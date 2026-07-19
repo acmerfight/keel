@@ -19,10 +19,12 @@ import { KeelError } from "../../../src/core/error.ts";
 import type { SessionGoal } from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message, Usage } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   EXPENSIVE_USAGE,
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -76,6 +78,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -188,6 +191,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -256,6 +260,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -345,6 +350,19 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+        persistGoal: (update) => {
+          if (update.goal !== null) {
+            persistedGoals.push(update.goal);
+            return update.goal;
+          }
+          return undefined;
+        },
+      }),
       initialSessionGoal: initialGoal,
       goalAutomaticContinuationTurnLimit: 2,
       input,
@@ -379,16 +397,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
-      persistSessionGoal: (update) => {
-        if (update.goal !== null) {
-          persistedGoals.push(update.goal);
-          return update.goal;
-        }
-        return undefined;
-      },
     });
     input.end("start the goal\n");
 
@@ -473,6 +481,12 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+      }),
       initialSessionGoal: initialGoal,
       goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
       input,
@@ -503,9 +517,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
     });
     input.end("start the goal\n");
 
@@ -587,6 +598,26 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode: "disabled" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages, reason, consumedInputIds }) => {
+            persistedMessages = persistSessionMessages({
+              session: storedSession,
+              previousMessages: persistedMessages,
+              currentMessages: messages,
+              runtime,
+              reason,
+              consumedInputIds,
+            });
+          },
+          persistGoal: ({ goal, consumedInputIds }) =>
+            persistSessionGoal({
+              session: storedSession,
+              goal,
+              runtime,
+              consumedInputIds,
+            }),
+        }),
         ...(persistedInitialGoal !== undefined
           ? { initialSessionGoal: persistedInitialGoal }
           : {}),
@@ -618,23 +649,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistSessionMessages: (messages, reason, consumedInputIds) => {
-          persistedMessages = persistSessionMessages({
-            session: storedSession,
-            previousMessages: persistedMessages,
-            currentMessages: messages,
-            runtime,
-            reason,
-            consumedInputIds,
-          });
-        },
-        persistSessionGoal: ({ goal, consumedInputIds }) =>
-          persistSessionGoal({
-            session: storedSession,
-            goal,
-            runtime,
-            consumedInputIds,
-          }),
       });
       firstInput.write("start the goal\n");
       await withTimeout(firstRun, 5000, "goal recovery did not pause");
@@ -651,6 +665,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode: "disabled" },
         workspace,
         platform: process.platform,
+        session: EPHEMERAL_INTERACTIVE_SESSION,
         ...(resumed.goal !== undefined
           ? { initialSessionGoal: resumed.goal }
           : {}),
@@ -737,6 +752,16 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: ({ goal }) => {
+          if (goal !== null) {
+            persistedGoals.push(goal);
+            return goal;
+          }
+          return undefined;
+        },
+      }),
       initialSessionGoal: {
         objective: "Replace stale recovery metadata",
         status: "active",
@@ -775,13 +800,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionGoal: ({ goal }) => {
-        if (goal !== null) {
-          persistedGoals.push(goal);
-          return goal;
-        }
-        return undefined;
-      },
     });
     input.write("continue the goal\n");
 
@@ -877,6 +895,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistGoal: ({ goal }) => {
+            persistedGoal = goal ?? undefined;
+            return persistedGoal;
+          },
+        }),
         initialSessionGoal: persistedGoal,
         input,
         writeStdout: () => {},
@@ -906,10 +931,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistSessionGoal: ({ goal }) => {
-          persistedGoal = goal ?? undefined;
-          return persistedGoal;
-        },
       });
       input.write("continue the goal\n");
 
@@ -986,6 +1007,16 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: () => {},
@@ -1013,13 +1044,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
     });
     input.write("start the goal\n");
 
@@ -1136,6 +1160,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: () => {},
@@ -1163,10 +1194,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
     });
     input.write("start the goal\n");
 
@@ -1257,6 +1284,12 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode: "disabled" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages }) => {
+            persistedMessages = [...messages];
+          },
+        }),
         initialSessionGoal: initialGoal,
         goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
         input,
@@ -1295,9 +1328,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistSessionMessages: (messages) => {
-          persistedMessages = [...messages];
-        },
       });
       input.end("start the goal\n");
 
@@ -1363,6 +1393,16 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: (update) => {
+          if (update.goal !== null) {
+            persistedGoals.push(update.goal);
+            return update.goal;
+          }
+          return undefined;
+        },
+      }),
       initialSessionGoal: initialGoal,
       input,
       writeStdout: () => {},
@@ -1392,13 +1432,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionGoal: (update) => {
-        if (update.goal !== null) {
-          persistedGoals.push(update.goal);
-          return update.goal;
-        }
-        return undefined;
-      },
     });
     input.end("start the goal\n");
 
@@ -1486,6 +1519,17 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = structuredClone([...messages]);
+        },
+        persistGoal: (update) => {
+          if (update.goal === null) return undefined;
+          persistedGoals.push(update.goal);
+          return update.goal;
+        },
+      }),
       initialSessionGoal: initialGoal,
       input,
       writeStdout: () => {},
@@ -1513,14 +1557,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = structuredClone([...messages]);
-      },
-      persistSessionGoal: (update) => {
-        if (update.goal === null) return undefined;
-        persistedGoals.push(update.goal);
-        return update.goal;
-      },
     });
     input.end("complete the assertion goal\n");
 
@@ -1597,6 +1633,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: (update) => {
+          persistedGoal = update.goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
       initialSessionGoal: initialGoal,
       now: () => timestamps.shift() ?? 2_500,
       input,
@@ -1627,10 +1670,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionGoal: (update) => {
-        persistedGoal = update.goal ?? undefined;
-        return persistedGoal;
-      },
     });
     input.end("start the goal\n");
 
@@ -1664,6 +1703,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
       initialSessionGoal: {
         objective: "Account a missing final end event",
         status: "active",
@@ -1694,10 +1740,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
       requireKnownCostModel: () => ZERO_COST_MODEL,
       printAgentEvents: async () => undefined,
       formatCostReport: () => "",
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
     });
     input.end("start goal\n");
 
@@ -1744,6 +1786,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: ({ goal }) => goal ?? undefined,
+      }),
       initialSessionGoal: {
         objective: "Report goal budget exhaustion",
         status: "active",
@@ -1775,7 +1821,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionGoal: ({ goal }) => goal ?? undefined,
     });
     input.end("start goal\n");
 
@@ -1803,6 +1848,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: ({ goal }) => goal ?? undefined,
+      }),
       now: () => 0,
       input,
       writeStdout: () => {},
@@ -1828,7 +1877,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionGoal: ({ goal }) => goal ?? undefined,
     });
     input.end(
       "/goal Report session cost precedence\n/goal budget --tokens 1\n",
@@ -1860,6 +1908,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
       initialSessionGoal: {
         objective: "Remain interactive after goal budget exhaustion",
         status: "active",
@@ -1897,10 +1952,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
     });
     input.end(
       [
@@ -1987,6 +2038,19 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+        persistGoal: (update) => {
+          if (update.goal !== null) {
+            persistedGoals.push(update.goal);
+            return update.goal;
+          }
+          return undefined;
+        },
+      }),
       initialSessionGoal: initialGoal,
       goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
       input,
@@ -2015,16 +2079,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
-      persistSessionGoal: (update) => {
-        if (update.goal !== null) {
-          persistedGoals.push(update.goal);
-          return update.goal;
-        }
-        return undefined;
-      },
     });
     input.end("start the goal\n");
 
@@ -2120,6 +2174,16 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode: "trusted" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages }) => {
+            persistedMessages = [...messages];
+          },
+          persistGoal: ({ goal }) => {
+            persistedGoal = goal ?? undefined;
+            return persistedGoal;
+          },
+        }),
         initialSessionGoal: persistedGoal,
         input,
         writeStdout: () => {},
@@ -2149,13 +2213,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistSessionMessages: (messages) => {
-          persistedMessages = [...messages];
-        },
-        persistSessionGoal: ({ goal }) => {
-          persistedGoal = goal ?? undefined;
-          return persistedGoal;
-        },
       });
       input.end("start the goal\n");
 
@@ -2229,6 +2286,12 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+      }),
       initialSessionGoal: initialGoal,
       goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
       input,
@@ -2259,9 +2322,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
     });
     input.end("start the goal\n");
 
@@ -2325,6 +2385,12 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+      }),
       initialSessionGoal: initialGoal,
       goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
       input,
@@ -2355,9 +2421,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
     });
     input.end("start the goal\n");
 
@@ -2432,6 +2495,12 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode: "trusted" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages }) => {
+            persistedMessages = [...messages];
+          },
+        }),
         initialSessionGoal: initialGoal,
         goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
         input,
@@ -2462,9 +2531,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistSessionMessages: (messages) => {
-          persistedMessages = [...messages];
-        },
       });
       input.end("start the goal\n");
 
@@ -2538,6 +2604,16 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode: "trusted" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages }) => {
+            persistedMessages = [...messages];
+          },
+          persistGoal: ({ goal }) => {
+            persistedGoal = goal ?? undefined;
+            return persistedGoal;
+          },
+        }),
         initialSessionGoal: initialGoal,
         goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
         input,
@@ -2568,13 +2644,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistSessionMessages: (messages) => {
-          persistedMessages = [...messages];
-        },
-        persistSessionGoal: ({ goal }) => {
-          persistedGoal = goal ?? undefined;
-          return persistedGoal;
-        },
       });
       input.end("start the goal\n");
 
@@ -2645,6 +2714,16 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
       initialSessionGoal: initialGoal,
       input,
       writeStdout: () => {},
@@ -2672,13 +2751,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
     });
     input.write("start the goal\n");
 
@@ -2722,6 +2794,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialSessionGoal: {
         objective: "Continue with invalid configuration",
         status: "active",
@@ -2821,6 +2894,19 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+        persistGoal: (update) => {
+          if (update.goal !== null) {
+            persistedGoals.push(update.goal);
+            return update.goal;
+          }
+          return undefined;
+        },
+      }),
       initialSessionGoal: initialGoal,
       input,
       writeStdout: () => {},
@@ -2852,16 +2938,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
-      persistSessionGoal: (update) => {
-        if (update.goal !== null) {
-          persistedGoals.push(update.goal);
-          return update.goal;
-        }
-        return undefined;
-      },
     });
     input.end("start the goal\n");
 
@@ -2957,6 +3033,13 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
       initialSessionGoal: initialGoal,
       input,
       writeStdout: () => {},
@@ -2986,10 +3069,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return undefined;
       },
       formatCostReport: () => "",
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
     });
     input.end("start the goal\n");
 
@@ -3033,6 +3112,17 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({
+          messages,
+          reason: _reason,
+          consumedInputIds: inputIds,
+        }) => {
+          persistedMessages = [...messages];
+          consumedInputIds.push([...inputIds]);
+        },
+      }),
       initialQueuedInputs: [pendingInput],
       input,
       writeStdout: (text) => {
@@ -3064,10 +3154,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages, _reason, inputIds) => {
-        persistedMessages = [...messages];
-        consumedInputIds.push([...inputIds]);
-      },
     });
     input.end();
 
@@ -3102,6 +3188,12 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        consumeQueuedInputs: (inputIds) => {
+          consumedInputIds.push([...inputIds]);
+        },
+      }),
       initialQueuedInputs: [pendingInput],
       input,
       writeStdout: () => {},
@@ -3118,9 +3210,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
       requireKnownCostModel: () => ZERO_COST_MODEL,
       printAgentEvents: async () => undefined,
       formatCostReport: () => "",
-      consumeQueuedInputs: (inputIds) => {
-        consumedInputIds.push([...inputIds]);
-      },
     });
     input.end();
 
@@ -3179,6 +3268,28 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistQueuedInput: (input) =>
+          persistSessionQueuedInput({
+            session,
+            sequence: input.sequence,
+            line: input.line,
+            runtime,
+          }),
+        persistMessages: ({ messages, reason, consumedInputIds: inputIds }) => {
+          now = 2;
+          consumedInputIds.push([...inputIds]);
+          persistedMessages = persistSessionMessages({
+            session,
+            previousMessages: persistedMessages,
+            currentMessages: messages,
+            runtime,
+            reason,
+            consumedInputIds: inputIds,
+          });
+        },
+      }),
       initialMessages: session.messages,
       initialQueuedInputs: session.pendingInputs,
       input,
@@ -3212,25 +3323,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistQueuedInput: (input) =>
-        persistSessionQueuedInput({
-          session,
-          sequence: input.sequence,
-          line: input.line,
-          runtime,
-        }),
-      persistSessionMessages: (messages, reason, inputIds) => {
-        now = 2;
-        consumedInputIds.push([...inputIds]);
-        persistedMessages = persistSessionMessages({
-          session,
-          previousMessages: persistedMessages,
-          currentMessages: messages,
-          runtime,
-          reason,
-          consumedInputIds: inputIds,
-        });
-      },
     });
 
     try {
@@ -3299,6 +3391,27 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistQueuedInput: (input) =>
+          persistSessionQueuedInput({
+            session,
+            sequence: input.sequence,
+            line: input.line,
+            runtime,
+          }),
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          now = 2;
+          persistedMessages = persistSessionMessages({
+            session,
+            previousMessages: persistedMessages,
+            currentMessages: messages,
+            runtime,
+            reason,
+            consumedInputIds,
+          });
+        },
+      }),
       initialMessages: session.messages,
       initialQueuedInputs: session.pendingInputs,
       input: firstInput,
@@ -3330,24 +3443,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
         return undefined;
       },
       formatCostReport: () => "",
-      persistQueuedInput: (input) =>
-        persistSessionQueuedInput({
-          session,
-          sequence: input.sequence,
-          line: input.line,
-          runtime,
-        }),
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        now = 2;
-        persistedMessages = persistSessionMessages({
-          session,
-          previousMessages: persistedMessages,
-          currentMessages: messages,
-          runtime,
-          reason,
-          consumedInputIds,
-        });
-      },
     });
 
     try {
@@ -3390,6 +3485,20 @@ describe("Interactive Session - Reports And Queued Input", () => {
         cliArgs: { bashMode: "disabled" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages, reason, consumedInputIds }) => {
+            now = 3;
+            resumedPersistedMessages = persistSessionMessages({
+              session: resumed,
+              previousMessages: resumedPersistedMessages,
+              currentMessages: messages,
+              runtime,
+              reason,
+              consumedInputIds,
+            });
+          },
+        }),
         initialMessages: resumed.messages,
         initialQueuedInputs: resumed.pendingInputs,
         input: secondInput,
@@ -3420,17 +3529,6 @@ describe("Interactive Session - Reports And Queued Input", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistSessionMessages: (messages, reason, consumedInputIds) => {
-          now = 3;
-          resumedPersistedMessages = persistSessionMessages({
-            session: resumed,
-            previousMessages: resumedPersistedMessages,
-            currentMessages: messages,
-            runtime,
-            reason,
-            consumedInputIds,
-          });
-        },
       });
       secondInput.end();
 
@@ -3484,6 +3582,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "trusted", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -3565,6 +3664,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "ask", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -3673,6 +3773,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: (text) => {

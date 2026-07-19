@@ -13,6 +13,7 @@ import {
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { CHECKPOINT_INSTRUCTION } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -115,6 +116,7 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
         cliArgs: { bashMode: "disabled" },
         workspace,
         platform: process.platform,
+        session: EPHEMERAL_INTERACTIVE_SESSION,
         initialMessages: resumed.messages,
         input,
         writeStdout: (text) => {

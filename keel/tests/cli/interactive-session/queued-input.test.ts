@@ -5,7 +5,9 @@ import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { SessionQueuedInput } from "../../../src/cli/session-store.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -47,6 +49,7 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -172,6 +175,7 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -311,6 +315,7 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -419,7 +424,32 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "queued-title",
+      session: savedInteractiveSession({
+        id: "queued-title",
+        persistQueuedInput: (queuedInput) => {
+          const persisted = {
+            id: `queued-${queuedInput.sequence}`,
+            timestamp: `1970-01-01T00:00:0${queuedInput.sequence}.000Z`,
+            sequence: queuedInput.sequence,
+            line: queuedInput.line,
+          };
+          persistedQueuedInputs.push(persisted);
+          return persisted;
+        },
+        persistTitle: (titleRecord) => {
+          titlePersisted = titleRecord.title;
+          titleConsumedInputIds = titleRecord.consumedInputIds;
+          return titleRecord.title;
+        },
+        persistMessages: ({
+          messages: _messages,
+          reason: _reason,
+          consumedInputIds,
+        }) => {
+          consumedMessageInputIds.push([...consumedInputIds]);
+        },
+      }),
+
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -431,24 +461,7 @@ describe("Interactive Session - Queued Input", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistQueuedInput: (queuedInput) => {
-        const persisted = {
-          id: `queued-${queuedInput.sequence}`,
-          timestamp: `1970-01-01T00:00:0${queuedInput.sequence}.000Z`,
-          sequence: queuedInput.sequence,
-          line: queuedInput.line,
-        };
-        persistedQueuedInputs.push(persisted);
-        return persisted;
-      },
-      persistSessionTitle: (titleRecord) => {
-        titlePersisted = titleRecord.title;
-        titleConsumedInputIds = titleRecord.consumedInputIds;
-        return titleRecord.title;
-      },
-      persistSessionMessages: (_messages, _reason, consumedInputIds) => {
-        consumedMessageInputIds.push([...consumedInputIds]);
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -534,6 +547,14 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        fork: (request) => {
+          forkTarget = request.targetSessionId;
+          forkBeforeMessageId = request.beforeMessageId;
+          return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -568,11 +589,6 @@ describe("Interactive Session - Queued Input", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      forkSession: (request) => {
-        forkTarget = request.targetSessionId;
-        forkBeforeMessageId = request.beforeMessageId;
-        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
-      },
     });
 
     // When
@@ -680,6 +696,7 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -806,6 +823,7 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -903,6 +921,7 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1015,6 +1034,7 @@ describe("Interactive Session - Queued Input", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: () => {},

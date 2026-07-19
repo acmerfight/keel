@@ -10,9 +10,11 @@ import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -67,6 +69,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -206,6 +209,15 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs,
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages: _messages, reason }) => {
+          persistedReasons.push(reason);
+        },
+        persistModelSwitch: () => {
+          throw new Error("rejected model switch must not persist");
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -252,12 +264,6 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         return finalEnd;
       },
       formatCostReport: () => "Rejected compaction cost recorded.\n",
-      persistSessionMessages: (_messages, reason) => {
-        persistedReasons.push(reason);
-      },
-      persistModelSwitch: () => {
-        throw new Error("rejected model switch must not persist");
-      },
     });
 
     // When
@@ -361,6 +367,15 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs,
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages: _messages, reason }) => {
+          persistedReasons.push(reason);
+        },
+        persistModelSwitch: () => {
+          throw new Error("interrupted model switch must not persist");
+        },
+      }),
       initialMessages,
       input,
       writeStdout: () => {},
@@ -396,12 +411,6 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         );
       },
       formatCostReport: () => "",
-      persistSessionMessages: (_messages, reason) => {
-        persistedReasons.push(reason);
-      },
-      persistModelSwitch: () => {
-        throw new Error("interrupted model switch must not persist");
-      },
     });
 
     // When
@@ -470,6 +479,12 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistModelSwitch: () => {
+          throw new Error("budget-limited switch must not persist");
+        },
+      }),
       initialMessages,
       input,
       writeStdout: () => {},
@@ -498,9 +513,6 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
       formatCostReport: (cost, maxUsd) =>
         `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(3)} limited=${cost.budgetLimited}\n`,
-      persistModelSwitch: () => {
-        throw new Error("budget-limited switch must not persist");
-      },
     });
 
     // When
@@ -555,6 +567,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -712,6 +725,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store },
       input,
@@ -870,6 +884,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store: artifact.store },
       input,

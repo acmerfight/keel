@@ -20,7 +20,9 @@ import {
 } from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  savedInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -57,6 +59,20 @@ async function runLocalGoalCommandScenario(options: {
     cliArgs: { bashMode: "disabled" },
     workspace: process.cwd(),
     platform: process.platform,
+    session:
+      options.persistence === "missing"
+        ? EPHEMERAL_INTERACTIVE_SESSION
+        : savedInteractiveSession({
+            id: "local-goal-command",
+            persistGoal: ({ goal }) => {
+              if (options.persistence === "throw") {
+                throw new Error("goal persistence failed");
+              }
+              if (goal === null) return undefined;
+              persistedGoals.push(goal);
+              return goal;
+            },
+          }),
     ...(options.initialGoal !== undefined
       ? { initialSessionGoal: options.initialGoal }
       : {}),
@@ -73,22 +89,6 @@ async function runLocalGoalCommandScenario(options: {
     forceExit: (code) => {
       throw new ForcedExit(code);
     },
-    ...(options.persistence === "missing"
-      ? {}
-      : {
-          persistSessionGoal: ({
-            goal,
-          }: {
-            readonly goal: SessionGoal | null;
-          }) => {
-            if (options.persistence === "throw") {
-              throw new Error("goal persistence failed");
-            }
-            if (goal === null) return undefined;
-            persistedGoals.push(goal);
-            return goal;
-          },
-        }),
     resolveProvider: () => ({
       provider: unusedProvider(""),
       providerId: "fake",
@@ -714,7 +714,15 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-budget-lifecycle",
+      session: savedInteractiveSession({
+        id: "goal-budget-lifecycle",
+        persistGoal: ({ goal }) => {
+          if (goal === null) return undefined;
+          persistedGoals.push(goal);
+          return goal;
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Finish the budgeted checkout goal",
         status: "budget_limited",
@@ -737,11 +745,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        if (goal === null) return undefined;
-        persistedGoals.push(goal);
-        return goal;
-      },
+
       resolveProvider: () => ({
         provider: unusedProvider(""),
         providerId: "fake",
@@ -843,7 +847,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-session",
+      session: savedInteractiveSession({
+        id: "goal-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -857,10 +868,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -960,7 +968,18 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-activation-session",
+      session: savedInteractiveSession({
+        id: "goal-activation-session",
+        persistGoal: ({ goal }) => {
+          if (goal === null) return undefined;
+          persistedGoals.push(goal);
+          return goal;
+        },
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       input,
       writeStdout: (text) => {
@@ -975,14 +994,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        if (goal === null) return undefined;
-        persistedGoals.push(goal);
-        return goal;
-      },
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1060,7 +1072,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "queued-goal-activation-session",
+      session: savedInteractiveSession({
+        id: "queued-goal-activation-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -1072,10 +1091,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1142,7 +1158,18 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "failed-pending-goal-budget-session",
+      session: savedInteractiveSession({
+        id: "failed-pending-goal-budget-session",
+        persistGoal: ({ goal }) => {
+          persistenceCalls++;
+          if (persistenceCalls === 2) {
+            throw new Error("goal budget store unavailable");
+          }
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       input,
       writeStdout: () => {},
@@ -1155,14 +1182,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistenceCalls++;
-        if (persistenceCalls === 2) {
-          throw new Error("goal budget store unavailable");
-        }
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1241,7 +1261,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "invalid-pending-goal-budget-session",
+      session: savedInteractiveSession({
+        id: "invalid-pending-goal-budget-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       input,
       writeStdout: () => {},
@@ -1254,10 +1281,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1329,7 +1353,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-pause-session",
+      session: savedInteractiveSession({
+        id: "goal-pause-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1344,10 +1375,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1435,7 +1463,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-lifecycle-guards-session",
+      session: savedInteractiveSession({
+        id: "goal-lifecycle-guards-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1450,10 +1485,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1566,7 +1598,17 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-resume-session",
+      session: savedInteractiveSession({
+        id: "goal-resume-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       initialSessionGoal: persistedGoal,
       input,
@@ -1582,13 +1624,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1659,7 +1695,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "incomplete-goal-resume-session",
+      session: savedInteractiveSession({
+        id: "incomplete-goal-resume-session",
+        persistGoal: ({ goal }) => {
+          persistenceCalls++;
+          return goal ?? undefined;
+        },
+      }),
+
       initialSessionGoal: initialGoal,
       input,
       writeStdout: () => {},
@@ -1672,10 +1715,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistenceCalls++;
-        return goal ?? undefined;
-      },
+
       resolveProvider: () => ({
         provider: unusedProvider("incomplete-goal-resume-provider"),
         providerId: "fake",
@@ -1716,7 +1756,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-assertion-criterion-session",
+      session: savedInteractiveSession({
+        id: "goal-assertion-criterion-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1731,10 +1778,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1787,7 +1831,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-subcommand-typo-session",
+      session: savedInteractiveSession({
+        id: "goal-subcommand-typo-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1802,10 +1853,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1862,7 +1910,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-enabled-bash-session",
+      session: savedInteractiveSession({
+        id: "goal-enabled-bash-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1877,10 +1932,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1932,7 +1984,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-clear-session",
+      session: savedInteractiveSession({
+        id: "goal-clear-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1947,10 +2006,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1988,6 +2044,7 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -2039,7 +2096,11 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "no-goal-session",
+      session: savedInteractiveSession({
+        id: "no-goal-session",
+        persistGoal: () => undefined,
+      }),
+
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -2051,7 +2112,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => undefined,
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2086,7 +2147,13 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "failing-goal-session",
+      session: savedInteractiveSession({
+        id: "failing-goal-session",
+        persistGoal: () => {
+          throw new Error("goal store unavailable");
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Persist every goal state",
         status: "active",
@@ -2104,9 +2171,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => {
-        throw new Error("goal store unavailable");
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2142,7 +2207,13 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "failing-goal-resume-session",
+      session: savedInteractiveSession({
+        id: "failing-goal-resume-session",
+        persistGoal: () => {
+          throw new Error("goal resume store unavailable");
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Resume persistence failure",
         status: "paused",
@@ -2162,9 +2233,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => {
-        throw new Error("goal resume store unavailable");
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2212,7 +2281,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "completed-goal-session",
+      session: savedInteractiveSession({
+        id: "completed-goal-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -2227,10 +2303,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2347,7 +2420,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "trusted" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-tool-session",
+      session: savedInteractiveSession({
+        id: "goal-tool-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -2362,10 +2442,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2500,7 +2577,22 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-assertion-redaction-session",
+      session: savedInteractiveSession({
+        id: "goal-assertion-redaction-session",
+        persistGoal: ({ goal, consumedInputIds }) => {
+          const persistedGoal = persistSessionGoal({
+            session: store,
+            goal,
+            runtime: runtime(home, timestamp++),
+            ...(consumedInputIds !== undefined ? { consumedInputIds } : {}),
+          });
+          if (persistedGoal !== undefined) {
+            persistedGoals.push(persistedGoal);
+          }
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: initialGoal,
       input,
       writeStdout: (text) => {
@@ -2515,18 +2607,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal, consumedInputIds }) => {
-        const persistedGoal = persistSessionGoal({
-          session: store,
-          goal,
-          runtime: runtime(home, timestamp++),
-          ...(consumedInputIds !== undefined ? { consumedInputIds } : {}),
-        });
-        if (persistedGoal !== undefined) {
-          persistedGoals.push(persistedGoal);
-        }
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2647,7 +2728,16 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "trusted" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-abort-session",
+      session: savedInteractiveSession({
+        id: "goal-abort-session",
+        persistGoal: ({ goal }) => {
+          if (goal !== null) {
+            persistedGoalUpdates.push(goal);
+          }
+          return goal ?? undefined;
+        },
+      }),
+
       initialSessionGoal: initialGoal,
       input,
       writeStdout: (text) => {
@@ -2666,12 +2756,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        if (goal !== null) {
-          persistedGoalUpdates.push(goal);
-        }
-        return goal ?? undefined;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2756,7 +2841,13 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-throw-abort-session",
+      session: savedInteractiveSession({
+        id: "goal-throw-abort-session",
+        persistGoal: () => {
+          throw new Error("interrupted turn should not persist a goal");
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Keep the goal after abort errors",
         status: "active",
@@ -2780,9 +2871,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => {
-        throw new Error("interrupted turn should not persist a goal");
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",

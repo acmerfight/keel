@@ -8,10 +8,12 @@ import type { ProviderSelection } from "../../../src/cli/interactive-session/typ
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   EXPENSIVE_USAGE,
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  savedInteractiveSession,
   textProvider,
   withTimeout,
   ZERO_COST_MODEL,
@@ -53,6 +55,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: (text) => {
@@ -141,6 +144,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages: [{ role: "user", content: largePrompt }],
       input,
       writeStdout: (text) => {
@@ -242,6 +246,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: (text) => {
@@ -355,6 +360,21 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persisted.push({
+            reason,
+            messages: structuredClone([...messages]),
+            consumedInputIds,
+          });
+        },
+        consumeQueuedInputs: () => {
+          throw new Error(
+            "compaction persistence already consumed model input",
+          );
+        },
+      }),
       initialMessages,
       initialQueuedInputs: [
         {
@@ -407,16 +427,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
               ONE_DOLLAR_PER_MILLION_INPUT,
             ),
       requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persisted.push({
-          reason,
-          messages: structuredClone([...messages]),
-          consumedInputIds,
-        });
-      },
-      consumeQueuedInputs: () => {
-        throw new Error("compaction persistence already consumed model input");
-      },
+
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {
@@ -484,6 +495,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: (text) => {
@@ -644,6 +656,24 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persisted.push({
+            reason,
+            messages: structuredClone([...messages]),
+            consumedInputIds,
+          });
+        },
+        persistModelSwitch: (switchRecord) => {
+          switches.push(switchRecord);
+        },
+        consumeQueuedInputs: () => {
+          throw new Error(
+            "persisted model switch should not consume separately",
+          );
+        },
+      }),
       initialMessages,
       initialQueuedInputs: [
         {
@@ -691,19 +721,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
             )
           : resolvedProvider("fake", "fake", oldProvider),
       requireKnownCostModel: () => ZERO_COST_MODEL,
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persisted.push({
-          reason,
-          messages: structuredClone([...messages]),
-          consumedInputIds,
-        });
-      },
-      persistModelSwitch: (switchRecord) => {
-        switches.push(switchRecord);
-      },
-      consumeQueuedInputs: () => {
-        throw new Error("persisted model switch should not consume separately");
-      },
+
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {
@@ -826,6 +844,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;

@@ -4,8 +4,10 @@ import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -51,6 +53,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -146,6 +149,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -223,6 +227,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -306,6 +311,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -397,6 +403,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -511,6 +518,12 @@ describe("Interactive Session - Manual Compact Failures", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages: _messages, reason }) => {
+          persistedReasons.push(reason);
+        },
+      }),
       initialMessages,
       input,
       writeStdout: (text) => {
@@ -545,9 +558,6 @@ describe("Interactive Session - Manual Compact Failures", () => {
         return finalEnd;
       },
       formatCostReport: () => "Compaction cost recorded.\n",
-      persistSessionMessages: (_messages, reason) => {
-        persistedReasons.push(reason);
-      },
     });
 
     // When
@@ -639,6 +649,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs,
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: () => {},
@@ -722,6 +733,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: () => {},
@@ -821,6 +833,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -932,6 +945,15 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        consumeQueuedInputs: (inputIds) => {
+          consumedInputIds.push([...inputIds]);
+        },
+        persistMessages: () => {
+          throw new Error("interrupted queued compaction should not persist");
+        },
+      }),
       initialMessages,
       initialQueuedInputs: [
         {
@@ -966,12 +988,6 @@ describe("Interactive Session - Manual Compact Failures", () => {
         throw new Error("queued manual compaction should not print events");
       },
       formatCostReport: () => "",
-      consumeQueuedInputs: (inputIds) => {
-        consumedInputIds.push([...inputIds]);
-      },
-      persistSessionMessages: () => {
-        throw new Error("interrupted queued compaction should not persist");
-      },
     });
 
     // When
@@ -1033,6 +1049,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1116,6 +1133,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;

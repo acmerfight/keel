@@ -13,7 +13,9 @@ import {
 } from "../../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  savedInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -53,6 +55,7 @@ async function runInteractiveLocalCommand(
     cliArgs: { bashMode: "ask" },
     workspace,
     platform: process.platform,
+    session: EPHEMERAL_INTERACTIVE_SESSION,
     input,
     writeStdout: (text) => {
       stdout += text;
@@ -277,7 +280,11 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
-      sessionId: "status-detail",
+      session: savedInteractiveSession({
+        id: "status-detail",
+        listForkPoints: () => ({ sessionId: "status-detail", points: [] }),
+      }),
+
       workflowSkills: [
         {
           id: "repo:test:review",
@@ -304,7 +311,7 @@ describe("Interactive Session - Lifecycle", () => {
         },
       ],
       initialModelSwitchCount: 1,
-      listForkPoints: () => ({ sessionId: "status-detail", points: [] }),
+
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -378,6 +385,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -459,7 +467,13 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "title-error",
+      session: savedInteractiveSession({
+        id: "title-error",
+        persistTitle: () => {
+          throw new Error("Error: cannot write session title.");
+        },
+      }),
+
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -473,9 +487,7 @@ describe("Interactive Session - Lifecycle", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionTitle: () => {
-        throw new Error("Error: cannot write session title.");
-      },
+
       resolveProvider: () => {
         providerResolved = true;
         return {
@@ -533,6 +545,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -605,6 +618,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -668,6 +682,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -711,6 +726,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -761,6 +777,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -830,6 +847,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: () => {},
@@ -928,6 +946,7 @@ describe("Interactive Session - Lifecycle", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
