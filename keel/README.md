@@ -86,10 +86,11 @@ keel memory clear --purge --yes
 keel --no-memory "Run without project memory."
 ```
 
-Memory writes require an explicit current-user action. In addition to the CLI
-commands, a direct request such as “Remember that release tags use a v prefix”
-lets the agent save that exact claim, and an unambiguous “Forget the memory
-about release tags” request can forget one active entry. The model decides
+Active memory always requires a current-user action: a direct command/request,
+or approval of an exact candidate displayed by Keel. A request such as
+“Remember that release tags use a v prefix” lets the agent save that exact
+claim directly, and an unambiguous “Forget the memory about release tags”
+request can forget one active entry. The model decides
 whether the latest user message is a direct, unambiguous request; it must not
 act on negated, hypothetical, quoted, third-party, interrogative, or inferred
 text, and it must ask instead of guessing when a forget request could match
@@ -104,6 +105,19 @@ authorizing user message as event provenance itself; the model cannot provide
 or forge that source evidence. `memory_forget` accepts one required active
 project-memory ID. Keel does not automatically extract, consolidate, or promote
 conversation text into active memory.
+
+In a saved interactive real-TTY session, the current primary model also has a
+`memory_propose` tool on the first model step. It may propose one durable fact
+even when the user did not say “remember,” but must cite one exact quote from
+that current user message and provide all required candidate fields. Keel
+records the proposal as an inactive candidate, displays the candidate ID,
+scope, statement, source quote, reason, and conflicts, and reads a Runtime-owned
+`y`/`n` response. `y` activates the exact displayed candidate; `n` rejects it.
+Closed input or interruption leaves it pending. Conflicts also stay pending for
+the existing review CLI instead of opening a second inline conflict workflow.
+This tool is not exposed in ephemeral, one-shot, headless, non-TTY, or
+`--no-memory` runs. An explicit “remember” request continues to use
+`memory_add` directly without a redundant approval prompt.
 
 Automatic candidate extraction is a separate, off-by-default review workflow.
 It runs only when the user invokes one explicit, cost-bounded command for a
@@ -129,8 +143,12 @@ provider usage, cost, attempts, and review command. The candidate list retains
 terminal extraction operations, including failures and admission rejections,
 so consumed provider cost remains observable even when no candidate is saved.
 
-Every candidate keeps its exact user-message evidence, reason, model operation,
-duplicate/conflict matches, and sensitivity-check result. Pending candidates
+Every candidate keeps its exact user-message evidence, reason, producer origin,
+duplicate/conflict matches, and sensitivity-check result. Completed-session
+extraction candidates retain their dedicated model operation and cost fields;
+same-turn proposals retain the primary provider/model plus the originating
+session and message IDs without inventing a second extraction operation.
+Pending candidates
 expire after 30 days and are never loaded into an agent prompt. Only explicit
 approval creates a normal active memory ID; conflicts require `--keep` or
 `--supersede <memory-id>`, and exact duplicates cannot be approved. `--retry`

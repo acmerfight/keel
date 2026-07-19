@@ -138,6 +138,7 @@ export interface StreamOptions {
   readonly allowBash?: boolean;
   readonly allowSkill?: boolean;
   readonly allowMemory?: boolean;
+  readonly allowMemoryProposal?: boolean;
   // Absent = provider default (model may call tools). "none" is for turns
   // that must produce text only, e.g. the wrap-up summary after the turn
   // limit; providers enforce it at the protocol level.

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createInterface } from "node:readline/promises";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
@@ -80,6 +81,7 @@ import {
 } from "../skills/model.ts";
 import { executeGitDiff } from "../tools/git-diff.ts";
 import { executeGitStatus } from "../tools/git-status.ts";
+import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
@@ -136,6 +138,7 @@ import {
   trimQueuedLine,
 } from "./interactive-session/line-reader.ts";
 import { executeManualCompaction } from "./interactive-session/manual-compact.ts";
+import { createInteractiveMemoryProposalReview } from "./interactive-session/memory-proposal-approval.ts";
 import {
   executeModelSwitchCompaction,
   modelSwitchRequiresCompaction,
@@ -618,6 +621,46 @@ export async function runInteractiveSession(
         }
       : {}),
   });
+  const memoryProposalReview =
+    options.memoryProposal === undefined
+      ? undefined
+      : createInteractiveMemoryProposalReview(lineReader, options.writeStderr, {
+          onPromptStart: () => {
+            setComposerMode("approval");
+          },
+          onPromptEnd: () => {
+            setComposerMode("steer");
+          },
+        });
+  const memoryProposalSources = new WeakMap<
+    Extract<Message, { readonly role: "user" }>,
+    AgentMemoryProposalSource
+  >();
+  const reservedSessionMessageIds: {
+    readonly message: Message;
+    readonly id: string;
+  }[] = [];
+  const reserveMemoryProposalSource = (
+    message: Extract<Message, { readonly role: "user" }>,
+    provider: InteractiveResolvedProvider,
+  ): void => {
+    if (
+      options.memoryProposal === undefined ||
+      options.sessionId === undefined ||
+      options.reserveSessionMessageId === undefined ||
+      options.persistSessionMessages === undefined
+    ) {
+      return;
+    }
+    const messageId = options.reserveSessionMessageId();
+    reservedSessionMessageIds.push({ message, id: messageId });
+    memoryProposalSources.set(message, {
+      sessionId: options.sessionId,
+      messageId,
+      providerId: provider.providerId,
+      model: provider.model,
+    });
+  };
   const bashPermission =
     options.bashPermission ??
     interactiveBashPermissionPolicy(
@@ -922,6 +965,7 @@ export async function runInteractiveSession(
     options.skillActivation?.beginTurn();
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
+    const turnProvider = resolved;
     const turnModelOperations = reportModelOperations(resolved, {
       type: "current_agent_run",
     });
@@ -966,15 +1010,86 @@ export async function runInteractiveSession(
     const deferredInputLines: QueuedLine[] = [];
     const turnAbortController = new AbortController();
     activeAbortController = turnAbortController;
-    messages.push({
+    const currentUserMessage = {
       role: "user",
       content: request.userMessage,
       origin: request.userMessageOrigin,
-    });
+    } as const;
+    messages.push(currentUserMessage);
+    reserveMemoryProposalSource(currentUserMessage, turnProvider);
+    let persistedMemorySourceMessages: readonly Message[] | null = null;
+    let persistedDrainedInputCount = 0;
+    const persistedInputIds = new Set<string>();
+    const persistSessionMessages = options.persistSessionMessages;
+    const persistMemoryProposalSource =
+      persistSessionMessages === undefined
+        ? undefined
+        : (
+            sourceMessage: Extract<Message, { readonly role: "user" }>,
+          ): void => {
+            const sourceIndex = messages.indexOf(sourceMessage);
+            assert(
+              sourceIndex >= 0,
+              "reviewed project-memory source is no longer present in the interactive session",
+            );
+            const sourceMessages = messages.slice(0, sourceIndex + 1);
+            const sourceReservations = reservedSessionMessageIds.filter(
+              (reservation) => sourceMessages.includes(reservation.message),
+            );
+            const sourceInputIds = queuedInputIds([
+              ...request.consumedInputLines,
+              ...drainedInjectedLines,
+            ]);
+            persistSessionMessages(
+              sourceMessages,
+              "turn",
+              sourceInputIds,
+              undefined,
+              sourceReservations,
+            );
+            persistedMemorySourceMessages = sourceMessages;
+            persistedDrainedInputCount = drainedInjectedLines.length;
+            for (const inputId of sourceInputIds) {
+              persistedInputIds.add(inputId);
+            }
+            reservedSessionMessageIds.splice(
+              0,
+              reservedSessionMessageIds.length,
+            );
+          };
     let deferRemainingInjectedInput = false;
     let taskProgressChanged = false;
     let sessionGoalStateChanged = false;
     let sessionGoalUpdateReportedDuringTurn = false;
+    const restoreInterruptedTurnState = (): void => {
+      if (skillStateBeforeTurn !== undefined) {
+        options.skillActivation?.restore(skillStateBeforeTurn);
+        syncActiveWorkflowSkills();
+        systemPrompt = rebuildSystemPrompt();
+      }
+      messages.splice(
+        0,
+        messages.length,
+        ...(persistedMemorySourceMessages ?? messagesBeforeTurn),
+      );
+      reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
+      updateTaskProgress(taskProgressBeforeTurn);
+      updateSessionGoal(sessionGoalBeforeTurn);
+      projectInstructionVisibility.clear();
+      projectInstructionVisibility.markInstructionPathsVisible(
+        projectInstructionPathsBeforeTurnOldestFirst,
+      );
+      restoreDrainedInput([
+        ...drainedInjectedLines.slice(persistedDrainedInputCount),
+        ...deferredInputLines,
+      ]);
+      consumeQueuedInputLines(
+        request.consumedInputLines.filter(
+          (line) =>
+            line.inputId === undefined || !persistedInputIds.has(line.inputId),
+        ),
+      );
+    };
     setComposerMode("steer");
 
     try {
@@ -993,6 +1108,18 @@ export async function runInteractiveSession(
             : {}),
           ...(options.memoryMutation !== undefined
             ? { memoryMutation: options.memoryMutation }
+            : {}),
+          ...(options.memoryProposal !== undefined &&
+          memoryProposalReview !== undefined &&
+          persistMemoryProposalSource !== undefined
+            ? {
+                memoryProposal: {
+                  capability: options.memoryProposal,
+                  sourceFor: (message) => memoryProposalSources.get(message),
+                  persistSource: persistMemoryProposalSource,
+                  review: memoryProposalReview,
+                },
+              }
             : {}),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
@@ -1057,11 +1184,13 @@ export async function runInteractiveSession(
             }
             return injectableLines.map((content) => {
               reportRecorder.recordHumanIntervention();
-              return {
+              const injectedMessage = {
                 role: "user",
                 content: content.line,
                 origin: STEER_ORIGIN,
-              };
+              } as const;
+              reserveMemoryProposalSource(injectedMessage, turnProvider);
+              return injectedMessage;
             });
           },
         }),
@@ -1096,21 +1225,7 @@ export async function runInteractiveSession(
       );
       if (turnAbortController.signal.aborted) {
         abortReportedAgentRun(finalEnd);
-        if (skillStateBeforeTurn !== undefined) {
-          options.skillActivation?.restore(skillStateBeforeTurn);
-          syncActiveWorkflowSkills();
-          systemPrompt = rebuildSystemPrompt();
-        }
-        messages.splice(0, messages.length, ...messagesBeforeTurn);
-        updateTaskProgress(taskProgressBeforeTurn);
-        updateSessionGoal(sessionGoalBeforeTurn);
-        projectInstructionVisibility.clear();
-        projectInstructionVisibility.markInstructionPathsVisible(
-          projectInstructionPathsBeforeTurnOldestFirst,
-        );
-        const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
-        restoreDrainedInput(restoredLines);
-        consumeQueuedInputLines(request.consumedInputLines);
+        restoreInterruptedTurnState();
         options.writeStdout("\n");
         return {
           aborted: true,
@@ -1135,9 +1250,11 @@ export async function runInteractiveSession(
         [
           ...queuedInputIds(request.consumedInputLines),
           ...queuedInputIds(drainedInjectedLines),
-        ],
+        ].filter((inputId) => !persistedInputIds.has(inputId)),
         skillStateChanged ? completedSkillState : undefined,
+        reservedSessionMessageIds,
       );
+      reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
       if (skillStateChanged) {
         syncActiveWorkflowSkills();
         systemPrompt = rebuildSystemPrompt();
@@ -1296,21 +1413,7 @@ export async function runInteractiveSession(
         throw error;
       }
       abortReportedAgentRun();
-      if (skillStateBeforeTurn !== undefined) {
-        options.skillActivation?.restore(skillStateBeforeTurn);
-        syncActiveWorkflowSkills();
-        systemPrompt = rebuildSystemPrompt();
-      }
-      messages.splice(0, messages.length, ...messagesBeforeTurn);
-      updateTaskProgress(taskProgressBeforeTurn);
-      updateSessionGoal(sessionGoalBeforeTurn);
-      projectInstructionVisibility.clear();
-      projectInstructionVisibility.markInstructionPathsVisible(
-        projectInstructionPathsBeforeTurnOldestFirst,
-      );
-      const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
-      restoreDrainedInput(restoredLines);
-      consumeQueuedInputLines(request.consumedInputLines);
+      restoreInterruptedTurnState();
       options.writeStdout("\n");
       return {
         aborted: true,

@@ -534,13 +534,14 @@ function appendSessionSnapshotIfNeeded(options: {
   });
 }
 
-function storedMessageId(): string {
+export function createSessionMessageId(): string {
   return `msg_${randomUUID()}`;
 }
 
 function storedMessagesForProviderMessages(options: {
   readonly messages: readonly SessionMessage[];
   readonly previousStoredMessages: readonly StoredMessage[];
+  readonly reservedMessageIds: ReadonlyMap<number, string>;
 }): readonly StoredMessage[] {
   const redactedMessages = options.messages.map((message) =>
     redactMessageForPersistence(message),
@@ -551,7 +552,7 @@ function storedMessagesForProviderMessages(options: {
       return copyStoredMessage(previous);
     }
     return {
-      id: storedMessageId(),
+      id: options.reservedMessageIds.get(index) ?? createSessionMessageId(),
       message: copyMessage(message),
     };
   });

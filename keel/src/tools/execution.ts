@@ -45,6 +45,7 @@ import {
   type AgentMemoryToolContext,
   validateAgentMemoryAdd,
   validateAgentMemoryForget,
+  validateAgentMemoryProposal,
 } from "./memory.ts";
 import { executeRead } from "./read.ts";
 import { observeReadResource } from "./read-resource-observation.ts";
@@ -83,6 +84,10 @@ type MemoryAddToolCall = Extract<
 type MemoryForgetToolCall = Extract<
   ValidToolCall,
   { readonly tool: "memory_forget" }
+>;
+type MemoryProposeToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "memory_propose" }
 >;
 type GlobToolCall = Extract<ValidToolCall, { readonly tool: "glob" }>;
 type GrepToolCall = Extract<ValidToolCall, { readonly tool: "grep" }>;
@@ -230,16 +235,87 @@ function executeSkillTool(
 }
 
 function memoryToolFailure(
-  tool: "memory_add" | "memory_forget",
+  tool: "memory_add" | "memory_forget" | "memory_propose",
   reason: string,
 ): ToolExecution {
-  const recovery =
-    tool === "memory_add"
-      ? "Use one exact contiguous durable-claim span from the latest current-user message only when that user directly asked Keel to remember it; never paraphrase, broaden, or infer."
-      : "Use one exact active project-memory ID only when the latest current-user message directly and unambiguously asked Keel to forget it; ask when the target is ambiguous.";
+  const recovery = (() => {
+    if (tool === "memory_add") {
+      return "Use one exact contiguous durable-claim span from the latest current-user message only when that user directly asked Keel to remember it; never paraphrase, broaden, or infer.";
+    }
+    if (tool === "memory_forget") {
+      return "Use one exact active project-memory ID only when the latest current-user message directly and unambiguously asked Keel to forget it; ask when the target is ambiguous.";
+    }
+    return "Use one exact source quote from the latest current-user message in a saved interactive session; do not invent evidence or retry a rejected proposal.";
+  })();
   return {
     content: `Tool failed: ${tool} failed: ${reason}.\nRecovery: ${recovery}`,
     ok: false,
+  };
+}
+
+async function executeMemoryProposeTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: MemoryProposeToolCall,
+): Promise<ToolExecution> {
+  const memory = context.memory;
+  if (memory?.proposal === null || memory === undefined) {
+    return memoryToolFailure(
+      "memory_propose",
+      "reviewed memory is unavailable for this model step",
+    );
+  }
+  const currentUserMessage = memory.currentUserMessage();
+  const source =
+    currentUserMessage === null
+      ? undefined
+      : memory.proposal.sourceFor(currentUserMessage);
+  const validation = validateAgentMemoryProposal({
+    currentUserMessage,
+    sourceQuote: toolCall.sourceQuote,
+    source,
+  });
+  if (!validation.ok) {
+    return memoryToolFailure("memory_propose", validation.reason);
+  }
+  if (
+    currentUserMessage === null ||
+    source === undefined ||
+    !memory.claimSourceMutation(currentUserMessage)
+  ) {
+    return memoryToolFailure(
+      "memory_propose",
+      "this current-user source already authorized one memory mutation",
+    );
+  }
+  memory.proposal.persistSource(currentUserMessage);
+  const result = await memory.proposal.capability.propose(
+    {
+      kind: toolCall.kind,
+      statement: toolCall.statement,
+      why: toolCall.why,
+      sourceQuote: toolCall.sourceQuote,
+      conflictMemoryIds: toolCall.conflictMemoryIds,
+    },
+    source,
+    memory.proposal.review,
+    context.signal,
+  );
+  const content =
+    result.outcome === "approved"
+      ? `Approved project-memory candidate ${result.candidateId} as ${String(result.memoryId)} for ${result.scope.id}.`
+      : result.outcome === "rejected"
+        ? `Rejected project-memory candidate ${result.candidateId} for ${result.scope.id}.`
+        : `Project-memory candidate ${result.candidateId} remains pending for ${result.scope.id}. Review it with: keel memory candidates show ${result.candidateId}; approve with: keel memory candidates approve ${result.candidateId} (add --keep or --supersede <memory-id> when required).`;
+  return {
+    content,
+    ok: true,
+    memoryOperation: {
+      operation: "propose",
+      candidateId: result.candidateId,
+      memoryId: result.memoryId,
+      scope: result.scope,
+      outcome: result.outcome,
+    },
   };
 }
 
@@ -954,6 +1030,8 @@ function executeBuiltinToolCall(
       return executeMemoryAddTool(context, parsed.data);
     case "memory_forget":
       return executeMemoryForgetTool(context, parsed.data);
+    case "memory_propose":
+      return executeMemoryProposeTool(context, parsed.data);
     case "skill_resource":
       return executeSkillResourceTool(context, parsed.data);
     case "skill_search":

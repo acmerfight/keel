@@ -1,14 +1,23 @@
-import type { AgentMemoryMutationCapability } from "../tools/memory.ts";
+import type {
+  AgentMemoryMutationCapability,
+  AgentMemoryProposalCapability,
+} from "../tools/memory.ts";
 import {
   addProjectMemory,
   forgetProjectMemory,
   listProjectMemory,
   type ProjectMemoryRuntime,
 } from "./project-memory.ts";
+import {
+  approveReviewedProjectMemoryCandidate,
+  recordCurrentTurnCandidateProposal,
+  rejectProjectMemoryCandidate,
+} from "./project-memory-candidates.ts";
 import type { RunReportMemoryOperation } from "./report.ts";
 
 export interface AgentProjectMemory {
   readonly capability: AgentMemoryMutationCapability;
+  readonly proposalCapability: AgentMemoryProposalCapability;
   readonly operations: () => readonly RunReportMemoryOperation[];
 }
 
@@ -61,6 +70,97 @@ export function createAgentProjectMemory(options: {
           outcome: "forgotten",
         });
         return { id, scope };
+      },
+    },
+    proposalCapability: {
+      propose: async (proposal, source, review, signal) => {
+        const sourceRecord = {
+          sessionId: source.sessionId,
+          messageId: source.messageId,
+          quote: proposal.sourceQuote,
+        };
+        const recorded = recordCurrentTurnCandidateProposal(
+          options.runtime,
+          options.workspace,
+          {
+            sessionId: source.sessionId,
+            messageId: source.messageId,
+            providerId: source.providerId,
+            model: source.model,
+            createdAt: new Date(options.runtime.now()).toISOString(),
+          },
+          {
+            kind: proposal.kind,
+            statement: proposal.statement,
+            why: proposal.why,
+            sources: [sourceRecord],
+            conflictMemoryIds: proposal.conflictMemoryIds,
+          },
+        );
+        const pending = () => {
+          const operation = {
+            operation: "propose" as const,
+            candidateId: recorded.candidate.id,
+            memoryId: null,
+            scope: recorded.scope,
+            outcome: "pending" as const,
+          };
+          operations.push(operation);
+          return operation;
+        };
+        if (recorded.candidate.conflictMemoryIds.length > 0) {
+          return pending();
+        }
+        const decision = await review(
+          {
+            candidateId: recorded.candidate.id,
+            scope: recorded.scope,
+            kind: recorded.candidate.kind,
+            statement: recorded.candidate.statement,
+            why: recorded.candidate.why,
+            sourceQuote: sourceRecord.quote,
+            conflictMemoryIds: recorded.candidate.conflictMemoryIds,
+          },
+          signal,
+        );
+        if (decision.type === "pending") {
+          return pending();
+        }
+        if (decision.type === "reject") {
+          rejectProjectMemoryCandidate(
+            options.runtime,
+            options.workspace,
+            recorded.candidate.id,
+          );
+          const operation = {
+            operation: "propose" as const,
+            candidateId: recorded.candidate.id,
+            memoryId: null,
+            scope: recorded.scope,
+            outcome: "rejected" as const,
+          };
+          operations.push(operation);
+          return operation;
+        }
+        const approved = approveReviewedProjectMemoryCandidate(
+          options.runtime,
+          options.workspace,
+          recorded.candidate.id,
+          {
+            statement: recorded.candidate.statement,
+            source: sourceRecord,
+            sessionId: source.sessionId,
+          },
+        );
+        const operation = {
+          operation: "propose" as const,
+          candidateId: recorded.candidate.id,
+          memoryId: approved.memory.id,
+          scope: recorded.scope,
+          outcome: "approved" as const,
+        };
+        operations.push(operation);
+        return operation;
       },
     },
     operations: () => [...operations],

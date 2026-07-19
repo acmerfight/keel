@@ -12,6 +12,7 @@ import {
   failedCandidateExtractionOperation,
   recordCandidateExtraction,
   recordCandidateExtractionOutcome,
+  recordCurrentTurnCandidateProposal,
 } from "../../src/cli/project-memory-candidates.ts";
 import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
 import { createRuntime } from "../../src/testing/cli-runtime-fixtures.ts";
@@ -75,6 +76,58 @@ async function command(
 }
 
 describe("memory candidate command", () => {
+  test(`Given a current-turn proposal is waiting for later review,
+    When the user shows it through the candidate CLI,
+    Then output identifies its real proposal origin without fabricated extraction data`, async () => {
+    const workspace = await createGitWorkspace(
+      "keel-current-proposal-command-",
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-current-proposal-command-home-"),
+    );
+    try {
+      const recorded = recordCurrentTurnCandidateProposal(
+        runtime(keelHome, NOW),
+        workspace,
+        {
+          sessionId: "interactive-session",
+          messageId: "msg_current",
+          providerId: "kimi",
+          model: "kimi-k2.5",
+          createdAt: new Date(NOW).toISOString(),
+        },
+        {
+          kind: "project_context",
+          statement: "Release validation uses pnpm test:coverage.",
+          why: "This rule should remain visible in later sessions.",
+          sources: [
+            {
+              sessionId: "interactive-session",
+              messageId: "msg_current",
+              quote: "pnpm test:coverage",
+            },
+          ],
+          conflictMemoryIds: [],
+        },
+      );
+
+      const shown = await command(
+        ["memory", "candidates", "show", recorded.candidate.id],
+        workspace,
+        keelHome,
+      );
+
+      expect(shown.exitCode, shown.stderr).toBe(0);
+      expect(shown.stdout).toContain("origin: current_turn_proposal");
+      expect(shown.stdout).toContain("provider: kimi");
+      expect(shown.stdout).toContain("model: kimi-k2.5");
+      expect(shown.stdout).not.toContain("input tokens:");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given candidates in several review states,
     When the user manages them through the candidate CLI,
     Then show, edit, approval, rejection, linked purge, clear, and operation output stay connected`, async () => {

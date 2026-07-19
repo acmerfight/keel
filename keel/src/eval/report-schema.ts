@@ -182,7 +182,7 @@ const runReportMemorySchema = z
           }),
           z.object({
             type: z.literal("user_approved"),
-            channel: z.literal("cli"),
+            channel: z.enum(["cli", "interactive"]),
             candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
           }),
         ]),
@@ -209,6 +209,16 @@ const runReportMemorySchema = z
           id: z.string(),
           scope: z.object({ kind: z.literal("project"), id: z.string() }),
           outcome: z.literal("forgotten"),
+        }),
+        z.object({
+          operation: z.literal("propose"),
+          candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+          memoryId: z
+            .string()
+            .regex(/^mem_[0-9a-f-]+$/u)
+            .nullable(),
+          scope: z.object({ kind: z.literal("project"), id: z.string() }),
+          outcome: z.enum(["approved", "rejected", "pending"]),
         }),
       ]),
     ),

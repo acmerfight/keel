@@ -72,6 +72,26 @@ function candidateDetails(
     `source message: ${source.messageId}`,
     `source quote: ${escapeTerminalText(source.quote)}`,
   ]);
+  const originLines =
+    candidate.origin.type === "completed_session_extraction"
+      ? [
+          `origin: completed_session_extraction`,
+          `operation: ${candidate.origin.extraction.operationId}`,
+          `provider: ${candidate.origin.extraction.providerId}`,
+          `model: ${candidate.origin.extraction.model}`,
+          `input tokens: ${candidate.origin.extraction.usage.inputTokens}`,
+          `cached input tokens: ${candidate.origin.extraction.usage.cachedInputTokens}`,
+          `uncached input tokens: ${candidate.origin.extraction.usage.uncachedInputTokens}`,
+          `output tokens: ${candidate.origin.extraction.usage.outputTokens}`,
+          `attempts: ${candidate.origin.extraction.attemptCount}`,
+          `retries: ${candidate.origin.extraction.retryCount}`,
+          `cost: $${costLabel(candidate.origin.extraction.costUsd)}`,
+        ]
+      : [
+          `origin: current_turn_proposal`,
+          `provider: ${candidate.origin.proposal.providerId}`,
+          `model: ${candidate.origin.proposal.model}`,
+        ];
   return [
     `id: ${candidate.id}`,
     `status: ${candidate.status}`,
@@ -90,16 +110,7 @@ function candidateDetails(
     `sensitivity validation: ${candidate.sensitivityValidation}`,
     `active memory: ${candidate.memoryId ?? "none"}`,
     ...sourceLines,
-    `operation: ${candidate.extraction.operationId}`,
-    `provider: ${candidate.extraction.providerId}`,
-    `model: ${candidate.extraction.model}`,
-    `input tokens: ${candidate.extraction.usage.inputTokens}`,
-    `cached input tokens: ${candidate.extraction.usage.cachedInputTokens}`,
-    `uncached input tokens: ${candidate.extraction.usage.uncachedInputTokens}`,
-    `output tokens: ${candidate.extraction.usage.outputTokens}`,
-    `attempts: ${candidate.extraction.attemptCount}`,
-    `retries: ${candidate.extraction.retryCount}`,
-    `cost: $${costLabel(candidate.extraction.costUsd)}`,
+    ...originLines,
   ];
 }
 

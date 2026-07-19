@@ -18,7 +18,7 @@ const CANDIDATE_ID = "cand_11111111-1111-4111-8111-111111111111";
 
 function addEvent() {
   return projectMemoryEventSchema.parse({
-    version: 4,
+    version: 5,
     type: "add",
     memory: {
       id: MEMORY_ID,
@@ -39,7 +39,7 @@ function addEvent() {
 
 function successfulExtractionEvent() {
   return projectMemoryEventSchema.parse({
-    version: 4,
+    version: 5,
     type: "candidate_extraction",
     operation: {
       operationId: "mcex_11111111-1111-4111-8111-111111111111",
@@ -87,6 +87,28 @@ function successfulExtractionEvent() {
     purgedCandidateCount: 0,
     discardedCandidateIds: [],
   });
+}
+
+function currentTurnProposalEvent() {
+  const extraction = successfulExtractionEvent();
+  if (
+    extraction.type !== "candidate_extraction" ||
+    extraction.operation.outcome !== "succeeded"
+  ) {
+    throw new Error("expected successful extraction fixture");
+  }
+  return {
+    version: 5,
+    type: "candidate_proposal",
+    origin: {
+      sessionId: "session-1",
+      messageId: "msg_1",
+      providerId: "deepseek",
+      model: "deepseek-chat",
+      createdAt: CREATED_AT,
+    },
+    candidate: extraction.candidates[0],
+  } as const;
 }
 
 describe("project-memory event boundaries", () => {
@@ -148,6 +170,19 @@ describe("project-memory event boundaries", () => {
     expect(projectMemoryEventSchema.safeParse(mismatchedCount).success).toBe(
       false,
     );
+  });
+
+  test(`Given a current-turn proposal cites a different saved user message,
+    When the event boundary validates its cross-field provenance,
+    Then the mismatched event is rejected while exact provenance is accepted`, () => {
+    const valid = currentTurnProposalEvent();
+    const mismatched = {
+      ...valid,
+      origin: { ...valid.origin, messageId: "msg_other" },
+    };
+
+    expect(projectMemoryEventSchema.safeParse(valid).success).toBe(true);
+    expect(projectMemoryEventSchema.safeParse(mismatched).success).toBe(false);
   });
 
   test(`Given memory and candidate-only events,

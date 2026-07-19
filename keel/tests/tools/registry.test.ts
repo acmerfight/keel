@@ -519,6 +519,7 @@ describe("tool registry", () => {
       "update_goal",
       "memory_add",
       "memory_forget",
+      "memory_propose",
       "skill_resource",
       "skill_search",
       "skill",
@@ -571,6 +572,13 @@ describe("tool registry", () => {
       },
       {
         name: "memory_forget",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "memory_propose",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -849,7 +857,7 @@ describe("tool registry", () => {
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
     const argumentsByTool = Object.fromEntries(
-      openAICompatibleTools(true, true, true).map((tool) => [
+      openAICompatibleTools(true, true, true, true).map((tool) => [
         tool.function.name,
         {
           fields: Object.keys(tool.function.parameters.properties),
@@ -868,6 +876,22 @@ describe("tool registry", () => {
       memory_forget: {
         fields: ["memoryId"],
         required: ["memoryId"],
+      },
+      memory_propose: {
+        fields: [
+          "kind",
+          "statement",
+          "why",
+          "sourceQuote",
+          "conflictMemoryIds",
+        ],
+        required: [
+          "kind",
+          "statement",
+          "why",
+          "sourceQuote",
+          "conflictMemoryIds",
+        ],
       },
       skill_resource: {
         fields: ["skill", "path"],
@@ -900,7 +924,7 @@ describe("tool registry", () => {
   test(`Given builtin tools declare arguments in Zod,
     When provider metadata is compared with generated JSON schema,
     Then keys requiredness types and numeric bounds stay equivalent`, () => {
-    const providerTools = openAICompatibleTools(true, true, true);
+    const providerTools = openAICompatibleTools(true, true, true, true);
 
     for (const tool of builtinTools) {
       const providerTool = providerToolByName(providerTools, tool.name);
@@ -960,35 +984,75 @@ describe("tool registry", () => {
         (tool) =>
           tool.risk.kind !== "trusted-shell" &&
           tool.availability !== "skill-catalog" &&
-          tool.availability !== "memory",
+          tool.availability !== "memory" &&
+          tool.availability !== "memory-proposal",
       )
       .map((tool) => tool.name);
     const skillBuiltinToolNames = builtinTools
       .filter(
         (tool) =>
-          tool.risk.kind !== "trusted-shell" && tool.availability !== "memory",
+          tool.risk.kind !== "trusted-shell" &&
+          tool.availability !== "memory" &&
+          tool.availability !== "memory-proposal",
       )
       .map((tool) => tool.name);
 
     expect(
-      openAICompatibleTools(false, false, false).map(
+      openAICompatibleTools(false, false, false, false).map(
         (tool) => tool.function.name,
       ),
     ).toEqual(defaultBuiltinToolNames);
     expect(
-      openAICompatibleTools(false, true, false).map(
+      openAICompatibleTools(false, true, false, false).map(
         (tool) => tool.function.name,
       ),
     ).toEqual(skillBuiltinToolNames);
     expect(
-      openAICompatibleTools(true, true, true).map((tool) => tool.function.name),
+      openAICompatibleTools(true, true, true, true).map(
+        (tool) => tool.function.name,
+      ),
     ).toEqual(allBuiltinToolNames);
+  });
+
+  test(`Given direct memory and reviewed interactive memory have different runtime boundaries,
+    When provider tools are filtered for each capability,
+    Then memory_propose is exposed only by the reviewed-memory capability`, () => {
+    const directMemoryTools = openAICompatibleTools(
+      false,
+      false,
+      true,
+      false,
+    ).map((tool) => tool.function.name);
+    const reviewedMemoryTools = openAICompatibleTools(
+      false,
+      false,
+      false,
+      true,
+    ).map((tool) => tool.function.name);
+
+    expect(directMemoryTools).toEqual(
+      expect.arrayContaining(["memory_add", "memory_forget"]),
+    );
+    expect(directMemoryTools).not.toContain("memory_propose");
+    expect(reviewedMemoryTools).toContain("memory_propose");
+    expect(reviewedMemoryTools).not.toEqual(
+      expect.arrayContaining(["memory_add", "memory_forget"]),
+    );
+    const allTools = openAICompatibleTools(false, false, true, true);
+    expect(
+      allTools.find((tool) => tool.function.name === "memory_add")?.function
+        .description,
+    ).toContain("以后都用 X");
+    expect(
+      allTools.find((tool) => tool.function.name === "memory_propose")?.function
+        .description,
+    ).toContain("never substitute memory_add");
   });
 
   test(`Given provider tools are requested,
     When OpenAI-compatible definitions are built,
     Then descriptions match the builtin registry and parameters are strict objects`, () => {
-    const providerTools = openAICompatibleTools(true, true, true);
+    const providerTools = openAICompatibleTools(true, true, true, true);
 
     expect(
       providerTools.map((tool) => ({
@@ -1032,7 +1096,7 @@ describe("tool registry", () => {
   test(`Given bash is disabled,
     When provider tools are requested,
     Then only file tools are exposed in stable order`, () => {
-    const tools = openAICompatibleTools(false, false, false);
+    const tools = openAICompatibleTools(false, false, false, false);
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
@@ -1052,7 +1116,7 @@ describe("tool registry", () => {
   test(`Given bash is enabled,
     When provider tools are requested,
     Then the bash tool is exposed after the file tools`, () => {
-    const tools = openAICompatibleTools(true, false, false);
+    const tools = openAICompatibleTools(true, false, false, false);
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
@@ -1167,7 +1231,7 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When the edit schema is rendered for the model,
     Then edit exposes one edits array of replacement objects`, () => {
-    const editTool = openAICompatibleTools(true, false, false).find(
+    const editTool = openAICompatibleTools(true, false, false, false).find(
       (tool) => tool.function.name === "edit",
     );
     const { edits } = editTool?.function.parameters.properties ?? {};
@@ -1204,7 +1268,7 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When the edit description is rendered for the model,
     Then edit explains how to use recovery diagnostics`, () => {
-    const editTool = openAICompatibleTools(true, false, false).find(
+    const editTool = openAICompatibleTools(true, false, false, false).find(
       (tool) => tool.function.name === "edit",
     );
     const description = editTool?.function.description ?? "";

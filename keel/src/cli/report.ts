@@ -57,7 +57,7 @@ export interface RunReportMemoryEntry {
       }
     | {
         readonly type: "user_approved";
-        readonly channel: "cli";
+        readonly channel: "cli" | "interactive";
         readonly candidateId: string;
       };
   readonly createdAt: string;
@@ -107,6 +107,13 @@ export type RunReportMemoryOperation =
       readonly id: string;
       readonly scope: { readonly kind: "project"; readonly id: string };
       readonly outcome: "forgotten";
+    }
+  | {
+      readonly operation: "propose";
+      readonly candidateId: string;
+      readonly memoryId: string | null;
+      readonly scope: { readonly kind: "project"; readonly id: string };
+      readonly outcome: "approved" | "rejected" | "pending";
     };
 
 interface RunReportSkillCatalog {

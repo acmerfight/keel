@@ -1,3 +1,4 @@
+import type { ProviderId } from "../core/provider-id.ts";
 import type { Message } from "../llm/types.ts";
 
 interface AgentMemoryScope {
@@ -22,6 +23,13 @@ export type AgentMemoryOperation =
       readonly id: string;
       readonly scope: AgentMemoryScope;
       readonly outcome: "forgotten";
+    }
+  | {
+      readonly operation: "propose";
+      readonly candidateId: string;
+      readonly memoryId: string | null;
+      readonly scope: AgentMemoryScope;
+      readonly outcome: "approved" | "rejected" | "pending";
     };
 
 export interface AgentMemoryMutationCapability {
@@ -36,8 +44,74 @@ export interface AgentMemoryMutationCapability {
   ) => { readonly id: string; readonly scope: AgentMemoryScope };
 }
 
+interface AgentMemoryProposal {
+  readonly kind:
+    | "user_preference"
+    | "feedback"
+    | "project_context"
+    | "reference";
+  readonly statement: string;
+  readonly why: string;
+  readonly sourceQuote: string;
+  readonly conflictMemoryIds: readonly string[];
+}
+
+export interface AgentMemoryProposalSource {
+  readonly sessionId: string;
+  readonly messageId: string;
+  readonly providerId: ProviderId;
+  readonly model: string;
+}
+
+export interface AgentMemoryProposalReviewRequest {
+  readonly candidateId: string;
+  readonly scope: AgentMemoryScope;
+  readonly kind: AgentMemoryProposal["kind"];
+  readonly statement: string;
+  readonly why: string;
+  readonly sourceQuote: string;
+  readonly conflictMemoryIds: readonly string[];
+}
+
+export type AgentMemoryProposalReviewDecision =
+  | { readonly type: "approve" }
+  | { readonly type: "reject" }
+  | { readonly type: "pending" };
+
+export interface AgentMemoryProposalCapability {
+  readonly propose: (
+    proposal: AgentMemoryProposal,
+    source: AgentMemoryProposalSource,
+    review: (
+      request: AgentMemoryProposalReviewRequest,
+      signal: AbortSignal,
+    ) => Promise<AgentMemoryProposalReviewDecision>,
+    signal: AbortSignal,
+  ) => Promise<{
+    readonly candidateId: string;
+    readonly memoryId: string | null;
+    readonly scope: AgentMemoryScope;
+    readonly outcome: "approved" | "rejected" | "pending";
+  }>;
+}
+
+export interface AgentMemoryProposalToolCapability {
+  readonly capability: AgentMemoryProposalCapability;
+  readonly sourceFor: (
+    message: Extract<Message, { readonly role: "user" }>,
+  ) => AgentMemoryProposalSource | undefined;
+  readonly persistSource: (
+    message: Extract<Message, { readonly role: "user" }>,
+  ) => void;
+  readonly review: (
+    request: AgentMemoryProposalReviewRequest,
+    signal: AbortSignal,
+  ) => Promise<AgentMemoryProposalReviewDecision>;
+}
+
 interface AgentMemoryToolContext {
   readonly capability: AgentMemoryMutationCapability;
+  readonly proposal: AgentMemoryProposalToolCapability | null;
   readonly currentUserMessage: () => Extract<
     Message,
     { readonly role: "user" }
@@ -97,6 +171,34 @@ export function validateAgentMemoryForget(options: {
     return {
       ok: false,
       reason: "requested memory ID is not active in this project",
+    };
+  }
+  return { ok: true };
+}
+
+export function validateAgentMemoryProposal(options: {
+  readonly currentUserMessage: Extract<
+    Message,
+    { readonly role: "user" }
+  > | null;
+  readonly sourceQuote: string;
+  readonly source: AgentMemoryProposalSource | undefined;
+}): MemoryIntentValidation {
+  if (options.currentUserMessage === null || options.source === undefined) {
+    return {
+      ok: false,
+      reason:
+        "reviewed memory is unavailable without a saved current-user message",
+    };
+  }
+  if (
+    options.sourceQuote.trim() === "" ||
+    !options.currentUserMessage.content.includes(options.sourceQuote)
+  ) {
+    return {
+      ok: false,
+      reason:
+        "sourceQuote must be one exact contiguous span from the current-user message",
     };
   }
   return { ok: true };

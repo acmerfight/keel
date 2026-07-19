@@ -276,6 +276,7 @@ export function toolCallAccesses(
     case "update_goal":
     case "memory_add":
     case "memory_forget":
+    case "memory_propose":
     case "skill_resource":
     case "skill_search":
     case "skill":

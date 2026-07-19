@@ -59,6 +59,42 @@ export const memoryForgetToolArgumentsSchema = z
   })
   .strict();
 
+export const memoryProposeToolArgumentsSchema = z
+  .object({
+    kind: z.enum([
+      "user_preference",
+      "feedback",
+      "project_context",
+      "reference",
+    ]),
+    statement: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1_000)
+      .describe("One concise durable project-memory statement to review."),
+    why: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1_000)
+      .describe("Why this statement is likely to help in a later session."),
+    sourceQuote: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .describe(
+        "One exact contiguous quote copied from the latest current-user message that supports the proposed statement.",
+      ),
+    conflictMemoryIds: z
+      .array(z.string())
+      .max(8)
+      .describe(
+        "Every active project-memory ID that conflicts with this proposal; use an empty array when none conflict.",
+      ),
+  })
+  .strict();
+
 export const readToolArgumentsSchema = z
   .object({
     path: z.string().describe("Workspace-relative file path to read."),

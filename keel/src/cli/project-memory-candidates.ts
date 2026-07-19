@@ -27,6 +27,7 @@ import {
   type CandidateExtractionFailure,
   type CandidateExtractionOperation,
   type CandidateKind,
+  type CandidateProposalOrigin,
   type CandidateRecord,
   type CandidateSource,
   eventsWithoutCandidateArtifacts,
@@ -42,6 +43,16 @@ type SuccessfulExtractionOperation = Extract<
   CandidateExtractionOperation,
   { readonly outcome: "succeeded" }
 >;
+
+type ProjectMemoryCandidateOrigin =
+  | {
+      readonly type: "completed_session_extraction";
+      readonly extraction: SuccessfulExtractionOperation;
+    }
+  | {
+      readonly type: "current_turn_proposal";
+      readonly proposal: CandidateProposalOrigin;
+    };
 
 type ProjectMemoryCandidateStatus =
   | "pending"
@@ -60,7 +71,7 @@ export interface ProjectMemoryCandidate {
   readonly duplicateMemoryIds: readonly string[];
   readonly conflictMemoryIds: readonly string[];
   readonly sensitivityValidation: "passed_sensitive_text_v1";
-  readonly extraction: SuccessfulExtractionOperation;
+  readonly origin: ProjectMemoryCandidateOrigin;
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly status: ProjectMemoryCandidateStatus;
@@ -69,7 +80,7 @@ export interface ProjectMemoryCandidate {
 
 interface MutableCandidate {
   readonly created: CandidateRecord;
-  readonly extraction: SuccessfulExtractionOperation;
+  readonly origin: ProjectMemoryCandidateOrigin;
   statement: string;
   status: "pending" | "approved" | "rejected" | "discarded";
   memoryId: string | null;
@@ -102,6 +113,14 @@ export interface CandidateExtractionRecord {
   readonly maxCostUsd: number;
   readonly createdAt: string;
   readonly finishedAt: string;
+}
+
+export interface CurrentTurnCandidateProposalRecord {
+  readonly sessionId: string;
+  readonly messageId: string;
+  readonly providerId: ProviderId;
+  readonly model: string;
+  readonly createdAt: string;
 }
 
 export type CandidateConflictResolution =
@@ -141,7 +160,7 @@ function immutableCandidate(
     duplicateMemoryIds: mutable.created.duplicateMemoryIds,
     conflictMemoryIds: mutable.created.conflictMemoryIds,
     sensitivityValidation: mutable.created.sensitivityValidation,
-    extraction: mutable.extraction,
+    origin: mutable.origin,
     createdAt: mutable.created.createdAt,
     expiresAt: mutable.created.expiresAt,
     status,
@@ -188,12 +207,34 @@ function replayCandidateEvents(
         }
         candidates.set(candidate.id, {
           created: candidate,
-          extraction: event.operation,
+          origin: {
+            type: "completed_session_extraction",
+            extraction: event.operation,
+          },
           statement: candidate.statement,
           status: "pending",
           memoryId: null,
         });
       }
+      continue;
+    }
+    if (event.type === "candidate_proposal") {
+      const candidate = event.candidate;
+      if (candidates.has(candidate.id)) {
+        fail(
+          `Error: cannot read project-memory candidates ${filePath}: duplicate candidate ${candidate.id} at line ${index + 1}.`,
+        );
+      }
+      candidates.set(candidate.id, {
+        created: candidate,
+        origin: {
+          type: "current_turn_proposal",
+          proposal: event.origin,
+        },
+        statement: candidate.statement,
+        status: "pending",
+        memoryId: null,
+      });
       continue;
     }
     if (event.type === "candidate_edit") {
@@ -364,6 +405,16 @@ function normalizedProposal(
 ): CandidateProposal & { readonly duplicateMemoryIds: readonly string[] } {
   const statement = validatedCandidateText(proposal.statement);
   const why = validatedCandidateText(proposal.why);
+  for (const source of proposal.sources) {
+    if (
+      prohibitedSensitiveTextCategory(source.quote) !== undefined ||
+      hasPersistenceRedactionMarker(source.quote)
+    ) {
+      fail(
+        "Error: candidate source was not stored because it contains prohibited sensitive data or a redaction marker.",
+      );
+    }
+  }
   if (proposal.sources.some((source) => source.sessionId !== sessionId)) {
     fail(
       "Error: candidate source session does not match the extraction session.",
@@ -450,7 +501,8 @@ function recordCandidateExtractionInState(
         .filter(
           (candidate) =>
             candidate.status === "pending" &&
-            candidate.extraction.sessionId === extraction.sessionId,
+            candidate.origin.type === "completed_session_extraction" &&
+            candidate.origin.extraction.sessionId === extraction.sessionId,
         )
         .map((candidate) => candidate.id)
     : [];
@@ -544,6 +596,74 @@ export function recordCandidateExtractionWithWriteLockHeld(
       retry,
     ),
   );
+}
+
+export function recordCurrentTurnCandidateProposal(
+  runtime: ProjectMemoryRuntime,
+  workspace: string,
+  origin: CurrentTurnCandidateProposalRecord,
+  proposal: CandidateProposal,
+): {
+  readonly scope: ProjectMemoryScope;
+  readonly candidate: ProjectMemoryCandidate;
+} {
+  return withWriteLock(runtime, workspace, (scope, state, filePath) => {
+    const activeMemory = listProjectMemory(runtime, workspace, {
+      all: false,
+    }).entries;
+    const normalized = normalizedProposal(
+      proposal,
+      origin.sessionId,
+      activeMemory,
+    );
+    if (normalized.duplicateMemoryIds.length > 0) {
+      fail(
+        `Error: project-memory proposal duplicates active memory ${normalized.duplicateMemoryIds.join(", ")}.`,
+      );
+    }
+    const pendingCount = state.candidates.filter(
+      (candidate) => candidate.status === "pending",
+    ).length;
+    if (pendingCount >= MAX_PENDING_CANDIDATES) {
+      fail(
+        `Error: project-memory candidate inbox already contains ${MAX_PENDING_CANDIDATES} pending candidates. Review or clear existing candidates first.`,
+      );
+    }
+    const candidate: CandidateRecord = {
+      id: `cand_${randomUUID()}`,
+      kind: normalized.kind,
+      statement: normalized.statement,
+      why: normalized.why,
+      sources: [...normalized.sources],
+      duplicateMemoryIds: [...normalized.duplicateMemoryIds],
+      conflictMemoryIds: [...normalized.conflictMemoryIds],
+      sensitivityValidation: "passed_sensitive_text_v1",
+      createdAt: origin.createdAt,
+      expiresAt: new Date(
+        Date.parse(origin.createdAt) + CANDIDATE_TTL_MS,
+      ).toISOString(),
+    };
+    const event: ProjectMemoryEvent = {
+      version: PROJECT_MEMORY_SCHEMA_VERSION,
+      type: "candidate_proposal",
+      origin: {
+        sessionId: origin.sessionId,
+        messageId: origin.messageId,
+        providerId: origin.providerId,
+        model: origin.model,
+        createdAt: origin.createdAt,
+      },
+      candidate,
+    };
+    const nextEvents = [...state.events, event];
+    const next = replayCandidateEvents(nextEvents, filePath, runtime.now());
+    validateProjectMemoryGeneration(nextEvents, filePath, runtime.now());
+    appendProjectMemoryEvent(filePath, event);
+    return {
+      scope,
+      candidate: requireCandidate(next, candidate.id),
+    };
+  });
 }
 
 export function recordCandidateExtractionOutcome(
@@ -690,11 +810,30 @@ function currentConflicts(
   return candidate.conflictMemoryIds.filter((id) => activeIds.has(id));
 }
 
-export function approveProjectMemoryCandidate(
+function candidateOriginSessionId(candidate: ProjectMemoryCandidate): string {
+  return candidate.origin.type === "completed_session_extraction"
+    ? candidate.origin.extraction.sessionId
+    : candidate.origin.proposal.sessionId;
+}
+
+type CandidateApproval =
+  | {
+      readonly channel: "cli";
+      readonly resolution: CandidateConflictResolution;
+    }
+  | {
+      readonly channel: "interactive";
+      readonly resolution: { readonly type: "none" };
+      readonly expectedStatement: string;
+      readonly expectedSource: CandidateSource;
+      readonly sessionId: string;
+    };
+
+function approveCandidate(
   runtime: ProjectMemoryRuntime,
   workspace: string,
   id: string,
-  resolution: CandidateConflictResolution,
+  approval: CandidateApproval,
 ): {
   readonly scope: ProjectMemoryScope;
   readonly candidate: ProjectMemoryCandidate;
@@ -703,6 +842,20 @@ export function approveProjectMemoryCandidate(
   validateCandidateId(id);
   return withWriteLock(runtime, workspace, (scope, state, filePath) => {
     const candidate = requirePendingCandidate(state, id);
+    if (
+      approval.channel === "interactive" &&
+      (candidate.origin.type !== "current_turn_proposal" ||
+        candidate.origin.proposal.sessionId !== approval.sessionId ||
+        candidate.statement !== approval.expectedStatement ||
+        candidate.sources.length !== 1 ||
+        candidate.sources[0]?.sessionId !== approval.expectedSource.sessionId ||
+        candidate.sources[0]?.messageId !== approval.expectedSource.messageId ||
+        candidate.sources[0]?.quote !== approval.expectedSource.quote)
+    ) {
+      fail(
+        `Error: project-memory candidate ${id} changed after it was displayed for interactive approval.`,
+      );
+    }
     const active = validateProjectMemoryGeneration(
       state.events,
       filePath,
@@ -719,6 +872,7 @@ export function approveProjectMemoryCandidate(
     }
     const edited = candidate.statement !== candidate.originalStatement;
     const conflicts = edited ? [] : currentConflicts(candidate, active);
+    const resolution = approval.resolution;
     if (edited && resolution.type === "none") {
       fail(
         `Error: edited candidate requires an explicit conflict decision. Approve with --keep or --supersede <active-memory-id>.`,
@@ -745,8 +899,8 @@ export function approveProjectMemoryCandidate(
       text: validatedCandidateText(candidate.statement),
       source: {
         type: "user_approved",
-        channel: "cli",
-        evidence: `approved candidate ${id} from session ${candidate.extraction.sessionId}`,
+        channel: approval.channel,
+        evidence: `approved candidate ${id} from session ${candidateOriginSessionId(candidate)}`,
         candidateId: id,
       },
       createdAt,
@@ -776,6 +930,37 @@ export function approveProjectMemoryCandidate(
       throw new Error("approved candidate memory was not projected");
     }
     return { scope, candidate: approved, memory: activeMemory };
+  });
+}
+
+export function approveProjectMemoryCandidate(
+  runtime: ProjectMemoryRuntime,
+  workspace: string,
+  id: string,
+  resolution: CandidateConflictResolution,
+): ReturnType<typeof approveCandidate> {
+  return approveCandidate(runtime, workspace, id, {
+    channel: "cli",
+    resolution,
+  });
+}
+
+export function approveReviewedProjectMemoryCandidate(
+  runtime: ProjectMemoryRuntime,
+  workspace: string,
+  id: string,
+  expected: {
+    readonly statement: string;
+    readonly source: CandidateSource;
+    readonly sessionId: string;
+  },
+): ReturnType<typeof approveCandidate> {
+  return approveCandidate(runtime, workspace, id, {
+    channel: "interactive",
+    resolution: { type: "none" },
+    expectedStatement: expected.statement,
+    expectedSource: expected.source,
+    sessionId: expected.sessionId,
   });
 }
 

@@ -42,8 +42,9 @@ const MEMORY_HELP = `Usage:
   keel memory candidates purge <candidate-id> [--purge-memory <memory-id>]
   keel memory candidates clear [--purge] [--purge-memories] [--yes]
 
-Memory is saved only by these commands or a direct, unambiguous current-user “remember” request handled by the agent memory tool.
-Candidate extraction is off by default and runs only after an explicit extract command. It inspects bounded current-user evidence from one completed, persisted root session and creates inactive candidates; it never writes active memory directly.
+Memory is saved by these commands, a direct unambiguous current-user “remember” request, or an explicitly approved proposal shown during a saved interactive TTY session.
+Candidate extraction is off by default and runs only after an explicit extract command. It inspects bounded current-user evidence from one completed, persisted root session and creates inactive candidates.
+During a saved interactive TTY session, the current model may propose one durable fact from an exact current-user quote. Keel records the candidate first and activates only the exact displayed candidate after a Runtime-owned y/n prompt. Conflicts, interruptions, and closed input stay pending for the existing candidate review CLI.
 Review candidate sources, conflicts, sensitivity validation, provider usage, and cost before approving. Pending candidates expire after 30 days and are never injected into agent context.
 Direct “forget” requests must identify one active entry unambiguously; use an ID when needed.
 Save small, durable project facts that are not cheaply derivable from the repository.

@@ -40,6 +40,7 @@ export interface StreamTurnOptions {
   readonly allowBash: boolean;
   readonly allowSkill?: boolean;
   readonly allowMemory?: boolean;
+  readonly allowMemoryProposal?: boolean;
   readonly toolChoice?: "none";
   readonly textPrefix?: string;
   readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
@@ -95,6 +96,7 @@ export async function* streamAgentTurn(
     allowBash,
     allowSkill,
     allowMemory,
+    allowMemoryProposal,
   } = options;
   let textPrefix = options.textPrefix ?? "";
   const stream = provider.stream({
@@ -107,6 +109,7 @@ export async function* streamAgentTurn(
     ...(allowBash ? { allowBash: true } : {}),
     ...(allowSkill === true ? { allowSkill: true } : {}),
     ...(allowMemory === true ? { allowMemory: true } : {}),
+    ...(allowMemoryProposal === true ? { allowMemoryProposal: true } : {}),
     ...(options.toolChoice !== undefined
       ? { toolChoice: options.toolChoice }
       : {}),

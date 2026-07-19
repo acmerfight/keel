@@ -11,6 +11,7 @@ import {
 } from "../../src/cli/project-memory.ts";
 import {
   approveProjectMemoryCandidate,
+  approveReviewedProjectMemoryCandidate,
   type CandidateExtractionRecord,
   type CandidateProposal,
   clearProjectMemoryCandidates,
@@ -18,6 +19,7 @@ import {
   listProjectMemoryCandidates,
   purgeProjectMemoryCandidate,
   recordCandidateExtraction,
+  recordCurrentTurnCandidateProposal,
   rejectProjectMemoryCandidate,
   showProjectMemoryCandidate,
 } from "../../src/cli/project-memory-candidates.ts";
@@ -75,6 +77,244 @@ function proposal(sessionId: string, statement: string): CandidateProposal {
 }
 
 describe("project-memory candidate store", () => {
+  test(`Given the current model proposes a fact from one saved user message,
+    When the displayed candidate is approved without changing,
+    Then its distinct proposal origin and interactive approval remain auditable`, async () => {
+    const workspace = await createGitWorkspace("keel-current-turn-candidate-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-current-turn-candidate-home-"),
+    );
+    const runtime = storeRuntime(keelHome, () => Date.parse(CREATED_AT));
+    const source = {
+      sessionId: "current-session",
+      messageId: "msg_current",
+      quote: "pnpm test:coverage",
+    };
+
+    try {
+      const recorded = recordCurrentTurnCandidateProposal(
+        runtime,
+        workspace,
+        {
+          sessionId: source.sessionId,
+          messageId: source.messageId,
+          providerId: "kimi",
+          model: "kimi-k2.5",
+          createdAt: CREATED_AT,
+        },
+        {
+          kind: "project_context",
+          statement: "Release validation uses pnpm test:coverage.",
+          why: "This command is likely to be reused.",
+          sources: [source],
+          conflictMemoryIds: [],
+        },
+      );
+
+      expect(recorded.candidate.origin).toEqual({
+        type: "current_turn_proposal",
+        proposal: {
+          sessionId: source.sessionId,
+          messageId: source.messageId,
+          providerId: "kimi",
+          model: "kimi-k2.5",
+          createdAt: CREATED_AT,
+        },
+      });
+      expect(
+        listProjectMemory(runtime, workspace, { all: false }).entries,
+      ).toEqual([]);
+
+      const approved = approveReviewedProjectMemoryCandidate(
+        runtime,
+        workspace,
+        recorded.candidate.id,
+        {
+          statement: recorded.candidate.statement,
+          source,
+          sessionId: source.sessionId,
+        },
+      );
+
+      expect(approved.memory.source).toMatchObject({
+        type: "user_approved",
+        channel: "interactive",
+        candidateId: recorded.candidate.id,
+      });
+      expect(() =>
+        recordCurrentTurnCandidateProposal(
+          runtime,
+          workspace,
+          {
+            sessionId: source.sessionId,
+            messageId: "msg_duplicate",
+            providerId: "kimi",
+            model: "kimi-k2.5",
+            createdAt: CREATED_AT,
+          },
+          {
+            kind: "project_context",
+            statement: recorded.candidate.statement,
+            why: "The same rule should not create another candidate.",
+            sources: [
+              {
+                sessionId: source.sessionId,
+                messageId: "msg_duplicate",
+                quote: recorded.candidate.statement,
+              },
+            ],
+            conflictMemoryIds: [],
+          },
+        ),
+      ).toThrow("duplicates active memory");
+      expect(
+        listProjectMemoryCandidates(runtime, workspace).operations,
+      ).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a pending current-turn proposal exists only in candidate storage,
+    When the user physically purges that candidate,
+    Then its proposal event and payload are both removed`, async () => {
+    const workspace = await createGitWorkspace("keel-proposal-purge-");
+    const keelHome = await mkdtemp(join(tmpdir(), "keel-proposal-purge-home-"));
+    const runtime = storeRuntime(keelHome, () => Date.parse(CREATED_AT));
+    try {
+      const recorded = recordCurrentTurnCandidateProposal(
+        runtime,
+        workspace,
+        {
+          sessionId: "purge-session",
+          messageId: "msg_purge",
+          providerId: "deepseek",
+          model: "deepseek-chat",
+          createdAt: CREATED_AT,
+        },
+        {
+          kind: "reference",
+          statement: "The release handbook is the review reference.",
+          why: "Future release reviews need the same reference.",
+          sources: [
+            {
+              sessionId: "purge-session",
+              messageId: "msg_purge",
+              quote: "release handbook",
+            },
+          ],
+          conflictMemoryIds: [],
+        },
+      );
+      const filePath = join(
+        keelHome,
+        "memory",
+        "projects",
+        recorded.scope.id,
+        "events.jsonl",
+      );
+
+      purgeProjectMemoryCandidate(
+        runtime,
+        workspace,
+        recorded.candidate.id,
+        null,
+      );
+
+      expect(
+        listProjectMemoryCandidates(runtime, workspace).candidates,
+      ).toEqual([]);
+      expect(await readFile(filePath, "utf8")).not.toContain(
+        recorded.candidate.statement,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive proposal has a conflict or changes after display,
+    When inline approval would be unsafe,
+    Then the candidate remains pending for the existing review CLI`, async () => {
+    const workspace = await createGitWorkspace("keel-current-turn-conflict-");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-current-turn-conflict-home-"),
+    );
+    const runtime = storeRuntime(keelHome, () => Date.parse(CREATED_AT));
+    const active = addProjectMemory(
+      runtime,
+      workspace,
+      "Release validation uses pnpm test.",
+      { type: "user_explicit", channel: "cli", evidence: "memory add" },
+      { reviewAfter: null, expiresAt: null },
+    );
+    const source = {
+      sessionId: "conflict-session",
+      messageId: "msg_conflict",
+      quote: "pnpm test:coverage",
+    };
+
+    try {
+      const recorded = recordCurrentTurnCandidateProposal(
+        runtime,
+        workspace,
+        {
+          sessionId: source.sessionId,
+          messageId: source.messageId,
+          providerId: "qwen",
+          model: "qwen3-coder-plus",
+          createdAt: CREATED_AT,
+        },
+        {
+          kind: "project_context",
+          statement: "Release validation uses pnpm test:coverage.",
+          why: "The validation command changed.",
+          sources: [source],
+          conflictMemoryIds: [active.entry.id],
+        },
+      );
+
+      expect(() =>
+        approveReviewedProjectMemoryCandidate(
+          runtime,
+          workspace,
+          recorded.candidate.id,
+          {
+            statement: recorded.candidate.statement,
+            source,
+            sessionId: source.sessionId,
+          },
+        ),
+      ).toThrow("conflicts with");
+      editProjectMemoryCandidate(
+        runtime,
+        workspace,
+        recorded.candidate.id,
+        "Release validation uses pnpm test:coverage --runInBand.",
+      );
+      expect(() =>
+        approveReviewedProjectMemoryCandidate(
+          runtime,
+          workspace,
+          recorded.candidate.id,
+          {
+            statement: recorded.candidate.statement,
+            source,
+            sessionId: source.sessionId,
+          },
+        ),
+      ).toThrow("changed after it was displayed");
+      expect(
+        showProjectMemoryCandidate(runtime, workspace, recorded.candidate.id)
+          .candidate.status,
+      ).toBe("pending");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a new extracted candidate,
     When the user edits, rejects, and physically purges it,
     Then every lifecycle transition is deterministic and no candidate payload remains`, async () => {
@@ -775,6 +1015,32 @@ describe("project-memory candidate store", () => {
           false,
         ),
       ).toThrow("would exceed 100 pending candidates");
+      expect(() =>
+        recordCurrentTurnCandidateProposal(
+          runtime,
+          workspace,
+          {
+            sessionId: "interactive-overflow",
+            messageId: "msg_overflow",
+            providerId: "deepseek",
+            model: "deepseek-chat",
+            createdAt: CREATED_AT,
+          },
+          {
+            kind: "project_context",
+            statement: "One interactive candidate too many.",
+            why: "This should be stopped by the shared inbox cap.",
+            sources: [
+              {
+                sessionId: "interactive-overflow",
+                messageId: "msg_overflow",
+                quote: "One interactive candidate too many.",
+              },
+            ],
+            conflictMemoryIds: [],
+          },
+        ),
+      ).toThrow("candidate inbox already contains 100 pending candidates");
       expect(
         listProjectMemoryCandidates(runtime, workspace).candidates,
       ).toHaveLength(100);
@@ -850,6 +1116,21 @@ describe("project-memory candidate store", () => {
         ],
         [
           projectMemoryEventSchema.parse({
+            version: 5,
+            type: "candidate_proposal",
+            origin: {
+              sessionId: "corrupt-session",
+              messageId: "msg_1",
+              providerId: "deepseek",
+              model: "deepseek-chat",
+              createdAt: CREATED_AT,
+            },
+            candidate,
+          }),
+          "duplicate candidate",
+        ],
+        [
+          projectMemoryEventSchema.parse({
             ...seed,
             operation: {
               ...seed.operation,
@@ -867,7 +1148,7 @@ describe("project-memory candidate store", () => {
         ],
         [
           projectMemoryEventSchema.parse({
-            version: 4,
+            version: 5,
             type: "candidate_edit",
             targetId: unknownCandidate,
             statement: "Unknown edit.",
@@ -877,7 +1158,7 @@ describe("project-memory candidate store", () => {
         ],
         [
           projectMemoryEventSchema.parse({
-            version: 4,
+            version: 5,
             type: "candidate_reject",
             targetIds: [unknownCandidate],
             reason: "user_rejected",
@@ -887,7 +1168,7 @@ describe("project-memory candidate store", () => {
         ],
         [
           projectMemoryEventSchema.parse({
-            version: 4,
+            version: 5,
             type: "candidate_approve",
             targetId: unknownCandidate,
             memory: {
@@ -910,7 +1191,7 @@ describe("project-memory candidate store", () => {
         ],
         [
           projectMemoryEventSchema.parse({
-            version: 4,
+            version: 5,
             type: "candidate_approve",
             targetId: candidate.id,
             memory: {
