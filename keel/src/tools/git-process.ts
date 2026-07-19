@@ -41,8 +41,10 @@ export interface RunGitOptions {
 export interface GitWorkTreeScope {
   readonly rootPath: string;
   readonly workspacePathspec: string;
-  readonly pathspecs: readonly string[];
+  readonly pathspecs: GitPathspecs;
 }
+
+export type GitPathspecs = readonly [string, ...string[]];
 
 interface GitProcessOutputCapture {
   readonly append: (chunk: Buffer) => void;
@@ -344,7 +346,7 @@ export function expectGitExitCode(
   result: GitProcessResult,
   acceptedExitCodes: ReadonlySet<number>,
 ): GitProcessResult {
-  if (result.exitCode === null) {
+  if (result.exitCode === null || result.timedOut) {
     throw gitCommandFailure(toolName, command, result);
   }
   if (!acceptedExitCodes.has(result.exitCode)) {
@@ -481,11 +483,11 @@ export async function resolveGitWorkTreeScope(
   const rootPath = realpathSync(result.artifactStdout.text.trim());
   const workspaceFromRoot = posixRelativePath(rootPath, workspacePath);
   const workspacePathspec = workspaceFromRoot === "" ? "." : workspaceFromRoot;
-  const pathspecs =
-    workspaceRelativePaths.length === 0
-      ? [workspacePathspec]
-      : workspaceRelativePaths.map((path) =>
-          joinGitPath(workspaceFromRoot, path),
-        );
+  const resolvedPathspecs = workspaceRelativePaths.map((path) =>
+    joinGitPath(workspaceFromRoot, path),
+  );
+  const [firstPathspec = workspacePathspec, ...remainingPathspecs] =
+    resolvedPathspecs;
+  const pathspecs: GitPathspecs = [firstPathspec, ...remainingPathspecs];
   return { rootPath, workspacePathspec, pathspecs };
 }

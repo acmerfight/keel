@@ -1,10 +1,12 @@
 import { realpathSync } from "node:fs";
+import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 import {
   assertGitPathFiltersAllowed,
   expectGitExitCode,
   GIT_ARTIFACT_OUTPUT_MAX_BYTES,
   GIT_PREVIEW_OUTPUT_MAX_BYTES,
+  type GitPathspecs,
   type GitProcessResult,
   gitCommandFailure,
   gitNullDevicePath,
@@ -25,7 +27,10 @@ import type { ToolResult } from "./types.ts";
 const UNTRACKED_FILE_LIMIT = 50;
 const GIT_DIFF_NO_CHANGES_CONTENT = "No git changes found.";
 const SAFE_GIT_REF_PATTERN = /^[A-Za-z0-9_./@{}~^+-]+$/u;
-const GIT_COMMIT_OID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
+const GIT_COMMIT_OID_OUTPUT_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?\r?\n$/u;
+const FILTER_DRIVER_KEY_PATTERN = /^filter\.[^=]+\.(?:clean|process)$/u;
+const SINGLE_CHANGED_STATUS_PATTERN = /^(?:[ADMTUXB]|M(?:100|0[0-9]{2}))$/u;
+const PAIRED_CHANGED_STATUS_PATTERN = /^[RC](?:100|0[0-9]{2})$/u;
 
 const DIFF_BASE_ARGS = [
   "--no-color",
@@ -54,20 +59,33 @@ export interface GitDiffResult extends ToolResult {
   readonly inGitWorkTree: boolean;
 }
 
-interface SingleChangedTrackedEntry {
-  readonly kind: "single";
-  readonly path: string;
-}
+const changedTrackedPathSchema = z.string().min(1);
+const changedTrackedEntrySchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("single"),
+      path: changedTrackedPathSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("paired"),
+      oldPath: changedTrackedPathSchema,
+      newPath: changedTrackedPathSchema,
+    })
+    .strict(),
+]);
+const changedTrackedEntriesSchema = z.array(changedTrackedEntrySchema);
+const filterDriverKeySchema = z
+  .string()
+  .regex(FILTER_DRIVER_KEY_PATTERN)
+  .transform((key) => {
+    const suffix = key.endsWith(".clean") ? ".clean" : ".process";
+    return key.slice(0, -suffix.length);
+  });
+const filterDriverKeysSchema = z.array(filterDriverKeySchema).min(1);
 
-interface PairedChangedTrackedEntry {
-  readonly kind: "paired";
-  readonly oldPath: string;
-  readonly newPath: string;
-}
-
-type ChangedTrackedEntry =
-  | SingleChangedTrackedEntry
-  | PairedChangedTrackedEntry;
+type ChangedTrackedEntry = z.infer<typeof changedTrackedEntrySchema>;
 
 interface GitDiffRefComparison {
   readonly baseRef: string;
@@ -78,6 +96,11 @@ interface GitDiffRefComparison {
 interface ResolvedGitDiffRefComparison extends GitDiffRefComparison {
   readonly baseCommit: string;
   readonly headCommit: string;
+}
+
+interface GitDiffSourceTruncation {
+  readonly preview: boolean;
+  readonly artifact: boolean;
 }
 
 function gitRefError(message: string): KeelError {
@@ -102,6 +125,64 @@ function noCommonAncestorError(comparison: GitDiffRefComparison): KeelError {
     `git_diff failed: no common ancestor between ${comparison.baseRef} and ${comparison.headRef}`,
     "Choose refs that share a common ancestor, or compare explicit commits without mergeBase.",
   );
+}
+
+function malformedGitOutputError(command: string): KeelError {
+  return new KeelError(
+    "tool_unavailable",
+    `git_diff failed: git ${command} returned malformed output`,
+    "Retry git_diff, or inspect the affected files directly with read/grep.",
+  );
+}
+
+function truncatedGitMetadataError(command: string): KeelError {
+  return new KeelError(
+    "tool_unavailable",
+    `git_diff failed: git ${command} returned truncated metadata`,
+    "Use paths to narrow the metadata set, or inspect files directly with read/grep.",
+  );
+}
+
+function completeGitMetadata(
+  command: string,
+  output: CapturedByteOutput,
+): string {
+  if (output.truncated) {
+    throw truncatedGitMetadataError(command);
+  }
+  return output.text;
+}
+
+function stripFinalLf(output: string): string {
+  return output.endsWith("\n") ? output.slice(0, -1) : output;
+}
+
+function parseGitCommitOid(
+  command: string,
+  output: CapturedByteOutput,
+): string {
+  const completeOutput = completeGitMetadata(command, output);
+  if (!GIT_COMMIT_OID_OUTPUT_PATTERN.test(completeOutput)) {
+    throw malformedGitOutputError(command);
+  }
+  return completeOutput.replace(/\r?\n$/u, "");
+}
+
+function nulTerminatedGitRecords(
+  command: string,
+  output: string,
+): readonly string[] {
+  if (output === "") return [];
+  if (!output.endsWith("\0")) {
+    throw malformedGitOutputError(command);
+  }
+  const parsed = z
+    .array(changedTrackedPathSchema)
+    .safeParse(output.slice(0, -1).split("\0"));
+  if (!parsed.success) {
+    throw malformedGitOutputError(command);
+  }
+  return parsed.data;
 }
 
 function normalizeGitRef(requestedRef: string): string {
@@ -161,15 +242,6 @@ function safeDiffArgs(
   ];
 }
 
-function filterDriverFromKey(key: string): string | null {
-  if (!key.startsWith("filter.")) return null;
-  for (const suffix of [".clean", ".process"]) {
-    if (key.endsWith(suffix)) return key.slice(0, -suffix.length);
-  }
-  /* v8 ignore next: git config is queried with a clean/process suffix regexp; this guards malformed output. */
-  return null;
-}
-
 async function configuredFilterOverrides(
   workspacePath: string,
   signal: AbortSignal | undefined,
@@ -186,18 +258,25 @@ async function configuredFilterOverrides(
     ],
     gitRunOptions(undefined, signal, "metadata"),
   );
-  /* v8 ignore next: exit 1 is git's normal no-match result; other config failures are environment faults. */
-  if (result.exitCode === 1) return [];
-  /* v8 ignore next: unexpected git config failures are surfaced through the generic git failure path. */
+  if (result.exitCode === 1) {
+    if (completeGitMetadata("config", result.artifactStdout) !== "") {
+      throw malformedGitOutputError("config");
+    }
+    return [];
+  }
   expectGitExitCode("git_diff", "config", result, new Set([0]));
 
-  const drivers = new Set<string>();
-  for (const key of result.artifactStdout.text.split("\0")) {
-    const driver = filterDriverFromKey(key);
-    if (driver !== null) drivers.add(driver);
+  const parsed = filterDriverKeysSchema.safeParse(
+    nulTerminatedGitRecords(
+      "config",
+      completeGitMetadata("config", result.artifactStdout),
+    ),
+  );
+  if (!parsed.success) {
+    throw malformedGitOutputError("config");
   }
 
-  return [...drivers].flatMap((driver) => [
+  return [...new Set(parsed.data)].flatMap((driver) => [
     `${driver}.clean=`,
     `${driver}.process=`,
     `${driver}.required=false`,
@@ -209,19 +288,15 @@ function processOutput(options: {
   readonly stderr: CapturedByteOutput;
   readonly maxBytes: number;
 }): string {
-  const output: string[] = [];
-  /* v8 ignore next: callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings. */
-  if (options.stdout.text !== "") output.push(options.stdout.text.trimEnd());
+  const output = [stripFinalLf(options.stdout.text)];
   if (options.stdout.truncated) {
     output.push(
       `[git_diff stdout truncated: showing first ${options.maxBytes} bytes]`,
     );
   }
-  /* v8 ignore next 3: stderr pass-through is for unexpected git warnings; successful fixture diffs keep stderr empty. */
   if (options.stderr.text !== "") {
-    output.push(`git stderr:\n${options.stderr.text.trimEnd()}`);
+    output.push(`git stderr:\n${stripFinalLf(options.stderr.text)}`);
   }
-  /* v8 ignore next 4: stderr truncation is a defensive cap for unexpected noisy git warnings/errors. */
   if (options.stderr.truncated) {
     output.push(
       `[git_diff stderr truncated: showing first ${options.maxBytes} bytes]`,
@@ -230,47 +305,34 @@ function processOutput(options: {
   return output.join("\n");
 }
 
-function appendOutputSection(
-  sections: string[],
-  label: string,
-  output: string,
-): void {
-  /* v8 ignore next: callers skip known-empty tracked diffs; this remains as a defensive guard for git races/warnings. */
-  if (output !== "") sections.push(`${label}:\n${output}`);
-}
-
 function appendProcessSections(
   sections: string[],
   artifactSections: string[],
   label: string,
   result: GitProcessResult,
-): void {
-  appendOutputSection(
-    sections,
-    label,
-    processOutput({
+): GitDiffSourceTruncation {
+  if (result.artifactStdout.text === "") {
+    throw malformedGitOutputError("diff");
+  }
+  sections.push(
+    `${label}:\n${processOutput({
       stdout: result.stdout,
       stderr: result.stderr,
       maxBytes: GIT_PREVIEW_OUTPUT_MAX_BYTES,
-    }),
+    })}`,
   );
-  appendOutputSection(
-    artifactSections,
-    label,
-    processOutput({
+  artifactSections.push(
+    `${label}:\n${processOutput({
       stdout: result.artifactStdout,
       stderr: result.artifactStderr,
       maxBytes: GIT_ARTIFACT_OUTPUT_MAX_BYTES,
-    }),
+    })}`,
   );
-}
-
-function gitDiffContentSourceTruncated(content: string): boolean {
-  return (
-    content.includes("[git_diff stdout truncated:") ||
-    content.includes("[git_diff stderr truncated:") ||
-    content.includes("[git_diff output truncated:")
-  );
+  return {
+    preview: result.stdout.truncated || result.stderr.truncated,
+    artifact:
+      result.artifactStdout.truncated || result.artifactStderr.truncated,
+  };
 }
 
 async function runDiff(
@@ -286,7 +348,7 @@ async function runDiff(
     safeDiffArgs(args, paths),
     gitRunOptions(config, signal),
   );
-  return expectGitExitCode("git_diff", "diff", result, new Set([0, 1]));
+  return expectGitExitCode("git_diff", "diff", result, new Set([0]));
 }
 
 async function resolveGitCommitRef(
@@ -301,20 +363,18 @@ async function resolveGitCommitRef(
     ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
     gitRunOptions(config, signal, "metadata"),
   );
-  /* v8 ignore next 3: rev-parse timeout/null exit is an OS process-control failure, not deterministic tool behavior. */
-  if (result.exitCode === null || result.timedOut) {
+  if (result.exitCode === null) {
+    throw gitCommandFailure("git_diff", "rev-parse", result);
+  }
+  /* v8 ignore next 3 -- the numeric-exit timeout race is owned by expectGitExitCode's process-level contract. */
+  if (result.timedOut) {
     throw gitCommandFailure("git_diff", "rev-parse", result);
   }
   if (result.exitCode !== 0) {
     throw gitRefDoesNotResolveToCommitError(requestedRef);
   }
 
-  const commit = result.artifactStdout.text.trim();
-  /* v8 ignore next 3: git rev-parse --verify <ref>^{commit} emits a commit OID on success. */
-  if (!GIT_COMMIT_OID_PATTERN.test(commit)) {
-    throw gitRefDoesNotResolveToCommitError(requestedRef);
-  }
-  return commit;
+  return parseGitCommitOid("rev-parse", result.artifactStdout);
 }
 
 async function resolveRefComparison(
@@ -342,23 +402,20 @@ async function mergeBaseRef(
     ["merge-base", comparison.baseCommit, comparison.headCommit],
     gitRunOptions(config, signal, "metadata"),
   );
-  /* v8 ignore next 3: merge-base timeout/null exit is an OS process-control failure, not deterministic tool behavior. */
-  if (result.exitCode === null || result.timedOut) {
+  if (result.exitCode === null) {
+    throw gitCommandFailure("git_diff", "merge-base", result);
+  }
+  /* v8 ignore next 3 -- the numeric-exit timeout race is owned by expectGitExitCode's process-level contract. */
+  if (result.timedOut) {
     throw gitCommandFailure("git_diff", "merge-base", result);
   }
   if (result.exitCode === 1) {
     throw noCommonAncestorError(comparison);
   }
-  /* v8 ignore next 3: git merge-base returns 0 for success and 1 for no common ancestor; other exits are environment faults. */
   if (result.exitCode !== 0) {
     throw gitCommandFailure("git_diff", "merge-base", result);
   }
-  const mergeBase = result.artifactStdout.text.trim();
-  /* v8 ignore next 3: successful git merge-base emits the selected ancestor commit. */
-  if (mergeBase === "") {
-    throw noCommonAncestorError(comparison);
-  }
-  return mergeBase;
+  return parseGitCommitOid("merge-base", result.artifactStdout);
 }
 
 async function refComparisonDiffArgs(
@@ -378,41 +435,33 @@ async function refComparisonDiffArgs(
 function parseChangedTrackedEntries(
   nameStatusOutput: string,
 ): readonly ChangedTrackedEntry[] {
-  const tokens = nameStatusOutput.split("\0");
-  const entries: ChangedTrackedEntry[] = [];
-  let index = 0;
+  const tokens = nulTerminatedGitRecords(
+    "diff --name-status",
+    nameStatusOutput,
+  );
+  const entries: unknown[] = [];
+  const iterator = tokens[Symbol.iterator]();
 
-  while (index < tokens.length) {
-    const status = tokens[index];
-    index += 1;
-    if (status === undefined || status === "") break;
-
-    const statusKind = status[0];
-    if (statusKind === "R" || statusKind === "C") {
-      const oldPath = tokens[index];
-      const newPath = tokens[index + 1];
-      index += 2;
-      /* v8 ignore next: git --name-status -z emits old/new paths for rename/copy entries. */
-      if (
-        oldPath === undefined ||
-        oldPath === "" ||
-        newPath === undefined ||
-        newPath === ""
-      ) {
-        continue;
-      }
+  for (const status of iterator) {
+    if (PAIRED_CHANGED_STATUS_PATTERN.test(status)) {
+      const oldPath = iterator.next().value;
+      const newPath = iterator.next().value;
       entries.push({ kind: "paired", oldPath, newPath });
       continue;
     }
+    if (!SINGLE_CHANGED_STATUS_PATTERN.test(status)) {
+      throw malformedGitOutputError("diff --name-status");
+    }
 
-    const path = tokens[index];
-    index += 1;
-    /* v8 ignore next: git --name-status -z emits status/path pairs for non-rename entries. */
-    if (path === undefined || path === "") continue;
+    const path = iterator.next().value;
     entries.push({ kind: "single", path });
   }
 
-  return entries;
+  const parsed = changedTrackedEntriesSchema.safeParse(entries);
+  if (!parsed.success) {
+    throw malformedGitOutputError("diff --name-status");
+  }
+  return parsed.data;
 }
 
 async function changedTrackedEntries(
@@ -428,8 +477,10 @@ async function changedTrackedEntries(
     safeDiffArgs([...args, "--name-status", "-z"], paths),
     gitRunOptions(config, signal, "metadata"),
   );
-  expectGitExitCode("git_diff", "diff --name-status", result, new Set([0, 1]));
-  return parseChangedTrackedEntries(result.artifactStdout.text);
+  expectGitExitCode("git_diff", "diff --name-status", result, new Set([0]));
+  return parseChangedTrackedEntries(
+    completeGitMetadata("diff --name-status", result.artifactStdout),
+  );
 }
 
 function pathMatchesFilter(path: string, filter: string): boolean {
@@ -453,9 +504,8 @@ function trackedEntryPaths(entry: ChangedTrackedEntry): readonly string[] {
 
 function trackedEntryMatchesPathFilters(
   entry: ChangedTrackedEntry,
-  paths: readonly string[],
+  paths: GitPathspecs,
 ): boolean {
-  if (paths.length === 0) return true;
   return trackedEntryPaths(entry).some((path) =>
     pathMatchesAnyFilter(path, paths),
   );
@@ -466,7 +516,7 @@ async function trackedDiffPaths(
   gitRootPath: string,
   args: readonly string[],
   discoveryPaths: readonly string[],
-  paths: readonly string[],
+  paths: GitPathspecs,
   config: readonly string[],
   signal: AbortSignal | undefined,
   projectIgnorePolicy: ProjectIgnorePolicy,
@@ -505,7 +555,7 @@ async function runTrackedDiff(
   gitRootPath: string,
   args: readonly string[],
   discoveryPaths: readonly string[],
-  paths: readonly string[],
+  paths: GitPathspecs,
   config: readonly string[],
   signal: AbortSignal | undefined,
   projectIgnorePolicy: ProjectIgnorePolicy,
@@ -527,7 +577,7 @@ async function runTrackedDiff(
 async function untrackedFiles(
   workspacePath: string,
   gitRootPath: string,
-  paths: readonly string[],
+  paths: GitPathspecs,
   config: readonly string[],
   signal: AbortSignal | undefined,
   projectIgnorePolicy: ProjectIgnorePolicy,
@@ -546,18 +596,17 @@ async function untrackedFiles(
   );
   expectGitExitCode("git_diff", "ls-files", result, new Set([0]));
 
-  return result.artifactStdout.text
-    .split("\0")
-    .filter(
-      (path) =>
-        path !== "" &&
-        gitPathVisibleToProvider(
-          workspacePath,
-          gitRootPath,
-          projectIgnorePolicy,
-          path,
-        ),
-    );
+  return nulTerminatedGitRecords(
+    "ls-files",
+    completeGitMetadata("ls-files", result.artifactStdout),
+  ).filter((path) =>
+    gitPathVisibleToProvider(
+      workspacePath,
+      gitRootPath,
+      projectIgnorePolicy,
+      path,
+    ),
+  );
 }
 
 async function appendUntrackedDiffs(
@@ -565,11 +614,11 @@ async function appendUntrackedDiffs(
   artifactSections: string[],
   workspacePath: string,
   gitRootPath: string,
-  paths: readonly string[],
+  paths: GitPathspecs,
   config: readonly string[],
   signal: AbortSignal | undefined,
   projectIgnorePolicy: ProjectIgnorePolicy,
-): Promise<void> {
+): Promise<GitDiffSourceTruncation> {
   const files = await untrackedFiles(
     workspacePath,
     gitRootPath,
@@ -579,6 +628,7 @@ async function appendUntrackedDiffs(
     projectIgnorePolicy,
   );
   const visibleFiles = limitCountedOutput(files, UNTRACKED_FILE_LIMIT);
+  const sourceTruncations: GitDiffSourceTruncation[] = [];
   for (const file of visibleFiles.items) {
     const result = await runGitProcess(
       "git_diff",
@@ -593,11 +643,18 @@ async function appendUntrackedDiffs(
       ],
       gitRunOptions(config, signal),
     );
-    appendProcessSections(
-      sections,
-      artifactSections,
-      `Untracked changes (${file})`,
-      expectGitExitCode("git_diff", "diff --no-index", result, new Set([0, 1])),
+    sourceTruncations.push(
+      appendProcessSections(
+        sections,
+        artifactSections,
+        `Untracked changes (${file})`,
+        expectGitExitCode(
+          "git_diff",
+          "diff --no-index",
+          result,
+          new Set([0, 1]),
+        ),
+      ),
     );
   }
   if (visibleFiles.truncated) {
@@ -605,6 +662,14 @@ async function appendUntrackedDiffs(
     sections.push(marker);
     artifactSections.push(marker);
   }
+  return {
+    preview:
+      visibleFiles.truncated ||
+      sourceTruncations.some((truncation) => truncation.preview),
+    artifact:
+      visibleFiles.truncated ||
+      sourceTruncations.some((truncation) => truncation.artifact),
+  };
 }
 
 export async function executeGitDiff(
@@ -649,6 +714,7 @@ export async function executeGitDiff(
   );
   const sections: string[] = [];
   const artifactSections: string[] = [];
+  const sourceTruncations: GitDiffSourceTruncation[] = [];
 
   if (refComparison !== null) {
     const resolvedComparison = await resolveRefComparison(
@@ -673,11 +739,13 @@ export async function executeGitDiff(
       projectIgnorePolicy,
     );
     if (refDiff !== null) {
-      appendProcessSections(
-        sections,
-        artifactSections,
-        refComparisonLabel(refComparison),
-        refDiff,
+      sourceTruncations.push(
+        appendProcessSections(
+          sections,
+          artifactSections,
+          refComparisonLabel(refComparison),
+          refDiff,
+        ),
       );
     }
   } else {
@@ -695,11 +763,13 @@ export async function executeGitDiff(
         projectIgnorePolicy,
       );
       if (unstagedDiff !== null) {
-        appendProcessSections(
-          sections,
-          artifactSections,
-          "Unstaged changes",
-          unstagedDiff,
+        sourceTruncations.push(
+          appendProcessSections(
+            sections,
+            artifactSections,
+            "Unstaged changes",
+            unstagedDiff,
+          ),
         );
       }
     }
@@ -716,25 +786,29 @@ export async function executeGitDiff(
         projectIgnorePolicy,
       );
       if (stagedDiff !== null) {
-        appendProcessSections(
-          sections,
-          artifactSections,
-          "Staged changes",
-          stagedDiff,
+        sourceTruncations.push(
+          appendProcessSections(
+            sections,
+            artifactSections,
+            "Staged changes",
+            stagedDiff,
+          ),
         );
       }
     }
 
     if (mode === "all" || mode === "unstaged") {
-      await appendUntrackedDiffs(
-        sections,
-        artifactSections,
-        workspacePath,
-        scope.rootPath,
-        scope.pathspecs,
-        config,
-        options.signal,
-        projectIgnorePolicy,
+      sourceTruncations.push(
+        await appendUntrackedDiffs(
+          sections,
+          artifactSections,
+          workspacePath,
+          scope.rootPath,
+          scope.pathspecs,
+          config,
+          options.signal,
+          projectIgnorePolicy,
+        ),
       );
     }
   }
@@ -745,16 +819,21 @@ export async function executeGitDiff(
     artifactSections.length === 0
       ? GIT_DIFF_NO_CHANGES_CONTENT
       : artifactSections.join("\n\n");
-  const previewTruncated = gitDiffContentSourceTruncated(content);
-  const artifactSourceTruncated =
-    gitDiffContentSourceTruncated(artifactContent);
+  const previewSourceTruncated = sourceTruncations.some(
+    (truncation) => truncation.preview,
+  );
+  const artifactSourceTruncated = sourceTruncations.some(
+    (truncation) => truncation.artifact,
+  );
   return {
     content,
     hasChanges: sections.length > 0,
     inGitWorkTree: true,
-    ...(previewTruncated ? { sourceTruncated: true } : {}),
-    ...(previewTruncated || artifactSourceTruncated ? { artifactContent } : {}),
-    ...(previewTruncated || artifactSourceTruncated
+    ...(previewSourceTruncated ? { sourceTruncated: true } : {}),
+    ...(previewSourceTruncated || artifactSourceTruncated
+      ? { artifactContent }
+      : {}),
+    ...(previewSourceTruncated || artifactSourceTruncated
       ? { artifactSourceTruncated }
       : {}),
   };
