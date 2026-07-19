@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
+import { runInteractiveSession as runInteractiveSessionWithMemory } from "../../../src/cli/interactive-session.ts";
 import {
   consumeSessionQueuedInputs,
   createSessionStore,
@@ -25,6 +25,7 @@ import {
   expectInterruptedTurnPreservesVisibleScopedInstructions,
   ForcedExit,
   fileExists,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
@@ -256,7 +257,7 @@ describe("Interactive Session - Interrupts", () => {
     let persistedMessages: readonly Message[] = [];
     const persistedInputIdBatches: string[][] = [];
     let reservedMessageOrdinal = 0;
-    const session = runInteractiveSession({
+    const session = runInteractiveSessionWithMemory({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
@@ -311,16 +312,29 @@ describe("Interactive Session - Interrupts", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      memoryMutation: {
-        list: () => [],
-        add: () => {
-          throw new Error("memory_add is not expected");
+      memory: {
+        kind: "reviewed",
+        prompt: () => "",
+        mutation: {
+          list: () => [],
+          add: () => {
+            throw new Error("memory_add is not expected");
+          },
+          forget: () => {
+            throw new Error("memory_forget is not expected");
+          },
         },
-        forget: () => {
-          throw new Error("memory_forget is not expected");
-        },
+        proposal: memoryProposal,
+        status: () => ({
+          enabled: true,
+          scope: { kind: "project", id: "project_reviewed_abort" },
+          loadedIds: [],
+          loadedEntries: [],
+          renderedBytes: 0,
+          estimatedTokens: 0,
+          operations: [],
+        }),
       },
-      memoryProposal,
     });
 
     // When

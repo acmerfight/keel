@@ -1,12 +1,12 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { SessionQueuedInput } from "../../../src/cli/session-store.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,

@@ -3,12 +3,12 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
   resolvedProvider,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   textProvider,
   ZERO_COST_MODEL,

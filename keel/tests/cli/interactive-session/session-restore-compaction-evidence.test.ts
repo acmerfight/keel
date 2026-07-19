@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   persistSessionMessages,
@@ -15,6 +14,7 @@ import { CHECKPOINT_INSTRUCTION } from "../../../src/testing/context-compaction-
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";

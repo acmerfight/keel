@@ -3,11 +3,13 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import { ZERO_COST_MODEL } from "../../../src/core/cost.ts";
 import type { LLMProvider } from "../../../src/llm/types.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
-import { EPHEMERAL_INTERACTIVE_SESSION } from "../../../src/testing/interactive-session-fixtures.ts";
+import {
+  EPHEMERAL_INTERACTIVE_SESSION,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+} from "../../../src/testing/interactive-session-fixtures.ts";
 import { sseTextReplyWithUsage } from "../../../src/testing/provider-sse-fixtures.ts";
 import {
   close,

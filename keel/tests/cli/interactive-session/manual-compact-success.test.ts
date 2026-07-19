@@ -11,7 +11,6 @@ import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../../src/core/cost.ts";
 import { createDeepseekProvider } from "../../../src/llm/providers/deepseek.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
@@ -19,6 +18,7 @@ import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,

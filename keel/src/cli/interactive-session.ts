@@ -148,9 +148,11 @@ import type {
   EndEventWithCost,
   InteractiveComposerMode,
   InteractiveResolvedProvider,
+  InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
   ProviderSelection,
+  ReviewedInteractiveSessionMemoryBinding,
   SavedInteractiveSession,
 } from "./interactive-session/types.ts";
 import {
@@ -176,6 +178,7 @@ export type {
   InteractiveForkSessionRequest,
   InteractiveResolvedProvider,
   InteractiveSession,
+  InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
 } from "./interactive-session/types.ts";
@@ -437,6 +440,12 @@ function resolveSelectedProvider(
   return next;
 }
 
+function isReviewedInteractiveMemoryBinding(
+  binding: InteractiveSessionMemoryBinding,
+): binding is ReviewedInteractiveSessionMemoryBinding {
+  return binding.memory.kind === "reviewed";
+}
+
 export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
@@ -622,17 +631,24 @@ export async function runInteractiveSession(
         }
       : {}),
   });
-  const memoryProposalReview =
-    options.memoryProposal === undefined
-      ? undefined
-      : createInteractiveMemoryProposalReview(lineReader, options.writeStderr, {
-          onPromptStart: () => {
-            setComposerMode("approval");
+  const memoryBinding: InteractiveSessionMemoryBinding = options;
+  const reviewedMemory = isReviewedInteractiveMemoryBinding(memoryBinding)
+    ? {
+        ...memoryBinding,
+        review: createInteractiveMemoryProposalReview(
+          lineReader,
+          options.writeStderr,
+          {
+            onPromptStart: () => {
+              setComposerMode("approval");
+            },
+            onPromptEnd: () => {
+              setComposerMode("steer");
+            },
           },
-          onPromptEnd: () => {
-            setComposerMode("steer");
-          },
-        });
+        ),
+      }
+    : null;
   const memoryProposalSources = new WeakMap<
     Extract<Message, { readonly role: "user" }>,
     AgentMemoryProposalSource
@@ -645,13 +661,13 @@ export async function runInteractiveSession(
     message: Extract<Message, { readonly role: "user" }>,
     provider: InteractiveResolvedProvider,
   ): void => {
-    if (options.memoryProposal === undefined || savedSession === null) {
+    if (reviewedMemory === null) {
       return;
     }
-    const messageId = savedSession.reserveMessageId();
+    const messageId = reviewedMemory.session.reserveMessageId();
     reservedSessionMessageIds.push({ message, id: messageId });
     memoryProposalSources.set(message, {
-      sessionId: savedSession.id,
+      sessionId: reviewedMemory.session.id,
       messageId,
       providerId: provider.providerId,
       model: provider.model,
@@ -1015,42 +1031,47 @@ export async function runInteractiveSession(
     let persistedMemorySourceMessages: readonly Message[] | null = null;
     let persistedDrainedInputCount = 0;
     const persistedInputIds = new Set<string>();
-    const persistSessionMessages = savedSession?.persistMessages;
-    const persistMemoryProposalSource =
-      persistSessionMessages === undefined
-        ? undefined
-        : (
-            sourceMessage: Extract<Message, { readonly role: "user" }>,
-          ): void => {
-            const sourceIndex = messages.indexOf(sourceMessage);
-            assert(
-              sourceIndex >= 0,
-              "reviewed project-memory source is no longer present in the interactive session",
-            );
-            const sourceMessages = messages.slice(0, sourceIndex + 1);
-            const sourceReservations = reservedSessionMessageIds.filter(
-              (reservation) => sourceMessages.includes(reservation.message),
-            );
-            const sourceInputIds = queuedInputIds([
-              ...request.consumedInputLines,
-              ...drainedInjectedLines,
-            ]);
-            persistSessionMessages({
-              messages: sourceMessages,
-              reason: "turn",
-              consumedInputIds: sourceInputIds,
-              skillState: null,
-              reservedMessageIds: sourceReservations,
-            });
-            persistedMemorySourceMessages = sourceMessages;
-            persistedDrainedInputCount = drainedInjectedLines.length;
-            for (const inputId of sourceInputIds) {
-              persistedInputIds.add(inputId);
-            }
-            reservedSessionMessageIds.splice(
-              0,
-              reservedSessionMessageIds.length,
-            );
+    const memoryProposal =
+      reviewedMemory === null
+        ? null
+        : {
+            capability: reviewedMemory.memory.proposal,
+            sourceFor: (message: Extract<Message, { readonly role: "user" }>) =>
+              memoryProposalSources.get(message),
+            persistSource: (
+              sourceMessage: Extract<Message, { readonly role: "user" }>,
+            ): void => {
+              const sourceIndex = messages.indexOf(sourceMessage);
+              assert(
+                sourceIndex >= 0,
+                "reviewed project-memory source is no longer present in the interactive session",
+              );
+              const sourceMessages = messages.slice(0, sourceIndex + 1);
+              const sourceReservations = reservedSessionMessageIds.filter(
+                (reservation) => sourceMessages.includes(reservation.message),
+              );
+              const sourceInputIds = queuedInputIds([
+                ...request.consumedInputLines,
+                ...drainedInjectedLines,
+              ]);
+              reviewedMemory.session.persistMessages({
+                messages: sourceMessages,
+                reason: "turn",
+                consumedInputIds: sourceInputIds,
+                skillState: null,
+                reservedMessageIds: sourceReservations,
+              });
+              persistedMemorySourceMessages = sourceMessages;
+              persistedDrainedInputCount = drainedInjectedLines.length;
+              for (const inputId of sourceInputIds) {
+                persistedInputIds.add(inputId);
+              }
+              reservedSessionMessageIds.splice(
+                0,
+                reservedSessionMessageIds.length,
+              );
+            },
+            review: reviewedMemory.review,
           };
     let deferRemainingInjectedInput = false;
     let taskProgressChanged = false;
@@ -1098,24 +1119,13 @@ export async function runInteractiveSession(
           provider: resolved.provider,
           messages,
           systemPrompt: baseSystemPromptWithGoal(),
-          ...(options.memoryPrompt !== undefined
-            ? { memoryPrompt: options.memoryPrompt }
-            : {}),
-          ...(options.memoryMutation !== undefined
-            ? { memoryMutation: options.memoryMutation }
-            : {}),
-          ...(options.memoryProposal !== undefined &&
-          memoryProposalReview !== undefined &&
-          persistMemoryProposalSource !== undefined
-            ? {
-                memoryProposal: {
-                  capability: options.memoryProposal,
-                  sourceFor: (message) => memoryProposalSources.get(message),
-                  persistSource: persistMemoryProposalSource,
-                  review: memoryProposalReview,
-                },
-              }
-            : {}),
+          ...(options.memory.kind === "disabled"
+            ? {}
+            : {
+                memoryPrompt: options.memory.prompt,
+                memoryMutation: options.memory.mutation,
+              }),
+          ...(memoryProposal === null ? {} : { memoryProposal }),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
           hiddenWorkspacePaths,
@@ -1679,9 +1689,7 @@ export async function runInteractiveSession(
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
             undoProtection: undoProtection.summary(),
-            ...(options.memoryStatus !== undefined
-              ? { memory: options.memoryStatus() }
-              : {}),
+            memory: options.memory.status(),
             recoveryActions: statusRecoveryActions(),
           }),
         );
