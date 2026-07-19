@@ -21,9 +21,11 @@ import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { createSkillActivation } from "../../../src/skills/lifecycle.ts";
 import { discoverSkillCatalog } from "../../../src/skills/project.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   expectInterruptedTurnPreservesVisibleScopedInstructions,
   ForcedExit,
   fileExists,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -49,6 +51,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -131,6 +134,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -256,7 +260,19 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "reviewed-abort",
+      session: savedInteractiveSession({
+        id: "reviewed-abort",
+        reserveMessageId: () => `message_${++reservedMessageOrdinal}`,
+        persistMessages: ({
+          messages,
+          reason: _reason,
+          consumedInputIds: inputIds,
+        }) => {
+          persistedMessages = structuredClone(messages);
+          persistedInputIdBatches.push([...inputIds]);
+        },
+      }),
+
       initialQueuedInputs: [queuedSource],
       input,
       writeStdout: (text) => {
@@ -305,11 +321,6 @@ describe("Interactive Session - Interrupts", () => {
         },
       },
       memoryProposal,
-      reserveSessionMessageId: () => `message_${++reservedMessageOrdinal}`,
-      persistSessionMessages: (messages, _reason, inputIds) => {
-        persistedMessages = structuredClone(messages);
-        persistedInputIdBatches.push([...inputIds]);
-      },
     });
 
     // When
@@ -408,6 +419,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -565,6 +577,22 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        consumeQueuedInputs: (inputIds) => {
+          now = 3;
+          consumeSessionQueuedInputs({
+            session: resumed,
+            inputIds,
+            runtime,
+          });
+        },
+        persistMessages: () => {
+          throw new Error(
+            "interrupted queued turn should not persist messages",
+          );
+        },
+      }),
       initialMessages: resumed.messages,
       initialQueuedInputs: resumed.pendingInputs,
       input,
@@ -602,17 +630,6 @@ describe("Interactive Session - Interrupts", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      consumeQueuedInputs: (inputIds) => {
-        now = 3;
-        consumeSessionQueuedInputs({
-          session: resumed,
-          inputIds,
-          runtime,
-        });
-      },
-      persistSessionMessages: () => {
-        throw new Error("interrupted queued turn should not persist messages");
-      },
     });
 
     try {
@@ -713,6 +730,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -886,6 +904,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1030,6 +1049,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;

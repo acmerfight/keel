@@ -5,7 +5,11 @@ import { PassThrough } from "node:stream";
 import { expect } from "vitest";
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
-import type { InteractiveResolvedProvider } from "../cli/interactive-session/types.ts";
+import type {
+  InteractiveResolvedProvider,
+  InteractiveSession,
+  SavedInteractiveSession,
+} from "../cli/interactive-session/types.ts";
 import { runInteractiveSession } from "../cli/interactive-session.ts";
 import type { ModelSource } from "../cli/provider-config.ts";
 import type { CostModel } from "../core/cost.ts";
@@ -26,6 +30,52 @@ export const ZERO_COST_MODEL: CostModel = {
   cachedInputPerMillionTokens: 0,
   outputPerMillionTokens: 0,
 };
+
+export const EPHEMERAL_INTERACTIVE_SESSION = {
+  kind: "ephemeral",
+} satisfies InteractiveSession;
+
+type SavedInteractiveSessionFixtureOptions = {
+  readonly id: string;
+} & Partial<Omit<SavedInteractiveSession, "id" | "kind">>;
+
+export function savedInteractiveSession(
+  options: SavedInteractiveSessionFixtureOptions,
+): SavedInteractiveSession {
+  return {
+    kind: "saved",
+    id: options.id,
+    resumeAvailable: options.resumeAvailable ?? (() => true),
+    reserveMessageId: options.reserveMessageId ?? (() => `msg-${options.id}`),
+    persistQueuedInput:
+      options.persistQueuedInput ??
+      ((input) => ({
+        id: `input-${input.sequence}`,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        sequence: input.sequence,
+        line: input.line,
+      })),
+    consumeQueuedInputs: options.consumeQueuedInputs ?? (() => {}),
+    persistMessages: options.persistMessages ?? (() => {}),
+    persistTitle: options.persistTitle ?? ((record) => record.title),
+    persistGoal: options.persistGoal ?? ((update) => update.goal ?? undefined),
+    persistTaskProgress: options.persistTaskProgress ?? (() => {}),
+    persistModelSwitch: options.persistModelSwitch ?? (() => {}),
+    persistSkillState: options.persistSkillState ?? (() => {}),
+    fork: options.fork ?? (() => ""),
+    listForkPoints:
+      options.listForkPoints ??
+      (() => ({
+        sessionId: options.id,
+        points: [],
+      })),
+    persistBashApprovalGrant: options.persistBashApprovalGrant ?? (() => {}),
+    persistBashApprovalRevoked:
+      options.persistBashApprovalRevoked ?? (() => {}),
+    persistBashApprovalsCleared:
+      options.persistBashApprovalsCleared ?? (() => {}),
+  };
+}
 
 const TEST_MODEL_METADATA: ModelMetadata = {
   status: "known",
@@ -280,6 +330,7 @@ export async function expectInterruptedTurnPreservesVisibleScopedInstructions(
     cliArgs: { bashMode: "disabled" },
     workspace,
     platform: process.platform,
+    session: EPHEMERAL_INTERACTIVE_SESSION,
     input,
     writeStdout: (text) => {
       stdout += text;

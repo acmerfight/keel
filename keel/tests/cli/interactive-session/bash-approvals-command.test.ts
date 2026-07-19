@@ -21,7 +21,9 @@ import {
 import type { LLMProvider } from "../../../src/llm/types.ts";
 import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  savedInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
 } from "../../../src/testing/interactive-session-fixtures.ts";
@@ -95,6 +97,7 @@ describe("Interactive Session - Bash Approvals Command", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -147,6 +150,7 @@ describe("Interactive Session - Bash Approvals Command", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -197,6 +201,7 @@ describe("Interactive Session - Bash Approvals Command", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialBashApprovalGrants: [
         {
           type: "exact",
@@ -282,6 +287,7 @@ describe("Interactive Session - Bash Approvals Command", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialBashApprovalGrants: [
         {
           type: "exact",
@@ -338,6 +344,7 @@ describe("Interactive Session - Bash Approvals Command", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialBashApprovalGrants: [
         {
           type: "exact",
@@ -407,6 +414,12 @@ describe("Interactive Session - Bash Approvals Command", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistBashApprovalRevoked: (revocation) => {
+          revokedGrants.push(revocation.grant);
+        },
+      }),
       initialBashApprovalGrants: [
         {
           type: "exact",
@@ -446,9 +459,6 @@ describe("Interactive Session - Bash Approvals Command", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistBashApprovalRevoked: (revocation) => {
-        revokedGrants.push(revocation.grant);
-      },
     });
 
     try {
@@ -517,6 +527,18 @@ describe("Interactive Session - Bash Approvals Command", () => {
         cliArgs: { bashMode: "ask" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistBashApprovalRevoked: (revocation) => {
+            persistSessionBashApprovalRevoked({
+              session,
+              grant: revocation.grant,
+              runtime: runtime(home, 4),
+              consumedInputIds: revocation.consumedInputIds,
+            });
+            throw new Error("crash after approval revocation persisted");
+          },
+        }),
         initialQueuedInputs: [queuedInput],
         initialBashApprovalGrants: [exactGrant, prefixGrant],
         input,
@@ -536,15 +558,6 @@ describe("Interactive Session - Bash Approvals Command", () => {
           throw new Error("queued revoke should not start a model turn");
         },
         formatCostReport: () => "",
-        persistBashApprovalRevoked: (revocation) => {
-          persistSessionBashApprovalRevoked({
-            session,
-            grant: revocation.grant,
-            runtime: runtime(home, 4),
-            consumedInputIds: revocation.consumedInputIds,
-          });
-          throw new Error("crash after approval revocation persisted");
-        },
       });
 
       // When
@@ -594,6 +607,12 @@ describe("Interactive Session - Bash Approvals Command", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistBashApprovalsCleared: () => {
+          clearCount++;
+        },
+      }),
       initialBashApprovalGrants: [
         {
           type: "exact",
@@ -638,9 +657,6 @@ describe("Interactive Session - Bash Approvals Command", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistBashApprovalsCleared: () => {
-        clearCount++;
-      },
     });
 
     try {

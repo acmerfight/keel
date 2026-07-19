@@ -34,9 +34,9 @@ import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
 import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
 import {
   type InteractiveForkSessionRequest,
+  type InteractiveSession,
   type InteractiveSessionOptions,
   runInteractiveSession,
-  type SessionPersistenceReason,
 } from "./interactive-session.ts";
 import {
   formatCostReport,
@@ -102,7 +102,6 @@ import {
   type SessionCatalogEntry,
   type SessionLock,
   type SessionModelSelection,
-  type SessionQueuedInput,
   type SessionState,
   SessionStoreError,
   sessionStoredMessages,
@@ -819,28 +818,30 @@ async function runSessionCli(
         skillActivations: [],
         activeSkillIds: [],
       };
-      let ensureActiveSession: (() => SessionState) | undefined;
-      if (activeSessionId !== undefined) {
-        const sessionId = activeSessionId;
-        ensureActiveSession = (): SessionState => {
-          let activeSession = session;
-          if (activeSession === undefined) {
-            activeSession = createSessionStore({
-              sessionId,
-              workspace,
-              runtime,
-              skillState: lazySessionInitialSkillState,
-            });
-            session = activeSession;
-            persistedMessages = activeSession.messages;
-          }
-          return activeSession;
-        };
-      }
-      const persistSkillLifecycleState = (state: SkillLifecycleState): void => {
-        /* v8 ignore next -- this callback is exposed only through named-session persistence below. */
-        if (ensureActiveSession === undefined) return;
-        const activeSession = ensureActiveSession();
+      const savedSessionOwner =
+        activeSessionId === undefined
+          ? null
+          : {
+              id: activeSessionId,
+              ensure: (): SessionState => {
+                let activeSession = session;
+                if (activeSession === undefined) {
+                  activeSession = createSessionStore({
+                    sessionId: activeSessionId,
+                    workspace,
+                    runtime,
+                    skillState: lazySessionInitialSkillState,
+                  });
+                  session = activeSession;
+                  persistedMessages = activeSession.messages;
+                }
+                return activeSession;
+              },
+            };
+      const persistSkillLifecycleState = (
+        activeSession: SessionState,
+        state: SkillLifecycleState,
+      ): void => {
         persistSessionSkillState({
           session: activeSession,
           state: restorePolicyHiddenActiveSkillIds(
@@ -874,7 +875,7 @@ async function runSessionCli(
             skillActivation.state(),
           )
         ) {
-          persistSkillLifecycleState(skillActivation.state());
+          persistSkillLifecycleState(session, skillActivation.state());
         }
         if (session === undefined) {
           lazySessionInitialSkillState = skillActivation.state();
@@ -888,75 +889,24 @@ async function runSessionCli(
           `Warning: workflow skill ${status.activation.qualifiedName} ${status.diskStatus}; continuing with session snapshot sha256:${status.activation.digest}.\n`,
         );
       }
-      let sessionPersistence:
-        | {
-            readonly initialMessages: readonly Message[];
-            readonly initialSessionTitle?: string;
-            readonly initialSessionGoal?: SessionGoal;
-            readonly initialTaskProgress: SessionState["taskProgress"];
-            readonly initialModelSelection?: SessionModelSelection;
-            readonly initialModelSwitchCount: number;
-            readonly initialQueuedInputs: readonly SessionQueuedInput[];
-            readonly persistQueuedInput: (input: {
-              readonly sequence: number;
-              readonly line: string;
-            }) => SessionQueuedInput;
-            readonly consumeQueuedInputs: (inputIds: readonly string[]) => void;
-            readonly persistSessionMessages: (
-              messages: readonly Message[],
-              reason: SessionPersistenceReason,
-              consumedInputIds: readonly string[],
-              skillState?: SkillLifecycleState,
-              reservedMessageIds?: readonly {
-                readonly message: Message;
-                readonly id: string;
-              }[],
-            ) => void;
-            readonly persistSessionTitle: (titleRecord: {
-              readonly title: string;
-              readonly consumedInputIds: readonly string[];
-            }) => string;
-            readonly persistSessionGoal: (update: {
-              readonly goal: SessionGoal | null;
-              readonly consumedInputIds: readonly string[];
-            }) => SessionGoal | undefined;
-            readonly persistTaskProgress: (update: {
-              readonly taskProgress: SessionState["taskProgress"];
-              readonly messageOrdinal: number;
-            }) => void;
-            readonly persistModelSwitch: (switchRecord: {
-              readonly from: SessionModelSelection | null;
-              readonly to: SessionModelSelection;
-              readonly consumedInputIds: readonly string[];
-            }) => void;
-            readonly persistSkillState: (state: SkillLifecycleState) => void;
-            readonly forkSession: (
-              request: InteractiveForkSessionRequest,
-            ) => string;
-            readonly listForkPoints: () => ReturnType<
-              typeof sessionForkPointsFromStoredMessages
-            >;
-            readonly initialBashApprovalGrants: readonly BashApprovalGrant[];
-            readonly persistBashApprovalGrant: (
-              grant: BashApprovalGrant,
-            ) => void;
-            readonly persistBashApprovalRevoked: (revocation: {
-              readonly grant: BashApprovalGrant;
-              readonly consumedInputIds: readonly string[];
-            }) => void;
-            readonly persistBashApprovalsCleared: (clear: {
-              readonly consumedInputIds: readonly string[];
-            }) => void;
-          }
+      let interactiveSession: InteractiveSession = { kind: "ephemeral" };
+      let restoredSessionOptions:
+        | Pick<
+            InteractiveSessionOptions,
+            | "initialMessages"
+            | "initialSessionTitle"
+            | "initialSessionGoal"
+            | "initialTaskProgress"
+            | "initialModelSelection"
+            | "initialModelSwitchCount"
+            | "initialQueuedInputs"
+            | "initialBashApprovalGrants"
+          >
         | undefined;
       let headlessGoalActivated = false;
-      if (activeSessionId !== undefined) {
-        const sessionId = activeSessionId;
-        const activeSessionForPersistence = ensureActiveSession;
-        /* v8 ignore next 3 -- activeSessionId installs this closure immediately above. */
-        if (activeSessionForPersistence === undefined) {
-          throw new Error("saved session persistence is unavailable");
-        }
+      if (savedSessionOwner !== null) {
+        const sessionId = savedSessionOwner.id;
+        const activeSessionForPersistence = savedSessionOwner.ensure;
         const forkActiveSession = (
           request: InteractiveForkSessionRequest,
         ): string => {
@@ -1029,7 +979,7 @@ async function runSessionCli(
           );
           return pausedGoal;
         })();
-        sessionPersistence = {
+        restoredSessionOptions = {
           initialMessages: initialSession?.messages ?? [],
           ...(initialSession?.title !== undefined
             ? { initialSessionTitle: initialSession.title }
@@ -1044,6 +994,12 @@ async function runSessionCli(
           initialModelSwitchCount: initialSession?.modelSwitches.length ?? 0,
           initialQueuedInputs: initialSession?.pendingInputs ?? [],
           initialBashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
+        };
+        interactiveSession = {
+          kind: "saved",
+          id: sessionId,
+          resumeAvailable: () => session !== undefined,
+          reserveMessageId: createSessionMessageId,
           persistQueuedInput: (input: {
             readonly sequence: number;
             readonly line: string;
@@ -1061,41 +1017,30 @@ async function runSessionCli(
               runtime,
             });
           },
-          persistSessionMessages: (
-            messages: readonly Message[],
-            reason: SessionPersistenceReason,
-            consumedInputIds: readonly string[],
-            skillState?: SkillLifecycleState,
-            reservedMessageIds?: readonly {
-              readonly message: Message;
-              readonly id: string;
-            }[],
-          ) => {
+          persistMessages: (request) => {
             const activeSession = activeSessionForPersistence();
             const persistedSkillState =
-              skillState === undefined
+              request.skillState === null
                 ? undefined
                 : restorePolicyHiddenActiveSkillIds(
-                    skillState,
+                    request.skillState,
                     activeSession,
                     skillPolicy.disabledPackageIds,
                   );
             persistedMessages = persistSessionMessages({
               session: activeSession,
               previousMessages: persistedMessages,
-              currentMessages: messages,
+              currentMessages: request.messages,
               runtime,
-              reason,
+              reason: request.reason,
               ...(persistedSkillState !== undefined
                 ? { skillState: persistedSkillState }
                 : {}),
-              consumedInputIds,
-              ...(reservedMessageIds !== undefined
-                ? { reservedMessageIds }
-                : {}),
+              consumedInputIds: request.consumedInputIds,
+              reservedMessageIds: request.reservedMessageIds,
             });
           },
-          persistSessionTitle: (titleRecord: {
+          persistTitle: (titleRecord: {
             readonly title: string;
             readonly consumedInputIds: readonly string[];
           }) =>
@@ -1105,7 +1050,7 @@ async function runSessionCli(
               runtime,
               consumedInputIds: titleRecord.consumedInputIds,
             }),
-          persistSessionGoal: (update: {
+          persistGoal: (update: {
             readonly goal: SessionGoal | null;
             readonly consumedInputIds: readonly string[];
           }) => {
@@ -1149,8 +1094,10 @@ async function runSessionCli(
               consumedInputIds: switchRecord.consumedInputIds,
             });
           },
-          persistSkillState: persistSkillLifecycleState,
-          forkSession: forkActiveSession,
+          persistSkillState: (state) => {
+            persistSkillLifecycleState(activeSessionForPersistence(), state);
+          },
+          fork: forkActiveSession,
           listForkPoints: listActiveForkPoints,
           persistBashApprovalGrant: (grant: BashApprovalGrant) => {
             persistSessionBashApprovalGrant({
@@ -1353,22 +1300,16 @@ async function runSessionCli(
         ...(reviewedMemoryEnabled
           ? {
               memoryProposal: agentMemory.proposalCapability,
-              reserveSessionMessageId: createSessionMessageId,
             }
           : {}),
         memoryStatus: inspectMemoryStatus,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
+        session: interactiveSession,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
         ...(mode.kind === "headless-goal" &&
         headlessGoalBashPermission !== undefined
           ? { bashPermission: headlessGoalBashPermission }
-          : {}),
-        ...(activeSessionId !== undefined
-          ? {
-              sessionId: activeSessionId,
-              sessionResumeAvailable: () => session !== undefined,
-            }
           : {}),
         ...(cliArgs.providerId !== undefined || cliArgs.model !== undefined
           ? {
@@ -1404,7 +1345,7 @@ async function runSessionCli(
                 skillCatalog.load(lookup),
             }
           : {}),
-        ...(sessionPersistence !== undefined ? sessionPersistence : {}),
+        ...(restoredSessionOptions !== undefined ? restoredSessionOptions : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
           ? {

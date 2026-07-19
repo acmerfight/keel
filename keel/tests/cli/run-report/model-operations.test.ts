@@ -7,6 +7,7 @@ import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import { ZERO_COST_MODEL } from "../../../src/core/cost.ts";
 import type { LLMProvider } from "../../../src/llm/types.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
+import { EPHEMERAL_INTERACTIVE_SESSION } from "../../../src/testing/interactive-session-fixtures.ts";
 import { sseTextReplyWithUsage } from "../../../src/testing/provider-sse-fixtures.ts";
 import {
   close,
@@ -405,6 +406,7 @@ describe("CLI Run Report - Model Operations", () => {
       cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       initialMessages: [
         { role: "user", content: "remember prior context" },

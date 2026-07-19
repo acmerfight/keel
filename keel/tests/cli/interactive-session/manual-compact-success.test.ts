@@ -17,7 +17,9 @@ import { createDeepseekProvider } from "../../../src/llm/providers/deepseek.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -202,6 +204,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -353,6 +356,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store },
       input,
@@ -483,6 +487,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store },
       input,
@@ -610,6 +615,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store: artifact.store },
       input,
@@ -697,6 +703,16 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persisted.push({
+            reason,
+            messages: structuredClone([...messages]),
+            consumedInputIds: [...consumedInputIds],
+          });
+        },
+      }),
       initialMessages,
       input,
       writeStdout: () => {},
@@ -728,13 +744,6 @@ describe("Interactive Session - Manual Compact Success", () => {
         throw new Error("manual compaction should not print agent events");
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persisted.push({
-          reason,
-          messages: structuredClone([...messages]),
-          consumedInputIds: [...consumedInputIds],
-        });
-      },
     });
 
     // When
@@ -825,6 +834,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -985,6 +995,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1096,6 +1107,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1202,6 +1214,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1312,6 +1325,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1419,6 +1433,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1504,6 +1519,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
