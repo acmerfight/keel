@@ -235,25 +235,52 @@ export type MemoryCliArgs =
       readonly purgeLinkedMemories: boolean;
     };
 
-export interface RunCliArgs {
+interface RunCliCommonArgs {
   readonly command: "run";
   readonly bashMode: BashMode;
   readonly skillsEnabled: boolean;
-  readonly userMessage?: string;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
-  readonly transcriptFile?: string;
-  readonly ephemeral: boolean;
   readonly memoryEnabled: boolean;
-  readonly sessionId?: string;
-  readonly resumeSession?: ResumeSessionCliArg;
-  readonly forkSessionId?: string;
-  readonly forkBeforeMessage?: string;
-  readonly forkPoints?: boolean;
   readonly providerId?: ProviderId;
   readonly model?: string;
   readonly skillNames?: readonly string[];
 }
+
+export type InteractiveSessionCliIntent =
+  | { readonly kind: "automatic" }
+  | { readonly kind: "ephemeral" }
+  | { readonly kind: "create"; readonly sessionId: string }
+  | { readonly kind: "resume"; readonly sessionId: string }
+  | { readonly kind: "resume-latest" }
+  | { readonly kind: "resume-pick" }
+  | {
+      readonly kind: "fork";
+      readonly sourceSessionId: string;
+      readonly targetSessionId: string;
+      readonly beforeMessageId: string | null;
+    };
+
+interface OneShotRunCliArgs extends RunCliCommonArgs {
+  readonly mode: "one-shot";
+  readonly userMessage: string;
+  readonly transcriptFile: string | null;
+}
+
+interface InteractiveRunCliArgs extends RunCliCommonArgs {
+  readonly mode: "interactive";
+  readonly session: InteractiveSessionCliIntent;
+}
+
+interface ForkPointsRunCliArgs extends RunCliCommonArgs {
+  readonly mode: "fork-points";
+  readonly sessionId: string;
+}
+
+export type RunCliArgs =
+  | OneShotRunCliArgs
+  | InteractiveRunCliArgs
+  | ForkPointsRunCliArgs;
 
 interface GoalCliCommonArgs {
   readonly command: "goal";
@@ -267,13 +294,10 @@ interface GoalCliCommonArgs {
   readonly skillNames?: readonly string[];
 }
 
-type ResumeSessionCliArg =
+type GoalResumeSessionCliArg =
   | {
       readonly kind: "id";
       readonly sessionId: string;
-    }
-  | {
-      readonly kind: "pick";
     }
   | {
       readonly kind: "latest";
@@ -299,10 +323,7 @@ interface GoalLaunchCliArgs extends GoalCliCommonArgs {
 interface GoalResumeCliArgs extends GoalCliCommonArgs {
   readonly mode: "resume";
   readonly budget: SessionGoalBudget;
-  readonly resumeSession: Exclude<
-    ResumeSessionCliArg,
-    { readonly kind: "pick" }
-  >;
+  readonly resumeSession: GoalResumeSessionCliArg;
 }
 
 export type GoalCliArgs = GoalLaunchCliArgs | GoalResumeCliArgs;
