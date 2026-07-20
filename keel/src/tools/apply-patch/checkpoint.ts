@@ -69,12 +69,14 @@ export function checkpointOperationsFor(
       filePath: targetPath,
       beforeContent: operation.beforeContent,
       afterContent: operation.afterContent,
-      ...(operation.modeChange === null
-        ? {}
-        : {
-            beforeMode: operation.modeChange.beforeMode,
-            afterMode: operation.modeChange.afterMode,
-          }),
+      modeOwnership:
+        operation.modeChange === null
+          ? { kind: "unowned" }
+          : {
+              kind: "owned",
+              beforeMode: operation.modeChange.beforeMode,
+              afterMode: operation.modeChange.afterMode,
+            },
     },
   ];
 }

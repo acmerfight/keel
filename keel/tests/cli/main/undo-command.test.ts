@@ -40,6 +40,7 @@ describe("CLI Main - Undo Command", () => {
       filePath: join(workspace, "note.txt"),
       beforeContent: "before\n",
       afterContent: "after\n",
+      modeOwnership: { kind: "unowned" },
     });
     const fixture = createRuntime(["/undo"], { cwd: workspace });
 
@@ -71,6 +72,7 @@ describe("CLI Main - Undo Command", () => {
       filePath: join(workspace, "first.txt"),
       beforeContent: "before first\n",
       afterContent: "after first\n",
+      modeOwnership: { kind: "unowned" },
     });
     await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
     recordLastEditCheckpoint({
@@ -78,6 +80,7 @@ describe("CLI Main - Undo Command", () => {
       filePath: join(workspace, "second.txt"),
       beforeContent: "before second\n",
       afterContent: "after second\n",
+      modeOwnership: { kind: "unowned" },
     });
     const fixture = createRuntime(["/undo", "--list"], { cwd: workspace });
 
@@ -114,6 +117,7 @@ describe("CLI Main - Undo Command", () => {
       filePath: join(workspace, "first.txt"),
       beforeContent: "before first\n",
       afterContent: "after first\n",
+      modeOwnership: { kind: "unowned" },
     });
     await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
     recordLastEditCheckpoint({
@@ -121,6 +125,7 @@ describe("CLI Main - Undo Command", () => {
       filePath: join(workspace, "second.txt"),
       beforeContent: "before second\n",
       afterContent: "after second\n",
+      modeOwnership: { kind: "unowned" },
     });
     const fixture = createRuntime(["/undo", "--to", "2"], { cwd: workspace });
 
@@ -157,6 +162,7 @@ describe("CLI Main - Undo Command", () => {
       filePath: join(workspace, "note.txt"),
       beforeContent: "before\n",
       afterContent: "after\n",
+      modeOwnership: { kind: "unowned" },
     });
     await writeFile(join(workspace, "note.txt"), "newer change\n", "utf8");
     const fixture = createRuntime(["/undo"], { cwd: workspace });

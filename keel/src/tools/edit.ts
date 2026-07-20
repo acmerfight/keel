@@ -613,6 +613,7 @@ function executeEditBatch(
       filePath: finalTargetPath,
       beforeContent,
       afterContent,
+      modeOwnership: { kind: "unowned" },
     });
   }
 
@@ -624,6 +625,7 @@ function executeEditBatch(
       filePath: finalTargetPath,
       beforeContent,
       afterContent,
+      modeOwnership: { kind: "unowned" },
     },
   };
 }

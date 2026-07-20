@@ -242,6 +242,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "first.txt"),
       beforeContent: "before first\n",
       afterContent: "after first\n",
+      modeOwnership: { kind: "unowned" },
     });
     await commitFile(workspace, "second.txt", "before second\n");
     await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
@@ -250,6 +251,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "second.txt"),
       beforeContent: "before second\n",
       afterContent: "after second\n",
+      modeOwnership: { kind: "unowned" },
     });
     const input = new PassThrough();
     let stdout = "";
@@ -318,6 +320,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "first.txt"),
       beforeContent: "before first\n",
       afterContent: "after first\n",
+      modeOwnership: { kind: "unowned" },
     });
     await commitFile(workspace, "second.txt", "before second\n");
     await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
@@ -326,6 +329,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "second.txt"),
       beforeContent: "before second\n",
       afterContent: "after second\n",
+      modeOwnership: { kind: "unowned" },
     });
     const input = new PassThrough();
     let stdout = "";
@@ -394,6 +398,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "note.txt"),
       beforeContent: "before\n",
       afterContent: "after\n",
+      modeOwnership: { kind: "unowned" },
     });
     await writeFile(join(workspace, "note.txt"), "user change\n", "utf8");
 
@@ -741,6 +746,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "note.txt"),
       beforeContent: "before\n",
       afterContent: "after\n",
+      modeOwnership: { kind: "unowned" },
     });
     const storedSession = createSessionStore({
       sessionId: "undo-resume",
