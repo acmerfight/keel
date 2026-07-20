@@ -89,12 +89,12 @@ Default to required fields. Model the runtime meaning directly:
 | Absence is meaningful | Optional field (`?`) |
 | Field is present but may explicitly contain no value | `null` |
 
-Make invalid internal states unrepresentable. When fields are mutually exclusive
-or conditionally required, model the valid modes with a discriminated union and
-put each mode's required data on that variant. Do not use independently optional
-fields plus downstream guards to encode a relationship. Couple values that must
-vary together in one type so invalid constructions fail typecheck at the call
-site.
+Make illegal states unrepresentable. Design internal types so invalid states
+cannot be constructed. When fields are mutually exclusive or conditionally
+required, model the valid modes with a discriminated union and put each mode's
+required data on that variant. Do not use independently optional fields plus
+downstream guards to encode a relationship. Couple values that must vary
+together in one type so invalid constructions fail typecheck at the call site.
 
 This rule applies to trusted internal state, not unvalidated external data. Parse
 external values as `unknown` with a schema at the trust boundary, then convert
