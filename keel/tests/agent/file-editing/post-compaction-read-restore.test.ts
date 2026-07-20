@@ -12,6 +12,7 @@ import {
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 import { createProjectInstructionVisibilityState } from "../../../src/tools/scoped-project-instructions.ts";
 
 const CURRENT_TOOL_OUTPUT_MARKER =
@@ -50,13 +51,11 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
-      {
-        ok: true,
-        content: "",
-        readTargetPath: noteTargetPath,
-        readTargetOffset: 2,
-        readTargetLimit: 1,
-      },
+      successfulReadToolExecution({
+        targetPath: noteTargetPath,
+        offset: 2,
+        limit: 1,
+      }),
     ]);
     let sequence = 0;
 
@@ -130,7 +129,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
-      { ok: true, content: "", readTargetPath: noteTargetPath },
+      successfulReadToolExecution({ targetPath: noteTargetPath }),
     ]);
     let sequence = 0;
 
@@ -810,8 +809,8 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
-      { ok: true, content: "", readTargetPath: keepTargetPath },
-      { ok: true, content: "", readTargetPath: goneTargetPath },
+      successfulReadToolExecution({ targetPath: keepTargetPath }),
+      successfulReadToolExecution({ targetPath: goneTargetPath }),
     ]);
     await rm(gonePath);
     let sequence = 0;
@@ -881,11 +880,11 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
-      { ok: true, content: "", readTargetPath: afterBudgetTargetPath },
-      { ok: true, content: "", readTargetPath: tinyBudgetTargetPath },
-      { ok: true, content: "", readTargetPath: fillerTargetPath },
-      { ok: true, content: "", readTargetPath: largeBTargetPath },
-      { ok: true, content: "", readTargetPath: largeATargetPath },
+      successfulReadToolExecution({ targetPath: afterBudgetTargetPath }),
+      successfulReadToolExecution({ targetPath: tinyBudgetTargetPath }),
+      successfulReadToolExecution({ targetPath: fillerTargetPath }),
+      successfulReadToolExecution({ targetPath: largeBTargetPath }),
+      successfulReadToolExecution({ targetPath: largeATargetPath }),
     ]);
     let sequence = 0;
 

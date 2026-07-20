@@ -15,6 +15,10 @@ import {
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import {
+  successfulMutationToolExecution,
+  successfulReadToolExecution,
+} from "../../../src/testing/tool-execution-fixtures.ts";
 
 describe("File Editing Read Before Edit", () => {
   test(`Given the assistant edits a file before reading it,
@@ -173,11 +177,9 @@ describe("File Editing Read Before Edit", () => {
 
     // When
     readVisibility.applyVisibleToolExecutions(
-      targetPaths.map((targetPath) => ({
-        ok: true,
-        content: "",
-        readTargetPath: targetPath,
-      })),
+      targetPaths.map((targetPath) =>
+        successfulReadToolExecution({ targetPath }),
+      ),
     );
 
     // Then
@@ -190,9 +192,7 @@ describe("File Editing Read Before Edit", () => {
     expect(readVisibility.hasRead(newestTarget)).toBe(true);
 
     readVisibility.applyImmediateMutation({
-      ok: true,
-      content: "",
-      mutatedTargetPath: newestTarget,
+      ...successfulMutationToolExecution({ targetPaths: [newestTarget] }),
     });
     expect(readVisibility.hasRead(newestTarget)).toBe(false);
   });

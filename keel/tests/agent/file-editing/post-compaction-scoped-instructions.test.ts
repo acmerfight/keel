@@ -11,6 +11,7 @@ import {
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -626,7 +627,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
-      { ok: true, content: "", readTargetPath: serverTargetPath },
+      successfulReadToolExecution({ targetPath: serverTargetPath }),
     ]);
     let sequence = 0;
 

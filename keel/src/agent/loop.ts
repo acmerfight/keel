@@ -26,7 +26,12 @@ import {
 } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
-import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+  toolExecutionEffects,
+} from "../tools/execution.ts";
 import type {
   AgentMemoryRuntime,
   AgentMemoryToolContext,
@@ -172,29 +177,26 @@ function mutatedTargetPathsFromExecution(
   if (!execution.ok) {
     return [];
   }
-  const targetPaths: string[] = [];
-  if (execution.mutatedTargetPath !== undefined) {
-    targetPaths.push(execution.mutatedTargetPath);
-  }
-  if (execution.mutatedTargetPaths !== undefined) {
-    targetPaths.push(...execution.mutatedTargetPaths);
-  }
-  return targetPaths;
+  return toolExecutionEffects(execution, "mutation").flatMap(
+    (mutation) => mutation.targetPaths,
+  );
 }
 
 function toolEndEvent(
   toolCall: ToolCall,
   execution: ToolExecution,
 ): Extract<AgentEvent, { readonly type: "tool_end" }> {
+  const bashCommand = toolExecutionEffect(execution, "bash_command");
+  const memoryOperation = toolExecutionEffect(execution, "memory_operation");
   return {
     type: "tool_end",
     toolCall,
     ok: execution.ok,
-    ...(execution.bashCommandEvidence !== undefined
-      ? { bashExitCode: execution.bashCommandEvidence.exitCode }
+    ...(bashCommand !== undefined
+      ? { bashExitCode: bashCommand.evidence.exitCode }
       : {}),
-    ...(execution.memoryOperation !== undefined
-      ? { memoryOperation: execution.memoryOperation }
+    ...(memoryOperation !== undefined
+      ? { memoryOperation: memoryOperation.operation }
       : {}),
   };
 }
@@ -224,10 +226,14 @@ function publishVisibleProjectInstructions(
   executions: readonly ToolExecution[],
 ): void {
   for (const execution of executions) {
-    if (execution.visibleProjectInstructionPaths === undefined) {
+    const visibleInstructions = toolExecutionEffect(
+      execution,
+      "visible_project_instructions",
+    );
+    if (visibleInstructions === undefined) {
       continue;
     }
-    state.markInstructionPathsVisible(execution.visibleProjectInstructionPaths);
+    state.markInstructionPathsVisible(visibleInstructions.instructionPaths);
   }
 }
 
@@ -930,6 +936,7 @@ export async function* runAgentTurn(
           return {
             content: DUPLICATE_BLOCKED_GOAL_PROPOSAL_TOOL_RESULT,
             ok: false,
+            effects: [],
           };
         }
         if (sessionGoal?.status === "active") {
@@ -1000,12 +1007,11 @@ export async function* runAgentTurn(
     };
 
     const recordCheckpointOperations = (execution: ToolExecution): void => {
-      if (
-        execution.ok &&
-        execution.checkpointOperations !== undefined &&
-        execution.checkpointOperations.length > 0
-      ) {
-        options.recordCheckpointOperations?.(execution.checkpointOperations);
+      if (!execution.ok) {
+        return;
+      }
+      for (const mutation of toolExecutionEffects(execution, "mutation")) {
+        options.recordCheckpointOperations?.(mutation.checkpointOperations);
       }
     };
 
@@ -1026,6 +1032,7 @@ export async function* runAgentTurn(
       });
       const artifactNotices: ToolOutputArtifactNotice[] = [];
       for (const settled of settledToolExecutions) {
+        const read = toolExecutionEffect(settled.execution, "read");
         applySessionLedger(
           appendSessionLedgerMessage(sessionLedger, {
             role: "tool",
@@ -1035,9 +1042,9 @@ export async function* runAgentTurn(
               content: settled.content,
               sourceTruncated: settled.sourceTruncated,
             }),
-            ...(settled.execution.resourceObservation !== undefined
+            ...(read !== undefined
               ? {
-                  resourceObservation: settled.execution.resourceObservation,
+                  resourceObservation: read.resourceObservation,
                 }
               : {}),
           }),
@@ -1065,10 +1072,11 @@ export async function* runAgentTurn(
       AgentEvent,
       { readonly type: "task_progress_updated" }
     > | null => {
-      if (execution.taskProgressUpdate === undefined) {
+      const progress = toolExecutionEffect(execution, "task_progress");
+      if (progress === undefined) {
         return null;
       }
-      taskProgress = copySessionTaskProgress(execution.taskProgressUpdate);
+      taskProgress = copySessionTaskProgress(progress.taskProgress);
       return {
         type: "task_progress_updated",
         taskProgress,
@@ -1082,10 +1090,11 @@ export async function* runAgentTurn(
       AgentEvent,
       { readonly type: "session_goal_updated" }
     > | null => {
-      if (execution.sessionGoalUpdate === undefined) {
+      const goalUpdate = toolExecutionEffect(execution, "session_goal");
+      if (goalUpdate === undefined) {
         return null;
       }
-      sessionGoal = copySessionGoal(execution.sessionGoalUpdate);
+      sessionGoal = copySessionGoal(goalUpdate.goal);
       return {
         type: "session_goal_updated",
         goal: sessionGoal,
@@ -1112,9 +1121,13 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield toolEndEvent(toolCall, execution);
+          const skillActivation = toolExecutionEffect(
+            execution,
+            "skill_activation",
+          );
           /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
-          if (execution.skillActivation !== undefined) {
-            yield { type: "skill_activated", ...execution.skillActivation };
+          if (skillActivation !== undefined) {
+            yield { type: "skill_activated", ...skillActivation.activation };
           }
           const taskProgressEvent = taskProgressEventFromExecution(execution);
           /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
@@ -1154,6 +1167,7 @@ export async function* runAgentTurn(
             execution: {
               content: COST_BUDGET_ADMISSION_TOOL_RESULT,
               ok: false,
+              effects: [],
             },
           });
           /* v8 ignore next 3 -- the fixed short budget message cannot cross the artifact threshold. */
@@ -1173,8 +1187,12 @@ export async function* runAgentTurn(
           return;
         }
         yield toolEndEvent(toolCall, execution);
-        if (execution.skillActivation !== undefined) {
-          yield { type: "skill_activated", ...execution.skillActivation };
+        const skillActivation = toolExecutionEffect(
+          execution,
+          "skill_activation",
+        );
+        if (skillActivation !== undefined) {
+          yield { type: "skill_activated", ...skillActivation.activation };
         }
         const taskProgressEvent = taskProgressEventFromExecution(execution);
         if (taskProgressEvent !== null) {

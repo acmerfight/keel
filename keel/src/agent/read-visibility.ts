@@ -1,4 +1,8 @@
-import type { ToolExecution } from "../tools/execution.ts";
+import {
+  type ToolExecution,
+  toolExecutionEffect,
+  toolExecutionEffects,
+} from "../tools/execution.ts";
 
 const VISIBLE_READS_MAX_ENTRIES = 256;
 
@@ -33,11 +37,11 @@ export function createReadVisibilityState(): ReadVisibilityState {
     }
   };
   const applyMutation = (execution: ToolExecution): void => {
-    if (execution.ok && execution.mutatedTargetPath !== undefined) {
-      visibleReads.delete(execution.mutatedTargetPath);
+    if (!execution.ok) {
+      return;
     }
-    if (execution.ok && execution.mutatedTargetPaths !== undefined) {
-      for (const targetPath of execution.mutatedTargetPaths) {
+    for (const mutation of toolExecutionEffects(execution, "mutation")) {
+      for (const targetPath of mutation.targetPaths) {
         visibleReads.delete(targetPath);
       }
     }
@@ -58,17 +62,14 @@ export function createReadVisibilityState(): ReadVisibilityState {
       for (const execution of executions) {
         if (!execution.ok) continue;
         applyMutation(execution);
-        if (execution.readTargetPath !== undefined) {
+        const read = toolExecutionEffect(execution, "read");
+        if (read !== undefined) {
           // Delete+set refreshes Map insertion order so iteration is recency ordered.
-          visibleReads.delete(execution.readTargetPath);
-          visibleReads.set(execution.readTargetPath, {
-            targetPath: execution.readTargetPath,
-            ...(execution.readTargetOffset !== undefined
-              ? { offset: execution.readTargetOffset }
-              : {}),
-            ...(execution.readTargetLimit !== undefined
-              ? { limit: execution.readTargetLimit }
-              : {}),
+          visibleReads.delete(read.targetPath);
+          visibleReads.set(read.targetPath, {
+            targetPath: read.targetPath,
+            ...(read.offset !== undefined ? { offset: read.offset } : {}),
+            ...(read.limit !== undefined ? { limit: read.limit } : {}),
           });
           evictOldestVisibleReads();
         }

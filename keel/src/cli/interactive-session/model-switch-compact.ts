@@ -67,24 +67,7 @@ function restoreReadVisibility(
   state: ReadVisibilityState,
   snapshots: readonly VisibleReadSnapshot[],
 ): void {
-  state.clear();
-  state.applyVisibleToolExecutions(
-    snapshots
-      .slice()
-      .reverse()
-      .map((snapshot) => ({
-        // applyVisibleToolExecutions uses only read metadata for read visibility.
-        content: "",
-        ok: true,
-        readTargetPath: snapshot.targetPath,
-        ...(snapshot.offset !== undefined
-          ? { readTargetOffset: snapshot.offset }
-          : {}),
-        ...(snapshot.limit !== undefined
-          ? { readTargetLimit: snapshot.limit }
-          : {}),
-      })),
-  );
+  state.restoreSnapshot(snapshots.slice().reverse());
 }
 
 function restoreProjectInstructionVisibility(
