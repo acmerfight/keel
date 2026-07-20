@@ -377,30 +377,30 @@ describe("Context Compaction Accounting", () => {
     expect(shouldCompact).toBe(true);
   });
 
-  test.each([
-    0,
-    Number.POSITIVE_INFINITY,
-  ])(`Given provider usage contains unusable input token count %s,
+  test.each([0, Number.POSITIVE_INFINITY])(
+    `Given provider usage contains unusable input token count %s,
     When compaction accounting is captured,
-    Then no accounting snapshot is recorded`, (inputTokens) => {
-    // Given
-    const messages: Message[] = [
-      { role: "user", content: "Completed request." },
-    ];
+    Then no accounting snapshot is recorded`,
+    (inputTokens) => {
+      // Given
+      const messages: Message[] = [
+        { role: "user", content: "Completed request." },
+      ];
 
-    // When
-    const accounting = captureContextCompactionAccountingSnapshot({
-      systemPrompt: "You are helpful.",
-      messages,
-      usage: {
-        inputTokens,
-        cachedInputTokens: 0,
-        uncachedInputTokens: 0,
-        outputTokens: 1,
-      },
-    });
+      // When
+      const accounting = captureContextCompactionAccountingSnapshot({
+        systemPrompt: "You are helpful.",
+        messages,
+        usage: {
+          inputTokens,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 1,
+        },
+      });
 
-    // Then
-    expect(accounting).toBeUndefined();
-  });
+      // Then
+      expect(accounting).toBeUndefined();
+    },
+  );
 });

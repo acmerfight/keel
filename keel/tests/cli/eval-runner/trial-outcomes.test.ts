@@ -212,33 +212,35 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
       enabledOutcome: "crashed",
       expectedExitCode: 1,
     },
-  ] as const)(`Given a memory pair whose $name,
+  ] as const)(
+    `Given a memory pair whose $name,
     When the eval runner applies the pair gate,
-    Then it returns the expected gate result with explicit arm outcomes`, async ({
-    scriptTimeoutMs,
-    verify,
-    action,
-    disabledOutcome,
-    enabledOutcome,
-    expectedExitCode,
-  }) => {
-    // Given
-    const { root, suiteDir, outFile } = await createEvalDir();
-    const taskId = "invalid-memory-pair";
-    await createMemoryPairTask(suiteDir, taskId, {
-      prompt: "write the remembered release command",
-      verify,
-      solution: "printf 'pnpm test:coverage\\n' > release-command.txt\n",
-      timeoutMs: 10_000,
+    Then it returns the expected gate result with explicit arm outcomes`,
+    async ({
       scriptTimeoutMs,
-      allowBash: false,
-      maxCostUsd: 0.01,
-      memory: "The release command is pnpm test:coverage.",
-    });
-    const cliEntry = join(root, "invalid-memory-pair-cli.mjs");
-    await writeFile(
-      cliEntry,
-      `import { writeFileSync } from "node:fs";
+      verify,
+      action,
+      disabledOutcome,
+      enabledOutcome,
+      expectedExitCode,
+    }) => {
+      // Given
+      const { root, suiteDir, outFile } = await createEvalDir();
+      const taskId = "invalid-memory-pair";
+      await createMemoryPairTask(suiteDir, taskId, {
+        prompt: "write the remembered release command",
+        verify,
+        solution: "printf 'pnpm test:coverage\\n' > release-command.txt\n",
+        timeoutMs: 10_000,
+        scriptTimeoutMs,
+        allowBash: false,
+        maxCostUsd: 0.01,
+        memory: "The release command is pnpm test:coverage.",
+      });
+      const cliEntry = join(root, "invalid-memory-pair-cli.mjs");
+      await writeFile(
+        cliEntry,
+        `import { writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "memory" && args[1] === "add") process.exit(0);
 const disabled = args.includes("--no-memory");
@@ -246,29 +248,30 @@ ${action}
 const reportIndex = args.indexOf("--report");
 writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPORT)}));
 `,
-      "utf8",
-    );
+        "utf8",
+      );
 
-    try {
-      // When
-      const exitCode = await runEvalCommand({
-        suiteDir,
-        outFile,
-        trials: 1,
-        check: false,
-        cliEntry,
-      });
+      try {
+        // When
+        const exitCode = await runEvalCommand({
+          suiteDir,
+          outFile,
+          trials: 1,
+          check: false,
+          cliEntry,
+        });
 
-      // Then
-      expect(exitCode).toBe(expectedExitCode);
-      expect(await readResultLines(outFile)).toMatchObject([
-        { condition: "memory_disabled", outcome: disabledOutcome },
-        { condition: "memory_enabled", outcome: enabledOutcome },
-      ]);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(exitCode).toBe(expectedExitCode);
+        expect(await readResultLines(outFile)).toMatchObject([
+          { condition: "memory_disabled", outcome: disabledOutcome },
+          { condition: "memory_enabled", outcome: enabledOutcome },
+        ]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a solvable task,
     When the eval runner executes one trial,

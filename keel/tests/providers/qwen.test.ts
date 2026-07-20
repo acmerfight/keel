@@ -614,34 +614,34 @@ describe("Qwen Provider", () => {
     ]);
   });
 
-  test.each([
-    "negative-tool-call-index",
-    "fractional-tool-call-index",
-  ])(`Given Qwen emits a tool call delta with an invalid numeric index,
+  test.each(["negative-tool-call-index", "fractional-tool-call-index"])(
+    `Given Qwen emits a tool call delta with an invalid numeric index,
     When Keel validates the stream chunk,
-    Then it throws a provider protocol error before accumulating the tool call`, async (message) => {
-    // Given
-    const provider = createQwenProvider({
-      apiKey: "test-qwen-key",
-      baseUrl,
-      model: "qwen3.7-plus",
-    });
+    Then it throws a provider protocol error before accumulating the tool call`,
+    async (message) => {
+      // Given
+      const provider = createQwenProvider({
+        apiKey: "test-qwen-key",
+        baseUrl,
+        model: "qwen3.7-plus",
+      });
 
-    // When / Then
-    await expect(
-      collect(
-        provider.stream({
-          systemPrompt: "You are Keel.",
-          messages: [{ role: "user", content: message }],
-          signal: freshSignal(),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_protocol_error",
-      message: "Qwen stream chunk has invalid schema",
-    });
-  });
+      // When / Then
+      await expect(
+        collect(
+          provider.stream({
+            systemPrompt: "You are Keel.",
+            messages: [{ role: "user", content: message }],
+            signal: freshSignal(),
+          }),
+        ),
+      ).rejects.toMatchObject({
+        name: "KeelError",
+        code: "provider_protocol_error",
+        message: "Qwen stream chunk has invalid schema",
+      });
+    },
+  );
 
   test(`Given prior assistant tool call history includes text,
     When Qwen receives the next request,

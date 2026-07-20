@@ -115,38 +115,37 @@ describe("Git Checkpoint Race Handling", () => {
           afterContent: "created\n",
         }),
     },
-  ])(`Given checkpoint metadata cannot be written for $operation,
+  ])(
+    `Given checkpoint metadata cannot be written for $operation,
     When recording the checkpoint,
-    Then Keel skips the checkpoint without failing`, async ({
-    fileName,
-    content,
-    record,
-  }) => {
-    await withGitWorkspace(async (workspace) => {
-      // Given
-      const filePath = join(workspace, fileName);
-      await writeFile(filePath, content, "utf8");
-      const actualFs =
-        await vi.importActual<typeof import("node:fs")>("node:fs");
-      const gitModule = await importGitWithFs({
-        writeFileSync: (path, data, options) => {
-          if (String(path).endsWith("undo-checkpoints.json")) {
-            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
-          }
-          return actualFs.writeFileSync(path, data, options);
-        },
-      });
+    Then Keel skips the checkpoint without failing`,
+    async ({ fileName, content, record }) => {
+      await withGitWorkspace(async (workspace) => {
+        // Given
+        const filePath = join(workspace, fileName);
+        await writeFile(filePath, content, "utf8");
+        const actualFs =
+          await vi.importActual<typeof import("node:fs")>("node:fs");
+        const gitModule = await importGitWithFs({
+          writeFileSync: (path, data, options) => {
+            if (String(path).endsWith("undo-checkpoints.json")) {
+              throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+            }
+            return actualFs.writeFileSync(path, data, options);
+          },
+        });
 
-      // When
-      const result = record(gitModule, workspace, filePath);
+        // When
+        const result = record(gitModule, workspace, filePath);
 
-      // Then
-      expect(result).toEqual({
-        written: false,
-        reason: "checkpoint_write_failed",
+        // Then
+        expect(result).toEqual({
+          written: false,
+          reason: "checkpoint_write_failed",
+        });
       });
-    });
-  });
+    },
+  );
 
   test(`Given delete checkpoint metadata cannot be written,
     When recording the checkpoint,

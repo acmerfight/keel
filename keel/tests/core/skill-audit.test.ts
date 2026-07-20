@@ -5,28 +5,29 @@ import { describe, expect, test } from "vitest";
 import { auditSkillPackage } from "../../src/skills/audit.ts";
 
 describe("skill package audit", () => {
-  test.each([
-    0x2061, 0x2062, 0x2063, 0x2064,
-  ])(`Given content contains zero-width format character U+%i,
+  test.each([0x2061, 0x2062, 0x2063, 0x2064])(
+    `Given content contains zero-width format character U+%i,
     When the deterministic package audit scans it,
-    Then the content is blocked as concealed instructions`, (codePoint) => {
-    const findings = auditSkillPackage({
-      skillDirectory: "/unused",
-      skillRelativePath: ".agents/skills/review/SKILL.md",
-      content: `Review${String.fromCodePoint(codePoint)}concealed`,
-      description: "Review the requested change.",
-      descriptionSource: "Review the requested change.",
-      resourcePaths: [],
-      inventoryFindings: [],
-    });
+    Then the content is blocked as concealed instructions`,
+    (codePoint) => {
+      const findings = auditSkillPackage({
+        skillDirectory: "/unused",
+        skillRelativePath: ".agents/skills/review/SKILL.md",
+        content: `Review${String.fromCodePoint(codePoint)}concealed`,
+        description: "Review the requested change.",
+        descriptionSource: "Review the requested change.",
+        resourcePaths: [],
+        inventoryFindings: [],
+      });
 
-    expect(findings).toEqual([
-      expect.objectContaining({
-        severity: "blocker",
-        code: "invisible_content",
-      }),
-    ]);
-  });
+      expect(findings).toEqual([
+        expect.objectContaining({
+          severity: "blocker",
+          code: "invisible_content",
+        }),
+      ]);
+    },
+  );
 
   test(`Given the same deterministic finding is produced by inventory and content checks,
     When the package audit combines its phases,

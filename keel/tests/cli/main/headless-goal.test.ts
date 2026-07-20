@@ -125,111 +125,112 @@ describe("CLI Main - Headless Goal", () => {
       persistedGlobalDisable: true,
       reportMode: "globally_disabled",
     },
-  ] as const)(`Given a headless Goal matches an installed Skill,
+  ] as const)(
+    `Given a headless Goal matches an installed Skill,
     When the launch uses $label,
-    Then the shared Goal runtime exposes no Skill metadata, body, or tools`, async ({
-    runArgs,
-    persistedGlobalDisable,
-    reportMode,
-  }) => {
-    // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-headless-no-skills-workspace-"),
-    );
-    const home = await mkdtemp(join(tmpdir(), "keel-headless-no-skills-home-"));
-    const reportPath = join(workspace, "no-skills-report.json");
-    if (persistedGlobalDisable) {
-      await writeFile(
-        join(home, "skills.json"),
-        `${JSON.stringify({ schemaVersion: 1, enabled: false, disabledPackageIds: [] })}\n`,
+    Then the shared Goal runtime exposes no Skill metadata, body, or tools`,
+    async ({ runArgs, persistedGlobalDisable, reportMode }) => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-headless-no-skills-workspace-"),
       );
-    }
-    const skillDirectory = join(workspace, ".agents", "skills", "review");
-    await mkdir(skillDirectory, { recursive: true });
-    await writeFile(
-      join(skillDirectory, "SKILL.md"),
-      "---\nname: review\ndescription: Review release changes\n---\n\nHEADLESS_NO_SKILLS_BODY\n",
-    );
-    const capturedBodies: unknown[] = [];
-    const server = createServer((req, res) => {
-      let body = "";
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        capturedBodies.push(JSON.parse(body));
-        res.writeHead(200, { "Content-Type": "text/event-stream" });
-        if (capturedBodies.length === 1) {
-          res.write(
-            sseToolCall("complete_without_skills", "update_goal", {
-              status: "completed",
-            }),
-          );
-          res.write(sseToolFinish());
-          res.end("data: [DONE]\n\n");
-          return;
-        }
-        res.end(
-          sseTextReplyWithUsage(
-            JSON.stringify({ completed: true, reason: "Complete." }),
-          ),
+      const home = await mkdtemp(
+        join(tmpdir(), "keel-headless-no-skills-home-"),
+      );
+      const reportPath = join(workspace, "no-skills-report.json");
+      if (persistedGlobalDisable) {
+        await writeFile(
+          join(home, "skills.json"),
+          `${JSON.stringify({ schemaVersion: 1, enabled: false, disabledPackageIds: [] })}\n`,
         );
-      });
-    });
-    await listen(server);
-    const fixture = createRuntime(
-      [
-        "goal",
-        "--objective=Review the release",
-        "--done-when=the release review is complete",
-        "--session=headless-no-skills",
-        "--provider=deepseek",
-        ...runArgs,
-        `--report=${reportPath}`,
-      ],
-      {
-        cwd: workspace,
-        env: {
-          KEEL_HOME: home,
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-        },
-      },
-    );
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        activeSkills: [],
-        skillPolicy: { mode: reportMode, disabledPackages: 0 },
-      });
-      expect(capturedBodies).toHaveLength(3);
-      for (const body of capturedBodies) {
-        const request = requestWithMessagesSchema.parse(body);
-        const systemPrompt = request.messages?.find(
-          (message) => message.role === "system",
-        )?.content;
-        expect(systemPrompt).not.toContain("Available workflow skills:");
-        expect(systemPrompt).not.toContain("repo:review");
-        expect(systemPrompt).not.toContain("HEADLESS_NO_SKILLS_BODY");
-        const toolNames =
-          requestWithToolsSchema
-            .parse(body)
-            .tools?.map((tool) => tool.function?.name) ?? [];
-        expect(toolNames).not.toContain("skill");
-        expect(toolNames).not.toContain("skill_search");
-        expect(toolNames).not.toContain("skill_resource");
       }
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+      const skillDirectory = join(workspace, ".agents", "skills", "review");
+      await mkdir(skillDirectory, { recursive: true });
+      await writeFile(
+        join(skillDirectory, "SKILL.md"),
+        "---\nname: review\ndescription: Review release changes\n---\n\nHEADLESS_NO_SKILLS_BODY\n",
+      );
+      const capturedBodies: unknown[] = [];
+      const server = createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          capturedBodies.push(JSON.parse(body));
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          if (capturedBodies.length === 1) {
+            res.write(
+              sseToolCall("complete_without_skills", "update_goal", {
+                status: "completed",
+              }),
+            );
+            res.write(sseToolFinish());
+            res.end("data: [DONE]\n\n");
+            return;
+          }
+          res.end(
+            sseTextReplyWithUsage(
+              JSON.stringify({ completed: true, reason: "Complete." }),
+            ),
+          );
+        });
+      });
+      await listen(server);
+      const fixture = createRuntime(
+        [
+          "goal",
+          "--objective=Review the release",
+          "--done-when=the release review is complete",
+          "--session=headless-no-skills",
+          "--provider=deepseek",
+          ...runArgs,
+          `--report=${reportPath}`,
+        ],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: home,
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
+
+        // Then
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+          activeSkills: [],
+          skillPolicy: { mode: reportMode, disabledPackages: 0 },
+        });
+        expect(capturedBodies).toHaveLength(3);
+        for (const body of capturedBodies) {
+          const request = requestWithMessagesSchema.parse(body);
+          const systemPrompt = request.messages?.find(
+            (message) => message.role === "system",
+          )?.content;
+          expect(systemPrompt).not.toContain("Available workflow skills:");
+          expect(systemPrompt).not.toContain("repo:review");
+          expect(systemPrompt).not.toContain("HEADLESS_NO_SKILLS_BODY");
+          const toolNames =
+            requestWithToolsSchema
+              .parse(body)
+              .tools?.map((tool) => tool.function?.name) ?? [];
+          expect(toolNames).not.toContain("skill");
+          expect(toolNames).not.toContain("skill_search");
+          expect(toolNames).not.toContain("skill_resource");
+        }
+      } finally {
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a resumable headless Goal has an active Skill snapshot,
     When one resume uses --no-skills and a later resume does not,
@@ -1029,196 +1030,199 @@ describe("CLI Main - Headless Goal", () => {
   test.each([
     ["by id", ["headless-resume"]],
     ["by latest", ["--last"]],
-  ])(`Given a saved headless Goal stopped at an invocation cost boundary,
+  ])(
+    `Given a saved headless Goal stopped at an invocation cost boundary,
     When a later non-interactive invocation resumes it %s with enough cost budget,
-    Then Keel preserves the durable contract and drives the same Goal to verified completion`, async (_selector, resumeTarget) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-headless-resume-"));
-    const home = await mkdtemp(join(tmpdir(), "keel-headless-resume-home-"));
-    const reportPath = join(workspace, "resume-report.json");
-    let providerCalls = 0;
-    const server = createServer((_req, res) => {
-      providerCalls++;
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
+    Then Keel preserves the durable contract and drives the same Goal to verified completion`,
+    async (_selector, resumeTarget) => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-headless-resume-"));
+      const home = await mkdtemp(join(tmpdir(), "keel-headless-resume-home-"));
+      const reportPath = join(workspace, "resume-report.json");
+      let providerCalls = 0;
+      const server = createServer((_req, res) => {
+        providerCalls++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (providerCalls % 2 === 1) {
+          res.write(
+            sseToolCall("complete_resumed_goal", "update_goal", {
+              status: "completed",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Resumed goal completed."));
       });
-      if (providerCalls % 2 === 1) {
-        res.write(
-          sseToolCall("complete_resumed_goal", "update_goal", {
-            status: "completed",
-          }),
-        );
-        res.write(sseToolFinish());
-        res.end("data: [DONE]\n\n");
-        return;
-      }
-      res.end(sseTextReplyWithUsage("Resumed goal completed."));
-    });
-    await listen(server);
-    const runtimeOptions = {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-        KEEL_HOME: home,
-      },
-    } as const;
-    const launch = createRuntime(
-      [
-        "goal",
-        "--objective",
-        "Resume the same durable Goal",
-        "--verify",
-        "true",
-        "--timeout",
-        "2s",
-        "--turns",
-        "3",
-        "--tokens",
-        "10000",
-        "--time",
-        "1m",
-        "--session",
-        "headless-resume",
-        "--bash-policy",
-        "trusted",
-        "--provider",
-        "deepseek",
-        "--max-cost",
-        "0.000001",
-      ],
-      runtimeOptions,
-    );
-
-    try {
-      expect(await runCliMain(launch.runtime)).toBe(4);
-      expect(providerCalls).toBe(0);
-      expect(launch.stdout()).toContain(
-        "Resume with: keel goal resume headless-resume\n",
+      await listen(server);
+      const runtimeOptions = {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      } as const;
+      const launch = createRuntime(
+        [
+          "goal",
+          "--objective",
+          "Resume the same durable Goal",
+          "--verify",
+          "true",
+          "--timeout",
+          "2s",
+          "--turns",
+          "3",
+          "--tokens",
+          "10000",
+          "--time",
+          "1m",
+          "--session",
+          "headless-resume",
+          "--bash-policy",
+          "trusted",
+          "--provider",
+          "deepseek",
+          "--max-cost",
+          "0.000001",
+        ],
+        runtimeOptions,
       );
-      if (_selector === "by latest") {
-        const newerCompletedSession = createRuntime(
+
+      try {
+        expect(await runCliMain(launch.runtime)).toBe(4);
+        expect(providerCalls).toBe(0);
+        expect(launch.stdout()).toContain(
+          "Resume with: keel goal resume headless-resume\n",
+        );
+        if (_selector === "by latest") {
+          const newerCompletedSession = createRuntime(
+            [
+              "goal",
+              "--objective",
+              "Complete a newer Goal that must not hide the resumable one",
+              "--verify",
+              "true",
+              "--session",
+              "headless-newer-completed",
+              "--bash-policy",
+              "trusted",
+              "--provider",
+              "deepseek",
+              "--max-cost",
+              "1",
+            ],
+            runtimeOptions,
+          );
+          expect(await runCliMain(newerCompletedSession.runtime)).toBe(0);
+          const completedResume = createRuntime(
+            [
+              "goal",
+              "resume",
+              "headless-newer-completed",
+              "--bash-policy",
+              "trusted",
+              "--provider",
+              "deepseek",
+            ],
+            runtimeOptions,
+          );
+          expect(await runCliMain(completedResume.runtime)).toBe(1);
+          expect(completedResume.stderr()).toContain(
+            "Error: only paused, blocked, or limited session goals can be resumed.\n",
+          );
+          expect(providerCalls).toBe(2);
+        }
+
+        // When
+        const resume = createRuntime(
           [
             "goal",
-            "--objective",
-            "Complete a newer Goal that must not hide the resumable one",
-            "--verify",
-            "true",
-            "--session",
-            "headless-newer-completed",
+            "resume",
+            ...resumeTarget,
             "--bash-policy",
             "trusted",
             "--provider",
             "deepseek",
             "--max-cost",
             "1",
+            "--report",
+            reportPath,
           ],
           runtimeOptions,
         );
-        expect(await runCliMain(newerCompletedSession.runtime)).toBe(0);
-        const completedResume = createRuntime(
-          [
-            "goal",
-            "resume",
-            "headless-newer-completed",
-            "--bash-policy",
-            "trusted",
-            "--provider",
-            "deepseek",
+        const exitCode = await runCliMain(resume.runtime);
+
+        // Then
+        expect(exitCode).toBe(0);
+        expect(providerCalls).toBe(_selector === "by latest" ? 4 : 2);
+        expect(resume.stdout()).toContain(
+          "Headless goal session: headless-resume\n",
+        );
+        expect(resume.stdout()).toContain(
+          "Headless goal outcome: completed; session: headless-resume\n",
+        );
+        const ledger = await readFile(
+          join(home, "sessions", "headless-resume", "ledger.jsonl"),
+          "utf8",
+        );
+        const latestGoalRecord = ledger
+          .trim()
+          .split("\n")
+          .filter((line) => line.includes('"type":"session_goal"'))
+          .at(-1);
+        expect(latestGoalRecord).toContain(
+          '"objective":"Resume the same durable Goal"',
+        );
+        expect(latestGoalRecord).toContain('"criterionKind":"command"');
+        expect(latestGoalRecord).toContain('"completionCriterion":"true"');
+        expect(latestGoalRecord).toContain('"verificationTimeoutMs":2000');
+        expect(latestGoalRecord).toContain(
+          '"budget":{"turns":3,"tokens":10000,"activeTimeMs":60000}',
+        );
+        expect(latestGoalRecord).toContain('"status":"completed"');
+        expect(latestGoalRecord).not.toContain(
+          '"usage":{"turns":0,"tokens":0,"activeTimeMs":0}',
+        );
+        expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+          tasks: [
+            {
+              ordinal: 1,
+              trigger: "goal_resume",
+              humanInterventionCount: 0,
+              agentRuns: [
+                {
+                  ordinal: 1,
+                  trigger: "goal_resume",
+                  humanInterventionCount: 0,
+                  agentLoopTurns: 2,
+                  stopReason: "completed",
+                },
+              ],
+              outcome: "completed",
+            },
           ],
-          runtimeOptions,
-        );
-        expect(await runCliMain(completedResume.runtime)).toBe(1);
-        expect(completedResume.stderr()).toContain(
-          "Error: only paused, blocked, or limited session goals can be resumed.\n",
-        );
-        expect(providerCalls).toBe(2);
-      }
-
-      // When
-      const resume = createRuntime(
-        [
-          "goal",
-          "resume",
-          ...resumeTarget,
-          "--bash-policy",
-          "trusted",
-          "--provider",
-          "deepseek",
-          "--max-cost",
-          "1",
-          "--report",
-          reportPath,
-        ],
-        runtimeOptions,
-      );
-      const exitCode = await runCliMain(resume.runtime);
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(providerCalls).toBe(_selector === "by latest" ? 4 : 2);
-      expect(resume.stdout()).toContain(
-        "Headless goal session: headless-resume\n",
-      );
-      expect(resume.stdout()).toContain(
-        "Headless goal outcome: completed; session: headless-resume\n",
-      );
-      const ledger = await readFile(
-        join(home, "sessions", "headless-resume", "ledger.jsonl"),
-        "utf8",
-      );
-      const latestGoalRecord = ledger
-        .trim()
-        .split("\n")
-        .filter((line) => line.includes('"type":"session_goal"'))
-        .at(-1);
-      expect(latestGoalRecord).toContain(
-        '"objective":"Resume the same durable Goal"',
-      );
-      expect(latestGoalRecord).toContain('"criterionKind":"command"');
-      expect(latestGoalRecord).toContain('"completionCriterion":"true"');
-      expect(latestGoalRecord).toContain('"verificationTimeoutMs":2000');
-      expect(latestGoalRecord).toContain(
-        '"budget":{"turns":3,"tokens":10000,"activeTimeMs":60000}',
-      );
-      expect(latestGoalRecord).toContain('"status":"completed"');
-      expect(latestGoalRecord).not.toContain(
-        '"usage":{"turns":0,"tokens":0,"activeTimeMs":0}',
-      );
-      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        tasks: [
-          {
-            ordinal: 1,
-            trigger: "goal_resume",
-            humanInterventionCount: 0,
-            agentRuns: [
-              {
-                ordinal: 1,
-                trigger: "goal_resume",
-                humanInterventionCount: 0,
-                agentLoopTurns: 2,
-                stopReason: "completed",
-              },
-            ],
-            outcome: "completed",
+          agentLoopTurns: 2,
+          stopReason: "completed",
+          goalOutcome: {
+            sessionId: "headless-resume",
+            status: "completed",
+            evidenceKind: "command",
           },
-        ],
-        agentLoopTurns: 2,
-        stopReason: "completed",
-        goalOutcome: {
-          sessionId: "headless-resume",
-          status: "completed",
-          evidenceKind: "command",
-        },
-      });
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+        });
+      } finally {
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a saved command Goal requires shell authorization,
     When a headless resume has neither trusted Bash nor a matching saved approval,
@@ -1300,127 +1304,130 @@ describe("CLI Main - Headless Goal", () => {
   test.each([
     ["disabled Bash", []],
     ["saved-approval-only Bash", ["--bash-policy", "ask"]],
-  ])(`Given an assertion Goal was configured interactively with %s,
+  ])(
+    `Given an assertion Goal was configured interactively with %s,
     When automation resumes it without a command verifier,
-    Then headless execution preserves the external assertion hard gate`, async (_label, bashArgs) => {
-    // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-headless-resume-assertion-"),
-    );
-    const home = await mkdtemp(
-      join(tmpdir(), "keel-headless-resume-assertion-home-"),
-    );
-    const reportPath = join(workspace, "assertion-resume-report.json");
-    const attemptsUnapprovedBash = _label === "saved-approval-only Bash";
-    await writeSessionLedger({
-      home,
-      id: "resume-assertion",
-      workspace: await realpath(workspace),
-      createdAt: "2026-07-11T00:00:00.000Z",
-      records: [
-        sessionGoalRecordLine({
-          timestamp: "2026-07-11T00:00:01.000Z",
-          goal: {
-            objective: "Preserve assertion completion on resume",
-            status: attemptsUnapprovedBash ? "paused" : "active",
-            budget: {},
-            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            completion: {
-              kind: "assertion",
-              assertion: "the saved assertion remains externally gated",
-            },
-          },
-        }),
-      ],
-    });
-    let providerCalls = 0;
-    const server = createServer((_req, res) => {
-      providerCalls++;
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      if (attemptsUnapprovedBash && providerCalls === 1) {
-        res.write(
-          sseToolCall("unapproved_assertion_bash", "bash", {
-            command: "true",
-          }),
-        );
-        res.write(sseToolFinish());
-        res.end("data: [DONE]\n\n");
-        return;
-      }
-      const completionRequest = attemptsUnapprovedBash ? 2 : 1;
-      if (providerCalls === completionRequest) {
-        res.write(
-          sseToolCall("complete_resumed_assertion", "update_goal", {
-            status: "completed",
-          }),
-        );
-        res.write(sseToolFinish());
-        res.end("data: [DONE]\n\n");
-        return;
-      }
-      if (providerCalls === completionRequest + 1) {
-        res.end(
-          sseTextReplyWithUsage(
-            JSON.stringify({
-              completed: true,
-              reason: "Fresh evaluator approved the saved assertion.",
-            }),
-          ),
-        );
-        return;
-      }
-      res.end(sseTextReplyWithUsage("Assertion Goal completed."));
-    });
-    await listen(server);
-    const fixture = createRuntime(
-      [
-        "goal",
-        "resume",
-        ...(attemptsUnapprovedBash ? ["resume-assertion"] : ["--last"]),
-        ...bashArgs,
-        "--provider",
-        "deepseek",
-        "--report",
-        reportPath,
-      ],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_HOME: home,
-        },
-      },
-    );
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(providerCalls).toBe(attemptsUnapprovedBash ? 4 : 3);
-      expect(fixture.stdout()).toContain(
-        "Headless goal outcome: completed; session: resume-assertion\n",
+    Then headless execution preserves the external assertion hard gate`,
+    async (_label, bashArgs) => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-headless-resume-assertion-"),
       );
-      expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        stopReason: "completed",
-        goalOutcome: {
-          sessionId: "resume-assertion",
-          status: "completed",
-          evidenceKind: "assertion_evaluator",
-        },
+      const home = await mkdtemp(
+        join(tmpdir(), "keel-headless-resume-assertion-home-"),
+      );
+      const reportPath = join(workspace, "assertion-resume-report.json");
+      const attemptsUnapprovedBash = _label === "saved-approval-only Bash";
+      await writeSessionLedger({
+        home,
+        id: "resume-assertion",
+        workspace: await realpath(workspace),
+        createdAt: "2026-07-11T00:00:00.000Z",
+        records: [
+          sessionGoalRecordLine({
+            timestamp: "2026-07-11T00:00:01.000Z",
+            goal: {
+              objective: "Preserve assertion completion on resume",
+              status: attemptsUnapprovedBash ? "paused" : "active",
+              budget: {},
+              usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+              completion: {
+                kind: "assertion",
+                assertion: "the saved assertion remains externally gated",
+              },
+            },
+          }),
+        ],
       });
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+      let providerCalls = 0;
+      const server = createServer((_req, res) => {
+        providerCalls++;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (attemptsUnapprovedBash && providerCalls === 1) {
+          res.write(
+            sseToolCall("unapproved_assertion_bash", "bash", {
+              command: "true",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        const completionRequest = attemptsUnapprovedBash ? 2 : 1;
+        if (providerCalls === completionRequest) {
+          res.write(
+            sseToolCall("complete_resumed_assertion", "update_goal", {
+              status: "completed",
+            }),
+          );
+          res.write(sseToolFinish());
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        if (providerCalls === completionRequest + 1) {
+          res.end(
+            sseTextReplyWithUsage(
+              JSON.stringify({
+                completed: true,
+                reason: "Fresh evaluator approved the saved assertion.",
+              }),
+            ),
+          );
+          return;
+        }
+        res.end(sseTextReplyWithUsage("Assertion Goal completed."));
+      });
+      await listen(server);
+      const fixture = createRuntime(
+        [
+          "goal",
+          "resume",
+          ...(attemptsUnapprovedBash ? ["resume-assertion"] : ["--last"]),
+          ...bashArgs,
+          "--provider",
+          "deepseek",
+          "--report",
+          reportPath,
+        ],
+        {
+          cwd: workspace,
+          env: {
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+            KEEL_HOME: home,
+          },
+        },
+      );
+
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
+
+        // Then
+        expect(exitCode).toBe(0);
+        expect(providerCalls).toBe(attemptsUnapprovedBash ? 4 : 3);
+        expect(fixture.stdout()).toContain(
+          "Headless goal outcome: completed; session: resume-assertion\n",
+        );
+        expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
+          stopReason: "completed",
+          goalOutcome: {
+            sessionId: "resume-assertion",
+            status: "completed",
+            evidenceKind: "assertion_evaluator",
+          },
+        });
+      } finally {
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a saved headless Goal exhausted its durable turn budget,
     When automation resumes it with a larger absolute Goal budget,

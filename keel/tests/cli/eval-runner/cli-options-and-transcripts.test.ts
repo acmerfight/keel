@@ -279,70 +279,71 @@ describe("Eval Runner", () => {
       transcriptAction:
         "mkdirSync(args[transcriptIndex + 1], { recursive: true });",
     },
-  ])(`Given the child writes a $name transcript artifact,
+  ])(
+    `Given the child writes a $name transcript artifact,
     When the eval runner records the result,
-    Then the result omits the transcript path`, async ({
-    transcriptAction,
-  }) => {
-    // Given
-    const { root, suiteDir, outFile } = await createEvalDir();
-    const transcriptDir = join(root, "transcripts");
-    await createTask(suiteDir, "invalid-transcript", {
-      ...FIX_NOTE_TASK,
-      verify: "exit 0\n",
-    });
-    const cliEntry = join(root, "invalid-transcript-cli.js");
-    await writeFile(
-      cliEntry,
-      [
-        "import { writeFileSync, mkdirSync } from 'node:fs';",
-        "import { dirname } from 'node:path';",
-        "const args = process.argv.slice(2);",
-        "const reportIndex = args.indexOf('--report');",
-        "const transcriptIndex = args.indexOf('--transcript');",
-        "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
-        transcriptAction,
-        "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 17,",
-        "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
-        "  humanInterventionCount: 0,",
-        ...modelOperationReportLines("fake", "fake"),
-        "  modelsUsed: [{ provider: 'fake', model: 'fake' }],",
-        "  usageByModel: [{ provider: 'fake', model: 'fake', agentLoopTurns: 1, usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 }, costUsd: 0 }],",
-        "  agentLoopTurns: 1,",
-        "  stopReason: 'completed',",
-        "  usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 },",
-        "  durationMs: 1,",
-        "  costUsd: 0,",
-        "  costOvershootUsd: 0,",
-        "  contextCompactions: [],",
-        "  skillActivations: [], activeSkills: [], skillCatalog: { exposed: 0, omitted: 0, total: 0, budgetChars: 8000, usedChars: 0 },",
-        "  skillPolicy: { mode: 'enabled', disabledPackages: 0 },",
-        "  undoProtection: { status: 'not_applicable', checkpointsWritten: 0, failures: [], latestCheckpoint: null },",
-        "  memory: { enabled: false, scope: null, loadedIds: [], loadedEntries: [], renderedBytes: 0, estimatedTokens: 0, operations: [] }",
-        "}), 'utf8');",
-      ].join("\n"),
-      "utf8",
-    );
-
-    try {
-      // When
-      const exitCode = await runEvalCommand({
-        suiteDir,
-        outFile,
-        trials: 1,
-        transcriptDir,
-        check: false,
-        cliEntry,
+    Then the result omits the transcript path`,
+    async ({ transcriptAction }) => {
+      // Given
+      const { root, suiteDir, outFile } = await createEvalDir();
+      const transcriptDir = join(root, "transcripts");
+      await createTask(suiteDir, "invalid-transcript", {
+        ...FIX_NOTE_TASK,
+        verify: "exit 0\n",
       });
+      const cliEntry = join(root, "invalid-transcript-cli.js");
+      await writeFile(
+        cliEntry,
+        [
+          "import { writeFileSync, mkdirSync } from 'node:fs';",
+          "import { dirname } from 'node:path';",
+          "const args = process.argv.slice(2);",
+          "const reportIndex = args.indexOf('--report');",
+          "const transcriptIndex = args.indexOf('--transcript');",
+          "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
+          transcriptAction,
+          "writeFileSync(args[reportIndex + 1], JSON.stringify({",
+          "  schemaVersion: 17,",
+          "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
+          "  humanInterventionCount: 0,",
+          ...modelOperationReportLines("fake", "fake"),
+          "  modelsUsed: [{ provider: 'fake', model: 'fake' }],",
+          "  usageByModel: [{ provider: 'fake', model: 'fake', agentLoopTurns: 1, usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 }, costUsd: 0 }],",
+          "  agentLoopTurns: 1,",
+          "  stopReason: 'completed',",
+          "  usage: { inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 },",
+          "  durationMs: 1,",
+          "  costUsd: 0,",
+          "  costOvershootUsd: 0,",
+          "  contextCompactions: [],",
+          "  skillActivations: [], activeSkills: [], skillCatalog: { exposed: 0, omitted: 0, total: 0, budgetChars: 8000, usedChars: 0 },",
+          "  skillPolicy: { mode: 'enabled', disabledPackages: 0 },",
+          "  undoProtection: { status: 'not_applicable', checkpointsWritten: 0, failures: [], latestCheckpoint: null },",
+          "  memory: { enabled: false, scope: null, loadedIds: [], loadedEntries: [], renderedBytes: 0, estimatedTokens: 0, operations: [] }",
+          "}), 'utf8');",
+        ].join("\n"),
+        "utf8",
+      );
 
-      // Then
-      expect(exitCode).toBe(0);
-      expect(
-        (await readResultLines(outFile))[0]?.transcriptPath,
-      ).toBeUndefined();
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+      try {
+        // When
+        const exitCode = await runEvalCommand({
+          suiteDir,
+          outFile,
+          trials: 1,
+          transcriptDir,
+          check: false,
+          cliEntry,
+        });
+
+        // Then
+        expect(exitCode).toBe(0);
+        expect(
+          (await readResultLines(outFile))[0]?.transcriptPath,
+        ).toBeUndefined();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

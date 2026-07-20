@@ -791,42 +791,42 @@ describe("CLI Main - Skills Doctor", () => {
       name: "slack-token",
       body: `Use xoxb-${"a".repeat(24)} for the request.`,
     },
-  ])(`Given the $name persistence-sensitive credential class is embedded in a Skill,
+  ])(
+    `Given the $name persistence-sensitive credential class is embedded in a Skill,
     When the user audits or lists project Skills,
-    Then doctor blocks the package and the catalog excludes it`, async ({
-    name,
-    body,
-  }) => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), `keel-skills-doctor-secret-class-${name}-`),
-    );
-    await writeSkill({
-      workspace,
-      name,
-      description: "Unsafe credential example.",
-      body,
-    });
-
-    try {
-      const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
-      const list = createRuntime(["skills"], { cwd: workspace });
-
-      expect(await runCliMain(doctor.runtime)).toBe(1);
-      expect(doctor.stderr()).toBe("");
-      expect(doctor.stdout()).toContain(`- repo:${name}: blocked`);
-      expect(doctor.stdout()).toContain("[embedded_secret]");
-      expect(doctor.stdout()).toContain(
-        "Summary: 1 package, 1 blocked, 0 warnings.",
+    Then doctor blocks the package and the catalog excludes it`,
+    async ({ name, body }) => {
+      const workspace = await mkdtemp(
+        join(tmpdir(), `keel-skills-doctor-secret-class-${name}-`),
       );
+      await writeSkill({
+        workspace,
+        name,
+        description: "Unsafe credential example.",
+        body,
+      });
 
-      expect(await runCliMain(list.runtime)).toBe(0);
-      expect(list.stdout()).not.toContain(`repo:${name}`);
-      expect(list.stderr()).toContain(`repo:${name}`);
-      expect(list.stderr()).toContain("[embedded_secret]");
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+      try {
+        const doctor = createRuntime(["skills", "doctor"], { cwd: workspace });
+        const list = createRuntime(["skills"], { cwd: workspace });
+
+        expect(await runCliMain(doctor.runtime)).toBe(1);
+        expect(doctor.stderr()).toBe("");
+        expect(doctor.stdout()).toContain(`- repo:${name}: blocked`);
+        expect(doctor.stdout()).toContain("[embedded_secret]");
+        expect(doctor.stdout()).toContain(
+          "Summary: 1 package, 1 blocked, 0 warnings.",
+        );
+
+        expect(await runCliMain(list.runtime)).toBe(0);
+        expect(list.stdout()).not.toContain(`repo:${name}`);
+        expect(list.stderr()).toContain(`repo:${name}`);
+        expect(list.stderr()).toContain("[embedded_secret]");
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a persistence-sensitive Skill is requested while creating a named session,
     When startup receives its first input before the lazy session exists,

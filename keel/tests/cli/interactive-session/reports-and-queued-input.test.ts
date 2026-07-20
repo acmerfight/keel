@@ -849,124 +849,122 @@ describe("Interactive Session - Reports And Queued Input", () => {
       expectedReason:
         'Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
     },
-  ])(`Given an active goal has an older recovery outcome,
+  ])(
+    `Given an active goal has an older recovery outcome,
     When a later goal turn produces $name,
-    Then the observed fact replaces the older outcome`, async ({
-    kind,
-    bashMode,
-    completion,
-    expectedReason,
-  }) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-observation-"));
-    try {
-      const input = new PassThrough();
-      let persistedGoal: SessionGoal | undefined = {
-        objective: "Replace stale recovery with an observed fact",
-        status: "active",
-        budget: {},
-        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        completion,
-        latestRuntimeOutcome: {
-          kind: "recovery_requested",
-          reason: "An earlier continuation repeated.",
-        },
-      };
-      let providerCalls = 0;
-      const provider: LLMProvider = {
-        id: "fake",
-        async *stream() {
-          providerCalls++;
-          if (providerCalls === 1) {
-            if (kind === "workspace") {
-              yield {
-                type: "tool_call",
-                id: "write_observed_progress",
-                tool: "write",
-                path: "report.txt",
-                content: "done\n",
-              };
-            } else {
-              if (completion.kind !== "command") {
-                throw new Error(
-                  "verification scenarios require command completion",
-                );
-              }
-              yield {
-                type: "tool_call",
-                id: "verify_observed_progress",
-                tool: "bash",
-                command: completion.command,
-              };
-            }
-            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-            return;
-          }
-          input.end("/goal pause\n");
-          await setImmediate();
-          yield { type: "text", text: "Observed fact recorded." };
-          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-        },
-      };
-      const session = runInteractiveSession({
-        cliArgs: { bashMode },
-        workspace,
-        platform: process.platform,
-        session: savedInteractiveSession({
-          id: "test-session",
-          persistGoal: ({ goal }) => {
-            persistedGoal = goal ?? undefined;
-            return persistedGoal;
+    Then the observed fact replaces the older outcome`,
+    async ({ kind, bashMode, completion, expectedReason }) => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-goal-observation-"));
+      try {
+        const input = new PassThrough();
+        let persistedGoal: SessionGoal | undefined = {
+          objective: "Replace stale recovery with an observed fact",
+          status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          completion,
+          latestRuntimeOutcome: {
+            kind: "recovery_requested",
+            reason: "An earlier continuation repeated.",
           },
-        }),
-        initialSessionGoal: persistedGoal,
-        input,
-        writeStdout: () => {},
-        writeStderr: () => {},
-        onSigint: () => {},
-        offSigint: () => {},
-        setExitCode: () => {},
-        forceExit: (code) => {
-          throw new ForcedExit(code);
-        },
-        resolveProvider: () => ({
-          provider,
-          providerId: "fake",
-          model: "fake",
-          costModel: ZERO_COST_MODEL,
-        }),
-        requireKnownCostModel: () => ZERO_COST_MODEL,
-        printAgentEvents: async (stream) => {
-          let finalEnd:
-            | Extract<AgentEvent, { readonly type: "end" }>
-            | undefined;
-          for await (const event of stream) {
-            if (event.type === "end") {
-              finalEnd = event;
+        };
+        let providerCalls = 0;
+        const provider: LLMProvider = {
+          id: "fake",
+          async *stream() {
+            providerCalls++;
+            if (providerCalls === 1) {
+              if (kind === "workspace") {
+                yield {
+                  type: "tool_call",
+                  id: "write_observed_progress",
+                  tool: "write",
+                  path: "report.txt",
+                  content: "done\n",
+                };
+              } else {
+                if (completion.kind !== "command") {
+                  throw new Error(
+                    "verification scenarios require command completion",
+                  );
+                }
+                yield {
+                  type: "tool_call",
+                  id: "verify_observed_progress",
+                  tool: "bash",
+                  command: completion.command,
+                };
+              }
+              yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+              return;
             }
-          }
-          return finalEnd;
-        },
-        formatCostReport: () => "",
-      });
-      input.write("continue the goal\n");
+            input.end("/goal pause\n");
+            await setImmediate();
+            yield { type: "text", text: "Observed fact recorded." };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          },
+        };
+        const session = runInteractiveSession({
+          cliArgs: { bashMode },
+          workspace,
+          platform: process.platform,
+          session: savedInteractiveSession({
+            id: "test-session",
+            persistGoal: ({ goal }) => {
+              persistedGoal = goal ?? undefined;
+              return persistedGoal;
+            },
+          }),
+          initialSessionGoal: persistedGoal,
+          input,
+          writeStdout: () => {},
+          writeStderr: () => {},
+          onSigint: () => {},
+          offSigint: () => {},
+          setExitCode: () => {},
+          forceExit: (code) => {
+            throw new ForcedExit(code);
+          },
+          resolveProvider: () => ({
+            provider,
+            providerId: "fake",
+            model: "fake",
+            costModel: ZERO_COST_MODEL,
+          }),
+          requireKnownCostModel: () => ZERO_COST_MODEL,
+          printAgentEvents: async (stream) => {
+            let finalEnd:
+              | Extract<AgentEvent, { readonly type: "end" }>
+              | undefined;
+            for await (const event of stream) {
+              if (event.type === "end") {
+                finalEnd = event;
+              }
+            }
+            return finalEnd;
+          },
+          formatCostReport: () => "",
+        });
+        input.write("continue the goal\n");
 
-      // When
-      await withTimeout(session, 5000, "observed outcome was not persisted");
+        // When
+        await withTimeout(session, 5000, "observed outcome was not persisted");
 
-      // Then
-      expect(providerCalls).toBe(2);
-      expect(persistedGoal).toMatchObject({
-        status: "paused",
-        latestRuntimeOutcome: {
-          kind: "progress_observed",
-          reason: expectedReason,
-        },
-      });
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(providerCalls).toBe(2);
+        expect(persistedGoal).toMatchObject({
+          status: "paused",
+          latestRuntimeOutcome: {
+            kind: "progress_observed",
+            reason: expectedReason,
+          },
+        });
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given repeated completion rejections only update runtime outcome metadata,
     When automatic continuations repeat the same failed proposal three times,
@@ -1115,119 +1113,120 @@ describe("Interactive Session - Reports And Queued Input", () => {
         reason: "The latest goal turn produced new tool-result evidence.",
       },
     },
-  ])(`Given repeated reads produced an older recovery outcome,
+  ])(
+    `Given repeated reads produced an older recovery outcome,
     When the recovery turn produces $name,
-    Then only fresh tool evidence replaces the recovery outcome`, async ({
-    recoveryReadPath,
-    injectSteering,
-    expectedOutcome,
-  }) => {
-    // Given
-    const input = new PassThrough();
-    let persistedGoal: SessionGoal | undefined = {
-      objective: "Observe evidence after recovery",
-      status: "active",
-      budget: {},
-      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      completion: {
-        kind: "assertion",
-        assertion: "The user confirms the evidence is sufficient.",
-      },
-    };
-    let providerCalls = 0;
-    const provider: LLMProvider = {
-      id: "fake",
-      async *stream() {
-        providerCalls++;
-        if ([2, 4, 6].includes(providerCalls)) {
-          yield {
-            type: "tool_call",
-            id: `repeated_evidence_${providerCalls}`,
-            tool: "read",
-            path: "package.json",
-          };
-          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-          return;
-        }
-        if (providerCalls === 8) {
-          if (injectSteering) {
-            input.write("Use the newly observed evidence.\n");
+    Then only fresh tool evidence replaces the recovery outcome`,
+    async ({ recoveryReadPath, injectSteering, expectedOutcome }) => {
+      // Given
+      const input = new PassThrough();
+      let persistedGoal: SessionGoal | undefined = {
+        objective: "Observe evidence after recovery",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        completion: {
+          kind: "assertion",
+          assertion: "The user confirms the evidence is sufficient.",
+        },
+      };
+      let providerCalls = 0;
+      const provider: LLMProvider = {
+        id: "fake",
+        async *stream() {
+          providerCalls++;
+          if ([2, 4, 6].includes(providerCalls)) {
+            yield {
+              type: "tool_call",
+              id: `repeated_evidence_${providerCalls}`,
+              tool: "read",
+              path: "package.json",
+            };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            return;
+          }
+          if (providerCalls === 8) {
+            if (injectSteering) {
+              input.write("Use the newly observed evidence.\n");
+              await setImmediate();
+            }
+            yield {
+              type: "tool_call",
+              id: "evidence_after_recovery",
+              tool: "read",
+              path: recoveryReadPath,
+            };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            return;
+          }
+          if (providerCalls === 9) {
+            input.end("/goal pause\n");
             await setImmediate();
           }
           yield {
-            type: "tool_call",
-            id: "evidence_after_recovery",
-            tool: "read",
-            path: recoveryReadPath,
+            type: "text",
+            text:
+              providerCalls === 1
+                ? "The initial turn left the goal active."
+                : "Evidence observed.",
           };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-          return;
-        }
-        if (providerCalls === 9) {
-          input.end("/goal pause\n");
-          await setImmediate();
-        }
-        yield {
-          type: "text",
-          text:
-            providerCalls === 1
-              ? "The initial turn left the goal active."
-              : "Evidence observed.",
-        };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-    const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
-      workspace: process.cwd(),
-      platform: process.platform,
-      session: savedInteractiveSession({
-        id: "test-session",
-        persistGoal: ({ goal }) => {
-          persistedGoal = goal ?? undefined;
-          return persistedGoal;
         },
-      }),
-      initialSessionGoal: persistedGoal,
-      input,
-      writeStdout: () => {},
-      writeStderr: () => {},
-      onSigint: () => {},
-      offSigint: () => {},
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
-      resolveProvider: () => ({
-        provider,
-        providerId: "fake",
-        model: "fake",
-        costModel: ZERO_COST_MODEL,
-      }),
-      requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async (stream) => {
-        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
-        for await (const event of stream) {
-          if (event.type === "end") {
-            finalEnd = event;
+      };
+      const session = runInteractiveSession({
+        cliArgs: { bashMode: "disabled" },
+        workspace: process.cwd(),
+        platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistGoal: ({ goal }) => {
+            persistedGoal = goal ?? undefined;
+            return persistedGoal;
+          },
+        }),
+        initialSessionGoal: persistedGoal,
+        input,
+        writeStdout: () => {},
+        writeStderr: () => {},
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") {
+              finalEnd = event;
+            }
           }
-        }
-        return finalEnd;
-      },
-      formatCostReport: () => "",
-    });
-    input.write("start the goal\n");
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+      });
+      input.write("start the goal\n");
 
-    // When
-    await withTimeout(session, 5000, "post-recovery evidence did not finish");
+      // When
+      await withTimeout(session, 5000, "post-recovery evidence did not finish");
 
-    // Then
-    expect(providerCalls).toBe(9);
-    expect(persistedGoal).toMatchObject({
-      status: "paused",
-      latestRuntimeOutcome: expectedOutcome,
-    });
-  });
+      // Then
+      expect(providerCalls).toBe(9);
+      expect(persistedGoal).toMatchObject({
+        status: "paused",
+        latestRuntimeOutcome: expectedOutcome,
+      });
+    },
+  );
 
   test(`Given automatic goal continuations restore changing read evidence after compaction,
     When the assistant repeats the same prose without ordinary tool executions,
@@ -2489,114 +2488,117 @@ describe("Interactive Session - Reports And Queued Input", () => {
       description: "non-verification failing",
       command: "printf changed >> state.txt; false",
     },
-  ])(`Given repeated $description bash calls can mutate the workspace with identical output,
+  ])(
+    `Given repeated $description bash calls can mutate the workspace with identical output,
     When automatic goal continuation reaches the hard turn cap,
-    Then Keel does not classify the calls as strong stagnation evidence`, async ({
-    command,
-  }) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-goal-bash-mutation-"));
-    try {
-      const initialGoal: SessionGoal = {
-        objective: "Wait for the shell-driven workspace task to finish",
-        status: "active",
-        budget: {},
-        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        completion: {
-          kind: "assertion",
-          assertion: "The shell-driven workspace task is finished.",
-        },
-      };
-      let persistedMessages: readonly Message[] = [];
-      const automaticContinuationTurnLimit = 4;
-      let providerCalls = 0;
-      const provider: LLMProvider = {
-        id: "fake",
-        async *stream() {
-          providerCalls++;
-          if (providerCalls > 1 && providerCalls % 2 === 0) {
+    Then Keel does not classify the calls as strong stagnation evidence`,
+    async ({ command }) => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-goal-bash-mutation-"),
+      );
+      try {
+        const initialGoal: SessionGoal = {
+          objective: "Wait for the shell-driven workspace task to finish",
+          status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          completion: {
+            kind: "assertion",
+            assertion: "The shell-driven workspace task is finished.",
+          },
+        };
+        let persistedMessages: readonly Message[] = [];
+        const automaticContinuationTurnLimit = 4;
+        let providerCalls = 0;
+        const provider: LLMProvider = {
+          id: "fake",
+          async *stream() {
+            providerCalls++;
+            if (providerCalls > 1 && providerCalls % 2 === 0) {
+              yield {
+                type: "tool_call",
+                id: `mutating_bash_${providerCalls}`,
+                tool: "bash",
+                command,
+              };
+              yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+              return;
+            }
             yield {
-              type: "tool_call",
-              id: `mutating_bash_${providerCalls}`,
-              tool: "bash",
-              command,
+              type: "text",
+              text: `Turn ${providerCalls} remained active.`,
             };
             yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-            return;
-          }
-          yield {
-            type: "text",
-            text: `Turn ${providerCalls} remained active.`,
-          };
-          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-        },
-      };
-      const input = new PassThrough();
-      const session = runInteractiveSession({
-        cliArgs: { bashMode: "trusted" },
-        workspace,
-        platform: process.platform,
-        session: savedInteractiveSession({
-          id: "test-session",
-          persistMessages: ({ messages }) => {
-            persistedMessages = [...messages];
           },
-        }),
-        initialSessionGoal: initialGoal,
-        goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
-        input,
-        writeStdout: () => {},
-        writeStderr: () => {},
-        onSigint: () => {},
-        offSigint: () => {},
-        setExitCode: () => {},
-        forceExit: (code) => {
-          throw new ForcedExit(code);
-        },
-        resolveProvider: () => ({
-          provider,
-          providerId: "fake",
-          model: "fake",
-          costModel: ZERO_COST_MODEL,
-        }),
-        requireKnownCostModel: () => ZERO_COST_MODEL,
-        printAgentEvents: async (stream) => {
-          let finalEnd:
-            | Extract<AgentEvent, { readonly type: "end" }>
-            | undefined;
-          for await (const event of stream) {
-            if (event.type === "end") {
-              finalEnd = event;
+        };
+        const input = new PassThrough();
+        const session = runInteractiveSession({
+          cliArgs: { bashMode: "trusted" },
+          workspace,
+          platform: process.platform,
+          session: savedInteractiveSession({
+            id: "test-session",
+            persistMessages: ({ messages }) => {
+              persistedMessages = [...messages];
+            },
+          }),
+          initialSessionGoal: initialGoal,
+          goalAutomaticContinuationTurnLimit: automaticContinuationTurnLimit,
+          input,
+          writeStdout: () => {},
+          writeStderr: () => {},
+          onSigint: () => {},
+          offSigint: () => {},
+          setExitCode: () => {},
+          forceExit: (code) => {
+            throw new ForcedExit(code);
+          },
+          resolveProvider: () => ({
+            provider,
+            providerId: "fake",
+            model: "fake",
+            costModel: ZERO_COST_MODEL,
+          }),
+          requireKnownCostModel: () => ZERO_COST_MODEL,
+          printAgentEvents: async (stream) => {
+            let finalEnd:
+              | Extract<AgentEvent, { readonly type: "end" }>
+              | undefined;
+            for await (const event of stream) {
+              if (event.type === "end") {
+                finalEnd = event;
+              }
             }
-          }
-          return finalEnd;
-        },
-        formatCostReport: () => "",
-      });
-      input.end("start the goal\n");
+            return finalEnd;
+          },
+          formatCostReport: () => "",
+        });
+        input.end("start the goal\n");
 
-      // When
-      await withTimeout(
-        session,
-        5000,
-        "mutating bash continuation did not hit turn cap",
-      );
+        // When
+        await withTimeout(
+          session,
+          5000,
+          "mutating bash continuation did not hit turn cap",
+        );
 
-      // Then
-      expect(await readFile(join(workspace, "state.txt"), "utf8")).toBe(
-        "changed".repeat(automaticContinuationTurnLimit),
-      );
-      expect(
-        persistedMessages.filter(
-          (message) =>
-            message.role === "user" &&
-            message.content.includes('source="goal_stagnation_recovery"'),
-        ),
-      ).toHaveLength(0);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(await readFile(join(workspace, "state.txt"), "utf8")).toBe(
+          "changed".repeat(automaticContinuationTurnLimit),
+        );
+        expect(
+          persistedMessages.filter(
+            (message) =>
+              message.role === "user" &&
+              message.content.includes('source="goal_stagnation_recovery"'),
+          ),
+        ).toHaveLength(0);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a command goal repeatedly runs the same failing verification,
     When the third identical failure completes without other state changes,

@@ -389,72 +389,73 @@ describe("Text Reply", () => {
       wrapUpReasoning: "Summarize without the tool.",
       expectedReasoning: "Summarize without the tool.",
     },
-  ])(`Given reasoning appears on the $label during turn-limit wrap-up,
+  ])(
+    `Given reasoning appears on the $label during turn-limit wrap-up,
     When the agent stores the final summary reply,
-    Then the assistant reply keeps the available reasoning segment`, async ({
-    initialReasoning,
-    wrapUpReasoning,
-    expectedReasoning,
-  }) => {
-    // Given
-    const messages: Message[] = [{ role: "user", content: "inspect package" }];
-    let turn = 0;
-    const provider: LLMProvider = {
-      id: "single-sided-reasoning-wrap-up",
-      async *stream() {
-        turn++;
-        if (turn === 1) {
-          if (initialReasoning !== null) {
-            yield { type: "reasoning", text: initialReasoning };
+    Then the assistant reply keeps the available reasoning segment`,
+    async ({ initialReasoning, wrapUpReasoning, expectedReasoning }) => {
+      // Given
+      const messages: Message[] = [
+        { role: "user", content: "inspect package" },
+      ];
+      let turn = 0;
+      const provider: LLMProvider = {
+        id: "single-sided-reasoning-wrap-up",
+        async *stream() {
+          turn++;
+          if (turn === 1) {
+            if (initialReasoning !== null) {
+              yield { type: "reasoning", text: initialReasoning };
+            }
+            yield {
+              type: "tool_call",
+              id: "read_package",
+              tool: "read",
+              path: "package.json",
+            };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+            return;
           }
-          yield {
-            type: "tool_call",
-            id: "read_package",
-            tool: "read",
-            path: "package.json",
-          };
+
+          if (wrapUpReasoning !== null) {
+            yield { type: "reasoning", text: wrapUpReasoning };
+          }
+          yield { type: "text", text: "Reached the turn limit." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-          return;
-        }
-
-        if (wrapUpReasoning !== null) {
-          yield { type: "reasoning", text: wrapUpReasoning };
-        }
-        yield { type: "text", text: "Reached the turn limit." };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-
-    // When
-    await collect(
-      runAgentTurn({
-        workspace: workspace(),
-        provider,
-        messages,
-        systemPrompt: "You are helpful.",
-        signal: freshSignal(),
-        bash: { kind: "disabled" },
-        stopPolicy: {
-          shouldStopAfterTurn: ({ toolCalls }) =>
-            toolCalls.length > 0
-              ? { type: "summarize", reason: "turn_limit" }
-              : { type: "continue" },
         },
-      }),
-    );
+      };
 
-    // Then
-    expect(messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: "Reached the turn limit.",
-      toolCalls: [],
-      providerMetadata: {
-        openaiCompatible: {
-          reasoningContent: expectedReasoning,
+      // When
+      await collect(
+        runAgentTurn({
+          workspace: workspace(),
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: {
+            shouldStopAfterTurn: ({ toolCalls }) =>
+              toolCalls.length > 0
+                ? { type: "summarize", reason: "turn_limit" }
+                : { type: "continue" },
+          },
+        }),
+      );
+
+      // Then
+      expect(messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: "Reached the turn limit.",
+        toolCalls: [],
+        providerMetadata: {
+          openaiCompatible: {
+            reasoningContent: expectedReasoning,
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   test(`Given an in-process turn produces no visible text,
     When user sends a follow-up message,

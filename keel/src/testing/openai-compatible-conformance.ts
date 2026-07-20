@@ -534,15 +534,18 @@ export function runOpenAICompatibleConformance(
       await close(server);
     });
 
-    test.each(successCases)(`Given the enrolled provider streams $label,
+    test.each(successCases)(
+      `Given the enrolled provider streams $label,
       When the shared OpenAI-compatible conformance harness reads the stream,
-      Then the provider emits the normalized Keel events`, async (row) => {
-      // When
-      const events = await streamFor(provider, row.prompt);
+      Then the provider emits the normalized Keel events`,
+      async (row) => {
+        // When
+        const events = await streamFor(provider, row.prompt);
 
-      // Then
-      expect(events).toEqual(row.expectedEvents);
-    });
+        // Then
+        expect(events).toEqual(row.expectedEvents);
+      },
+    );
 
     test(`Given an affordable completion token budget,
       When the enrolled provider sends a bounded request,
@@ -583,64 +586,73 @@ export function runOpenAICompatibleConformance(
       expect(parsed.max_completion_tokens).toBeUndefined();
     });
 
-    test.each(failureCases)(`Given the enrolled provider streams $label,
+    test.each(failureCases)(
+      `Given the enrolled provider streams $label,
       When the shared OpenAI-compatible conformance harness reads the stream,
-      Then the provider reports a protocol error`, async (row) => {
-      // When / Then
-      await expect(streamFor(provider, row.prompt)).rejects.toMatchObject({
-        name: "KeelError",
-        code: "provider_protocol_error",
-        message: row.message(spec),
-      });
-    });
+      Then the provider reports a protocol error`,
+      async (row) => {
+        // When / Then
+        await expect(streamFor(provider, row.prompt)).rejects.toMatchObject({
+          name: "KeelError",
+          code: "provider_protocol_error",
+          message: row.message(spec),
+        });
+      },
+    );
 
-    test.each(replaySuccessCases)(`Given the enrolled provider loses $label,
+    test.each(replaySuccessCases)(
+      `Given the enrolled provider loses $label,
       When retry budget remains and no assistant output was emitted,
-      Then the provider replays the request and emits one recovered stream`, async (row) => {
-      // Given
-      const retryingProvider = createProvider(
-        spec,
-        `http://127.0.0.1:${getPort(server)}`,
-        {
-          maxRetries: 1,
-          initialDelayMs: 0,
-          maxDelayMs: 0,
-          jitterRatio: 0,
-        },
-      );
+      Then the provider replays the request and emits one recovered stream`,
+      async (row) => {
+        // Given
+        const retryingProvider = createProvider(
+          spec,
+          `http://127.0.0.1:${getPort(server)}`,
+          {
+            maxRetries: 1,
+            initialDelayMs: 0,
+            maxDelayMs: 0,
+            jitterRatio: 0,
+          },
+        );
 
-      // When
-      const events = await streamFor(retryingProvider, row.prompt);
+        // When
+        const events = await streamFor(retryingProvider, row.prompt);
 
-      // Then
-      expect(events).toEqual(row.expectedEvents(spec));
-      expect(requestCounts.get(row.prompt)).toBe(row.expectedRequests);
-    });
+        // Then
+        expect(events).toEqual(row.expectedEvents(spec));
+        expect(requestCounts.get(row.prompt)).toBe(row.expectedRequests);
+      },
+    );
 
-    test.each(replayFailureCases)(`Given the enrolled provider loses $label,
+    test.each(replayFailureCases)(
+      `Given the enrolled provider loses $label,
       When the stream already emitted assistant output,
-      Then the provider does not replay partial output`, async (row) => {
-      // Given
-      const retryingProvider = createProvider(
-        spec,
-        `http://127.0.0.1:${getPort(server)}`,
-        {
-          maxRetries: 1,
-          initialDelayMs: 0,
-          maxDelayMs: 0,
-          jitterRatio: 0,
-        },
-      );
+      Then the provider does not replay partial output`,
+      async (row) => {
+        // Given
+        const retryingProvider = createProvider(
+          spec,
+          `http://127.0.0.1:${getPort(server)}`,
+          {
+            maxRetries: 1,
+            initialDelayMs: 0,
+            maxDelayMs: 0,
+            jitterRatio: 0,
+          },
+        );
 
-      // When / Then
-      await expect(
-        streamFor(retryingProvider, row.prompt),
-      ).rejects.toMatchObject({
-        name: "KeelError",
-        code: "provider_protocol_error",
-        message: row.message(spec),
-      });
-      expect(requestCounts.get(row.prompt)).toBe(row.expectedRequests);
-    });
+        // When / Then
+        await expect(
+          streamFor(retryingProvider, row.prompt),
+        ).rejects.toMatchObject({
+          name: "KeelError",
+          code: "provider_protocol_error",
+          message: row.message(spec),
+        });
+        expect(requestCounts.get(row.prompt)).toBe(row.expectedRequests);
+      },
+    );
   });
 }

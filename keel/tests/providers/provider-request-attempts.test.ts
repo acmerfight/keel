@@ -203,36 +203,35 @@ const supportedProtocolProviders: readonly {
 ];
 
 describe("Provider Request Attempt Conformance", () => {
-  test.each(
-    supportedProtocolProviders,
-  )(`Given a $label initial upstream request succeeds,
+  test.each(supportedProtocolProviders)(
+    `Given a $label initial upstream request succeeds,
     When the supported provider completes the stream,
-    Then exactly one completed physical attempt records returned usage`, async ({
-    create,
-  }) => {
-    let physicalRequests = 0;
-    const { baseUrl } = await localServer((_req, res) => {
-      physicalRequests++;
-      respondWithSse(res);
-    });
-    const observed = observeAttempts();
-    const provider = create(baseUrl);
+    Then exactly one completed physical attempt records returned usage`,
+    async ({ create }) => {
+      let physicalRequests = 0;
+      const { baseUrl } = await localServer((_req, res) => {
+        physicalRequests++;
+        respondWithSse(res);
+      });
+      const observed = observeAttempts();
+      const provider = create(baseUrl);
 
-    await collect(provider.stream(streamOptions(observed.observer)));
+      await collect(provider.stream(streamOptions(observed.observer)));
 
-    assertConformantAttemptCount(physicalRequests, observed.attempts);
-    expect(observed.attempts[0]?.finishes).toEqual([
-      {
-        outcome: "completed",
-        usage: {
-          inputTokens: 3,
-          cachedInputTokens: 0,
-          uncachedInputTokens: 3,
-          outputTokens: 1,
+      assertConformantAttemptCount(physicalRequests, observed.attempts);
+      expect(observed.attempts[0]?.finishes).toEqual([
+        {
+          outcome: "completed",
+          usage: {
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 3,
+            outputTokens: 1,
+          },
         },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   test(`Given the supported fake provider completes one scripted request,
     When attempt observation is enabled,
@@ -375,35 +374,33 @@ describe("Provider Request Attempt Conformance", () => {
       errorCode: "provider_context_overflow",
       attemptOutcome: "context_overflow" as const,
     },
-  ])(`Given a $label, Then its physical attempt has the exact failure outcome`, async ({
-    status,
-    body,
-    errorCode,
-    attemptOutcome,
-  }) => {
-    let physicalRequests = 0;
-    const { baseUrl } = await localServer((_req, res) => {
-      physicalRequests++;
-      res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(body);
-    });
-    const observed = observeAttempts();
-    const provider = createDeepseekProvider({
-      apiKey: "test-key",
-      baseUrl,
-      model: "deepseek-v4-flash",
-      retry: { maxRetries: 0 },
-    });
+  ])(
+    `Given a $label, Then its physical attempt has the exact failure outcome`,
+    async ({ status, body, errorCode, attemptOutcome }) => {
+      let physicalRequests = 0;
+      const { baseUrl } = await localServer((_req, res) => {
+        physicalRequests++;
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(body);
+      });
+      const observed = observeAttempts();
+      const provider = createDeepseekProvider({
+        apiKey: "test-key",
+        baseUrl,
+        model: "deepseek-v4-flash",
+        retry: { maxRetries: 0 },
+      });
 
-    await expect(
-      collect(provider.stream(streamOptions(observed.observer))),
-    ).rejects.toMatchObject({ code: errorCode });
+      await expect(
+        collect(provider.stream(streamOptions(observed.observer))),
+      ).rejects.toMatchObject({ code: errorCode });
 
-    assertConformantAttemptCount(physicalRequests, observed.attempts);
-    expect(observed.attempts[0]?.finishes).toEqual([
-      { outcome: attemptOutcome },
-    ]);
-  });
+      assertConformantAttemptCount(physicalRequests, observed.attempts);
+      expect(observed.attempts[0]?.finishes).toEqual([
+        { outcome: attemptOutcome },
+      ]);
+    },
+  );
 
   test(`Given a terminal HTTP response body is truncated after headers arrive,
     When the provider cannot read the error payload,

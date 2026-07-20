@@ -87,18 +87,18 @@ async function runInteractiveLocalCommand(
 }
 
 describe("Interactive Session - Lifecycle", () => {
-  test.each([
-    "$review inspect",
-    "/skill review",
-  ])(`Given explicit activation is unavailable in a direct interactive session,
+  test.each(["$review inspect", "/skill review"])(
+    `Given explicit activation is unavailable in a direct interactive session,
     When user enters %s,
-    Then Keel reports the capability failure without starting a model turn`, async (command) => {
-    const result = await runInteractiveLocalCommand(command, process.cwd());
+    Then Keel reports the capability failure without starting a model turn`,
+    async (command) => {
+      const result = await runInteractiveLocalCommand(command, process.cwd());
 
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe("explicit skill activation is unavailable\n");
-    expect(result.providerResolved).toBe(false);
-  });
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("explicit skill activation is unavailable\n");
+      expect(result.providerResolved).toBe(false);
+    },
+  );
 
   test(`Given staged unstaged and untracked workspace changes,
     When user enters /diff,

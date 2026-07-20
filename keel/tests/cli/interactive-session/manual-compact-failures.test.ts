@@ -617,80 +617,79 @@ describe("Interactive Session - Manual Compact Failures", () => {
       expectedCostModelResolutions: 2,
       expectsReport: true,
     },
-  ])(`Given $mode manual compaction returns a truncated summary,
+  ])(
+    `Given $mode manual compaction returns a truncated summary,
     When the command finishes,
-    Then Keel rejects the checkpoint with the configured usage accounting`, async ({
-    cliArgs,
-    expectedCostModelResolutions,
-    expectsReport,
-  }) => {
-    // Given
-    const initialMessages: readonly Message[] = [
-      { role: "user", content: "Remember alpha." },
-      { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
-      { role: "user", content: "Remember beta." },
-      { role: "assistant", content: "Beta recorded.", toolCalls: [] },
-      { role: "user", content: "Remember gamma." },
-      { role: "assistant", content: "Gamma recorded.", toolCalls: [] },
-    ];
-    let summaryRequests = 0;
-    let costModelResolutions = 0;
-    let stderr = "";
-    const provider: LLMProvider = {
-      id: "fake",
-      async *stream() {
-        summaryRequests++;
-        yield { type: "text", text: "Unmetered partial checkpoint" };
-        yield { type: "stop", reason: "length", usage: ZERO_USAGE };
-      },
-    };
-    const input = new PassThrough();
-    const session = runInteractiveSession({
-      cliArgs,
-      workspace: process.cwd(),
-      platform: process.platform,
-      session: EPHEMERAL_INTERACTIVE_SESSION,
-      initialMessages,
-      input,
-      writeStdout: () => {},
-      writeStderr: (text) => {
-        stderr += text;
-      },
-      onSigint: () => {},
-      offSigint: () => {},
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
-      resolveProvider: () => ({
-        provider,
-        providerId: "fake",
-        model: "fake",
-        costModel: ZERO_COST_MODEL,
-        contextCompaction: { keepRecentTokens: 1 },
-      }),
-      requireKnownCostModel: () => {
-        costModelResolutions++;
-        return ZERO_COST_MODEL;
-      },
-      printAgentEvents: async () => {
-        throw new Error("manual compaction must not start an agent turn");
-      },
-      formatCostReport: () => {
-        throw new Error("unmetered compaction must not format cost");
-      },
-    });
+    Then Keel rejects the checkpoint with the configured usage accounting`,
+    async ({ cliArgs, expectedCostModelResolutions, expectsReport }) => {
+      // Given
+      const initialMessages: readonly Message[] = [
+        { role: "user", content: "Remember alpha." },
+        { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
+        { role: "user", content: "Remember beta." },
+        { role: "assistant", content: "Beta recorded.", toolCalls: [] },
+        { role: "user", content: "Remember gamma." },
+        { role: "assistant", content: "Gamma recorded.", toolCalls: [] },
+      ];
+      let summaryRequests = 0;
+      let costModelResolutions = 0;
+      let stderr = "";
+      const provider: LLMProvider = {
+        id: "fake",
+        async *stream() {
+          summaryRequests++;
+          yield { type: "text", text: "Unmetered partial checkpoint" };
+          yield { type: "stop", reason: "length", usage: ZERO_USAGE };
+        },
+      };
+      const input = new PassThrough();
+      const session = runInteractiveSession({
+        cliArgs,
+        workspace: process.cwd(),
+        platform: process.platform,
+        session: EPHEMERAL_INTERACTIVE_SESSION,
+        initialMessages,
+        input,
+        writeStdout: () => {},
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+          contextCompaction: { keepRecentTokens: 1 },
+        }),
+        requireKnownCostModel: () => {
+          costModelResolutions++;
+          return ZERO_COST_MODEL;
+        },
+        printAgentEvents: async () => {
+          throw new Error("manual compaction must not start an agent turn");
+        },
+        formatCostReport: () => {
+          throw new Error("unmetered compaction must not format cost");
+        },
+      });
 
-    // When
-    input.end("/compact\n");
+      // When
+      input.end("/compact\n");
 
-    // Then
-    const result = await session;
-    expect(summaryRequests).toBe(2);
-    expect(costModelResolutions).toBe(expectedCostModelResolutions);
-    expect(stderr).toContain("length-truncated context compaction summaries");
-    expect(result.report !== undefined).toBe(expectsReport);
-  });
+      // Then
+      const result = await session;
+      expect(summaryRequests).toBe(2);
+      expect(costModelResolutions).toBe(expectedCostModelResolutions);
+      expect(stderr).toContain("length-truncated context compaction summaries");
+      expect(result.report !== undefined).toBe(expectsReport);
+    },
+  );
 
   test(`Given a billed manual summary is truncated before its retry exhausts the cost budget,
     When the retry is denied admission,

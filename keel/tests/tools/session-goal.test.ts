@@ -217,19 +217,22 @@ describe("Session Goal Tool", () => {
     ["completed", "completed"],
     ["blocked", "blocked"],
     ["limit_reached", "limit reached"],
-  ] as const)(`Given a latest runtime outcome kind %s,
+  ] as const)(
+    `Given a latest runtime outcome kind %s,
     When Keel formats it for goal surfaces,
-    Then it uses the stable label %s`, (kind, label) => {
-    expect(
-      formatSessionGoalRuntimeOutcomeSummary({
-        objective: "Inspect runtime outcome",
-        status: "active",
-        budget: {},
-        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        latestRuntimeOutcome: { kind, reason: "Observed fact." },
-      }),
-    ).toBe(`${label} - Observed fact.`);
-  });
+    Then it uses the stable label %s`,
+    (kind, label) => {
+      expect(
+        formatSessionGoalRuntimeOutcomeSummary({
+          objective: "Inspect runtime outcome",
+          status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          latestRuntimeOutcome: { kind, reason: "Observed fact." },
+        }),
+      ).toBe(`${label} - Observed fact.`);
+    },
+  );
 
   test(`Given an active goal has a pending blocked audit,
     When the goal schema parses it,

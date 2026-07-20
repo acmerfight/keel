@@ -125,30 +125,29 @@ describe("Project Instructions", () => {
       },
       expected: "binary or not valid UTF-8",
     },
-  ])(`Given root AGENTS is $name,
+  ])(
+    `Given root AGENTS is $name,
     When the user starts a one-shot run,
-    Then startup reports the project instructions error before provider output is printed`, async ({
-    prefix,
-    setup,
-    expected,
-  }) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), prefix));
-    await setup(workspace);
+    Then startup reports the project instructions error before provider output is printed`,
+    async ({ prefix, setup, expected }) => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), prefix));
+      await setup(workspace);
 
-    try {
-      // When
-      const result = await runOneShot(workspace);
+      try {
+        // When
+        const result = await runOneShot(workspace);
 
-      // Then
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(expected);
-      expect(result.stderr).not.toContain("Hello from fake provider");
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(expected);
+        expect(result.stderr).not.toContain("Hello from fake provider");
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given root AGENTS instructions are empty,
     When the user starts a one-shot run,

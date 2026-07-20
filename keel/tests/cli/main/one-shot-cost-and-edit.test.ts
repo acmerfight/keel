@@ -281,25 +281,25 @@ describe("CLI Main - One Shot Cost And Edit", () => {
         "Qwen default endpoint is https://dashscope-intl.aliyuncs.com/compatible-mode/v1; set QWEN_BASE_URL if your key belongs to China region or a workspace-scoped DashScope endpoint.",
       ],
     },
-  ])(`Given $provider is configured without an API key,
+  ])(
+    `Given $provider is configured without an API key,
     When the CLI main resolves the provider,
-    Then it tells the user how to configure provider credentials`, async ({
-    env,
-    expectedLines,
-  }) => {
-    // Given
-    const fixture = createRuntime(["hello"], { env });
+    Then it tells the user how to configure provider credentials`,
+    async ({ env, expectedLines }) => {
+      // Given
+      const fixture = createRuntime(["hello"], { env });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    for (const line of expectedLines) {
-      expect(fixture.stderr()).toContain(line);
-    }
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      for (const line of expectedLines) {
+        expect(fixture.stderr()).toContain(line);
+      }
+    },
+  );
 
   test(`Given the fake provider is selected with a max cost,
     When the CLI main finishes a one-shot request,
@@ -485,23 +485,23 @@ describe("CLI Main - One Shot Cost And Edit", () => {
       stderr:
         'Error: cost tracking is only supported for known Qwen model pricing; configured QWEN_MODEL="qwen-unknown".\n',
     },
-  ])(`Given $provider has no supported cost model,
+  ])(
+    `Given $provider has no supported cost model,
     When the CLI main is asked to track cost,
-    Then it rejects the run before contacting the provider`, async ({
-    env,
-    stderr,
-  }) => {
-    // Given
-    const fixture = createRuntime(["--max-cost", "1", "hello"], { env });
+    Then it rejects the run before contacting the provider`,
+    async ({ env, stderr }) => {
+      // Given
+      const fixture = createRuntime(["--max-cost", "1", "hello"], { env });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(stderr);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(stderr);
+    },
+  );
 
   test(`Given the fake provider writes a file,
     When the CLI main runs a one-shot create request,
@@ -538,20 +538,23 @@ describe("CLI Main - One Shot Cost And Edit", () => {
     ["replace old with  in note.txt"],
     ["replace old with new in "],
     ["create "],
-  ])(`Given the fake provider receives unsupported demo input "%s",
+  ])(
+    `Given the fake provider receives unsupported demo input "%s",
     When the CLI main runs the request,
-    Then it falls back to a plain fake reply`, async (message) => {
-    // Given
-    const fixture = createRuntime([message], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
+    Then it falls back to a plain fake reply`,
+    async (message) => {
+      // Given
+      const fixture = createRuntime([message], {
+        env: { KEEL_PROVIDER: "fake" },
+      });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
-    expect(fixture.stderr()).toBe("");
-  });
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe("Hello from fake provider.\n");
+      expect(fixture.stderr()).toBe("");
+    },
+  );
 });

@@ -366,29 +366,32 @@ describe("git_status tool", () => {
     ["missing branch head", ["? note.txt", ""].join("\0")],
   ] satisfies readonly (readonly [string, string])[];
 
-  test.each(malformedStatusScenarios)(`Given complete porcelain %s is malformed,
+  test.each(malformedStatusScenarios)(
+    `Given complete porcelain %s is malformed,
     When git_status parses the external status stream,
-    Then it fails through the recoverable contract`, async (scenario, statusOutput) => {
-    // Given
-    await withFakeGitStatusOutput({ statusOutput }, async (workspace) => {
-      // When
-      const result = await executeToolCall({
-        workspace,
-        signal: freshSignal(),
-        bash: { kind: "disabled" },
-        toolCall: {
-          id: `malformed_status_${scenario}`,
-          tool: "git_status",
-        },
-      });
+    Then it fails through the recoverable contract`,
+    async (scenario, statusOutput) => {
+      // Given
+      await withFakeGitStatusOutput({ statusOutput }, async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          toolCall: {
+            id: `malformed_status_${scenario}`,
+            tool: "git_status",
+          },
+        });
 
-      // Then
-      expect(result.ok, scenario).toBe(false);
-      expect(result.content, scenario).toContain(
-        "git_status failed: git status returned malformed output",
-      );
-    });
-  });
+        // Then
+        expect(result.ok, scenario).toBe(false);
+        expect(result.content, scenario).toContain(
+          "git_status failed: git status returned malformed output",
+        );
+      });
+    },
+  );
 
   test(`Given producer truncation cuts a rename pair after complete earlier records,
     When git_status parses the bounded stream,

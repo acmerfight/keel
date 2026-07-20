@@ -166,49 +166,52 @@ describe("Eval Runner", () => {
         },
       }),
     },
-  ])(`Given the agent writes a $name report,
+  ])(
+    `Given the agent writes a $name report,
     When the eval runner reads the report,
-    Then it records a crashed result`, async ({ reportContent }) => {
-    // Given
-    const { root, suiteDir, outFile } = await createEvalDir();
-    await createTask(suiteDir, "bad-report", FIX_NOTE_TASK);
-    const cliEntry = join(root, "bad-report-cli.js");
-    await writeFile(
-      cliEntry,
-      [
-        "import { writeFileSync } from 'node:fs';",
-        "const reportIndex = process.argv.indexOf('--report');",
-        "writeFileSync(process.argv[reportIndex + 1], process.env.REPORT_CONTENT ?? '', 'utf8');",
-      ].join("\n"),
-      "utf8",
-    );
-    const previousReportContent = process.env[REPORT_CONTENT_ENV];
-    process.env[REPORT_CONTENT_ENV] = reportContent;
-
-    try {
-      // When
-      const exitCode = await runEvalCommand({
-        suiteDir,
-        outFile,
-        trials: 1,
-        check: false,
+    Then it records a crashed result`,
+    async ({ reportContent }) => {
+      // Given
+      const { root, suiteDir, outFile } = await createEvalDir();
+      await createTask(suiteDir, "bad-report", FIX_NOTE_TASK);
+      const cliEntry = join(root, "bad-report-cli.js");
+      await writeFile(
         cliEntry,
-      });
+        [
+          "import { writeFileSync } from 'node:fs';",
+          "const reportIndex = process.argv.indexOf('--report');",
+          "writeFileSync(process.argv[reportIndex + 1], process.env.REPORT_CONTENT ?? '', 'utf8');",
+        ].join("\n"),
+        "utf8",
+      );
+      const previousReportContent = process.env[REPORT_CONTENT_ENV];
+      process.env[REPORT_CONTENT_ENV] = reportContent;
 
-      // Then
-      expect(exitCode).toBe(1);
-      expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "bad-report", pass: false, outcome: "crashed" },
-      ]);
-    } finally {
-      if (previousReportContent === undefined) {
-        delete process.env[REPORT_CONTENT_ENV];
-      } else {
-        process.env[REPORT_CONTENT_ENV] = previousReportContent;
+      try {
+        // When
+        const exitCode = await runEvalCommand({
+          suiteDir,
+          outFile,
+          trials: 1,
+          check: false,
+          cliEntry,
+        });
+
+        // Then
+        expect(exitCode).toBe(1);
+        expect(await readResultLines(outFile)).toMatchObject([
+          { taskId: "bad-report", pass: false, outcome: "crashed" },
+        ]);
+      } finally {
+        if (previousReportContent === undefined) {
+          delete process.env[REPORT_CONTENT_ENV];
+        } else {
+          process.env[REPORT_CONTENT_ENV] = previousReportContent;
+        }
+        await rm(root, { recursive: true, force: true });
       }
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   test(`Given the agent writes every valid project-memory operation,
     When the eval runner reads the report,

@@ -1396,33 +1396,34 @@ describe("CLI Main - Skills", () => {
         "---\nname: yaml-alias\ndescription: &description Aliased text.\nmetadata:\n  copy: *description\n---\nbody\n",
       expected: "SKILL.md contains invalid YAML frontmatter",
     },
-  ])(`Given a project skill violates the Agent Skills contract for $name,
+  ])(
+    `Given a project skill violates the Agent Skills contract for $name,
     When the user lists project skills,
-    Then Keel skips it with a strict validation diagnostic`, async ({
-    name,
-    content,
-    expected,
-  }) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-strict-"));
-    await writeRawSkill(workspace, name, content);
-    const fixture = createRuntime(["skills"], { cwd: workspace });
+    Then Keel skips it with a strict validation diagnostic`,
+    async ({ name, content, expected }) => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-strict-"));
+      await writeRawSkill(workspace, name, content);
+      const fixture = createRuntime(["skills"], { cwd: workspace });
 
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
 
-      // Then
-      expect(exitCode).toBe(0);
-      expect(fixture.stdout()).not.toContain(`${name}:`);
-      expect(fixture.stderr()).toContain(
-        `Warning: skipped workflow skill ${JSON.stringify(`repo:${name}`)}:`,
-      );
-      expect(fixture.stderr().toLowerCase()).toContain(expected.toLowerCase());
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(exitCode).toBe(0);
+        expect(fixture.stdout()).not.toContain(`${name}:`);
+        expect(fixture.stderr()).toContain(
+          `Warning: skipped workflow skill ${JSON.stringify(`repo:${name}`)}:`,
+        );
+        expect(fixture.stderr().toLowerCase()).toContain(
+          expected.toLowerCase(),
+        );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given workflow skills live at a parent git workspace,
     When the user lists skills from a nested package directory,
@@ -3114,24 +3115,25 @@ describe("CLI Main - Skills", () => {
   test.each([
     { label: "--skill", args: ["--skill"] },
     { label: "--skill=", args: ["--skill=", "hello"] },
-  ])(`Given a skill option $label without a name,
+  ])(
+    `Given a skill option $label without a name,
     When the CLI parses the request,
-    Then it returns a validation error before resolving a provider`, async ({
-    args,
-  }) => {
-    // Given
-    const fixture = createRuntime(args, {
-      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
-    });
+    Then it returns a validation error before resolving a provider`,
+    async ({ args }) => {
+      // Given
+      const fixture = createRuntime(args, {
+        env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+      });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe("Error: --skill requires a value.\n");
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe("Error: --skill requires a value.\n");
+    },
+  );
 
   test(`Given a missing local workflow skill is selected,
     When the CLI starts a one-shot run,
@@ -4238,31 +4240,34 @@ describe("CLI Main - Skills", () => {
       content: Buffer.from([0xc3, 0x28]),
       label: "invalid UTF-8",
     },
-  ])(`Given a workflow skill contains $label,
+  ])(
+    `Given a workflow skill contains $label,
     When the CLI starts a one-shot run,
-    Then it rejects the non-text skill file`, async ({ name, content }) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-text-"));
-    await writeRawSkill(workspace, name, content);
-    const fixture = createRuntime(["--skill", name, "hello"], {
-      cwd: workspace,
-      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
-    });
+    Then it rejects the non-text skill file`,
+    async ({ name, content }) => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-cli-skill-text-"));
+      await writeRawSkill(workspace, name, content);
+      const fixture = createRuntime(["--skill", name, "hello"], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+      });
 
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
 
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toContain(
-        "SKILL.md must be valid UTF-8 text without binary control bytes",
-      );
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(exitCode).toBe(1);
+        expect(fixture.stdout()).toBe("");
+        expect(fixture.stderr()).toContain(
+          "SKILL.md must be valid UTF-8 text without binary control bytes",
+        );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test.each([
     {
@@ -4280,35 +4285,34 @@ describe("CLI Main - Skills", () => {
       content: "---\nname: missing-description\n---\nbody\n",
       expected: "frontmatter does not match the Agent Skills schema",
     },
-  ])(`Given a workflow skill has invalid frontmatter for $name,
+  ])(
+    `Given a workflow skill has invalid frontmatter for $name,
     When the CLI starts a one-shot run,
-    Then it reports the frontmatter problem`, async ({
-    name,
-    content,
-    expected,
-  }) => {
-    // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-cli-skill-frontmatter-"),
-    );
-    await writeRawSkill(workspace, name, content);
-    const fixture = createRuntime(["--skill", name, "hello"], {
-      cwd: workspace,
-      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
-    });
+    Then it reports the frontmatter problem`,
+    async ({ name, content, expected }) => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-cli-skill-frontmatter-"),
+      );
+      await writeRawSkill(workspace, name, content);
+      const fixture = createRuntime(["--skill", name, "hello"], {
+        cwd: workspace,
+        env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+      });
 
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
 
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toContain(expected);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(exitCode).toBe(1);
+        expect(fixture.stdout()).toBe("");
+        expect(fixture.stderr()).toContain(expected);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a workflow skill frontmatter name does not match its directory,
     When the CLI starts a one-shot run,

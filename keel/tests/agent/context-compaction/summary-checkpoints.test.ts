@@ -304,74 +304,85 @@ describe("Context Compaction Summary Checkpoints", () => {
       "## Current Task\nInvestigate auth.\n\n## Constraints\nDo not",
     ],
     ["empty text", ""],
-  ])(`Given every compaction summary returns %s with a length stop,
+  ])(
+    `Given every compaction summary returns %s with a length stop,
     When compaction exhausts its safe retries,
-    Then no incomplete checkpoint replaces the original history`, async (_case, summaryText) => {
-    // Given
-    const messages: Message[] = [
-      { role: "user", content: "Remember constraint alpha." },
-      {
-        role: "assistant",
-        content: "Constraint alpha recorded.",
-        toolCalls: [],
-      },
-      { role: "user", content: "Remember decision beta." },
-      { role: "assistant", content: "Decision beta recorded.", toolCalls: [] },
-      { role: "user", content: "Remember evidence gamma." },
-      { role: "assistant", content: "Evidence gamma recorded.", toolCalls: [] },
-      { role: "user", content: "Continue." },
-    ];
-    const originalMessages = structuredClone(messages);
-    let summaryRequests = 0;
-    const provider: LLMProvider = {
-      id: "length-limited-summary-provider",
-      async *stream() {
-        summaryRequests++;
-        if (summaryText !== "") {
-          yield { type: "text", text: summaryText };
-        }
-        yield {
-          type: "stop",
-          reason: "length",
-          usage: {
-            inputTokens: 10,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 10,
-            outputTokens: 2,
-          },
-        };
-      },
-    };
+    Then no incomplete checkpoint replaces the original history`,
+    async (_case, summaryText) => {
+      // Given
+      const messages: Message[] = [
+        { role: "user", content: "Remember constraint alpha." },
+        {
+          role: "assistant",
+          content: "Constraint alpha recorded.",
+          toolCalls: [],
+        },
+        { role: "user", content: "Remember decision beta." },
+        {
+          role: "assistant",
+          content: "Decision beta recorded.",
+          toolCalls: [],
+        },
+        { role: "user", content: "Remember evidence gamma." },
+        {
+          role: "assistant",
+          content: "Evidence gamma recorded.",
+          toolCalls: [],
+        },
+        { role: "user", content: "Continue." },
+      ];
+      const originalMessages = structuredClone(messages);
+      let summaryRequests = 0;
+      const provider: LLMProvider = {
+        id: "length-limited-summary-provider",
+        async *stream() {
+          summaryRequests++;
+          if (summaryText !== "") {
+            yield { type: "text", text: summaryText };
+          }
+          yield {
+            type: "stop",
+            reason: "length",
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 10,
+              outputTokens: 2,
+            },
+          };
+        },
+      };
 
-    // When
-    const result = await compactMessages({
-      provider,
-      systemPrompt: "You are helpful.",
-      messages,
-      signal: freshSignal(),
-      contextCompaction: { keepRecentTokens: 1 },
-    });
+      // When
+      const result = await compactMessages({
+        provider,
+        systemPrompt: "You are helpful.",
+        messages,
+        signal: freshSignal(),
+        contextCompaction: { keepRecentTokens: 1 },
+      });
 
-    // Then
-    expect(result).toEqual({
-      compacted: false,
-      failure: {
-        code: "summary_truncated",
-        message:
-          "length-limited-summary-provider returned length-truncated context compaction summaries after 3 attempts.",
-      },
-      usage: {
-        inputTokens: 30,
-        cachedInputTokens: 0,
-        uncachedInputTokens: 30,
-        outputTokens: 6,
-      },
-    });
-    expect(summaryRequests).toBe(3);
-    expect(messages).toEqual(originalMessages);
-    expect(JSON.stringify(messages)).not.toContain("conversation-checkpoint");
-    expect(JSON.stringify(messages)).not.toContain("(no summary available)");
-  });
+      // Then
+      expect(result).toEqual({
+        compacted: false,
+        failure: {
+          code: "summary_truncated",
+          message:
+            "length-limited-summary-provider returned length-truncated context compaction summaries after 3 attempts.",
+        },
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 30,
+          outputTokens: 6,
+        },
+      });
+      expect(summaryRequests).toBe(3);
+      expect(messages).toEqual(originalMessages);
+      expect(JSON.stringify(messages)).not.toContain("conversation-checkpoint");
+      expect(JSON.stringify(messages)).not.toContain("(no summary available)");
+    },
+  );
 
   test(`Given a compaction summary first stops at length and a smaller safe prefix completes,
     When compaction retries,

@@ -494,111 +494,111 @@ describe("CLI Tool Output Artifacts", () => {
         );
       },
     },
-  ])(`Given a retained tool output marker points at a $name artifact,
+  ])(
+    `Given a retained tool output marker points at a $name artifact,
     When context compaction runs with the CLI artifact store,
-    Then Keel saves the retained output instead of reusing that ref`, async ({
-    ref,
-    prepare,
-  }) => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
-    const store = createToolOutputArtifactStore({
-      runtime: {
-        env: (key) => (key === "KEEL_HOME" ? home : undefined),
-        now: () => 0,
-      },
-      scope: "run-test",
-    });
-
-    try {
-      await prepare(home);
-      const marker = `[tool output shortened: omitted 90000 chars; full output artifact: ${ref}; inspect with: keel artifacts show ${ref}; source status: complete]`;
-      const retainedOutput = [
-        "FALLBACK_REPORT_START",
-        "fallback report line ".repeat(500),
-        marker,
-      ].join("\n");
-      const messages: Message[] = [
-        { role: "user", content: "Remember setup." },
-        { role: "assistant", content: "Setup remembered.", toolCalls: [] },
-        { role: "user", content: "Read the fallback report." },
-        {
-          role: "assistant",
-          content: "",
-          toolCalls: [
-            {
-              id: "read_fallback_report",
-              tool: "read",
-              path: "fallback-report.log",
-            },
-          ],
+    Then Keel saves the retained output instead of reusing that ref`,
+    async ({ ref, prepare }) => {
+      // Given
+      const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+      const store = createToolOutputArtifactStore({
+        runtime: {
+          env: (key) => (key === "KEEL_HOME" ? home : undefined),
+          now: () => 0,
         },
-        {
-          role: "tool",
+        scope: "run-test",
+      });
+
+      try {
+        await prepare(home);
+        const marker = `[tool output shortened: omitted 90000 chars; full output artifact: ${ref}; inspect with: keel artifacts show ${ref}; source status: complete]`;
+        const retainedOutput = [
+          "FALLBACK_REPORT_START",
+          "fallback report line ".repeat(500),
+          marker,
+        ].join("\n");
+        const messages: Message[] = [
+          { role: "user", content: "Remember setup." },
+          { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+          { role: "user", content: "Read the fallback report." },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "read_fallback_report",
+                tool: "read",
+                path: "fallback-report.log",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "read_fallback_report",
+            content: retainedOutput,
+          },
+          {
+            role: "assistant",
+            content: "The fallback report was inspected.",
+            toolCalls: [],
+          },
+          { role: "user", content: "Continue." },
+        ];
+        const provider: LLMProvider = {
+          id: "cli-artifact-reuse-fallback-provider",
+          async *stream(options) {
+            expect(options.toolExposure?.kind).toBe("none");
+            yield { type: "text", text: "Earlier setup summary." };
+            yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          },
+        };
+
+        // When
+        const result = await compactMessages({
+          provider,
+          systemPrompt: "You are helpful.",
+          messages,
+          signal: new AbortController().signal,
+          contextCompaction: {
+            keepRecentTokens: 100_000,
+            toolOutputMaxChars: 128,
+          },
+          toolOutputArtifacts: { store },
+        });
+
+        // Then
+        expect(result.compacted).toBe(true);
+        if (!result.compacted) {
+          throw new Error(
+            "Expected context compaction to retain the tool result",
+          );
+        }
+        const compactedToolOutput =
+          messages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.toolCallId === "read_fallback_report",
+          )?.content ?? "";
+        const newRef = artifactRefsFrom(compactedToolOutput).find(
+          (candidate) => candidate !== ref,
+        );
+        if (newRef === undefined) {
+          throw new Error(
+            `Expected a replacement artifact ref in:\n${compactedToolOutput}`,
+          );
+        }
+        expect(compactedToolOutput).not.toContain(`keel artifacts show ${ref}`);
+        expect(result.artifactNotices).toContainEqual({
+          status: "stored",
+          ref: newRef,
           toolCallId: "read_fallback_report",
-          content: retainedOutput,
-        },
-        {
-          role: "assistant",
-          content: "The fallback report was inspected.",
-          toolCalls: [],
-        },
-        { role: "user", content: "Continue." },
-      ];
-      const provider: LLMProvider = {
-        id: "cli-artifact-reuse-fallback-provider",
-        async *stream(options) {
-          expect(options.toolExposure?.kind).toBe("none");
-          yield { type: "text", text: "Earlier setup summary." };
-          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-        },
-      };
-
-      // When
-      const result = await compactMessages({
-        provider,
-        systemPrompt: "You are helpful.",
-        messages,
-        signal: new AbortController().signal,
-        contextCompaction: {
-          keepRecentTokens: 100_000,
-          toolOutputMaxChars: 128,
-        },
-        toolOutputArtifacts: { store },
-      });
-
-      // Then
-      expect(result.compacted).toBe(true);
-      if (!result.compacted) {
-        throw new Error(
-          "Expected context compaction to retain the tool result",
-        );
+          toolName: "read",
+          sourceStatus: "complete",
+          omittedChars: expect.any(Number),
+        });
+      } finally {
+        await rm(home, { recursive: true, force: true });
       }
-      const compactedToolOutput =
-        messages.find(
-          (message) =>
-            message.role === "tool" &&
-            message.toolCallId === "read_fallback_report",
-        )?.content ?? "";
-      const newRef = artifactRefsFrom(compactedToolOutput).find(
-        (candidate) => candidate !== ref,
-      );
-      if (newRef === undefined) {
-        throw new Error(
-          `Expected a replacement artifact ref in:\n${compactedToolOutput}`,
-        );
-      }
-      expect(compactedToolOutput).not.toContain(`keel artifacts show ${ref}`);
-      expect(result.artifactNotices).toContainEqual({
-        status: "stored",
-        ref: newRef,
-        toolCallId: "read_fallback_report",
-        toolName: "read",
-        sourceStatus: "complete",
-        omittedChars: expect.any(Number),
-      });
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });

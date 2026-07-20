@@ -66,11 +66,14 @@ describe("Abort Throws", () => {
     expect(isAbort).toBe(true);
   });
 
-  test.each(normalizedAbortCodes)(`Given a normalized %s Keel error,
+  test.each(normalizedAbortCodes)(
+    `Given a normalized %s Keel error,
     When Keel checks whether the throw is cancellation,
-    Then it preserves the abort classification across runtime boundaries`, (code) => {
-    expect(isAbortThrow(new KeelError(code, "operation aborted"))).toBe(true);
-  });
+    Then it preserves the abort classification across runtime boundaries`,
+    (code) => {
+      expect(isAbortThrow(new KeelError(code, "operation aborted"))).toBe(true);
+    },
+  );
 
   test(`Given an aborted signal,
     When Keel checks whether any throw belongs to that signal,

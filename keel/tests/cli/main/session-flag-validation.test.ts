@@ -53,22 +53,25 @@ describe("CLI Main - Session Flag Validation", () => {
       label: "fork point selector",
       args: ["--ephemeral", "--fork-before-message", "msg_demo"],
     },
-  ])(`Given ephemeral mode is combined with a $label,
+  ])(
+    `Given ephemeral mode is combined with a $label,
     When the CLI main parses the request,
-    Then it returns a validation error before starting interactive mode`, async (testCase) => {
-    // Given
-    const fixture = createRuntime(testCase.args);
+    Then it returns a validation error before starting interactive mode`,
+    async (testCase) => {
+      // Given
+      const fixture = createRuntime(testCase.args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.\n",
-    );
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: --ephemeral cannot be combined with --session, --resume, --fork, --fork-before-message, or --fork-points.\n",
+      );
+    },
+  );
 
   test(`Given ephemeral mode is passed with a one-shot prompt,
     When the CLI main parses the request,
@@ -250,20 +253,23 @@ describe("CLI Main - Session Flag Validation", () => {
       args: ["--resume", "--pick", "--transcript", "transcript.jsonl"],
       stderr: "Error: --resume --pick cannot be combined with --transcript.\n",
     },
-  ])(`Given resume pick is combined with a $label,
+  ])(
+    `Given resume pick is combined with a $label,
     When the CLI main parses the request,
-    Then it returns a validation error before reading sessions`, async (testCase) => {
-    // Given
-    const fixture = createRuntime(testCase.args);
+    Then it returns a validation error before reading sessions`,
+    async (testCase) => {
+      // Given
+      const fixture = createRuntime(testCase.args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(testCase.stderr);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(testCase.stderr);
+    },
+  );
 
   test(`Given pick is passed without resume,
     When the CLI main parses the request,

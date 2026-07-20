@@ -1263,35 +1263,38 @@ describe("Grep Tool Output Boundaries", () => {
     }
   });
 
-  test.each([49, 50])(`Given %i files match the pattern,
+  test.each([49, 50])(
+    `Given %i files match the pattern,
     When the grep tool searches the workspace,
-    Then it returns every match without claiming the output was truncated`, async (fileCount) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
-    for (let index = 0; index < fileCount; index++) {
-      await writeFile(
-        join(workspace, `${String(index).padStart(2, "0")}.txt`),
-        "needle\n",
-        "utf8",
-      );
-    }
+    Then it returns every match without claiming the output was truncated`,
+    async (fileCount) => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-grep-"));
+      for (let index = 0; index < fileCount; index++) {
+        await writeFile(
+          join(workspace, `${String(index).padStart(2, "0")}.txt`),
+          "needle\n",
+          "utf8",
+        );
+      }
 
-    try {
-      // When
-      const result = await executeGrep(workspace, "needle");
+      try {
+        // When
+        const result = await executeGrep(workspace, "needle");
 
-      // Then
-      const lines = result.content.split("\n");
-      expect(lines).toHaveLength(fileCount);
-      expect(lines[0]).toBe("00.txt:1:needle");
-      expect(lines[fileCount - 1]).toBe(
-        `${String(fileCount - 1).padStart(2, "0")}.txt:1:needle`,
-      );
-      expect(result.content).not.toContain("[grep output truncated");
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        const lines = result.content.split("\n");
+        expect(lines).toHaveLength(fileCount);
+        expect(lines[0]).toBe("00.txt:1:needle");
+        expect(lines[fileCount - 1]).toBe(
+          `${String(fileCount - 1).padStart(2, "0")}.txt:1:needle`,
+        );
+        expect(result.content).not.toContain("[grep output truncated");
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given an empty search pattern,
     When the grep tool validates the request,

@@ -217,18 +217,21 @@ describe("Interactive Session - Undo", () => {
   test.each([
     ["/undo --to 1 extra", 'Error: unknown /undo option "extra".'],
     ["/undo --to=1 extra", 'Error: unknown /undo option "extra".'],
-  ])(`Given the user passes extra arguments to %s,
+  ])(
+    `Given the user passes extra arguments to %s,
     When the interactive command is parsed,
-    Then the parser reports the extra argument`, (input, message) => {
-    // Given / When
-    const command = parseInteractiveCommand(input);
+    Then the parser reports the extra argument`,
+    (input, message) => {
+      // Given / When
+      const command = parseInteractiveCommand(input);
 
-    // Then
-    expect(command).toEqual({
-      kind: "invalid",
-      message,
-    });
-  });
+      // Then
+      expect(command).toEqual({
+        kind: "invalid",
+        message,
+      });
+    },
+  );
 
   test(`Given undo checkpoints exist,
     When user enters /undo --list,

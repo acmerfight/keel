@@ -54,62 +54,65 @@ describe("Workflow Skill Control Races", () => {
     vi.resetModules();
   });
 
-  test.each([
-    "EEXIST",
-    "ENOTEMPTY",
-  ])(`Given a stale config lock is replaced by a live generation before a delayed reclaimer receives $code,
+  test.each(["EEXIST", "ENOTEMPTY"])(
+    `Given a stale config lock is replaced by a live generation before a delayed reclaimer receives $code,
     When the user updates a Skill control,
-    Then the delayed reclaimer preserves the live lock and reports contention`, async (code) => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-skill-lock-replace-race-"));
-    const lockPath = join(home, "skills.lock");
-    const replacementToken = "00000000-0000-4000-8000-000000000001";
-    await mkdir(lockPath);
-    await writeFile(
-      join(lockPath, "owner.json"),
-      '{"pid":2147483647,"token":"00000000-0000-4000-8000-000000000000"}\n',
-    );
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    let replacementCreated = false;
-    vi.spyOn(Date, "now").mockImplementation(() =>
-      replacementCreated ? 5_001 : 0,
-    );
-    const skillUserConfig = await importSkillUserConfigWithFs({
-      renameSync: (oldPath, newPath) => {
-        if (String(oldPath) === lockPath) {
-          actualFs.renameSync(oldPath, newPath);
-          actualFs.mkdirSync(lockPath, { mode: 0o700 });
-          actualFs.writeFileSync(
-            join(lockPath, "owner.json"),
-            `${JSON.stringify({ pid: process.pid, token: replacementToken })}\n`,
-            { encoding: "utf8", mode: 0o600 },
-          );
-          replacementCreated = true;
-          throw nodeError(code);
-        }
-        actualFs.renameSync(oldPath, newPath);
-      },
-      statSync: (path) => actualFs.statSync(path),
-    });
-
-    try {
-      // When / Then
-      expect(() =>
-        skillUserConfig.setWorkflowSkillEnabled(
-          runtime(home),
-          "repo:root:review",
-          false,
-        ),
-      ).toThrow(
-        `Error: workflow skill config ${join(home, "skills.json")} is busy; retry after the other Keel process finishes.`,
+    Then the delayed reclaimer preserves the live lock and reports contention`,
+    async (code) => {
+      // Given
+      const home = await mkdtemp(
+        join(tmpdir(), "keel-skill-lock-replace-race-"),
       );
-      expect(
-        JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8")),
-      ).toEqual({ pid: process.pid, token: replacementToken });
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+      const lockPath = join(home, "skills.lock");
+      const replacementToken = "00000000-0000-4000-8000-000000000001";
+      await mkdir(lockPath);
+      await writeFile(
+        join(lockPath, "owner.json"),
+        '{"pid":2147483647,"token":"00000000-0000-4000-8000-000000000000"}\n',
+      );
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let replacementCreated = false;
+      vi.spyOn(Date, "now").mockImplementation(() =>
+        replacementCreated ? 5_001 : 0,
+      );
+      const skillUserConfig = await importSkillUserConfigWithFs({
+        renameSync: (oldPath, newPath) => {
+          if (String(oldPath) === lockPath) {
+            actualFs.renameSync(oldPath, newPath);
+            actualFs.mkdirSync(lockPath, { mode: 0o700 });
+            actualFs.writeFileSync(
+              join(lockPath, "owner.json"),
+              `${JSON.stringify({ pid: process.pid, token: replacementToken })}\n`,
+              { encoding: "utf8", mode: 0o600 },
+            );
+            replacementCreated = true;
+            throw nodeError(code);
+          }
+          actualFs.renameSync(oldPath, newPath);
+        },
+        statSync: (path) => actualFs.statSync(path),
+      });
+
+      try {
+        // When / Then
+        expect(() =>
+          skillUserConfig.setWorkflowSkillEnabled(
+            runtime(home),
+            "repo:root:review",
+            false,
+          ),
+        ).toThrow(
+          `Error: workflow skill config ${join(home, "skills.json")} is busy; retry after the other Keel process finishes.`,
+        );
+        expect(
+          JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8")),
+        ).toEqual({ pid: process.pid, token: replacementToken });
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given another reclaimer moves a stale config lock before this writer completes its rename,
     When the writer observes the vanished source and updates a Skill control,

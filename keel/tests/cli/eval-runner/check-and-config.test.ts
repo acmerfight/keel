@@ -444,34 +444,37 @@ describe("Eval Runner", () => {
         "verify.sh": "exit 0\n",
       },
     },
-  ])(`Given task $id is missing a required file or directory,
+  ])(
+    `Given task $id is missing a required file or directory,
     When the eval runner loads the suite,
-    Then it returns a configuration failure`, async ({ id, files }) => {
-    // Given
-    const { root, suiteDir, outFile } = await createEvalDir();
-    const taskDir = join(suiteDir, id);
-    await mkdir(taskDir, { recursive: true });
-    if (id !== "missing-workspace") {
-      await mkdir(join(taskDir, "workspace"), { recursive: true });
-    }
-    for (const [name, content] of Object.entries(files)) {
-      await writeFile(join(taskDir, name), content, "utf8");
-    }
+    Then it returns a configuration failure`,
+    async ({ id, files }) => {
+      // Given
+      const { root, suiteDir, outFile } = await createEvalDir();
+      const taskDir = join(suiteDir, id);
+      await mkdir(taskDir, { recursive: true });
+      if (id !== "missing-workspace") {
+        await mkdir(join(taskDir, "workspace"), { recursive: true });
+      }
+      for (const [name, content] of Object.entries(files)) {
+        await writeFile(join(taskDir, name), content, "utf8");
+      }
 
-    try {
-      // When
-      const exitCode = await runEvalCommand({
-        suiteDir,
-        outFile,
-        trials: 1,
-        check: false,
-        cliEntry: CLI_ENTRY,
-      });
+      try {
+        // When
+        const exitCode = await runEvalCommand({
+          suiteDir,
+          outFile,
+          trials: 1,
+          check: false,
+          cliEntry: CLI_ENTRY,
+        });
 
-      // Then
-      expect(exitCode).toBe(1);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(exitCode).toBe(1);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

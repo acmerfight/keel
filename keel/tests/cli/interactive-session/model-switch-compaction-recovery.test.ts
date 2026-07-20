@@ -186,142 +186,142 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       expectedFailure:
         "Context compaction failed: model-switch summary unavailable",
     },
-  ])(`Given $mode model-switch compaction fails,
+  ])(
+    `Given $mode model-switch compaction fails,
     When user enters /model for a smaller target,
-    Then the old provider remains active and the transcript is unchanged`, async ({
-    cliArgs,
-    expectsCostOutput,
-    summaryFailure,
-    expectedFailure,
-  }) => {
-    // Given
-    const input = new PassThrough();
-    const sigintHandlers = new Set<() => void>();
-    let stdout = "";
-    let stderr = "";
-    let oldProviderTurns = 0;
-    let oldProviderSummaryRequests = 0;
-    let targetProviderTurns = 0;
-    const oldRequestContexts: Message[][] = [];
-    const persistedReasons: string[] = [];
-    const largePrompt = "large history ".repeat(3_000).trim();
-    const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
-      id: "fake",
-      async *stream(options) {
-        if (options.toolExposure?.kind === "none") {
-          oldProviderSummaryRequests++;
-          if (summaryFailure === "thrown") {
-            throw new Error("model-switch summary unavailable");
+    Then the old provider remains active and the transcript is unchanged`,
+    async ({ cliArgs, expectsCostOutput, summaryFailure, expectedFailure }) => {
+      // Given
+      const input = new PassThrough();
+      const sigintHandlers = new Set<() => void>();
+      let stdout = "";
+      let stderr = "";
+      let oldProviderTurns = 0;
+      let oldProviderSummaryRequests = 0;
+      let targetProviderTurns = 0;
+      const oldRequestContexts: Message[][] = [];
+      const persistedReasons: string[] = [];
+      const largePrompt = "large history ".repeat(3_000).trim();
+      const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
+        id: "fake",
+        async *stream(options) {
+          if (options.toolExposure?.kind === "none") {
+            oldProviderSummaryRequests++;
+            if (summaryFailure === "thrown") {
+              throw new Error("model-switch summary unavailable");
+            }
+            yield {
+              type: "text",
+              text: "Partial model-switch checkpoint that must not commit",
+            };
+            yield { type: "stop", reason: "length", usage: ZERO_USAGE };
+            return;
           }
-          yield {
-            type: "text",
-            text: "Partial model-switch checkpoint that must not commit",
-          };
-          yield { type: "stop", reason: "length", usage: ZERO_USAGE };
-          return;
-        }
-        oldProviderTurns++;
-        oldRequestContexts.push(structuredClone([...options.messages]));
-        yield { type: "text", text: `old provider ${oldProviderTurns}` };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    });
-    const targetProvider: LLMProvider = {
-      id: "fake",
-      async *stream() {
-        targetProviderTurns++;
-        yield { type: "text", text: "unexpected target" };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-    const session = runInteractiveSession({
-      cliArgs,
-      workspace: process.cwd(),
-      platform: process.platform,
-      session: savedInteractiveSession({
-        id: "test-session",
-        persistMessages: ({ messages: _messages, reason }) => {
-          persistedReasons.push(reason);
+          oldProviderTurns++;
+          oldRequestContexts.push(structuredClone([...options.messages]));
+          yield { type: "text", text: `old provider ${oldProviderTurns}` };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
-        persistModelSwitch: () => {
-          throw new Error("rejected model switch must not persist");
+      });
+      const targetProvider: LLMProvider = {
+        id: "fake",
+        async *stream() {
+          targetProviderTurns++;
+          yield { type: "text", text: "unexpected target" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
-      }),
-      input,
-      writeStdout: (text) => {
-        stdout += text;
-      },
-      writeStderr: (text) => {
-        stderr += text;
-      },
-      onSigint: (handler) => {
-        sigintHandlers.add(handler);
-      },
-      offSigint: (handler) => {
-        sigintHandlers.delete(handler);
-      },
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
-      resolveProvider: (_message, selection?: ProviderSelection) => {
-        if (selection?.providerId === "qwen") {
-          return resolvedProvider(
-            "qwen",
-            selection.model ?? "tiny",
-            targetProvider,
-            ZERO_COST_MODEL,
-            {
-              contextWindowTokens: 2_000,
-              reserveTokens: 0,
-              keepRecentTokens: 1,
-            },
-          );
-        }
-        return resolvedProvider("fake", "fake", oldProvider);
-      },
-      requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async (stream) => {
-        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
-        for await (const event of stream) {
-          if (event.type === "text") {
-            stdout += event.text;
-          } else if (event.type === "end") {
-            finalEnd = event;
+      };
+      const session = runInteractiveSession({
+        cliArgs,
+        workspace: process.cwd(),
+        platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages: _messages, reason }) => {
+            persistedReasons.push(reason);
+          },
+          persistModelSwitch: () => {
+            throw new Error("rejected model switch must not persist");
+          },
+        }),
+        input,
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: (handler) => {
+          sigintHandlers.add(handler);
+        },
+        offSigint: (handler) => {
+          sigintHandlers.delete(handler);
+        },
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: (_message, selection?: ProviderSelection) => {
+          if (selection?.providerId === "qwen") {
+            return resolvedProvider(
+              "qwen",
+              selection.model ?? "tiny",
+              targetProvider,
+              ZERO_COST_MODEL,
+              {
+                contextWindowTokens: 2_000,
+                reserveTokens: 0,
+                keepRecentTokens: 1,
+              },
+            );
           }
-        }
-        return finalEnd;
-      },
-      formatCostReport: () => "Rejected compaction cost recorded.\n",
-    });
+          return resolvedProvider("fake", "fake", oldProvider);
+        },
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "text") {
+              stdout += event.text;
+            } else if (event.type === "end") {
+              finalEnd = event;
+            }
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "Rejected compaction cost recorded.\n",
+      });
 
-    // When
-    input.end(`${largePrompt}\n/model qwen/tiny\nsecond prompt\n`);
+      // When
+      input.end(`${largePrompt}\n/model qwen/tiny\nsecond prompt\n`);
 
-    // Then
-    await session;
-    expect(stderr).toContain(expectedFailure);
-    expect(stderr.includes("Rejected compaction cost recorded.")).toBe(
-      expectsCostOutput,
-    );
-    expect(stdout).toContain("old provider 1");
-    expect(stdout).toContain("old provider 2");
-    expect(stdout).not.toContain("unexpected target");
-    expect(oldProviderTurns).toBe(2);
-    expect(oldProviderSummaryRequests).toBe(1);
-    expect(targetProviderTurns).toBe(0);
-    expect(oldRequestContexts).toHaveLength(2);
-    expect(oldRequestContexts[1]).toEqual([
-      { role: "user", content: largePrompt },
-      { role: "assistant", content: "old provider 1", toolCalls: [] },
-      { role: "user", content: "second prompt" },
-    ]);
-    expect(JSON.stringify(oldRequestContexts[1])).not.toContain(
-      "Partial model-switch checkpoint that must not commit",
-    );
-    expect(persistedReasons).not.toContain("compaction");
-    expect(sigintHandlers.size).toBe(0);
-  });
+      // Then
+      await session;
+      expect(stderr).toContain(expectedFailure);
+      expect(stderr.includes("Rejected compaction cost recorded.")).toBe(
+        expectsCostOutput,
+      );
+      expect(stdout).toContain("old provider 1");
+      expect(stdout).toContain("old provider 2");
+      expect(stdout).not.toContain("unexpected target");
+      expect(oldProviderTurns).toBe(2);
+      expect(oldProviderSummaryRequests).toBe(1);
+      expect(targetProviderTurns).toBe(0);
+      expect(oldRequestContexts).toHaveLength(2);
+      expect(oldRequestContexts[1]).toEqual([
+        { role: "user", content: largePrompt },
+        { role: "assistant", content: "old provider 1", toolCalls: [] },
+        { role: "user", content: "second prompt" },
+      ]);
+      expect(JSON.stringify(oldRequestContexts[1])).not.toContain(
+        "Partial model-switch checkpoint that must not commit",
+      );
+      expect(persistedReasons).not.toContain("compaction");
+      expect(sigintHandlers.size).toBe(0);
+    },
+  );
 
   test.each([
     {
@@ -339,122 +339,122 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" as const },
       expectedUsage: undefined,
     },
-  ])(`Given $mode model-switch compaction completes after interruption,
+  ])(
+    `Given $mode model-switch compaction completes after interruption,
     When the provider returns its billed result,
-    Then Keel rolls back the switch and records usage only when metering is active`, async ({
-    cliArgs,
-    expectedUsage,
-  }) => {
-    // Given
-    const initialMessages: readonly Message[] = [
-      { role: "user", content: "large history ".repeat(3_000).trim() },
-      { role: "assistant", content: "old provider answer", toolCalls: [] },
-    ];
-    let receiveSummaryRequest: () => void = () => {};
-    const summaryRequested = new Promise<void>((resolve) => {
-      receiveSummaryRequest = resolve;
-    });
-    let targetProviderTurns = 0;
-    const currentProvider = withProviderRequestAttemptAccounting({
-      id: "fake",
-      async *stream(options) {
-        receiveSummaryRequest();
-        if (!options.signal.aborted) {
-          await new Promise<void>((resolve) => {
-            options.signal.addEventListener("abort", () => resolve(), {
-              once: true,
+    Then Keel rolls back the switch and records usage only when metering is active`,
+    async ({ cliArgs, expectedUsage }) => {
+      // Given
+      const initialMessages: readonly Message[] = [
+        { role: "user", content: "large history ".repeat(3_000).trim() },
+        { role: "assistant", content: "old provider answer", toolCalls: [] },
+      ];
+      let receiveSummaryRequest: () => void = () => {};
+      const summaryRequested = new Promise<void>((resolve) => {
+        receiveSummaryRequest = resolve;
+      });
+      let targetProviderTurns = 0;
+      const currentProvider = withProviderRequestAttemptAccounting({
+        id: "fake",
+        async *stream(options) {
+          receiveSummaryRequest();
+          if (!options.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
             });
-          });
-        }
-        yield { type: "text", text: "Cancelled model-switch checkpoint" };
-        yield {
-          type: "stop",
-          reason: "stop",
-          usage: {
-            inputTokens: 8,
-            cachedInputTokens: 0,
-            uncachedInputTokens: 8,
-            outputTokens: 2,
+          }
+          yield { type: "text", text: "Cancelled model-switch checkpoint" };
+          yield {
+            type: "stop",
+            reason: "stop",
+            usage: {
+              inputTokens: 8,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 8,
+              outputTokens: 2,
+            },
+          };
+        },
+      });
+      const targetProvider: LLMProvider = {
+        id: "fake",
+        async *stream() {
+          targetProviderTurns++;
+          yield { type: "text", text: "unexpected target" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
+      const input = new PassThrough();
+      const sigintHandlers = new Set<() => void>();
+      const persistedReasons: string[] = [];
+      const session = runInteractiveSession({
+        cliArgs,
+        workspace: process.cwd(),
+        platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistMessages: ({ messages: _messages, reason }) => {
+            persistedReasons.push(reason);
           },
-        };
-      },
-    });
-    const targetProvider: LLMProvider = {
-      id: "fake",
-      async *stream() {
-        targetProviderTurns++;
-        yield { type: "text", text: "unexpected target" };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-    const input = new PassThrough();
-    const sigintHandlers = new Set<() => void>();
-    const persistedReasons: string[] = [];
-    const session = runInteractiveSession({
-      cliArgs,
-      workspace: process.cwd(),
-      platform: process.platform,
-      session: savedInteractiveSession({
-        id: "test-session",
-        persistMessages: ({ messages: _messages, reason }) => {
-          persistedReasons.push(reason);
+          persistModelSwitch: () => {
+            throw new Error("interrupted model switch must not persist");
+          },
+        }),
+        initialMessages,
+        input,
+        writeStdout: () => {},
+        writeStderr: () => {},
+        onSigint: (handler) => {
+          sigintHandlers.add(handler);
         },
-        persistModelSwitch: () => {
-          throw new Error("interrupted model switch must not persist");
+        offSigint: (handler) => {
+          sigintHandlers.delete(handler);
         },
-      }),
-      initialMessages,
-      input,
-      writeStdout: () => {},
-      writeStderr: () => {},
-      onSigint: (handler) => {
-        sigintHandlers.add(handler);
-      },
-      offSigint: (handler) => {
-        sigintHandlers.delete(handler);
-      },
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
-      resolveProvider: (_message, selection?: ProviderSelection) =>
-        selection?.providerId === "qwen"
-          ? resolvedProvider(
-              "qwen",
-              selection.model ?? "tiny",
-              targetProvider,
-              ZERO_COST_MODEL,
-              {
-                contextWindowTokens: 2_000,
-                reserveTokens: 0,
-                keepRecentTokens: 1,
-              },
-            )
-          : resolvedProvider("fake", "fake", currentProvider),
-      requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async () => {
-        throw new Error(
-          "interrupted model switch must not start an agent turn",
-        );
-      },
-      formatCostReport: () => "",
-    });
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: (_message, selection?: ProviderSelection) =>
+          selection?.providerId === "qwen"
+            ? resolvedProvider(
+                "qwen",
+                selection.model ?? "tiny",
+                targetProvider,
+                ZERO_COST_MODEL,
+                {
+                  contextWindowTokens: 2_000,
+                  reserveTokens: 0,
+                  keepRecentTokens: 1,
+                },
+              )
+            : resolvedProvider("fake", "fake", currentProvider),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async () => {
+          throw new Error(
+            "interrupted model switch must not start an agent turn",
+          );
+        },
+        formatCostReport: () => "",
+      });
 
-    // When
-    input.write("/model qwen/tiny\n");
-    await withTimeout(summaryRequested, 5_000, "summary did not start");
-    for (const handler of [...sigintHandlers]) {
-      handler();
-    }
-    input.end();
+      // When
+      input.write("/model qwen/tiny\n");
+      await withTimeout(summaryRequested, 5_000, "summary did not start");
+      for (const handler of [...sigintHandlers]) {
+        handler();
+      }
+      input.end();
 
-    // Then
-    const result = await withTimeout(session, 5_000, "session did not end");
-    expect(result.report?.end.usage).toEqual(expectedUsage);
-    expect(targetProviderTurns).toBe(0);
-    expect(persistedReasons).not.toContain("compaction");
-    expect(sigintHandlers.size).toBe(0);
-  });
+      // Then
+      const result = await withTimeout(session, 5_000, "session did not end");
+      expect(result.report?.end.usage).toEqual(expectedUsage);
+      expect(targetProviderTurns).toBe(0);
+      expect(persistedReasons).not.toContain("compaction");
+      expect(sigintHandlers.size).toBe(0);
+    },
+  );
 
   test(`Given a billed model-switch summary is truncated before its retry exhausts the cost budget,
     When the retry is denied admission,
