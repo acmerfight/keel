@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+  type CurrentToolOutputCompactionPolicy,
   compactCurrentToolOutputs,
   compactCurrentToolOutputsWithArtifacts,
   compactMessages,
@@ -34,6 +35,14 @@ import {
 
 const PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER =
   "[current tool output compacted before provider request:";
+const OVERFLOW_PRESERVE_POLICY = {
+  reason: "overflow_recovery",
+  preflightCompactedOutputs: "preserve",
+} satisfies CurrentToolOutputCompactionPolicy;
+const OVERFLOW_RECOMPACT_POLICY = {
+  reason: "overflow_recovery",
+  preflightCompactedOutputs: "recompact",
+} satisfies CurrentToolOutputCompactionPolicy;
 
 interface SavedToolOutputArtifact {
   readonly ref: string;
@@ -1744,7 +1753,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(stderr).not.toContain("stale tool outputs 2");
   });
 
-  test(`Given the current-output compaction boundary receives no preflight reason,
+  test(`Given the current-output compaction boundary receives overflow-recovery policy,
     When current tool output is compacted,
     Then the boundary uses the overflow-recovery marker and recognizes both current-output markers`, () => {
     // Given
@@ -1774,7 +1783,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ];
 
     // When
-    const result = compactCurrentToolOutputs(messages, 128);
+    const result = compactCurrentToolOutputs(messages, 128, {
+      policy: OVERFLOW_PRESERVE_POLICY,
+      settledMaxChars: 128,
+    });
 
     // Then
     const compactedOutput = capturedToolOutput(
@@ -1822,8 +1834,8 @@ describe("Context Compaction Preflight Current Tool Output", () => {
 
     // When
     const result = compactCurrentToolOutputs(messages, 1, {
-      reason: "overflow_recovery",
-      allowPreflightRecompaction: true,
+      policy: OVERFLOW_RECOMPACT_POLICY,
+      settledMaxChars: 1,
     });
 
     // Then
@@ -1838,51 +1850,9 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(compactedOutput).not.toContain("Infinity");
   });
 
-  test(`Given a preflight current-output compaction attempt receives the recompaction flag,
-    When the current output is already preflight-compacted,
-    Then only overflow recovery has authority to recompact that marker`, () => {
-    // Given
-    const currentToolOutput = [
-      "PREFLIGHT_REAUTH_START",
-      "preflight preview row ".repeat(200),
-      "[current tool output compacted before provider request: approximately omitted 1200 chars; rerun the tool with narrower parameters if needed]",
-    ].join("\n");
-    const messages: Message[] = [
-      { role: "user", content: "Read the log." },
-      {
-        role: "assistant",
-        content: "",
-        toolCalls: [
-          {
-            id: "read_preflight_reauth",
-            tool: "read",
-            path: "preflight-reauth.log",
-          },
-        ],
-      },
-      {
-        role: "tool",
-        toolCallId: "read_preflight_reauth",
-        content: currentToolOutput,
-      },
-    ];
-
-    // When
-    const result = compactCurrentToolOutputs(messages, 1, {
-      reason: "preflight",
-      allowPreflightRecompaction: true,
-    });
-
-    // Then
-    expect(result.stats.toolOutputsCompacted).toBe(0);
-    expect(capturedToolOutput(result.messages, "read_preflight_reauth")).toBe(
-      currentToolOutput,
-    );
-  });
-
-  test(`Given the artifact-backed current-output compaction boundary receives no reason override,
+  test(`Given the artifact-backed current-output compaction boundary receives overflow-recovery policy,
     When an artifact is stored,
-    Then the artifact purpose remains overflow recovery`, async () => {
+    Then the artifact purpose is overflow recovery`, async () => {
     // Given
     const currentToolOutput = [
       "DEFAULT_ARTIFACT_START",
@@ -1915,6 +1885,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       messages,
       128,
       storingArtifactStore(saved),
+      {
+        policy: OVERFLOW_PRESERVE_POLICY,
+        settledMaxChars: 128,
+      },
     );
 
     // Then
@@ -1961,6 +1935,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       messages,
       1,
       storingArtifactStore(saved),
+      {
+        policy: OVERFLOW_PRESERVE_POLICY,
+        settledMaxChars: 1,
+      },
     );
 
     // Then
@@ -2011,6 +1989,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       messages,
       1,
       store,
+      {
+        policy: OVERFLOW_PRESERVE_POLICY,
+        settledMaxChars: 1,
+      },
     );
 
     // Then
@@ -2070,8 +2052,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         keepRecentTokens: 1,
         toolOutputMaxChars: 128,
       },
-      allowCurrentToolOutputCompaction: true,
-      currentToolOutputCompactionReason: "preflight",
+      currentToolOutputCompaction: {
+        mode: "combined",
+        reason: "preflight",
+      },
     });
 
     // Then
@@ -2124,8 +2108,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         reserveTokens: 0,
         keepRecentTokens: 1,
       },
-      allowCurrentToolOutputCompaction: true,
-      currentToolOutputCompactionReason: "preflight",
+      currentToolOutputCompaction: {
+        mode: "combined",
+        reason: "preflight",
+      },
     });
 
     // Then

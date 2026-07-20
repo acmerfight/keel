@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fc from "fast-check";
 import { describe, expect, test } from "vitest";
 import {
+  type CurrentToolOutputCompactionPolicy,
   type CurrentToolOutputCompactionReason,
   compactCurrentToolOutputs,
   compactCurrentToolOutputsWithArtifacts,
@@ -220,6 +221,14 @@ function expectNoPublishedArtifactSideEffects(result: {
   expect(result.artifactNotices).toBeUndefined();
 }
 
+function currentToolOutputPolicy(
+  reason: CurrentToolOutputCompactionReason,
+): CurrentToolOutputCompactionPolicy {
+  return reason === "preflight"
+    ? { reason }
+    : { reason, preflightCompactedOutputs: "preserve" };
+}
+
 async function compactWithStoredArtifacts(options: {
   readonly scope: ToolOutputCompactionScope;
   readonly currentReason: CurrentToolOutputCompactionReason;
@@ -237,7 +246,10 @@ async function compactWithStoredArtifacts(options: {
         options.messages,
         options.maxChars,
         options.store,
-        { reason: options.currentReason },
+        {
+          policy: currentToolOutputPolicy(options.currentReason),
+          settledMaxChars: options.maxChars,
+        },
       );
 }
 
@@ -250,7 +262,8 @@ function compactWithoutArtifacts(options: {
   return options.scope === "stale"
     ? compactStaleToolOutputs(options.messages, options.maxChars)
     : compactCurrentToolOutputs(options.messages, options.maxChars, {
-        reason: options.currentReason,
+        policy: currentToolOutputPolicy(options.currentReason),
+        settledMaxChars: options.maxChars,
       });
 }
 
@@ -527,9 +540,19 @@ describe("Context Compaction Invariants", () => {
         systemPrompt: "",
         messages,
         signal: new AbortController().signal,
-        onlyCurrentToolOutputCompaction: true,
-        currentToolOutputCompactionReason: reason,
-        currentToolOutputMaxCharsOverride: 1,
+        currentToolOutputCompaction:
+          reason === "preflight"
+            ? {
+                mode: "current_only",
+                reason,
+                maxChars: 1,
+              }
+            : {
+                mode: "current_only",
+                reason,
+                maxChars: 1,
+                preflightCompactedOutputs: "preserve",
+              },
         toolOutputArtifacts: { store: artifacts.store },
       });
 
@@ -562,9 +585,11 @@ describe("Context Compaction Invariants", () => {
       systemPrompt: "",
       messages,
       signal: new AbortController().signal,
-      onlyCurrentToolOutputCompaction: true,
-      currentToolOutputCompactionReason: "preflight",
-      currentToolOutputMaxCharsOverride: 1,
+      currentToolOutputCompaction: {
+        mode: "current_only",
+        reason: "preflight",
+        maxChars: 1,
+      },
       toolOutputArtifacts: { store: artifacts.store },
     });
 

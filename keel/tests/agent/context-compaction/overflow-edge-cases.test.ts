@@ -133,7 +133,11 @@ describe("Context Compaction Overflow Edge Cases", () => {
         keepRecentTokens: 1,
         toolOutputMaxChars: 128,
       },
-      allowCurrentToolOutputCompaction: true,
+      currentToolOutputCompaction: {
+        mode: "combined",
+        reason: "overflow_recovery",
+        preflightCompactedOutputs: "preserve",
+      },
     });
 
     // Then
@@ -215,7 +219,11 @@ describe("Context Compaction Overflow Edge Cases", () => {
         keepRecentTokens: 1,
         toolOutputMaxChars: 128,
       },
-      allowCurrentToolOutputCompaction: true,
+      currentToolOutputCompaction: {
+        mode: "combined",
+        reason: "overflow_recovery",
+        preflightCompactedOutputs: "preserve",
+      },
       toolOutputArtifacts: { store },
     });
 
