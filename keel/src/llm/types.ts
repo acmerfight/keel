@@ -1,5 +1,7 @@
 import type { ReadResourceObservation } from "../core/resource-observation.ts";
-import type { ToolCall } from "../tools/tool-call.ts";
+import type { ModelToolExposure, ToolCall } from "../tools/tool-call.ts";
+
+export type { ModelToolExposure } from "../tools/tool-call.ts";
 
 export interface Usage {
   readonly inputTokens: number;
@@ -135,14 +137,9 @@ export interface StreamOptions {
   readonly requestSystemPrompt?: () => string;
   readonly messages: readonly Message[];
   readonly signal: AbortSignal;
-  readonly allowBash?: boolean;
-  readonly allowSkill?: boolean;
-  readonly allowMemory?: boolean;
-  readonly allowMemoryProposal?: boolean;
-  // Absent = provider default (model may call tools). "none" is for turns
-  // that must produce text only, e.g. the wrap-up summary after the turn
-  // limit; providers enforce it at the protocol level.
-  readonly toolChoice?: "none";
+  // Absent = the standard provider tool surface. "none" is for turns that
+  // must produce text only, e.g. the wrap-up summary after the turn limit.
+  readonly toolExposure?: ModelToolExposure;
   readonly maxOutputTokens?: number;
   readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
 }

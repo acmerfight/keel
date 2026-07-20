@@ -300,7 +300,7 @@ async function collectTextOnly(
       systemPrompt,
       messages: [{ role: "user", content: userMessage }],
       signal: controller.signal,
-      toolChoice: "none",
+      toolExposure: { kind: "none" },
       providerRequestAttempts: tracker.observer,
     })) {
       if (event.type === "text") text += event.text;

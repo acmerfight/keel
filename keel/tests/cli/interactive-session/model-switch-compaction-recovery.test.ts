@@ -6,7 +6,11 @@ import type {
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  Message,
+  ModelToolExposure,
+} from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
@@ -35,11 +39,12 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     let targetProviderTurns = 0;
     let targetProviderSummaryRequests = 0;
     const targetRequestContexts: Message[][] = [];
+    const targetRequestToolExposures: Array<ModelToolExposure | undefined> = [];
     const largePrompt = "large history ".repeat(3_000).trim();
     const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Downshift checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -53,7 +58,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           targetProviderSummaryRequests++;
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -61,12 +66,13 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         }
         targetProviderTurns++;
         targetRequestContexts.push(structuredClone([...options.messages]));
+        targetRequestToolExposures.push(options.toolExposure);
         yield { type: "text", text: `target provider ${targetProviderTurns}` };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { bashMode: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -142,6 +148,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     expect(targetRequestContexts[0]?.[0]?.content).toContain(
       "Downshift checkpoint summary.",
     );
+    expect(targetRequestToolExposures).toEqual([{ kind: "auto", bash: true }]);
     expect(JSON.stringify(targetRequestContexts[0])).not.toContain("/model");
     expect(sigintHandlers.size).toBe(0);
   });
@@ -182,7 +189,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield {
             type: "text",
@@ -543,7 +550,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Still too large summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -692,7 +699,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const currentProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         currentSummaryRequests++;
         yield { type: "text", text: "Model switch artifact summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -701,7 +708,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -847,7 +854,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const currentProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         currentSummaryRequests++;
         yield {
           type: "text",
@@ -859,7 +866,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;

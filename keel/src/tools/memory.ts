@@ -95,7 +95,7 @@ export interface AgentMemoryProposalCapability {
   }>;
 }
 
-export interface AgentMemoryProposalToolCapability {
+interface AgentMemoryProposalToolCapability {
   readonly capability: AgentMemoryProposalCapability;
   readonly sourceFor: (
     message: Extract<Message, { readonly role: "user" }>,
@@ -108,6 +108,19 @@ export interface AgentMemoryProposalToolCapability {
     signal: AbortSignal,
   ) => Promise<AgentMemoryProposalReviewDecision>;
 }
+
+export type AgentMemoryRuntime<Proposal = AgentMemoryProposalToolCapability> =
+  | {
+      readonly kind: "direct";
+      readonly prompt: () => string;
+      readonly mutation: AgentMemoryMutationCapability;
+    }
+  | {
+      readonly kind: "reviewed";
+      readonly prompt: () => string;
+      readonly mutation: AgentMemoryMutationCapability;
+      readonly proposal: Proposal;
+    };
 
 interface AgentMemoryToolContext {
   readonly capability: AgentMemoryMutationCapability;

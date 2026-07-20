@@ -22,8 +22,8 @@ import type {
   WorkflowSkill,
 } from "../../skills/model.ts";
 import type {
-  AgentMemoryMutationCapability,
   AgentMemoryProposalCapability,
+  AgentMemoryRuntime,
 } from "../../tools/memory.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
@@ -138,24 +138,17 @@ export type InteractiveSession =
   | { readonly kind: "ephemeral" }
   | SavedInteractiveSession;
 
+type EnabledInteractiveMemoryRuntime =
+  AgentMemoryRuntime<AgentMemoryProposalCapability> & {
+    readonly status: () => RunReportMemory;
+  };
+
 export type InteractiveMemoryRuntime =
   | {
       readonly kind: "disabled";
       readonly status: () => RunReportMemory;
     }
-  | {
-      readonly kind: "direct";
-      readonly prompt: () => string;
-      readonly mutation: AgentMemoryMutationCapability;
-      readonly status: () => RunReportMemory;
-    }
-  | {
-      readonly kind: "reviewed";
-      readonly prompt: () => string;
-      readonly mutation: AgentMemoryMutationCapability;
-      readonly proposal: AgentMemoryProposalCapability;
-      readonly status: () => RunReportMemory;
-    };
+  | EnabledInteractiveMemoryRuntime;
 
 type NonReviewedInteractiveMemoryRuntime = Exclude<
   InteractiveMemoryRuntime,

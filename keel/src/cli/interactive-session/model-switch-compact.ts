@@ -138,7 +138,10 @@ function switchWouldOverflowTargetContext(options: {
     options.messages,
     options.target.contextCompaction,
     undefined,
-    { allowBash: options.bashToolVisible },
+    {
+      kind: "auto",
+      ...(options.bashToolVisible ? { bash: true } : {}),
+    },
   );
 }
 
@@ -320,7 +323,10 @@ export async function executeModelSwitchCompaction(
       systemPrompt,
       messages,
       requestMetadata: {
-        allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+        kind: "auto",
+        ...(bashModeExposesTool(options.cliArgs.bashMode)
+          ? { bash: true }
+          : {}),
       },
     });
     options.writeStderr(

@@ -47,7 +47,7 @@ describe("Turn Compaction", () => {
     const provider: LLMProvider = {
       id: "billed-summary-failure-provider",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("main request must not start after summary failure");
         }
         summaryRequests++;
@@ -97,7 +97,7 @@ describe("Turn Compaction", () => {
             provider,
             systemPrompt: "You are helpful.",
             signal: freshSignal(),
-            allowBash: false,
+            toolExposure: { kind: "auto" },
             modelOperationPurpose: "agent_turn",
             getLedger: () => ledger,
             setLedger: (next) => {
@@ -152,7 +152,7 @@ describe("Turn Compaction", () => {
     const provider: LLMProvider = {
       id: "truncated-turn-compaction-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Partial checkpoint" };
           yield {
@@ -198,7 +198,7 @@ describe("Turn Compaction", () => {
           provider,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          toolExposure: { kind: "auto" },
           modelOperationPurpose: "agent_turn",
           getLedger: () => ledger,
           setLedger: (next) => {
@@ -253,7 +253,7 @@ describe("Turn Compaction", () => {
     const provider: LLMProvider = {
       id: "turn-compaction-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Alpha summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -290,7 +290,7 @@ describe("Turn Compaction", () => {
           provider,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          toolExposure: { kind: "auto" },
           modelOperationPurpose: "agent_turn",
           getLedger: () => ledger,
           setLedger: (next) => {

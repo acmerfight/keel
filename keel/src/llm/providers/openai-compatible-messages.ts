@@ -14,12 +14,8 @@ export function createChatCompletionsBody(
   options: StreamOptions,
   messageOptions: OpenAICompatibleMessageOptions = {},
 ): string {
-  const tools = openAICompatibleTools(
-    options.allowBash === true,
-    options.allowSkill === true,
-    options.allowMemory === true,
-    options.allowMemoryProposal === true,
-  );
+  const toolExposure = options.toolExposure ?? { kind: "auto" };
+  const tools = openAICompatibleTools(toolExposure);
 
   return JSON.stringify({
     model,
@@ -31,7 +27,7 @@ export function createChatCompletionsBody(
             options.maxOutputTokens,
         }
       : {}),
-    ...(options.toolChoice === "none" ? {} : { tools, tool_choice: "auto" }),
+    ...(toolExposure.kind === "none" ? {} : { tools, tool_choice: "auto" }),
     messages: [
       { role: "system", content: options.systemPrompt },
       ...options.messages.map((message) =>

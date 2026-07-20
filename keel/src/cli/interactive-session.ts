@@ -1073,6 +1073,21 @@ export async function runInteractiveSession(
             },
             review: reviewedMemory.review,
           };
+    const agentMemory =
+      options.memory.kind === "disabled"
+        ? undefined
+        : memoryProposal === null
+          ? {
+              kind: "direct" as const,
+              prompt: options.memory.prompt,
+              mutation: options.memory.mutation,
+            }
+          : {
+              kind: "reviewed" as const,
+              prompt: options.memory.prompt,
+              mutation: options.memory.mutation,
+              proposal: memoryProposal,
+            };
     let deferRemainingInjectedInput = false;
     let taskProgressChanged = false;
     let sessionGoalStateChanged = false;
@@ -1119,13 +1134,7 @@ export async function runInteractiveSession(
           provider: resolved.provider,
           messages,
           systemPrompt: baseSystemPromptWithGoal(),
-          ...(options.memory.kind === "disabled"
-            ? {}
-            : {
-                memoryPrompt: options.memory.prompt,
-                memoryMutation: options.memory.mutation,
-              }),
-          ...(memoryProposal === null ? {} : { memoryProposal }),
+          ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
           allowBash: bashModeExposesTool(options.cliArgs.bashMode),
           hiddenWorkspacePaths,

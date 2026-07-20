@@ -6,12 +6,23 @@ import {
   maxTurnFallbackPolicy,
 } from "../../src/agent/stop-policy.ts";
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type { AgentMemoryMutationCapability } from "../../src/tools/memory.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
   cachedInputTokens: 0,
   uncachedInputTokens: 0,
   outputTokens: 0,
+};
+
+const UNUSED_MEMORY_MUTATION: AgentMemoryMutationCapability = {
+  list: () => [],
+  add: () => {
+    throw new Error("memory mutation should not run");
+  },
+  forget: () => {
+    throw new Error("memory mutation should not run");
+  },
 };
 
 function freshSignal(): AbortSignal {
@@ -312,7 +323,7 @@ describe("Conversation History", () => {
       id: "ledger-compaction-provider",
       async *stream(options) {
         providerRequests.push(options.messages);
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Current Task: continue latest step." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -394,9 +405,9 @@ describe("Conversation History", () => {
       async *stream(options) {
         requests.push({
           systemPrompt: options.systemPrompt,
-          toolChoice: options.toolChoice,
+          toolChoice: options.toolExposure?.kind,
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Current Task: continue latest step." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -413,7 +424,11 @@ describe("Conversation History", () => {
         provider,
         messages,
         systemPrompt: "You are helpful.",
-        memoryPrompt: () => memoryFact,
+        memory: {
+          kind: "direct",
+          prompt: () => memoryFact,
+          mutation: UNUSED_MEMORY_MUTATION,
+        },
         signal: freshSignal(),
         allowBash: false,
         stopPolicy: defaultStopPolicy(),
@@ -462,9 +477,9 @@ describe("Conversation History", () => {
       async *stream(options) {
         requests.push({
           systemPrompt: options.systemPrompt,
-          toolChoice: options.toolChoice,
+          toolChoice: options.toolExposure?.kind,
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Stopped after the first tool round." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -487,7 +502,11 @@ describe("Conversation History", () => {
         provider,
         messages: [{ role: "user", content: "Inspect the package." }],
         systemPrompt: "You are helpful.",
-        memoryPrompt: () => (memoryActive ? memoryFact : ""),
+        memory: {
+          kind: "direct",
+          prompt: () => (memoryActive ? memoryFact : ""),
+          mutation: UNUSED_MEMORY_MUTATION,
+        },
         signal: freshSignal(),
         allowBash: false,
         stopPolicy: maxTurnFallbackPolicy(1),

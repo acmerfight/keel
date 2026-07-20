@@ -58,7 +58,10 @@ function wrapUpBoundaryProvider(summary: string): LLMProvider {
     id: "wrap-up-boundary",
     async *stream(options) {
       const lastMessage = options.messages.at(-1);
-      if (lastMessage?.role === "user" && options.toolChoice === "none") {
+      if (
+        lastMessage?.role === "user" &&
+        options.toolExposure?.kind === "none"
+      ) {
         yield { type: "text", text: summary };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         return;
@@ -144,7 +147,7 @@ describe("Agent Stopping", () => {
         const lastMessage = options.messages.at(-1);
         if (options.messages.length > 1 && lastMessage?.role === "user") {
           wrapUpInstructions.push(lastMessage.content);
-          wrapUpToolChoices.push(options.toolChoice);
+          wrapUpToolChoices.push(options.toolExposure?.kind);
           wrapUpTranscripts.push(options.messages);
           yield { type: "text", text: "Stopping here." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };

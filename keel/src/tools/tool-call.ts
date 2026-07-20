@@ -15,6 +15,32 @@ export interface OpenAICompatibleToolDefinition {
   };
 }
 
+export type ModelToolExposure =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "auto";
+      readonly bash?: true;
+      readonly skill?: true;
+      readonly memory?: "direct" | "reviewed";
+    };
+
+export type ResolvedModelToolExposure =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "auto";
+      readonly bash: boolean;
+      readonly skill: boolean;
+      readonly memory: "disabled" | "direct" | "reviewed";
+    };
+
+export interface ModelToolExposureAccounting {
+  readonly allowBash: boolean;
+  readonly allowSkill: boolean;
+  readonly allowMemory: boolean;
+  readonly allowMemoryProposal: boolean;
+  readonly toolChoice: "auto" | "none";
+}
+
 type RegisteredBuiltinTool = (typeof builtinTools)[number];
 
 export type ToolName = RegisteredBuiltinTool["name"];
@@ -189,20 +215,65 @@ function toOpenAICompatibleToolDefinition(
 }
 
 export function openAICompatibleTools(
-  allowBash: boolean,
-  allowSkill: boolean,
-  allowMemory: boolean,
-  allowMemoryProposal: boolean,
+  exposure: ModelToolExposure,
 ): readonly OpenAICompatibleToolDefinition[] {
+  if (exposure.kind === "none") return [];
   return builtinTools
     .filter(
       (tool) =>
-        (allowBash || tool.risk.kind !== "trusted-shell") &&
-        (allowSkill || tool.availability !== "skill-catalog") &&
-        (allowMemory || tool.availability !== "memory") &&
-        (allowMemoryProposal || tool.availability !== "memory-proposal"),
+        (exposure.bash === true || tool.risk.kind !== "trusted-shell") &&
+        (exposure.skill === true || tool.availability !== "skill-catalog") &&
+        (exposure.memory !== undefined || tool.availability !== "memory") &&
+        (exposure.memory === "reviewed" ||
+          tool.availability !== "memory-proposal"),
     )
     .map(toOpenAICompatibleToolDefinition);
+}
+
+export function resolveModelToolExposure(
+  exposure: ModelToolExposure | undefined,
+): ResolvedModelToolExposure {
+  if (exposure?.kind === "none") return exposure;
+  return {
+    kind: "auto",
+    bash: exposure?.bash === true,
+    skill: exposure?.skill === true,
+    memory: exposure?.memory ?? "disabled",
+  };
+}
+
+export function modelToolExposuresEqual(
+  left: ResolvedModelToolExposure,
+  right: ResolvedModelToolExposure,
+): boolean {
+  if (left.kind === "none") return right.kind === "none";
+  if (right.kind === "none") return false;
+  return (
+    left.bash === right.bash &&
+    left.skill === right.skill &&
+    left.memory === right.memory
+  );
+}
+
+export function modelToolExposureAccounting(
+  exposure: ModelToolExposure | undefined,
+): ModelToolExposureAccounting {
+  const resolved = resolveModelToolExposure(exposure);
+  return resolved.kind === "none"
+    ? {
+        allowBash: false,
+        allowSkill: false,
+        allowMemory: false,
+        allowMemoryProposal: false,
+        toolChoice: "none",
+      }
+    : {
+        allowBash: resolved.bash,
+        allowSkill: resolved.skill,
+        allowMemory: resolved.memory !== "disabled",
+        allowMemoryProposal: resolved.memory === "reviewed",
+        toolChoice: "auto",
+      };
 }
 
 export function toolCallFromParsedArguments(

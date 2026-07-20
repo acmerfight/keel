@@ -88,7 +88,7 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
       const provider: LLMProvider = {
         id: "restored-metadata-evidence-provider",
         async *stream(options) {
-          if (options.toolChoice === "none") {
+          if (options.toolExposure?.kind === "none") {
             yield {
               type: "text",
               text: "Restored metadata summary that omits evidence handles.",

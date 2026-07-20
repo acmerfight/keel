@@ -2547,7 +2547,7 @@ describe("Interactive Session - Goals", () => {
     const provider: LLMProvider = {
       id: "goal-assertion-redaction-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({

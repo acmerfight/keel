@@ -1313,14 +1313,15 @@ describe("Task Progress", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
-          ...(options.allowBash !== undefined
-            ? { allowBash: options.allowBash }
+          ...(options.toolExposure?.kind === "auto" &&
+          options.toolExposure.bash === true
+            ? { allowBash: true }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({
@@ -1525,7 +1526,7 @@ describe("Task Progress", () => {
     const provider: LLMProvider = {
       id: "goal-same-turn-read-completion-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const prompt = options.messages[0]?.content ?? "";
           const hasFreshRead =
             prompt.includes("status=READY") &&
@@ -1652,7 +1653,7 @@ describe("Task Progress", () => {
     const provider: LLMProvider = {
       id: "goal-non-terminal-assertion-completion-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           evaluatorRequests++;
           yield {
             type: "text",
@@ -1758,11 +1759,11 @@ describe("Task Progress", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const prompt = options.messages[0]?.content ?? "";
           const changed =
             prompt.includes('"resourceFreshness"') &&
@@ -1882,11 +1883,11 @@ describe("Task Progress", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({
@@ -2010,11 +2011,11 @@ describe("Task Progress", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({
@@ -2136,11 +2137,11 @@ describe("Task Progress", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const evaluatorText = options.messages
             .map((message) => message.content)
             .join("\n");

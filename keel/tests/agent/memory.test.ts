@@ -50,7 +50,11 @@ describe("agent memory source provenance", () => {
         ]),
         messages,
         systemPrompt: "system",
-        memoryMutation,
+        memory: {
+          kind: "direct",
+          prompt: () => "",
+          mutation: memoryMutation,
+        },
         signal: new AbortController().signal,
         allowBash: false,
         stopPolicy: defaultStopPolicy(),

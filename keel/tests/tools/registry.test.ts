@@ -857,7 +857,12 @@ describe("tool registry", () => {
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
     const argumentsByTool = Object.fromEntries(
-      openAICompatibleTools(true, true, true, true).map((tool) => [
+      openAICompatibleTools({
+        kind: "auto",
+        bash: true,
+        skill: true,
+        memory: "reviewed",
+      }).map((tool) => [
         tool.function.name,
         {
           fields: Object.keys(tool.function.parameters.properties),
@@ -924,7 +929,12 @@ describe("tool registry", () => {
   test(`Given builtin tools declare arguments in Zod,
     When provider metadata is compared with generated JSON schema,
     Then keys requiredness types and numeric bounds stay equivalent`, () => {
-    const providerTools = openAICompatibleTools(true, true, true, true);
+    const providerTools = openAICompatibleTools({
+      kind: "auto",
+      bash: true,
+      skill: true,
+      memory: "reviewed",
+    });
 
     for (const tool of builtinTools) {
       const providerTool = providerToolByName(providerTools, tool.name);
@@ -998,47 +1008,47 @@ describe("tool registry", () => {
       .map((tool) => tool.name);
 
     expect(
-      openAICompatibleTools(false, false, false, false).map(
-        (tool) => tool.function.name,
-      ),
+      openAICompatibleTools({ kind: "auto" }).map((tool) => tool.function.name),
     ).toEqual(defaultBuiltinToolNames);
     expect(
-      openAICompatibleTools(false, true, false, false).map(
+      openAICompatibleTools({ kind: "auto", skill: true }).map(
         (tool) => tool.function.name,
       ),
     ).toEqual(skillBuiltinToolNames);
     expect(
-      openAICompatibleTools(true, true, true, true).map(
-        (tool) => tool.function.name,
-      ),
+      openAICompatibleTools({
+        kind: "auto",
+        bash: true,
+        skill: true,
+        memory: "reviewed",
+      }).map((tool) => tool.function.name),
     ).toEqual(allBuiltinToolNames);
   });
 
   test(`Given direct memory and reviewed interactive memory have different runtime boundaries,
     When provider tools are filtered for each capability,
     Then memory_propose is exposed only by the reviewed-memory capability`, () => {
-    const directMemoryTools = openAICompatibleTools(
-      false,
-      false,
-      true,
-      false,
-    ).map((tool) => tool.function.name);
-    const reviewedMemoryTools = openAICompatibleTools(
-      false,
-      false,
-      false,
-      true,
-    ).map((tool) => tool.function.name);
+    const directMemoryTools = openAICompatibleTools({
+      kind: "auto",
+      memory: "direct",
+    }).map((tool) => tool.function.name);
+    const reviewedMemoryTools = openAICompatibleTools({
+      kind: "auto",
+      memory: "reviewed",
+    }).map((tool) => tool.function.name);
 
     expect(directMemoryTools).toEqual(
       expect.arrayContaining(["memory_add", "memory_forget"]),
     );
     expect(directMemoryTools).not.toContain("memory_propose");
     expect(reviewedMemoryTools).toContain("memory_propose");
-    expect(reviewedMemoryTools).not.toEqual(
+    expect(reviewedMemoryTools).toEqual(
       expect.arrayContaining(["memory_add", "memory_forget"]),
     );
-    const allTools = openAICompatibleTools(false, false, true, true);
+    const allTools = openAICompatibleTools({
+      kind: "auto",
+      memory: "reviewed",
+    });
     expect(
       allTools.find((tool) => tool.function.name === "memory_add")?.function
         .description,
@@ -1052,7 +1062,12 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When OpenAI-compatible definitions are built,
     Then descriptions match the builtin registry and parameters are strict objects`, () => {
-    const providerTools = openAICompatibleTools(true, true, true, true);
+    const providerTools = openAICompatibleTools({
+      kind: "auto",
+      bash: true,
+      skill: true,
+      memory: "reviewed",
+    });
 
     expect(
       providerTools.map((tool) => ({
@@ -1096,7 +1111,7 @@ describe("tool registry", () => {
   test(`Given bash is disabled,
     When provider tools are requested,
     Then only file tools are exposed in stable order`, () => {
-    const tools = openAICompatibleTools(false, false, false, false);
+    const tools = openAICompatibleTools({ kind: "auto" });
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
@@ -1116,7 +1131,7 @@ describe("tool registry", () => {
   test(`Given bash is enabled,
     When provider tools are requested,
     Then the bash tool is exposed after the file tools`, () => {
-    const tools = openAICompatibleTools(true, false, false, false);
+    const tools = openAICompatibleTools({ kind: "auto", bash: true });
 
     expect(tools.map((tool) => tool.function.name)).toEqual([
       "update_plan",
@@ -1231,9 +1246,10 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When the edit schema is rendered for the model,
     Then edit exposes one edits array of replacement objects`, () => {
-    const editTool = openAICompatibleTools(true, false, false, false).find(
-      (tool) => tool.function.name === "edit",
-    );
+    const editTool = openAICompatibleTools({
+      kind: "auto",
+      bash: true,
+    }).find((tool) => tool.function.name === "edit");
     const { edits } = editTool?.function.parameters.properties ?? {};
 
     expect(edits).toEqual({
@@ -1268,9 +1284,10 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When the edit description is rendered for the model,
     Then edit explains how to use recovery diagnostics`, () => {
-    const editTool = openAICompatibleTools(true, false, false, false).find(
-      (tool) => tool.function.name === "edit",
-    );
+    const editTool = openAICompatibleTools({
+      kind: "auto",
+      bash: true,
+    }).find((tool) => tool.function.name === "edit");
     const description = editTool?.function.description ?? "";
 
     expect(description).toContain("Recovery current-file context");

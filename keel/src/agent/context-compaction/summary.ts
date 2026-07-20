@@ -416,7 +416,7 @@ async function collectTextOnlyTurn(options: {
     systemPrompt: options.systemPrompt,
     messages: options.messages,
     signal: options.signal,
-    toolChoice: "none",
+    toolExposure: { kind: "none" },
     ...(options.operation !== null
       ? { providerRequestAttempts: options.operation.providerRequestAttempts }
       : {}),

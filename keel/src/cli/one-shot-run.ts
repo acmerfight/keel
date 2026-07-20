@@ -316,9 +316,14 @@ export async function runOneShotCli(
       provider: resolved.provider,
       userMessage,
       systemPrompt,
-      ...(memoryPrompt !== undefined ? { memoryPrompt } : {}),
-      ...(cliArgs.memoryEnabled
-        ? { memoryMutation: agentMemory.capability }
+      ...(memoryPrompt !== undefined
+        ? {
+            memory: {
+              kind: "direct",
+              prompt: memoryPrompt,
+              mutation: agentMemory.capability,
+            },
+          }
         : {}),
       signal: abortController.signal,
       allowBash: bashModeExposesTool(cliArgs.bashMode),

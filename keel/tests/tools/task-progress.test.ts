@@ -21,7 +21,7 @@ describe("Task Progress Tool", () => {
     When bash is disabled,
     Then update_plan is exposed as an agent-state tool with deterministic statuses`, () => {
     // Given / When
-    const tools = openAICompatibleTools(false, false, false, false);
+    const tools = openAICompatibleTools({ kind: "auto" });
     const updatePlan = tools.find(
       (tool) => tool.function.name === "update_plan",
     );
