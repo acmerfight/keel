@@ -24,6 +24,9 @@ function freshSignal(): AbortSignal {
 function taskProgressUpdate(
   execution: ToolExecution,
 ): SessionTaskProgress | undefined {
+  if (!execution.ok) {
+    return undefined;
+  }
   return toolExecutionEffect(execution, "task_progress")?.taskProgress;
 }
 

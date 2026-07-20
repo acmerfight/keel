@@ -247,8 +247,12 @@ export async function restorePostCompactionReads(options: {
       hiddenWorkspacePaths,
       projectInstructions: options.projectInstructionVisibility,
     });
+    if (!execution.ok) {
+      continue;
+    }
     const readEffect = toolExecutionEffect(execution, "read");
-    if (!execution.ok || readEffect === undefined) {
+    /* v8 ignore next 3: executeReadTool records a read effect on every successful read execution. */
+    if (readEffect === undefined) {
       continue;
     }
     const fittedContent = fitPostCompactionReadContent(

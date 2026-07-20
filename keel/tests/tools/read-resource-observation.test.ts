@@ -30,6 +30,9 @@ async function observedRead(
     signal: freshSignal(),
     bash: { kind: "disabled" },
   });
+  if (!execution.ok) {
+    throw new Error("expected successful read execution");
+  }
   const read = toolExecutionEffect(execution, "read");
   if (read === undefined) {
     throw new Error("expected read resource observation");

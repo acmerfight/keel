@@ -186,12 +186,19 @@ function toolEndEvent(
   toolCall: ToolCall,
   execution: ToolExecution,
 ): Extract<AgentEvent, { readonly type: "tool_end" }> {
+  if (!execution.ok) {
+    return {
+      type: "tool_end",
+      toolCall,
+      ok: false,
+    };
+  }
   const bashCommand = toolExecutionEffect(execution, "bash_command");
   const memoryOperation = toolExecutionEffect(execution, "memory_operation");
   return {
     type: "tool_end",
     toolCall,
-    ok: execution.ok,
+    ok: true,
     ...(bashCommand !== undefined
       ? { bashExitCode: bashCommand.evidence.exitCode }
       : {}),
@@ -1032,7 +1039,9 @@ export async function* runAgentTurn(
       });
       const artifactNotices: ToolOutputArtifactNotice[] = [];
       for (const settled of settledToolExecutions) {
-        const read = toolExecutionEffect(settled.execution, "read");
+        const read = settled.execution.ok
+          ? toolExecutionEffect(settled.execution, "read")
+          : undefined;
         applySessionLedger(
           appendSessionLedgerMessage(sessionLedger, {
             role: "tool",
@@ -1072,6 +1081,9 @@ export async function* runAgentTurn(
       AgentEvent,
       { readonly type: "task_progress_updated" }
     > | null => {
+      if (!execution.ok) {
+        return null;
+      }
       const progress = toolExecutionEffect(execution, "task_progress");
       if (progress === undefined) {
         return null;
@@ -1121,13 +1133,15 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield toolEndEvent(toolCall, execution);
-          const skillActivation = toolExecutionEffect(
-            execution,
-            "skill_activation",
-          );
-          /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
-          if (skillActivation !== undefined) {
-            yield { type: "skill_activated", ...skillActivation.activation };
+          if (execution.ok) {
+            const skillActivation = toolExecutionEffect(
+              execution,
+              "skill_activation",
+            );
+            /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
+            if (skillActivation !== undefined) {
+              yield { type: "skill_activated", ...skillActivation.activation };
+            }
           }
           const taskProgressEvent = taskProgressEventFromExecution(execution);
           /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
@@ -1187,12 +1201,14 @@ export async function* runAgentTurn(
           return;
         }
         yield toolEndEvent(toolCall, execution);
-        const skillActivation = toolExecutionEffect(
-          execution,
-          "skill_activation",
-        );
-        if (skillActivation !== undefined) {
-          yield { type: "skill_activated", ...skillActivation.activation };
+        if (execution.ok) {
+          const skillActivation = toolExecutionEffect(
+            execution,
+            "skill_activation",
+          );
+          if (skillActivation !== undefined) {
+            yield { type: "skill_activated", ...skillActivation.activation };
+          }
         }
         const taskProgressEvent = taskProgressEventFromExecution(execution);
         if (taskProgressEvent !== null) {
