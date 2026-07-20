@@ -140,64 +140,126 @@ interface BashCommandEvidence {
   readonly exitCode: number | null;
 }
 
-export type ToolExecutionEffect =
-  | {
-      readonly kind: "read";
-      readonly targetPath: string;
-      readonly offset?: number;
-      readonly limit?: number;
-      readonly resourceObservation: ReadResourceObservation;
-    }
-  | {
-      readonly kind: "mutation";
-      readonly targetPaths: readonly string[];
-      readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
-    }
-  | {
-      readonly kind: "visible_project_instructions";
-      readonly instructionPaths: readonly string[];
-    }
-  | {
-      readonly kind: "task_progress";
-      readonly taskProgress: SessionTaskProgress;
-    }
-  | {
-      readonly kind: "session_goal";
-      readonly goal: SessionGoal;
-    }
-  | {
-      readonly kind: "bash_command";
-      readonly evidence: BashCommandEvidence;
-    }
-  | {
-      readonly kind: "skill_activation";
-      readonly activation: SkillActivationRecord;
-    }
-  | {
-      readonly kind: "memory_operation";
-      readonly operation: AgentMemoryOperation;
-    };
+interface ReadToolExecutionEffect {
+  readonly kind: "read";
+  readonly targetPath: string;
+  readonly offset?: number;
+  readonly limit?: number;
+  readonly resourceObservation: ReadResourceObservation;
+}
 
-const NO_TOOL_EXECUTION_EFFECTS: readonly ToolExecutionEffect[] = [];
+interface MutationToolExecutionEffect {
+  readonly kind: "mutation";
+  readonly targetPaths: readonly string[];
+  readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
+}
+
+interface VisibleProjectInstructionsToolExecutionEffect {
+  readonly kind: "visible_project_instructions";
+  readonly instructionPaths: readonly string[];
+}
+
+interface TaskProgressToolExecutionEffect {
+  readonly kind: "task_progress";
+  readonly taskProgress: SessionTaskProgress;
+}
+
+interface SessionGoalToolExecutionEffect {
+  readonly kind: "session_goal";
+  readonly goal: SessionGoal;
+}
+
+interface BashCommandToolExecutionEffect {
+  readonly kind: "bash_command";
+  readonly evidence: BashCommandEvidence;
+}
+
+interface SkillActivationToolExecutionEffect {
+  readonly kind: "skill_activation";
+  readonly activation: SkillActivationRecord;
+}
+
+interface MemoryOperationToolExecutionEffect {
+  readonly kind: "memory_operation";
+  readonly operation: AgentMemoryOperation;
+}
+
+type ToolExecutionEffect =
+  | ReadToolExecutionEffect
+  | MutationToolExecutionEffect
+  | VisibleProjectInstructionsToolExecutionEffect
+  | TaskProgressToolExecutionEffect
+  | SessionGoalToolExecutionEffect
+  | BashCommandToolExecutionEffect
+  | SkillActivationToolExecutionEffect
+  | MemoryOperationToolExecutionEffect;
+
+type FailedToolExecutionEffect =
+  | VisibleProjectInstructionsToolExecutionEffect
+  | SessionGoalToolExecutionEffect;
+
+interface ToolExecutionBase {
+  readonly content: string;
+  readonly sourceTruncated?: boolean;
+  readonly artifact?: ToolOutputArtifact;
+}
+
+interface SuccessfulToolExecution extends ToolExecutionBase {
+  readonly ok: true;
+  readonly effects: readonly ToolExecutionEffect[];
+}
+
+interface FailedToolExecution extends ToolExecutionBase {
+  readonly ok: false;
+  readonly effects: readonly FailedToolExecutionEffect[];
+}
+
+const NO_TOOL_EXECUTION_EFFECTS = [] as const;
 
 export function toolExecutionEffect<K extends ToolExecutionEffect["kind"]>(
+  execution: SuccessfulToolExecution,
+  kind: K,
+): Extract<ToolExecutionEffect, { readonly kind: K }> | undefined;
+export function toolExecutionEffect<
+  K extends FailedToolExecutionEffect["kind"],
+>(
+  execution: FailedToolExecution,
+  kind: K,
+): Extract<FailedToolExecutionEffect, { readonly kind: K }> | undefined;
+export function toolExecutionEffect<
+  K extends FailedToolExecutionEffect["kind"],
+>(
   execution: ToolExecution,
   kind: K,
-): Extract<ToolExecutionEffect, { readonly kind: K }> | undefined {
-  return execution.effects.find(
-    (effect): effect is Extract<ToolExecutionEffect, { readonly kind: K }> =>
-      effect.kind === kind,
-  );
+): Extract<FailedToolExecutionEffect, { readonly kind: K }> | undefined;
+export function toolExecutionEffect(
+  execution: ToolExecution,
+  kind: ToolExecutionEffect["kind"],
+): ToolExecutionEffect | undefined {
+  return execution.effects.find((effect) => effect.kind === kind);
 }
 
 export function toolExecutionEffects<K extends ToolExecutionEffect["kind"]>(
+  execution: SuccessfulToolExecution,
+  kind: K,
+): readonly Extract<ToolExecutionEffect, { readonly kind: K }>[];
+export function toolExecutionEffects<
+  K extends FailedToolExecutionEffect["kind"],
+>(
+  execution: FailedToolExecution,
+  kind: K,
+): readonly Extract<FailedToolExecutionEffect, { readonly kind: K }>[];
+export function toolExecutionEffects<
+  K extends FailedToolExecutionEffect["kind"],
+>(
   execution: ToolExecution,
   kind: K,
-): readonly Extract<ToolExecutionEffect, { readonly kind: K }>[] {
-  return execution.effects.filter(
-    (effect): effect is Extract<ToolExecutionEffect, { readonly kind: K }> =>
-      effect.kind === kind,
-  );
+): readonly Extract<FailedToolExecutionEffect, { readonly kind: K }>[];
+export function toolExecutionEffects(
+  execution: ToolExecution,
+  kind: ToolExecutionEffect["kind"],
+): readonly ToolExecutionEffect[] {
+  return execution.effects.filter((effect) => effect.kind === kind);
 }
 
 interface AssertionGoalCompletionContract {
@@ -210,13 +272,7 @@ interface AssertionGoalCompletionEvaluation {
   readonly reason: string;
 }
 
-export interface ToolExecution {
-  readonly content: string;
-  readonly ok: boolean;
-  readonly sourceTruncated?: boolean;
-  readonly artifact?: ToolOutputArtifact;
-  readonly effects: readonly ToolExecutionEffect[];
-}
+export type ToolExecution = SuccessfulToolExecution | FailedToolExecution;
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
   readonly toolCall: ToolCall;
@@ -285,7 +341,7 @@ function executeSkillTool(
 function memoryToolFailure(
   tool: "memory_add" | "memory_forget" | "memory_propose",
   reason: string,
-): ToolExecution {
+): FailedToolExecution {
   const recovery = (() => {
     if (tool === "memory_add") {
       return "Use one exact contiguous durable-claim span from the latest current-user message only when that user directly asked Keel to remember it; never paraphrase, broaden, or infer.";
@@ -577,7 +633,7 @@ function rejectedGoalCompletion(
   sessionGoal: Extract<SessionGoal, { readonly status: "active" }>,
   content: string,
   reason: string,
-): ToolExecution {
+): FailedToolExecution {
   return {
     content,
     ok: false,

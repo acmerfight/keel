@@ -728,6 +728,44 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     }
   });
 
+  test(`Given a visible read target disappears before post-compaction restoration,
+    When recent reads are restored,
+    Then failed read restoration is skipped without replaying a tool message`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const serverPath = join(workspace, "server.ts");
+    await writeFile(serverPath, "export const route = 'current';\n", "utf8");
+    const serverTargetPath = await realpath(serverPath);
+    const messages: Message[] = [];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    readVisibility.applyVisibleToolExecutions([
+      successfulReadToolExecution({ targetPath: serverTargetPath }),
+    ]);
+    await rm(serverPath);
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(messages).toEqual([]);
+      expect(sequence).toBe(1);
+      expect(readVisibility.visibleReadsMostRecentFirst()).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given visible scoped AGENTS.md becomes invalid before post-compaction restoration,
     When recent project instructions are restored,
     Then invalid scoped instructions are skipped without aborting the turn`, async () => {

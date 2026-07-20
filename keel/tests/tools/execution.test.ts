@@ -10,11 +10,32 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { Message } from "../../src/llm/types.ts";
-import { executeToolCall } from "../../src/tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+} from "../../src/tools/execution.ts";
 import type { AgentMemoryToolContext } from "../../src/tools/memory.ts";
 
 const EDIT_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const SHELL_ENV_KEY = "SHELL";
+type Expect<T extends true> = T;
+type Equal<TLeft, TRight> = [TLeft] extends [TRight]
+  ? [TRight] extends [TLeft]
+    ? true
+    : false
+  : false;
+type FailedToolExecutionEffectKind = Extract<
+  ToolExecution,
+  { readonly ok: false }
+>["effects"][number]["kind"];
+type FailedToolExecutionEffectsAreRestricted = Expect<
+  Equal<
+    FailedToolExecutionEffectKind,
+    "visible_project_instructions" | "session_goal"
+  >
+>;
+const failedToolExecutionEffectsAreRestricted: FailedToolExecutionEffectsAreRestricted = true;
+void failedToolExecutionEffectsAreRestricted;
 
 function expectRecoverableToolFailure(
   result: Awaited<ReturnType<typeof executeToolCall>>,
