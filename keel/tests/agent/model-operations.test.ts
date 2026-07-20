@@ -557,6 +557,55 @@ describe("Model Operations", () => {
     }
   });
 
+  test(`Given an Agent provider throws an unexpected runtime error,
+    When the model operation fails before a physical request is reported,
+    Then the report records a terminal failure and preserves the original error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-model-operation-"));
+    const unexpectedError = new Error("unexpected provider implementation bug");
+    const provider: LLMProvider = {
+      id: "unexpected-error-provider",
+      async *stream() {
+        yield* [];
+        throw unexpectedError;
+      },
+    };
+    const recorder = reportRecorderWithAgentRun();
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "Run the model request.",
+            systemPrompt: "You are helpful.",
+            signal: new AbortController().signal,
+            allowBash: false,
+            stopPolicy: defaultStopPolicy(),
+            modelOperations: {
+              recorder,
+              owner: { type: "current_agent_run" },
+              provider: provider.id,
+              model: "test-model",
+              costModel: ZERO_COST_MODEL,
+            },
+          }),
+        ),
+      ).rejects.toBe(unexpectedError);
+      expect(recorder.modelOperations()).toMatchObject([
+        {
+          purpose: "agent_turn",
+          outcome: "terminal_error",
+          providerRequestAttempts: [],
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given compaction receives a forbidden tool call,
     When the consumer rejects the provider output before its stop event,
     Then the attempt is finalized and the original protocol error is preserved`, async () => {
