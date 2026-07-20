@@ -236,17 +236,24 @@ describe("Interactive Session - Interrupts", () => {
           },
           signal,
         );
-        return {
+        const result = {
           candidateId: "cand_reviewed_abort",
-          memoryId: decision.type === "approve" ? "mem_reviewed_abort" : null,
-          scope: { kind: "project", id: "project_reviewed_abort" },
-          outcome:
-            decision.type === "approve"
-              ? "approved"
-              : decision.type === "reject"
-                ? "rejected"
-                : "pending",
+          scope: {
+            kind: "project" as const,
+            id: "project_reviewed_abort",
+          },
         };
+        if (decision.type === "approve") {
+          return {
+            ...result,
+            memoryId: "mem_reviewed_abort",
+            outcome: "approved",
+          };
+        }
+        if (decision.type === "reject") {
+          return { ...result, memoryId: null, outcome: "rejected" };
+        }
+        return { ...result, memoryId: null, outcome: "pending" };
       },
     };
     const input = new PassThrough();

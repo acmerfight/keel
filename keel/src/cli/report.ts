@@ -6,6 +6,7 @@ import type {
   ActiveSkillStatus,
   SkillActivationRecord,
 } from "../skills/model.ts";
+import type { AgentMemoryOperation } from "../tools/memory.ts";
 import type { EndEvent } from "./output.ts";
 import type { ActiveProjectMemoryEntry } from "./project-memory.ts";
 import {
@@ -95,26 +96,7 @@ export function projectMemoryReportEntry(
   };
 }
 
-export type RunReportMemoryOperation =
-  | {
-      readonly operation: "add";
-      readonly id: string;
-      readonly scope: { readonly kind: "project"; readonly id: string };
-      readonly outcome: "saved";
-    }
-  | {
-      readonly operation: "forget";
-      readonly id: string;
-      readonly scope: { readonly kind: "project"; readonly id: string };
-      readonly outcome: "forgotten";
-    }
-  | {
-      readonly operation: "propose";
-      readonly candidateId: string;
-      readonly memoryId: string | null;
-      readonly scope: { readonly kind: "project"; readonly id: string };
-      readonly outcome: "approved" | "rejected" | "pending";
-    };
+export type RunReportMemoryOperation = AgentMemoryOperation;
 
 interface RunReportSkillCatalog {
   readonly exposed: number;

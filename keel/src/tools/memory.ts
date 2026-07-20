@@ -11,6 +11,25 @@ export interface AgentMemoryEntry {
   readonly text: string;
 }
 
+type AgentMemoryProposalOutcome =
+  | {
+      readonly outcome: "approved";
+      readonly memoryId: string;
+    }
+  | {
+      readonly outcome: "rejected";
+      readonly memoryId: null;
+    }
+  | {
+      readonly outcome: "pending";
+      readonly memoryId: null;
+    };
+
+export type AgentMemoryProposalResult = {
+  readonly candidateId: string;
+  readonly scope: AgentMemoryScope;
+} & AgentMemoryProposalOutcome;
+
 export type AgentMemoryOperation =
   | {
       readonly operation: "add";
@@ -24,13 +43,7 @@ export type AgentMemoryOperation =
       readonly scope: AgentMemoryScope;
       readonly outcome: "forgotten";
     }
-  | {
-      readonly operation: "propose";
-      readonly candidateId: string;
-      readonly memoryId: string | null;
-      readonly scope: AgentMemoryScope;
-      readonly outcome: "approved" | "rejected" | "pending";
-    };
+  | ({ readonly operation: "propose" } & AgentMemoryProposalResult);
 
 export interface AgentMemoryMutationCapability {
   readonly list: () => readonly AgentMemoryEntry[];
@@ -87,12 +100,7 @@ export interface AgentMemoryProposalCapability {
       signal: AbortSignal,
     ) => Promise<AgentMemoryProposalReviewDecision>,
     signal: AbortSignal,
-  ) => Promise<{
-    readonly candidateId: string;
-    readonly memoryId: string | null;
-    readonly scope: AgentMemoryScope;
-    readonly outcome: "approved" | "rejected" | "pending";
-  }>;
+  ) => Promise<AgentMemoryProposalResult>;
 }
 
 interface AgentMemoryProposalToolCapability {

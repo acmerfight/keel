@@ -160,15 +160,53 @@ const modelOperationBase = {
 
 const modelOperationSchema = z.object(modelOperationBase);
 
+const projectMemoryScopeSchema = z.object({
+  kind: z.literal("project"),
+  id: z.string(),
+});
+
+const runReportMemoryOperationSchema = z.union([
+  z.object({
+    operation: z.literal("add"),
+    id: z.string(),
+    scope: projectMemoryScopeSchema,
+    outcome: z.literal("saved"),
+  }),
+  z.object({
+    operation: z.literal("forget"),
+    id: z.string(),
+    scope: projectMemoryScopeSchema,
+    outcome: z.literal("forgotten"),
+  }),
+  z.discriminatedUnion("outcome", [
+    z.object({
+      operation: z.literal("propose"),
+      candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+      memoryId: z.string().regex(/^mem_[0-9a-f-]+$/u),
+      scope: projectMemoryScopeSchema,
+      outcome: z.literal("approved"),
+    }),
+    z.object({
+      operation: z.literal("propose"),
+      candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+      memoryId: z.null(),
+      scope: projectMemoryScopeSchema,
+      outcome: z.literal("rejected"),
+    }),
+    z.object({
+      operation: z.literal("propose"),
+      candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+      memoryId: z.null(),
+      scope: projectMemoryScopeSchema,
+      outcome: z.literal("pending"),
+    }),
+  ]),
+]);
+
 const runReportMemorySchema = z
   .object({
     enabled: z.boolean(),
-    scope: z
-      .object({
-        kind: z.literal("project"),
-        id: z.string(),
-      })
-      .nullable(),
+    scope: projectMemoryScopeSchema.nullable(),
     loadedIds: z.array(z.string()),
     loadedEntries: z.array(
       z.object({
@@ -196,32 +234,7 @@ const runReportMemorySchema = z
     ),
     renderedBytes: z.number().int().nonnegative(),
     estimatedTokens: z.number().int().nonnegative().optional(),
-    operations: z.array(
-      z.discriminatedUnion("operation", [
-        z.object({
-          operation: z.literal("add"),
-          id: z.string(),
-          scope: z.object({ kind: z.literal("project"), id: z.string() }),
-          outcome: z.literal("saved"),
-        }),
-        z.object({
-          operation: z.literal("forget"),
-          id: z.string(),
-          scope: z.object({ kind: z.literal("project"), id: z.string() }),
-          outcome: z.literal("forgotten"),
-        }),
-        z.object({
-          operation: z.literal("propose"),
-          candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
-          memoryId: z
-            .string()
-            .regex(/^mem_[0-9a-f-]+$/u)
-            .nullable(),
-          scope: z.object({ kind: z.literal("project"), id: z.string() }),
-          outcome: z.enum(["approved", "rejected", "pending"]),
-        }),
-      ]),
-    ),
+    operations: z.array(runReportMemoryOperationSchema),
     error: z.string().optional(),
   })
   .superRefine((memory, ctx) => {

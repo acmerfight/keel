@@ -301,7 +301,7 @@ async function executeMemoryProposeTool(
   );
   const content =
     result.outcome === "approved"
-      ? `Approved project-memory candidate ${result.candidateId} as ${String(result.memoryId)} for ${result.scope.id}.`
+      ? `Approved project-memory candidate ${result.candidateId} as ${result.memoryId} for ${result.scope.id}.`
       : result.outcome === "rejected"
         ? `Rejected project-memory candidate ${result.candidateId} for ${result.scope.id}.`
         : `Project-memory candidate ${result.candidateId} remains pending for ${result.scope.id}. Review it with: keel memory candidates show ${result.candidateId}; approve with: keel memory candidates approve ${result.candidateId} (add --keep or --supersede <memory-id> when required).`;
@@ -310,10 +310,7 @@ async function executeMemoryProposeTool(
     ok: true,
     memoryOperation: {
       operation: "propose",
-      candidateId: result.candidateId,
-      memoryId: result.memoryId,
-      scope: result.scope,
-      outcome: result.outcome,
+      ...result,
     },
   };
 }

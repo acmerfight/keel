@@ -54,14 +54,7 @@ type ProjectMemoryCandidateOrigin =
       readonly proposal: CandidateProposalOrigin;
     };
 
-type ProjectMemoryCandidateStatus =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "expired"
-  | "discarded";
-
-export interface ProjectMemoryCandidate {
+interface ProjectMemoryCandidateBase {
   readonly id: string;
   readonly kind: CandidateKind;
   readonly originalStatement: string;
@@ -74,17 +67,29 @@ export interface ProjectMemoryCandidate {
   readonly origin: ProjectMemoryCandidateOrigin;
   readonly createdAt: string;
   readonly expiresAt: string;
-  readonly status: ProjectMemoryCandidateStatus;
-  readonly memoryId: string | null;
 }
 
-interface MutableCandidate {
+type ProjectMemoryCandidateLifecycle =
+  | { readonly status: "pending"; readonly memoryId: null }
+  | { readonly status: "approved"; readonly memoryId: string }
+  | { readonly status: "rejected"; readonly memoryId: null }
+  | { readonly status: "expired"; readonly memoryId: null }
+  | { readonly status: "discarded"; readonly memoryId: null };
+
+export type ProjectMemoryCandidate = ProjectMemoryCandidateBase &
+  ProjectMemoryCandidateLifecycle;
+
+type MutableCandidateLifecycle = Exclude<
+  ProjectMemoryCandidateLifecycle,
+  { readonly status: "expired" }
+>;
+
+type MutableCandidate = {
   readonly created: CandidateRecord;
   readonly origin: ProjectMemoryCandidateOrigin;
   statement: string;
-  status: "pending" | "approved" | "rejected" | "discarded";
-  memoryId: string | null;
-}
+  lifecycle: MutableCandidateLifecycle;
+};
 
 interface CandidateState {
   readonly events: readonly ProjectMemoryEvent[];
@@ -146,11 +151,7 @@ function immutableCandidate(
   mutable: MutableCandidate,
   now: number,
 ): ProjectMemoryCandidate {
-  const status =
-    mutable.status === "pending" && Date.parse(mutable.created.expiresAt) <= now
-      ? "expired"
-      : mutable.status;
-  return {
+  const base: ProjectMemoryCandidateBase = {
     id: mutable.created.id,
     kind: mutable.created.kind,
     originalStatement: mutable.created.statement,
@@ -163,9 +164,14 @@ function immutableCandidate(
     origin: mutable.origin,
     createdAt: mutable.created.createdAt,
     expiresAt: mutable.created.expiresAt,
-    status,
-    memoryId: mutable.memoryId,
   };
+  if (
+    mutable.lifecycle.status === "pending" &&
+    Date.parse(mutable.created.expiresAt) <= now
+  ) {
+    return { ...base, status: "expired", memoryId: null };
+  }
+  return { ...base, ...mutable.lifecycle };
 }
 
 function replayCandidateEvents(
@@ -183,12 +189,12 @@ function replayCandidateEvents(
       successfulSessionIds.add(event.operation.sessionId);
       for (const id of event.discardedCandidateIds) {
         const target = candidates.get(id);
-        if (target === undefined || target.status !== "pending") {
+        if (target === undefined || target.lifecycle.status !== "pending") {
           fail(
             `Error: cannot read project-memory candidates ${filePath}: extraction discards invalid ${id} at line ${index + 1}.`,
           );
         }
-        target.status = "discarded";
+        target.lifecycle = { status: "discarded", memoryId: null };
       }
       for (const candidate of event.candidates) {
         if (candidates.has(candidate.id)) {
@@ -212,8 +218,7 @@ function replayCandidateEvents(
             extraction: event.operation,
           },
           statement: candidate.statement,
-          status: "pending",
-          memoryId: null,
+          lifecycle: { status: "pending", memoryId: null },
         });
       }
       continue;
@@ -232,14 +237,13 @@ function replayCandidateEvents(
           proposal: event.origin,
         },
         statement: candidate.statement,
-        status: "pending",
-        memoryId: null,
+        lifecycle: { status: "pending", memoryId: null },
       });
       continue;
     }
     if (event.type === "candidate_edit") {
       const target = candidates.get(event.targetId);
-      if (target === undefined || target.status !== "pending") {
+      if (target === undefined || target.lifecycle.status !== "pending") {
         fail(
           `Error: cannot read project-memory candidates ${filePath}: edit targets invalid ${event.targetId} at line ${index + 1}.`,
         );
@@ -250,18 +254,18 @@ function replayCandidateEvents(
     if (event.type === "candidate_reject") {
       for (const id of event.targetIds) {
         const target = candidates.get(id);
-        if (target === undefined || target.status !== "pending") {
+        if (target === undefined || target.lifecycle.status !== "pending") {
           fail(
             `Error: cannot read project-memory candidates ${filePath}: reject targets invalid ${id} at line ${index + 1}.`,
           );
         }
-        target.status = "rejected";
+        target.lifecycle = { status: "rejected", memoryId: null };
       }
       continue;
     }
     if (event.type === "candidate_approve") {
       const target = candidates.get(event.targetId);
-      if (target === undefined || target.status !== "pending") {
+      if (target === undefined || target.lifecycle.status !== "pending") {
         fail(
           `Error: cannot read project-memory candidates ${filePath}: approve targets invalid ${event.targetId} at line ${index + 1}.`,
         );
@@ -275,8 +279,10 @@ function replayCandidateEvents(
           `Error: cannot read project-memory candidates ${filePath}: invalid activation relation at line ${index + 1}.`,
         );
       }
-      target.status = "approved";
-      target.memoryId = event.memory.id;
+      target.lifecycle = {
+        status: "approved",
+        memoryId: event.memory.id,
+      };
     }
   }
   return {
@@ -974,7 +980,7 @@ export function purgeProjectMemoryCandidate(
   return withWriteLock(runtime, workspace, (scope, state, filePath) => {
     const candidate = requireCandidate(state, id);
     let rewritten: readonly ProjectMemoryEvent[];
-    if (candidate.memoryId !== null) {
+    if (candidate.status === "approved") {
       if (linkedMemoryId !== candidate.memoryId) {
         fail(
           `Error: project-memory candidate ${id} is linked to memory ${candidate.memoryId}. Purge both explicitly with --purge-memory ${candidate.memoryId}.`,
@@ -1040,10 +1046,7 @@ export function clearProjectMemoryCandidates(
     }
 
     const linked = state.candidates.filter(
-      (
-        candidate,
-      ): candidate is ProjectMemoryCandidate & { readonly memoryId: string } =>
-        candidate.memoryId !== null,
+      (candidate) => candidate.status === "approved",
     );
     if (linked.length > 0 && !purgeLinkedMemories) {
       fail(
