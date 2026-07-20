@@ -9,6 +9,23 @@ import type { SessionTask } from "../core/task-progress.ts";
 import type { Message } from "../llm/types.ts";
 import type { SkillLifecycleState } from "../skills/model.ts";
 
+function sessionGoalRecord(goal: SessionGoal): object {
+  const { completion, ...state } = goal;
+  if (completion === undefined) {
+    return state;
+  }
+  return {
+    ...state,
+    criterionKind: completion.kind,
+    completionCriterion:
+      completion.kind === "command" ? completion.command : completion.assertion,
+    ...(completion.kind === "command" &&
+    completion.verificationTimeoutMs !== undefined
+      ? { verificationTimeoutMs: completion.verificationTimeoutMs }
+      : {}),
+  };
+}
+
 export function appendSessionRecordLine(
   timestamp: string,
   messages: readonly Message[],
@@ -52,7 +69,9 @@ export function snapshotSessionRecordLine(
     reason: "size_threshold",
     messages: storedMessages(messages, `snapshot-${timestamp}`),
     pendingInputs: options.pendingInputs ?? [],
-    ...(options.goal !== undefined ? { goal: options.goal } : {}),
+    ...(options.goal !== undefined
+      ? { goal: sessionGoalRecord(options.goal) }
+      : {}),
     ...(options.taskProgressCheckpoints !== undefined
       ? { taskProgressCheckpoints: options.taskProgressCheckpoints }
       : {}),
@@ -72,7 +91,7 @@ export function sessionGoalRecordLine(options: {
     schemaVersion: 4,
     type: "session_goal",
     timestamp: options.timestamp,
-    goal: options.goal,
+    goal: options.goal === null ? null : sessionGoalRecord(options.goal),
     ...(options.consumedInputIds !== undefined
       ? { consumedInputIds: options.consumedInputIds }
       : {}),

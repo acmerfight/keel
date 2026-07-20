@@ -273,8 +273,10 @@ describe("CLI Main - Interactive Entrypoint", () => {
             status: "active",
             budget: { turns: 1 },
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "assertion",
-            completionCriterion: "The durable goal is complete",
+            completion: {
+              kind: "assertion",
+              assertion: "The durable goal is complete",
+            },
             blockedAudit: {
               consecutiveCount: 1,
               reason: "The previous process was still checking a blocker.",
@@ -362,9 +364,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
             status: "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "command",
-            completionCriterion: "pnpm test",
-            verificationTimeoutMs: 350,
+            completion: {
+              kind: "command",
+              command: "pnpm test",
+              verificationTimeoutMs: 350,
+            },
           },
         }),
       ],

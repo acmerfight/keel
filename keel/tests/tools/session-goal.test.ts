@@ -118,9 +118,11 @@ describe("Session Goal Tool", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
-      verificationTimeoutMs: 45_000,
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+        verificationTimeoutMs: 45_000,
+      },
     });
   });
 
@@ -142,6 +144,16 @@ describe("Session Goal Tool", () => {
       },
     });
     const withoutOutcome = {
+      objective: goal.objective,
+      status: "active" as const,
+      budget: goal.budget,
+      usage: goal.usage,
+      completion: {
+        kind: "assertion" as const,
+        assertion: "The final report exists.",
+      },
+    };
+    const withoutOutcomeRecord = {
       objective: goal.objective,
       status: "active" as const,
       budget: goal.budget,
@@ -168,7 +180,7 @@ describe("Session Goal Tool", () => {
     );
     expect(
       sessionGoalSchema.safeParse({
-        ...withoutOutcome,
+        ...withoutOutcomeRecord,
         latestRuntimeOutcome: {
           kind: "recovery_requested",
           reason: "x".repeat(
@@ -179,7 +191,7 @@ describe("Session Goal Tool", () => {
     ).toBe(false);
     expect(
       sessionGoalSchema.safeParse({
-        ...withoutOutcome,
+        ...withoutOutcomeRecord,
         latestRuntimeOutcome: {
           kind: "recovery_requested",
           reason: "Repeated evidence.",
@@ -281,8 +293,10 @@ describe("Session Goal Tool", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
         blockedAudit: {
           consecutiveCount: 2,
           reason: "Need credentials from the user.",
@@ -293,8 +307,10 @@ describe("Session Goal Tool", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       latestRuntimeOutcome: {
         kind: "progress_observed",
         reason:
@@ -389,8 +405,10 @@ describe("Session Goal Tool", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "Release notes cover every changed command.",
+        completion: {
+          kind: "assertion",
+          assertion: "Release notes cover every changed command.",
+        },
       },
       { bashToolVisible: true },
     );
@@ -601,8 +619,10 @@ describe("Session Goal Tool", () => {
       status: "completed",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       completionEvidence: {
         kind: "command",
         command: "pnpm test",
@@ -617,8 +637,10 @@ describe("Session Goal Tool", () => {
         status: "completed",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
         completionEvidence: {
           kind: "command",
           command: "pnpm test",
@@ -637,8 +659,10 @@ describe("Session Goal Tool", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           completionEvidence: {
             kind: "command",
             command: "pnpm test",
@@ -656,8 +680,10 @@ describe("Session Goal Tool", () => {
         status: "completed",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "release notes explain command-a and command-b",
+        completion: {
+          kind: "assertion",
+          assertion: "release notes explain command-a and command-b",
+        },
         completionEvidence: {
           kind: "assertion_evaluator",
           reason: "RELEASE.md contains both command descriptions.",
@@ -771,8 +797,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       });
 
@@ -786,8 +814,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 1,
             reason: "Need an API key from the user.",
@@ -832,8 +862,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 2,
             reason: "Need an API key from the user.",
@@ -852,8 +884,10 @@ describe("Session Goal Tool", () => {
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "Need an API key from the user.",
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           latestRuntimeOutcome: {
             kind: "blocked",
             reason: "Need an API key from the user.",
@@ -894,8 +928,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 2,
             reason: "Need an API key from the user.",
@@ -915,8 +951,10 @@ describe("Session Goal Tool", () => {
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason:
             "Credentials are unavailable from the user, so checkout cannot proceed.",
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       });
     } finally {
@@ -952,8 +990,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 1,
             reason: "Need an API key from the user.",
@@ -969,8 +1009,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 2,
             reason: "Need VPN access.",
@@ -1006,8 +1048,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       });
 
@@ -1153,8 +1197,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       });
 
@@ -1246,9 +1292,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "assertion",
-          completionCriterion:
-            "The release notes explain every changed command.",
+          completion: {
+            kind: "assertion",
+            assertion: "The release notes explain every changed command.",
+          },
         },
       });
 
@@ -1299,9 +1346,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "assertion",
-          completionCriterion:
-            "The release notes explain every changed command.",
+          completion: {
+            kind: "assertion",
+            assertion: "The release notes explain every changed command.",
+          },
         },
         evaluateAssertionGoalCompletion: async () => ({
           completed: false,
@@ -1357,8 +1405,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: 'node -e "process.exit(0)"',
+          completion: {
+            kind: "command",
+            command: 'node -e "process.exit(0)"',
+          },
         },
       });
 
@@ -1371,8 +1421,10 @@ describe("Session Goal Tool", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: 'node -e "process.exit(0)"',
+          completion: {
+            kind: "command",
+            command: 'node -e "process.exit(0)"',
+          },
           completionEvidence: {
             kind: "command",
             command: 'node -e "process.exit(0)"',
@@ -1419,8 +1471,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       });
 
@@ -1471,9 +1525,11 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion:
-            "node -e \"console.log('still failing'); process.exit(1)\"",
+          completion: {
+            kind: "command",
+            command:
+              "node -e \"console.log('still failing'); process.exit(1)\"",
+          },
         },
       });
 
@@ -1527,8 +1583,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: command,
+          completion: {
+            kind: "command",
+            command: command,
+          },
         },
       });
 
@@ -1582,8 +1640,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       });
 
@@ -1634,8 +1694,10 @@ describe("Session Goal Tool", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "kill -TERM $$",
+          completion: {
+            kind: "command",
+            command: "kill -TERM $$",
+          },
         },
       });
 

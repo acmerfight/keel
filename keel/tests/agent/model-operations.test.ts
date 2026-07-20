@@ -116,8 +116,10 @@ describe("Model Operations", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "Trusted evidence proves the work is complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "Trusted evidence proves the work is complete.",
+      },
     };
     let agentRequests = 0;
     const provider: LLMProvider = {

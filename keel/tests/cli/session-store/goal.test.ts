@@ -62,8 +62,10 @@ describe("Session Store Goal", () => {
           status: "active",
           budget: { turns: 12, tokens: 50_000, activeTimeMs: 600_000 },
           usage: { turns: 3, tokens: 8_200, activeTimeMs: 91_000 },
-          criterionKind: "command",
-          completionCriterion: " pnpm   test ",
+          completion: {
+            kind: "command",
+            command: " pnpm   test ",
+          },
         },
         consumedInputIds: [queuedInput.id],
         runtime: runtime(home, 2),
@@ -80,8 +82,10 @@ describe("Session Store Goal", () => {
         status: "active",
         budget: { turns: 12, tokens: 50_000, activeTimeMs: 600_000 },
         usage: { turns: 3, tokens: 8_200, activeTimeMs: 91_000 },
-        criterionKind: "command",
-        completionCriterion: "pnpm   test",
+        completion: {
+          kind: "command",
+          command: "pnpm   test",
+        },
       });
       expect(resumed.pendingInputs).toEqual([]);
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
@@ -130,8 +134,10 @@ describe("Session Store Goal", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "assertion",
-          completionCriterion: " release   notes\ncover every changed command ",
+          completion: {
+            kind: "assertion",
+            assertion: " release   notes\ncover every changed command ",
+          },
         },
         runtime: runtime(home, 1),
       });
@@ -147,8 +153,10 @@ describe("Session Store Goal", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "release notes cover every changed command",
+        completion: {
+          kind: "assertion",
+          assertion: "release notes cover every changed command",
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -178,8 +186,10 @@ describe("Session Store Goal", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           completionEvidence: {
             kind: "command",
             command: " pnpm test ",
@@ -202,8 +212,10 @@ describe("Session Store Goal", () => {
         status: "completed",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
         completionEvidence: {
           kind: "command",
           command: "pnpm test",
@@ -264,8 +276,10 @@ describe("Session Store Goal", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "assertion",
-          completionCriterion: "release notes explain the command",
+          completion: {
+            kind: "assertion",
+            assertion: "release notes explain the command",
+          },
           completionEvidence: {
             kind: "assertion_evaluator",
             reason: " Evaluator\napproved the RELEASE.md evidence. ",
@@ -285,8 +299,10 @@ describe("Session Store Goal", () => {
         status: "completed",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "release notes explain the command",
+        completion: {
+          kind: "assertion",
+          assertion: "release notes explain the command",
+        },
         completionEvidence: {
           kind: "assertion_evaluator",
           reason: "Evaluator approved the RELEASE.md evidence.",
@@ -323,8 +339,10 @@ describe("Session Store Goal", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "assertion",
-          completionCriterion: "release notes explain the command",
+          completion: {
+            kind: "assertion",
+            assertion: "release notes explain the command",
+          },
           completionEvidence: {
             kind: "assertion_evaluator",
             reason,
@@ -389,8 +407,10 @@ describe("Session Store Goal", () => {
           status: "active",
           budget: {},
           usage: { turns: 1, tokens: 20, activeTimeMs: 30 },
-          criterionKind: "assertion",
-          completionCriterion: "The report exists.",
+          completion: {
+            kind: "assertion",
+            assertion: "The report exists.",
+          },
           latestRuntimeOutcome: {
             kind: "completion_rejected",
             reason,
@@ -446,8 +466,10 @@ describe("Session Store Goal", () => {
           status: "paused",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
         runtime: runtime(home, 1),
       });
@@ -459,8 +481,10 @@ describe("Session Store Goal", () => {
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: " Need credentials\nfrom the user. ",
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
         runtime: runtime(home, 2),
       });
@@ -472,8 +496,10 @@ describe("Session Store Goal", () => {
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: " Automatic continuation stopped. ",
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
         runtime: runtime(home, 3),
       });
@@ -485,8 +511,10 @@ describe("Session Store Goal", () => {
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: " Session budget stopped continuation. ",
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
         runtime: runtime(home, 4),
       });
@@ -503,8 +531,10 @@ describe("Session Store Goal", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Session budget stopped continuation.",
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       });
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
         .trimEnd()
@@ -585,8 +615,10 @@ describe("Session Store Goal", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 2,
             reason: " Need credentials\nfrom the user. ",
@@ -606,8 +638,10 @@ describe("Session Store Goal", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
         blockedAudit: {
           consecutiveCount: 2,
           reason: "Need credentials from the user.",
@@ -665,8 +699,10 @@ describe("Session Store Goal", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test:coverage",
+          completion: {
+            kind: "command",
+            command: "pnpm test:coverage",
+          },
         },
         runtime: runtime(home, 1),
       });
@@ -691,8 +727,10 @@ describe("Session Store Goal", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test:coverage",
+        completion: {
+          kind: "command",
+          command: "pnpm test:coverage",
+        },
       });
       const ledgerRecords = (await readFile(session.filePath, "utf8"))
         .trimEnd()
@@ -817,8 +855,10 @@ describe("Session Store Goal", () => {
             status: "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "command",
-            completionCriterion: "   ",
+            completion: {
+              kind: "command",
+              command: "   ",
+            },
           },
           runtime: runtime(home, 3),
         }),
@@ -831,10 +871,12 @@ describe("Session Store Goal", () => {
             status: "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "assertion",
-            completionCriterion: "x".repeat(
-              SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH + 1,
-            ),
+            completion: {
+              kind: "assertion",
+              assertion: "x".repeat(
+                SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH + 1,
+              ),
+            },
           },
           runtime: runtime(home, 4),
         }),
@@ -1094,7 +1136,7 @@ describe("Session Store Goal", () => {
     }
   });
 
-  test(`Given a verification timeout does not belong to an executable command contract,
+  test(`Given a command verification timeout exceeds the supported boundary,
     When the session store validates the current goal schema,
     Then it rejects the goal before appending unreadable state`, async () => {
     // Given
@@ -1113,30 +1155,17 @@ describe("Session Store Goal", () => {
         persistSessionGoal({
           session,
           goal: {
-            objective: "Verify an assertion",
-            status: "active",
-            budget: {},
-            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "assertion",
-            completionCriterion: "The report exists",
-            verificationTimeoutMs: 1000,
-          },
-          runtime: runtime(home, 1),
-        }),
-      ).toThrow("Error: session goal is invalid after persistence redaction.");
-      expect(() =>
-        persistSessionGoal({
-          session,
-          goal: {
             objective: "Verify a command",
             status: "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "command",
-            completionCriterion: "pnpm test",
-            verificationTimeoutMs: MAX_COMMAND_TIMEOUT_MS + 1,
+            completion: {
+              kind: "command",
+              command: "pnpm test",
+              verificationTimeoutMs: MAX_COMMAND_TIMEOUT_MS + 1,
+            },
           },
-          runtime: runtime(home, 2),
+          runtime: runtime(home, 1),
         }),
       ).toThrow("Error: session goal is invalid after persistence redaction.");
       const records = (await readFile(session.filePath, "utf8"))

@@ -931,7 +931,6 @@ export async function runInteractiveSession(
     if (activeGoal?.status !== "active") {
       return;
     }
-    const criterion = sessionGoalCompletionContract(activeGoal);
     const limitedGoalWithoutOutcome: SessionGoal =
       status === "budget_limited"
         ? {
@@ -939,14 +938,14 @@ export async function runInteractiveSession(
             status: "budget_limited",
             statusReason: reason,
             ...sessionGoalAccounting(activeGoal),
-            ...criterion,
+            ...sessionGoalCompletionContract(activeGoal),
           }
         : {
             objective: activeGoal.objective,
             status: "usage_limited",
             statusReason: reason,
             ...sessionGoalAccounting(activeGoal),
-            ...criterion,
+            ...sessionGoalCompletionContract(activeGoal),
           };
     const limitedGoal = withSessionGoalRuntimeOutcome(
       limitedGoalWithoutOutcome,
@@ -1775,31 +1774,37 @@ export async function runInteractiveSession(
                         status: "active",
                         budget: goalCommand.budget,
                         usage: emptySessionGoalUsage(),
-                        criterionKind: "command",
-                        completionCriterion: goalCommand.criterion.command,
-                        ...(goalCommand.criterion.verificationTimeoutMs !==
-                        undefined
-                          ? {
-                              verificationTimeoutMs:
-                                goalCommand.criterion.verificationTimeoutMs,
-                            }
-                          : {}),
+                        completion: {
+                          kind: "command",
+                          command: goalCommand.criterion.command,
+                          ...(goalCommand.criterion.verificationTimeoutMs !==
+                          undefined
+                            ? {
+                                verificationTimeoutMs:
+                                  goalCommand.criterion.verificationTimeoutMs,
+                              }
+                            : {}),
+                        },
                       }
                     : {
                         objective: goalCommand.objective,
                         status: "active",
                         budget: goalCommand.budget,
                         usage: emptySessionGoalUsage(),
-                        criterionKind: "assertion",
-                        completionCriterion: goalCommand.criterion.assertion,
+                        completion: {
+                          kind: "assertion",
+                          assertion: goalCommand.criterion.assertion,
+                        },
                       }
                   : {
                       objective: goalCommand.objective,
                       status: "active",
                       budget: emptySessionGoalBudget(),
                       usage: emptySessionGoalUsage(),
-                      criterionKind: "assertion",
-                      completionCriterion: goalCommand.objective,
+                      completion: {
+                        kind: "assertion",
+                        assertion: goalCommand.objective,
+                      },
                     };
               sessionGoal = persistSessionGoalUpdate({
                 goal: nextGoal,
@@ -2046,16 +2051,22 @@ export async function runInteractiveSession(
                 objective: sessionGoal.objective,
                 status: "active",
                 ...sessionGoalAccounting(sessionGoal),
-                criterionKind: "command",
-                completionCriterion: goalCommand.command,
-                ...(goalCommand.verificationTimeoutMs !== undefined
-                  ? {
-                      verificationTimeoutMs: goalCommand.verificationTimeoutMs,
-                    }
-                  : {}),
+                completion: {
+                  kind: "command",
+                  command: goalCommand.command,
+                  ...(goalCommand.verificationTimeoutMs !== undefined
+                    ? {
+                        verificationTimeoutMs:
+                          goalCommand.verificationTimeoutMs,
+                      }
+                    : {}),
+                },
               } satisfies SessionGoal & {
-                readonly criterionKind: "command";
-                readonly completionCriterion: string;
+                readonly completion: {
+                  readonly kind: "command";
+                  readonly command: string;
+                  readonly verificationTimeoutMs?: number;
+                };
               };
               const verifiedGoal = preserveLatestSessionGoalRuntimeOutcome(
                 sessionGoal,
@@ -2098,8 +2109,10 @@ export async function runInteractiveSession(
                 objective: sessionGoal.objective,
                 status: "active",
                 ...sessionGoalAccounting(sessionGoal),
-                criterionKind: goalCommand.criterionKind,
-                completionCriterion: goalCommand.criterion,
+                completion: {
+                  kind: "assertion",
+                  assertion: goalCommand.criterion,
+                },
               } satisfies SessionGoal;
               const goalWithCriterion = preserveLatestSessionGoalRuntimeOutcome(
                 sessionGoal,

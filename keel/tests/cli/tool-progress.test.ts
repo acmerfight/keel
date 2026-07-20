@@ -21,8 +21,10 @@ describe("CLI Tool Progress", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "The checkout is understood",
+        completion: {
+          kind: "assertion",
+          assertion: "The checkout is understood",
+        },
       }),
     ).toBe(
       "active - Inspect checkout; criterion(assertion): The checkout is understood",
@@ -33,8 +35,10 @@ describe("CLI Tool Progress", () => {
         status: "active",
         budget: {},
         usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
-        criterionKind: "assertion",
-        completionCriterion: "The checkout is understood",
+        completion: {
+          kind: "assertion",
+          assertion: "The checkout is understood",
+        },
         latestRuntimeOutcome: {
           kind: "progress_observed",
           reason: "Fresh evidence was recorded.",
@@ -48,8 +52,10 @@ describe("CLI Tool Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "x".repeat(400),
+      completion: {
+        kind: "assertion",
+        assertion: "x".repeat(400),
+      },
     });
     expect(status).toContain("active - Inspect\\ncheckout");
     expect(status).toHaveLength(243);
@@ -457,8 +463,10 @@ describe("CLI Tool Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       };
     }
@@ -531,8 +539,10 @@ describe("CLI Tool Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       };
     }
@@ -591,8 +601,10 @@ describe("CLI Tool Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
-          criterionKind: "assertion",
-          completionCriterion: "Live status is visible",
+          completion: {
+            kind: "assertion",
+            assertion: "Live status is visible",
+          },
           latestRuntimeOutcome: {
             kind: "progress_observed",
             reason: "The status boundary rendered fresh progress.",

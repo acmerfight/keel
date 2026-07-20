@@ -5,7 +5,7 @@ import {
   pauseActiveSessionGoal,
   type SessionGoal,
   type SessionGoalBudget,
-  type SessionGoalCriterionKind,
+  type SessionGoalCompletion,
   type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
 import {
@@ -58,15 +58,14 @@ function headlessGoalActivationCommand(cliArgs: GoalLaunchCliArgs): string {
 async function headlessGoalBashPermission(
   contract: {
     readonly bashMode: GoalCliArgs["bashMode"];
-    readonly criterionKind: SessionGoalCriterionKind;
-    readonly completionCriterion: string;
+    readonly completion: SessionGoalCompletion;
   },
   runtime: CliRuntime,
 ): Promise<SessionBashPermissionPolicy | null | undefined> {
   if (contract.bashMode === "trusted") {
     return undefined;
   }
-  if (contract.criterionKind === "assertion") {
+  if (contract.completion.kind === "assertion") {
     if (contract.bashMode === "disabled") {
       return undefined;
     }
@@ -100,7 +99,7 @@ async function headlessGoalBashPermission(
     }),
   });
   const decision = await policy.review({
-    command: contract.completionCriterion,
+    command: contract.completion.command,
     cwd: workspace,
     signal: new AbortController().signal,
   });
@@ -130,19 +129,14 @@ async function prepareHeadlessGoalResume(
     return { kind: "rejected" };
   }
   /* v8 ignore start: the shared resume gate guarantees a durable criterion. */
-  if (
-    preparedGoal === undefined ||
-    preparedGoal.criterionKind === undefined ||
-    preparedGoal.completionCriterion === undefined
-  ) {
+  if (preparedGoal === undefined || preparedGoal.completion === undefined) {
     return { kind: "rejected" };
   }
   /* v8 ignore stop */
   const bashPermission = await headlessGoalBashPermission(
     {
       bashMode: cliArgs.bashMode,
-      criterionKind: preparedGoal.criterionKind,
-      completionCriterion: preparedGoal.completionCriterion,
+      completion: preparedGoal.completion,
     },
     runtime,
   );
@@ -255,11 +249,22 @@ export async function runHeadlessGoalCli(
       const preparedBashPermission = await headlessGoalBashPermission(
         {
           bashMode: cliArgs.bashMode,
-          criterionKind: cliArgs.criterion.kind,
-          completionCriterion:
+          completion:
             cliArgs.criterion.kind === "command"
-              ? cliArgs.criterion.command
-              : cliArgs.criterion.assertion,
+              ? {
+                  kind: "command",
+                  command: cliArgs.criterion.command,
+                  ...(cliArgs.criterion.verificationTimeoutMs === undefined
+                    ? {}
+                    : {
+                        verificationTimeoutMs:
+                          cliArgs.criterion.verificationTimeoutMs,
+                      }),
+                }
+              : {
+                  kind: "assertion",
+                  assertion: cliArgs.criterion.assertion,
+                },
         },
         runtime,
       );

@@ -317,8 +317,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The final report exists.",
+      completion: {
+        kind: "assertion",
+        assertion: "The final report exists.",
+      },
     };
     const observedUserContexts: string[][] = [];
     let persistedMessages: readonly Message[] = [];
@@ -441,8 +443,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         reason:
           "Automatic goal continuation stopped after 2 continuation turns without completing the active goal.",
       },
-      criterionKind: "assertion",
-      completionCriterion: "The final report exists.",
+      completion: {
+        kind: "assertion",
+        assertion: "The final report exists.",
+      },
     });
   });
 
@@ -455,8 +459,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The final report exists.",
+      completion: {
+        kind: "assertion",
+        assertion: "The final report exists.",
+      },
     };
     let persistedMessages: readonly Message[] = [];
     const automaticContinuationTurnLimit = 4;
@@ -559,8 +565,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "The final report exists.",
+        completion: {
+          kind: "assertion",
+          assertion: "The final report exists.",
+        },
       };
       const persistedInitialGoal = persistSessionGoal({
         session: storedSession,
@@ -767,8 +775,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "The final report exists.",
+        completion: {
+          kind: "assertion",
+          assertion: "The final report exists.",
+        },
         latestRuntimeOutcome: {
           kind: "recovery_requested",
           reason: "An earlier continuation repeated.",
@@ -822,16 +832,20 @@ describe("Interactive Session - Reports And Queued Input", () => {
       name: "a workspace mutation",
       kind: "workspace" as const,
       bashMode: "disabled" as const,
-      criterionKind: "assertion" as const,
-      completionCriterion: "The final report exists.",
+      completion: {
+        kind: "assertion" as const,
+        assertion: "The final report exists.",
+      },
       expectedReason: "The latest goal turn changed the workspace.",
     },
     {
       name: "an exact successful completion command",
       kind: "verification" as const,
       bashMode: "trusted" as const,
-      criterionKind: "command" as const,
-      completionCriterion: 'node -e "process.exit(0)"',
+      completion: {
+        kind: "command" as const,
+        command: 'node -e "process.exit(0)"',
+      },
       expectedReason:
         'Completion command "node -e \\"process.exit(0)\\"" exited 0 after the latest workspace mutation.',
     },
@@ -840,8 +854,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     Then the observed fact replaces the older outcome`, async ({
     kind,
     bashMode,
-    criterionKind,
-    completionCriterion,
+    completion,
     expectedReason,
   }) => {
     // Given
@@ -853,8 +866,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind,
-        completionCriterion,
+        completion,
         latestRuntimeOutcome: {
           kind: "recovery_requested",
           reason: "An earlier continuation repeated.",
@@ -875,11 +887,16 @@ describe("Interactive Session - Reports And Queued Input", () => {
                 content: "done\n",
               };
             } else {
+              if (completion.kind !== "command") {
+                throw new Error(
+                  "verification scenarios require command completion",
+                );
+              }
               yield {
                 type: "tool_call",
                 id: "verify_observed_progress",
                 tool: "bash",
-                command: completionCriterion,
+                command: completion.command,
               };
             }
             yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -962,8 +979,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
     };
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -1110,8 +1129,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The user confirms the evidence is sufficient.",
+      completion: {
+        kind: "assertion",
+        assertion: "The user confirms the evidence is sufficient.",
+      },
     };
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -1221,8 +1242,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "The external status is complete.",
+        completion: {
+          kind: "assertion",
+          assertion: "The external status is complete.",
+        },
       };
       let persistedMessages: readonly Message[] = [];
       const restoredEvidence: string[] = [];
@@ -1471,8 +1494,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The assertion is demonstrably satisfied.",
+      completion: {
+        kind: "assertion",
+        assertion: "The assertion is demonstrably satisfied.",
+      },
     };
     const persistedGoals: SessionGoal[] = [];
     let persistedMessages: readonly Message[] = [];
@@ -1920,8 +1945,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: { turns: 1 },
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "The session remains interactive",
+        completion: {
+          kind: "assertion",
+          assertion: "The session remains interactive",
+        },
       },
       now: () => 0,
       input,
@@ -1974,8 +2001,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "paused",
       budget: {},
       usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The session remains interactive",
+      completion: {
+        kind: "assertion",
+        assertion: "The session remains interactive",
+      },
       latestRuntimeOutcome: {
         kind: "limit_reached",
         reason: "Session goal budget reached: turns 1/1.",
@@ -2002,8 +2031,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The goal is explicitly marked complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "The goal is explicitly marked complete.",
+      },
     };
     const persistedGoals: SessionGoal[] = [];
     let persistedMessages: readonly Message[] = [];
@@ -2109,8 +2140,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         kind: "limit_reached",
         reason: `Automatic goal continuation stopped after ${automaticContinuationTurnLimit} continuation turns without completing the active goal.`,
       },
-      criterionKind: "assertion",
-      completionCriterion: "The goal is explicitly marked complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "The goal is explicitly marked complete.",
+      },
     });
   });
 
@@ -2127,8 +2160,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: verificationCommand,
+        completion: {
+          kind: "command",
+          command: verificationCommand,
+        },
       };
       let providerCalls = 0;
       const provider: LLMProvider = {
@@ -2251,8 +2286,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "Every relevant project file has been inspected.",
+      completion: {
+        kind: "assertion",
+        assertion: "Every relevant project file has been inspected.",
+      },
     };
     let persistedMessages: readonly Message[] = [];
     const automaticContinuationTurnLimit = 4;
@@ -2350,8 +2387,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "Every relevant project file has been inspected.",
+      completion: {
+        kind: "assertion",
+        assertion: "Every relevant project file has been inspected.",
+      },
     };
     let persistedMessages: readonly Message[] = [];
     const automaticContinuationTurnLimit = 8;
@@ -2463,8 +2502,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "The shell-driven workspace task is finished.",
+        completion: {
+          kind: "assertion",
+          assertion: "The shell-driven workspace task is finished.",
+        },
       };
       let persistedMessages: readonly Message[] = [];
       const automaticContinuationTurnLimit = 4;
@@ -2571,8 +2612,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: verificationCommand,
+        completion: {
+          kind: "command",
+          command: verificationCommand,
+        },
       };
       let persistedMessages: readonly Message[] = [];
       let persistedGoal: SessionGoal | undefined = initialGoal;
@@ -2682,8 +2725,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The user confirms the work is complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "The user confirms the work is complete.",
+      },
     };
     const input = new PassThrough();
     let persistedMessages: readonly Message[] = [];
@@ -2846,8 +2891,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The goal is explicitly marked complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "The goal is explicitly marked complete.",
+      },
     };
     const sigintHandlers = new Set<() => void>();
     const persistedGoals: SessionGoal[] = [];
@@ -2951,8 +2998,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 3, tokens: 0, activeTimeMs: expect.any(Number) },
-      criterionKind: "assertion",
-      completionCriterion: "The goal is explicitly marked complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "The goal is explicitly marked complete.",
+      },
       latestRuntimeOutcome: {
         kind: "progress_observed",
         reason: "The latest goal turn produced new tool-result evidence.",
@@ -2991,8 +3040,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       latestRuntimeOutcome: {
         kind: "progress_observed",
         reason: "A prior turn changed task progress.",
