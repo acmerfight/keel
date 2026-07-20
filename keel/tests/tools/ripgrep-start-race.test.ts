@@ -57,7 +57,7 @@ describe("Ripgrep Start Failure Recovery", () => {
           pattern: "needle",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -91,7 +91,7 @@ describe("Ripgrep Start Failure Recovery", () => {
           pattern: "**/*.ts",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -123,7 +123,7 @@ describe("Ripgrep Start Failure Recovery", () => {
           pattern: "**/*.ts",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -155,7 +155,7 @@ describe("Ripgrep Start Failure Recovery", () => {
           pattern: "needle",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -193,7 +193,7 @@ describe("Ripgrep Start Failure Recovery", () => {
             pattern: "needle",
           },
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
         }),
       ).rejects.toMatchObject({
         name: "AbortError",
@@ -223,7 +223,7 @@ describe("Ripgrep Start Failure Recovery", () => {
           pattern: "**/*.ts",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then

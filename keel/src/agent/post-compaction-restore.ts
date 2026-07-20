@@ -236,7 +236,7 @@ export async function restorePostCompactionReads(options: {
       workspace: options.workspace,
       toolCall,
       signal: options.signal,
-      allowBash: false,
+      bash: { kind: "disabled" },
       hiddenWorkspacePaths,
       projectInstructions: options.projectInstructionVisibility,
     });

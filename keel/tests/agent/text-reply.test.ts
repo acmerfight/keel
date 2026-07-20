@@ -70,7 +70,7 @@ describe("Text Reply", () => {
         userMessage: "hi",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -101,7 +101,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -149,7 +149,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -189,7 +189,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -239,7 +239,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -253,7 +253,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -297,7 +297,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -349,7 +349,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: {
           shouldStopAfterTurn: ({ toolCalls }) =>
             toolCalls.length > 0
@@ -433,7 +433,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: {
           shouldStopAfterTurn: ({ toolCalls }) =>
             toolCalls.length > 0
@@ -485,7 +485,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -499,7 +499,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -548,7 +548,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -562,7 +562,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -613,7 +613,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         costTracking: {
           model: budgetModel,
@@ -631,7 +631,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -687,7 +687,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -701,7 +701,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -767,7 +767,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => {
           if (drained) {
@@ -846,7 +846,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => {
           if (drained) {
@@ -905,7 +905,7 @@ describe("Text Reply", () => {
         userMessage: "hello",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -945,7 +945,7 @@ describe("Text Reply", () => {
         userMessage: "answer after retry",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -986,7 +986,7 @@ describe("Text Reply", () => {
         userMessage: "summarize",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1032,7 +1032,7 @@ describe("Text Reply", () => {
         userMessage: "hi",
         systemPrompt: "You are helpful.",
         signal: controller.signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1061,7 +1061,7 @@ describe("Text Reply", () => {
           userMessage: "hi",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       ),
@@ -1093,7 +1093,7 @@ describe("Text Reply", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       })) {
         events.push(event);
@@ -1162,7 +1162,7 @@ describe("Text Reply", () => {
         userMessage: "inspect several files and verify the result",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1230,7 +1230,7 @@ describe("Text Reply", () => {
         userMessage: "inspect forever",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );

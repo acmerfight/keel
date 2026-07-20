@@ -57,8 +57,10 @@ import type { Message, Usage, UserMessageOrigin } from "../llm/types.ts";
 import {
   type BashApprovalGrant,
   type BashProjectApprovalGrant,
+  type BashRuntime,
   bashApprovalGrantKey,
-  bashModeExposesTool,
+  bashRuntimeExposesTool,
+  type SessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import {
   exposeSkillCatalog,
@@ -525,7 +527,7 @@ export async function runInteractiveSession(
     systemPromptWithSessionGoal(
       systemPrompt,
       sessionGoal,
-      bashModeExposesTool(options.cliArgs.bashMode),
+      bashRuntimeExposesTool(bash),
     );
   const currentSystemPrompt = (): string =>
     appendWorkflowSkillsToSystemPrompt(
@@ -673,35 +675,39 @@ export async function runInteractiveSession(
       model: provider.model,
     });
   };
-  const bashPermission =
-    options.bashPermission ??
-    interactiveBashPermissionPolicy(
-      options.cliArgs.bashMode,
-      lineReader,
-      options.writeStderr,
-      {
-        ...(options.initialBashApprovalGrants !== undefined
-          ? { initialGrants: options.initialBashApprovalGrants }
-          : {}),
-        onGrant: (grant) => {
-          savedSession?.persistBashApprovalGrant(grant);
-        },
-        ...(options.projectRoot !== undefined
-          ? { projectRoot: options.projectRoot }
-          : {}),
-        initialProjectGrants: activeProjectBashApprovalGrants,
-        onProjectGrant: (grant) => {
-          appendProjectBashApprovalGrant(grant);
-          options.persistProjectBashApprovalGrant?.(grant);
-        },
-        onPromptStart: () => {
-          setComposerMode("approval");
-        },
-        onPromptEnd: () => {
-          setComposerMode("steer");
-        },
-      },
-    );
+  const bash: BashRuntime<SessionBashPermissionPolicy> =
+    options.cliArgs.bashMode === "disabled"
+      ? { kind: "disabled" }
+      : options.cliArgs.bashMode === "trusted"
+        ? { kind: "trusted" }
+        : {
+            kind: "reviewed",
+            permission:
+              options.bashPermission ??
+              interactiveBashPermissionPolicy(lineReader, options.writeStderr, {
+                ...(options.initialBashApprovalGrants !== undefined
+                  ? { initialGrants: options.initialBashApprovalGrants }
+                  : {}),
+                onGrant: (grant) => {
+                  savedSession?.persistBashApprovalGrant(grant);
+                },
+                ...(options.projectRoot !== undefined
+                  ? { projectRoot: options.projectRoot }
+                  : {}),
+                initialProjectGrants: activeProjectBashApprovalGrants,
+                onProjectGrant: (grant) => {
+                  appendProjectBashApprovalGrant(grant);
+                  options.persistProjectBashApprovalGrant?.(grant);
+                },
+                onPromptStart: () => {
+                  setComposerMode("approval");
+                },
+                onPromptEnd: () => {
+                  setComposerMode("steer");
+                },
+              }),
+          };
+  const bashPermission = bash.kind === "reviewed" ? bash.permission : undefined;
   const activeBashApprovalGrants = (): readonly BashApprovalGrant[] =>
     bashPermission?.grants() ?? inactiveBashApprovalGrants;
   const revokeBashApprovalGrant = (grant: BashApprovalGrant): void => {
@@ -1136,7 +1142,7 @@ export async function runInteractiveSession(
           systemPrompt: baseSystemPromptWithGoal(),
           ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
-          allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+          bash,
           hiddenWorkspacePaths,
           ...(options.skillActivation !== undefined
             ? { skillActivation: options.skillActivation }
@@ -1144,7 +1150,6 @@ export async function runInteractiveSession(
           stopPolicy: defaultStopPolicy(),
           taskProgress,
           ...(sessionGoal !== undefined ? { sessionGoal } : {}),
-          ...(bashPermission !== undefined ? { bashPermission } : {}),
           ...(shouldTrackInteractiveCost(options.cliArgs)
             ? {
                 costTracking: {
@@ -2050,9 +2055,7 @@ export async function runInteractiveSession(
               });
               options.writeStdout(
                 formatInteractiveGoalVerificationSet(verifiedGoal, {
-                  bashToolVisible: bashModeExposesTool(
-                    options.cliArgs.bashMode,
-                  ),
+                  bashToolVisible: bashRuntimeExposesTool(bash),
                 }),
               );
             } catch (error) {
@@ -2302,7 +2305,7 @@ export async function runInteractiveSession(
               systemPrompt: currentSystemPrompt(),
               messages,
               target: nextResolved,
-              cliArgs: options.cliArgs,
+              bashToolVisible: bashRuntimeExposesTool(bash),
             })
           ) {
             const currentResolved: InteractiveResolvedProvider =
@@ -2331,6 +2334,7 @@ export async function runInteractiveSession(
                   postCompactionReadToolCallId(postCompactionReadSequence++),
                 taskProgress,
                 options,
+                bashToolVisible: bashRuntimeExposesTool(bash),
                 recordCompactionCost,
                 ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
                 costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,

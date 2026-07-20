@@ -1,6 +1,5 @@
 import {
   type BashApprovalGrant,
-  type BashMode,
   type BashProjectApprovalGrant,
   createSessionBashPermissionPolicy,
   type SessionBashPermissionPolicy,
@@ -9,7 +8,6 @@ import { escapeApprovalText } from "../bash-approval-text.ts";
 import type { LineReader } from "./line-reader.ts";
 
 export function interactiveBashPermissionPolicy(
-  mode: BashMode,
   lineReader: LineReader,
   writeStderr: (text: string) => void,
   policyOptions: {
@@ -21,11 +19,7 @@ export function interactiveBashPermissionPolicy(
     readonly onPromptStart?: () => void;
     readonly onPromptEnd?: () => void;
   },
-): SessionBashPermissionPolicy | undefined {
-  if (mode !== "ask") {
-    return undefined;
-  }
-
+): SessionBashPermissionPolicy {
   return createPromptedBashPermissionPolicy(lineReader, writeStderr, {
     ...policyOptions,
     scopeLabel: "session",

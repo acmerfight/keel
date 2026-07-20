@@ -67,7 +67,7 @@ describe("Context Compaction Agent Recovery", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: { keepRecentTokens: 1 },
           modelOperations: {
@@ -147,7 +147,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 6,
@@ -218,7 +218,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 120,
@@ -351,7 +351,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 160,
@@ -462,7 +462,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 160,
@@ -581,7 +581,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 160,
@@ -667,7 +667,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         readVisibility,
         contextCompaction: {
@@ -802,7 +802,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 80,
@@ -882,7 +882,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: true,
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 280,
@@ -996,7 +996,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: true,
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 260,
@@ -1109,7 +1109,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 6,

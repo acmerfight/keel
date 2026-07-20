@@ -76,7 +76,7 @@ describe("Bash Commands", () => {
           userMessage: "create a file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -132,7 +132,7 @@ describe("Bash Commands", () => {
           userMessage: "create a file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -188,7 +188,7 @@ describe("Bash Commands", () => {
           userMessage: "run the check",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -257,7 +257,7 @@ describe("Bash Commands", () => {
           userMessage: "run the slow check",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -316,7 +316,7 @@ describe("Bash Commands", () => {
           userMessage: "run with an invalid timeout",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -367,7 +367,7 @@ describe("Bash Commands", () => {
           userMessage: "create a file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -407,17 +407,19 @@ describe("Bash Commands", () => {
           userMessage: "create a file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
-          stopPolicy: defaultStopPolicy(),
-          bashPermission: {
-            review: (request) => {
-              reviewedCommand = request.command;
-              return {
-                type: "deny",
-                message: "User denied this command.",
-              };
+          bash: {
+            kind: "reviewed",
+            permission: {
+              review: (request) => {
+                reviewedCommand = request.command;
+                return {
+                  type: "deny",
+                  message: "User denied this command.",
+                };
+              },
             },
           },
+          stopPolicy: defaultStopPolicy(),
         }),
       );
 
@@ -462,9 +464,8 @@ describe("Bash Commands", () => {
           userMessage: "run the command twice",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "reviewed", permission: bashPermission },
           stopPolicy: defaultStopPolicy(),
-          bashPermission,
         }),
       );
 
@@ -506,9 +507,8 @@ describe("Bash Commands", () => {
           userMessage: "run the command twice",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "reviewed", permission: bashPermission },
           stopPolicy: defaultStopPolicy(),
-          bashPermission,
         }),
       );
 
@@ -759,9 +759,8 @@ describe("Bash Commands", () => {
           userMessage: "check git status twice",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "reviewed", permission: bashPermission },
           stopPolicy: defaultStopPolicy(),
-          bashPermission,
         }),
       );
 
@@ -989,9 +988,8 @@ describe("Bash Commands", () => {
           userMessage: "check git status",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "reviewed", permission: bashPermission },
           stopPolicy: defaultStopPolicy(),
-          bashPermission,
         }),
       );
       await collect(
@@ -1004,9 +1002,8 @@ describe("Bash Commands", () => {
           userMessage: "check git status",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "reviewed", permission: bashPermission },
           stopPolicy: defaultStopPolicy(),
-          bashPermission,
         }),
       );
 

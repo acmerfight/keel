@@ -98,7 +98,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "replace every occurrence",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -229,7 +229,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "edit both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -367,7 +367,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "edit both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -497,7 +497,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "edit both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -565,7 +565,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "patch src.ts and create docs/note.md",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -622,7 +622,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "apply this standard diff",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -679,7 +679,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "apply this standard rename diff",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -739,7 +739,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "apply this standard copy diff",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -799,7 +799,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "apply this standard diff that adds and deletes files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -852,7 +852,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "make this script executable using the standard diff",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -972,7 +972,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "patch in an API file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -1108,7 +1108,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
           userMessage: "patch both files then refine second.txt",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

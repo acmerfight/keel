@@ -82,7 +82,7 @@ describe("Scoped Project Instructions Race Handling", () => {
           path: "packages/api/src/server.ts",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions: createProjectInstructionVisibilityState(workspace),
       });
 
@@ -142,7 +142,7 @@ describe("Scoped Project Instructions Race Handling", () => {
             path: "packages/api/src/server.ts",
           },
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           projectInstructions:
             createProjectInstructionVisibilityState(workspace),
         });

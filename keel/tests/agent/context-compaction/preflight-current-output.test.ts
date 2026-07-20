@@ -197,7 +197,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 700,
@@ -305,7 +305,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 1,
@@ -410,7 +410,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 300,
@@ -521,7 +521,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 300,
@@ -619,7 +619,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 4_000,
@@ -713,7 +713,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 2_500,
@@ -820,7 +820,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           contextCompaction: {
@@ -838,7 +838,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           contextCompaction: {
@@ -955,7 +955,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 900,
@@ -1022,7 +1022,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 1,
@@ -1078,7 +1078,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 1,
@@ -1153,7 +1153,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 1,
@@ -1245,7 +1245,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 500,
@@ -1366,7 +1366,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 1_000,
@@ -1462,7 +1462,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 700,
@@ -1569,7 +1569,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 700,
@@ -1716,7 +1716,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,

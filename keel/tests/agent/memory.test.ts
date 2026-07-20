@@ -56,7 +56,7 @@ describe("agent memory source provenance", () => {
           mutation: memoryMutation,
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       })) {
         events.push(event);

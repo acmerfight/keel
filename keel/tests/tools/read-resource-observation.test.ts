@@ -25,7 +25,7 @@ async function observedRead(
     workspace,
     toolCall,
     signal: freshSignal(),
-    allowBash: false,
+    bash: { kind: "disabled" },
   });
   if (execution.resourceObservation === undefined) {
     throw new Error("expected read resource observation");

@@ -2635,7 +2635,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 300,
@@ -2899,7 +2899,7 @@ describe("Context Compaction Stale Tool Output", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -3037,7 +3037,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -3174,7 +3174,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -3310,7 +3310,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -3465,7 +3465,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,

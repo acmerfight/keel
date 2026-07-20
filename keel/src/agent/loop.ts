@@ -20,7 +20,10 @@ import type {
   ModelToolExposure,
   ToolCall,
 } from "../llm/types.ts";
-import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import {
+  type BashRuntime,
+  bashRuntimeExposesTool,
+} from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
@@ -114,11 +117,10 @@ export interface RunAgentOptions {
   readonly systemPrompt: string;
   readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
   readonly signal: AbortSignal;
-  readonly allowBash: boolean;
+  readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
-  readonly bashPermission?: BashPermissionPolicy;
   readonly skillActivation?: SkillActivationCapability;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
@@ -138,11 +140,10 @@ export interface RunAgentTurnOptions {
   readonly systemPrompt: string;
   readonly memory?: AgentMemoryRuntime;
   readonly signal: AbortSignal;
-  readonly allowBash: boolean;
+  readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
-  readonly bashPermission?: BashPermissionPolicy;
   readonly skillActivation?: SkillActivationCapability;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
@@ -552,8 +553,7 @@ export async function* runAgentTurn(
     systemPrompt,
     signal,
     costTracking,
-    allowBash,
-    bashPermission,
+    bash,
     stopPolicy,
     drainInjectedUserMessages,
   } = options;
@@ -744,7 +744,7 @@ export async function* runAgentTurn(
         signal,
         toolExposure: {
           kind: "auto",
-          ...(allowBash ? { bash: true } : {}),
+          ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
           ...(allowSkill ? { skill: true } : {}),
           ...(memoryToolExposure !== undefined
             ? { memory: memoryToolExposure }
@@ -941,7 +941,7 @@ export async function* runAgentTurn(
         workspace,
         toolCall,
         signal,
-        allowBash,
+        bash,
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: {
@@ -990,7 +990,6 @@ export async function* runAgentTurn(
           "status" in toolCall &&
           toolCall.status === "completed" &&
           toolCall !== turnResult.toolCalls.at(-1),
-        ...(bashPermission !== undefined ? { bashPermission } : {}),
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),
@@ -1256,7 +1255,7 @@ export async function* runAgent(
         systemPrompt: options.systemPrompt,
         ...(options.memory !== undefined ? { memory: options.memory } : {}),
         signal: options.signal,
-        allowBash: options.allowBash,
+        bash: options.bash,
         hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
@@ -1269,9 +1268,6 @@ export async function* runAgent(
         },
         ...(options.costTracking !== undefined
           ? { costTracking: options.costTracking }
-          : {}),
-        ...(options.bashPermission !== undefined
-          ? { bashPermission: options.bashPermission }
           : {}),
         ...(options.contextCompaction !== undefined
           ? { contextCompaction: options.contextCompaction }

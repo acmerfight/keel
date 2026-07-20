@@ -765,7 +765,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -826,7 +826,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -888,7 +888,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -946,7 +946,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1000,7 +1000,7 @@ describe("Session Goal Tool", () => {
           status: "blocked",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1046,7 +1046,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1096,7 +1096,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1147,7 +1147,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1190,7 +1190,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1240,7 +1240,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Publish the migration notes",
           status: "active",
@@ -1293,7 +1293,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Publish the migration notes",
           status: "active",
@@ -1346,9 +1346,11 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: true,
-        bashPermission: {
-          review: () => ({ type: "allow", scope: "once" }),
+        bash: {
+          kind: "reviewed",
+          permission: {
+            review: () => ({ type: "allow", scope: "once" }),
+          },
         },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
@@ -1411,7 +1413,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1463,7 +1465,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: true,
+        bash: { kind: "trusted" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1519,7 +1521,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: true,
+        bash: { kind: "trusted" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1566,12 +1568,14 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: true,
-        bashPermission: {
-          review: () => ({
-            type: "deny",
-            message: "The user declined this verifier.",
-          }),
+        bash: {
+          kind: "reviewed",
+          permission: {
+            review: () => ({
+              type: "deny",
+              message: "The user declined this verifier.",
+            }),
+          },
         },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
@@ -1624,7 +1628,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: true,
+        bash: { kind: "trusted" },
         sessionGoal: {
           objective: "Finish the durable checkout goal",
           status: "active",
@@ -1674,7 +1678,7 @@ describe("Session Goal Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -1710,7 +1714,7 @@ describe("Session Goal Tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall,
       });
 
