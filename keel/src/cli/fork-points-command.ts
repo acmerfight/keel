@@ -47,7 +47,6 @@ export function runForkPointsCommand(
     );
     return 0;
   } catch (error) {
-    /* v8 ignore next 3: resumeSessionStore reports supported fork-point failures as SessionStoreError. */
     if (!(error instanceof SessionStoreError)) {
       throw error;
     }

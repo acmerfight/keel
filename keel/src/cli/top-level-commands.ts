@@ -204,7 +204,6 @@ export function runSkillsCommand(
     );
     return 0;
   } catch (error) {
-    /* v8 ignore next 3: unexpected workflow skill listing failures are allowed to escape. */
     if (
       !(error instanceof WorkflowSkillError) &&
       !(error instanceof SkillUserConfigError)
@@ -253,7 +252,6 @@ export function runApprovalsCommand(
     runtime.writeStdout(formatBashProjectApprovalRevoked(cliArgs.index));
     return 0;
   } catch (error) {
-    /* v8 ignore next 3: unexpected approval command failures belong to the top-level runtime boundary. */
     if (!(error instanceof BashProjectApprovalsError)) {
       throw error;
     }

@@ -287,9 +287,7 @@ export async function runHeadlessGoalCli(
         : undefined,
     );
   } catch (error) {
-    /* v8 ignore start: approval loading is the only expected preflight throw; unexpected faults must reach the CLI boundary. */
     if (!(error instanceof BashProjectApprovalsError)) throw error;
-    /* v8 ignore stop */
     runtime.writeStderr(`${error.message}\n`);
     return 1;
   }
