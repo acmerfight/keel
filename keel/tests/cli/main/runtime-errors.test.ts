@@ -76,40 +76,39 @@ describe("CLI Main - Runtime Errors", () => {
       stderr:
         'Error: DeepSeek API error (400): {"error":{"message":"bad model"}}\n',
     },
-  ])(`Given a provider returns $name,
+  ])(
+    `Given a provider returns $name,
     When the user runs a one-shot request,
-    Then the CLI reports a clean provider error`, async ({
-    status,
-    body,
-    stderr,
-  }) => {
-    // Given
-    const server = createServer((req, res) => {
-      req.resume();
-      res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(body));
-    });
-    await listen(server);
-    const fixture = createRuntime(["hello"], {
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-      },
-    });
+    Then the CLI reports a clean provider error`,
+    async ({ status, body, stderr }) => {
+      // Given
+      const server = createServer((req, res) => {
+        req.resume();
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(body));
+      });
+      await listen(server);
+      const fixture = createRuntime(["hello"], {
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      });
 
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
 
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(stderr);
-      expectNoCrashOutput(fixture.stderr());
-    } finally {
-      await close(server);
-    }
-  });
+        // Then
+        expect(exitCode).toBe(1);
+        expect(fixture.stdout()).toBe("");
+        expect(fixture.stderr()).toBe(stderr);
+        expectNoCrashOutput(fixture.stderr());
+      } finally {
+        await close(server);
+      }
+    },
+  );
 
   test(`Given a provider emits an unsupported tool call,
     When the user runs a one-shot request,
@@ -169,44 +168,43 @@ describe("CLI Main - Runtime Errors", () => {
       stderr:
         'Error: DeepSeek API error (400): {"error":{"message":"bad model interactive"}}\n',
     },
-  ])(`Given a provider returns $name during an interactive session,
+  ])(
+    `Given a provider returns $name during an interactive session,
     When the user submits a prompt,
-    Then the CLI reports a clean provider error`, async ({
-    status,
-    body,
-    stderr,
-  }) => {
-    // Given
-    const server = createServer((req, res) => {
-      req.resume();
-      res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(body));
-    });
-    await listen(server);
-    const input = new PassThrough();
-    input.end("hello\n");
-    const fixture = createRuntime([], {
-      env: {
-        KEEL_FORCE_INTERACTIVE: "1",
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-      },
-      input,
-    });
+    Then the CLI reports a clean provider error`,
+    async ({ status, body, stderr }) => {
+      // Given
+      const server = createServer((req, res) => {
+        req.resume();
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(body));
+      });
+      await listen(server);
+      const input = new PassThrough();
+      input.end("hello\n");
+      const fixture = createRuntime([], {
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        input,
+      });
 
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
 
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(stderr);
-      expectNoCrashOutput(fixture.stderr());
-    } finally {
-      await close(server);
-    }
-  });
+        // Then
+        expect(exitCode).toBe(1);
+        expect(fixture.stdout()).toBe("");
+        expect(fixture.stderr()).toBe(stderr);
+        expectNoCrashOutput(fixture.stderr());
+      } finally {
+        await close(server);
+      }
+    },
+  );
 
   test(`Given a provider emits an unsupported tool call during an interactive session,
     When the user submits a prompt,
@@ -352,39 +350,39 @@ describe("CLI Main - Runtime Errors", () => {
       args: ["setup", "deepseek", "--with-api-key"],
       inputText: "provider-setup-secret\n",
     },
-  ])(`Given provider storage environment lookup fails during $command,
+  ])(
+    `Given provider storage environment lookup fails during $command,
     When the user runs the command,
-    Then the shared CLI boundary reports the unexpected failure without leaking input`, async ({
-    args,
-    inputText,
-  }) => {
-    // Given
-    const input = new PassThrough();
-    if (inputText !== undefined) {
-      input.end(inputText);
-    }
-    const fixture = createRuntime(args, { input });
-    const runtime = {
-      ...fixture.runtime,
-      env: () => {
-        throw new Error(
-          "provider storage environment failed\n    at raw-stack.ts:1:1",
-        );
-      },
-    };
+    Then the shared CLI boundary reports the unexpected failure without leaking input`,
+    async ({ args, inputText }) => {
+      // Given
+      const input = new PassThrough();
+      if (inputText !== undefined) {
+        input.end(inputText);
+      }
+      const fixture = createRuntime(args, { input });
+      const runtime = {
+        ...fixture.runtime,
+        env: () => {
+          throw new Error(
+            "provider storage environment failed\n    at raw-stack.ts:1:1",
+          );
+        },
+      };
 
-    // When
-    const exitCode = await runCliMain(runtime);
+      // When
+      const exitCode = await runCliMain(runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: unexpected runtime failure: provider storage environment failed\n",
-    );
-    expect(fixture.stderr()).not.toContain("provider-setup-secret");
-    expectNoCrashOutput(fixture.stderr());
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: unexpected runtime failure: provider storage environment failed\n",
+      );
+      expect(fixture.stderr()).not.toContain("provider-setup-secret");
+      expectNoCrashOutput(fixture.stderr());
+    },
+  );
 
   test.each([
     {
@@ -427,42 +425,45 @@ describe("CLI Main - Runtime Errors", () => {
         "ask",
       ],
     },
-  ])(`Given workspace lookup fails during $command,
+  ])(
+    `Given workspace lookup fails during $command,
     When the user runs the command,
-    Then the shared CLI boundary reports the unexpected failure without a stack trace`, async ({
-    args,
-  }) => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-command-error-home-"));
-    const fixture = createRuntime(args, {
-      env: {
-        KEEL_HOME: home,
-      },
-    });
-    const runtime = {
-      ...fixture.runtime,
-      cwd: () => {
-        throw new Error(
-          "command workspace lookup failed\n    at raw-stack.ts:1:1",
-        );
-      },
-    };
-
-    try {
-      // When
-      const exitCode = await runCliMain(runtime);
-
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        "Error: unexpected runtime failure: command workspace lookup failed\n",
+    Then the shared CLI boundary reports the unexpected failure without a stack trace`,
+    async ({ args }) => {
+      // Given
+      const home = await mkdtemp(
+        join(tmpdir(), "keel-cli-command-error-home-"),
       );
-      expectNoCrashOutput(fixture.stderr());
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+      const fixture = createRuntime(args, {
+        env: {
+          KEEL_HOME: home,
+        },
+      });
+      const runtime = {
+        ...fixture.runtime,
+        cwd: () => {
+          throw new Error(
+            "command workspace lookup failed\n    at raw-stack.ts:1:1",
+          );
+        },
+      };
+
+      try {
+        // When
+        const exitCode = await runCliMain(runtime);
+
+        // Then
+        expect(exitCode).toBe(1);
+        expect(fixture.stdout()).toBe("");
+        expect(fixture.stderr()).toBe(
+          "Error: unexpected runtime failure: command workspace lookup failed\n",
+        );
+        expectNoCrashOutput(fixture.stderr());
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given startup is aborted before command dispatch,
     When the user starts an interactive session,
@@ -558,27 +559,30 @@ describe("CLI Main - Runtime Errors", () => {
       error: new KeelError("provider_network_error", "Error: upstream failed"),
       stderr: "Error: upstream failed\n",
     },
-  ])(`Given startup fails with $name,
+  ])(
+    `Given startup fails with $name,
     When the user runs a one-shot request,
-    Then the CLI preserves the clean error text`, async ({ error, stderr }) => {
-    // Given
-    const fixture = createRuntime(["hello"], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-    const runtime = {
-      ...fixture.runtime,
-      cwd: () => {
-        throw error;
-      },
-    };
+    Then the CLI preserves the clean error text`,
+    async ({ error, stderr }) => {
+      // Given
+      const fixture = createRuntime(["hello"], {
+        env: { KEEL_PROVIDER: "fake" },
+      });
+      const runtime = {
+        ...fixture.runtime,
+        cwd: () => {
+          throw error;
+        },
+      };
 
-    // When
-    const exitCode = await runCliMain(runtime);
+      // When
+      const exitCode = await runCliMain(runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(stderr);
-    expectNoCrashOutput(fixture.stderr());
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(stderr);
+      expectNoCrashOutput(fixture.stderr());
+    },
+  );
 });

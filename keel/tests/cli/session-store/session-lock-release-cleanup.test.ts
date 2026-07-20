@@ -54,32 +54,35 @@ describe("Session Lock Release Cleanup", () => {
       code: "EEXIST",
       label: "non-empty session directory on platforms that report EEXIST",
     },
-  ])(`Given a $label race occurs after releasing a lock,
+  ])(
+    `Given a $label race occurs after releasing a lock,
     When the session lock is released,
-    Then cleanup ignores the benign empty-directory removal race`, async (testCase) => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const sessionStore =
-      await importSessionStoreWithSessionDirectoryRemovalError({
-        home,
-        sessionId: "benign-release-cleanup",
-        code: testCase.code,
-      });
+    Then cleanup ignores the benign empty-directory removal race`,
+    async (testCase) => {
+      // Given
+      const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+      const sessionStore =
+        await importSessionStoreWithSessionDirectoryRemovalError({
+          home,
+          sessionId: "benign-release-cleanup",
+          code: testCase.code,
+        });
 
-    try {
-      const lock = sessionStore.acquireSessionLock({
-        sessionId: "benign-release-cleanup",
-        runtime: runtime(home),
-      });
+      try {
+        const lock = sessionStore.acquireSessionLock({
+          sessionId: "benign-release-cleanup",
+          runtime: runtime(home),
+        });
 
-      // When / Then
-      expect(() => {
-        lock.release();
-      }).not.toThrow();
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+        // When / Then
+        expect(() => {
+          lock.release();
+        }).not.toThrow();
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given empty session directory cleanup fails after releasing a lock,
     When the session lock is released,

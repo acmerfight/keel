@@ -100,68 +100,66 @@ describe("Assertion Goal Evaluator", () => {
       },
     ];
 
-  test.each(
-    malformedEvaluatorOutputCases,
-  )(`Given the fresh assertion evaluator returns malformed output,
+  test.each(malformedEvaluatorOutputCases)(
+    `Given the fresh assertion evaluator returns malformed output,
     When Keel evaluates assertion-goal completion,
-    Then it rejects completion with a judgment-format reason`, async ({
-    output,
-    expected,
-  }) => {
-    // Given
-    const providerRequests: {
-      readonly messages: readonly Message[];
-      readonly toolChoice?: "none";
-      readonly allowBash?: boolean;
-    }[] = [];
-    const provider: LLMProvider = {
-      id: "malformed-assertion-evaluator-provider",
-      async *stream(options) {
-        providerRequests.push({
-          messages: structuredClone([...options.messages]),
-          ...(options.toolExposure?.kind === "none"
-            ? { toolChoice: "none" as const }
-            : {}),
-          ...(options.toolExposure?.kind === "auto" &&
-          options.toolExposure.bash === true
-            ? { allowBash: true }
-            : {}),
-        });
-        yield { type: "text", text: output };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
+    Then it rejects completion with a judgment-format reason`,
+    async ({ output, expected }) => {
+      // Given
+      const providerRequests: {
+        readonly messages: readonly Message[];
+        readonly toolChoice?: "none";
+        readonly allowBash?: boolean;
+      }[] = [];
+      const provider: LLMProvider = {
+        id: "malformed-assertion-evaluator-provider",
+        async *stream(options) {
+          providerRequests.push({
+            messages: structuredClone([...options.messages]),
+            ...(options.toolExposure?.kind === "none"
+              ? { toolChoice: "none" as const }
+              : {}),
+            ...(options.toolExposure?.kind === "auto" &&
+            options.toolExposure.bash === true
+              ? { allowBash: true }
+              : {}),
+          });
+          yield { type: "text", text: output };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
 
-    // When
-    const evaluation = await evaluateAssertionGoalCompletionWithProvider({
-      provider,
-      signal: freshSignal(),
-      goal: {
-        objective: "Publish release notes",
-        completionCriterion: "Release notes cover every changed command.",
-      },
-      resourceFreshness: [],
-      modelOperations: null,
-      evidenceMessages: [{ role: "user", content: "Publish release notes." }],
-    });
+      // When
+      const evaluation = await evaluateAssertionGoalCompletionWithProvider({
+        provider,
+        signal: freshSignal(),
+        goal: {
+          objective: "Publish release notes",
+          completionCriterion: "Release notes cover every changed command.",
+        },
+        resourceFreshness: [],
+        modelOperations: null,
+        evidenceMessages: [{ role: "user", content: "Publish release notes." }],
+      });
 
-    // Then
-    expect(evaluation).toMatchObject({
-      completed: false,
-      reason: expect.stringContaining(expected),
-      usage: ZERO_USAGE,
-    });
-    expect(providerRequests).toHaveLength(1);
-    expect(providerRequests[0]).toMatchObject({ toolChoice: "none" });
-    expect(providerRequests[0]?.allowBash).not.toBe(true);
-    expect(providerRequests[0]?.messages).toHaveLength(1);
-    expect(providerRequests[0]?.messages[0]).toEqual({
-      role: "user",
-      content: expect.stringContaining(
-        '"completionCriterion": "Release notes cover every changed command."',
-      ),
-    });
-  });
+      // Then
+      expect(evaluation).toMatchObject({
+        completed: false,
+        reason: expect.stringContaining(expected),
+        usage: ZERO_USAGE,
+      });
+      expect(providerRequests).toHaveLength(1);
+      expect(providerRequests[0]).toMatchObject({ toolChoice: "none" });
+      expect(providerRequests[0]?.allowBash).not.toBe(true);
+      expect(providerRequests[0]?.messages).toHaveLength(1);
+      expect(providerRequests[0]?.messages[0]).toEqual({
+        role: "user",
+        content: expect.stringContaining(
+          '"completionCriterion": "Release notes cover every changed command."',
+        ),
+      });
+    },
+  );
 
   const wrappedEvaluatorOutputCases: readonly WrappedEvaluatorOutputCase[] = [
     {
@@ -217,52 +215,50 @@ describe("Assertion Goal Evaluator", () => {
     },
   ];
 
-  test.each(
-    wrappedEvaluatorOutputCases,
-  )(`Given the fresh assertion evaluator returns fenced or prose-wrapped JSON,
+  test.each(wrappedEvaluatorOutputCases)(
+    `Given the fresh assertion evaluator returns fenced or prose-wrapped JSON,
     When Keel evaluates assertion-goal completion,
-    Then it parses the judgment without treating wrappers as failure`, async ({
-    output,
-    expectedReason,
-  }) => {
-    // Given
-    const provider: LLMProvider = {
-      id: "fenced-assertion-evaluator-provider",
-      async *stream() {
-        yield {
-          type: "text",
-          text: output,
-        };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-
-    // When
-    const evaluation = await evaluateAssertionGoalCompletionWithProvider({
-      provider,
-      signal: freshSignal(),
-      goal: {
-        objective: "Publish release notes",
-        completionCriterion: "Release notes cover every changed command.",
-      },
-      resourceFreshness: [],
-      modelOperations: null,
-      evidenceMessages: [
-        {
-          role: "tool",
-          toolCallId: "read_1",
-          content: "Release notes cover every changed command.",
+    Then it parses the judgment without treating wrappers as failure`,
+    async ({ output, expectedReason }) => {
+      // Given
+      const provider: LLMProvider = {
+        id: "fenced-assertion-evaluator-provider",
+        async *stream() {
+          yield {
+            type: "text",
+            text: output,
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
-      ],
-    });
+      };
 
-    // Then
-    expect(evaluation).toEqual({
-      completed: true,
-      reason: expectedReason,
-      usage: ZERO_USAGE,
-    });
-  });
+      // When
+      const evaluation = await evaluateAssertionGoalCompletionWithProvider({
+        provider,
+        signal: freshSignal(),
+        goal: {
+          objective: "Publish release notes",
+          completionCriterion: "Release notes cover every changed command.",
+        },
+        resourceFreshness: [],
+        modelOperations: null,
+        evidenceMessages: [
+          {
+            role: "tool",
+            toolCallId: "read_1",
+            content: "Release notes cover every changed command.",
+          },
+        ],
+      });
+
+      // Then
+      expect(evaluation).toEqual({
+        completed: true,
+        reason: expectedReason,
+        usage: ZERO_USAGE,
+      });
+    },
+  );
 
   test(`Given the fresh assertion evaluator attempts to call tools,
     When Keel evaluates assertion-goal completion,

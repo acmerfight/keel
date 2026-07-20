@@ -1271,90 +1271,95 @@ describe("Interactive Session - Goals", () => {
       expectedStatus: "usage_limited",
       expectedError: "Error: /status does not accept arguments.",
     },
-  ] as const)(`Given goal activation is pending and a queued $label is invalid,
+  ] as const)(
+    `Given goal activation is pending and a queued $label is invalid,
     When the input queue drains,
-    Then Keel only cancels activation for invalid goal configuration`, async ({
-    invalidCommand,
-    expectedProviderCalls,
-    expectedStatus,
-    expectedError,
-  }) => {
-    // Given
-    const condition = "The checkout suite passes within its budget";
-    const input = new PassThrough();
-    let stderr = "";
-    let providerCalls = 0;
-    let persistedGoal: SessionGoal | undefined;
-    const provider: LLMProvider = {
-      id: "invalid-pending-local-command-provider",
-      async *stream() {
-        providerCalls++;
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-    const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
-      workspace: process.cwd(),
-      platform: process.platform,
-      session: savedInteractiveSession({
-        id: "invalid-pending-goal-budget-session",
-        persistGoal: ({ goal }) => {
-          persistedGoal = goal ?? undefined;
-          return persistedGoal;
+    Then Keel only cancels activation for invalid goal configuration`,
+    async ({
+      invalidCommand,
+      expectedProviderCalls,
+      expectedStatus,
+      expectedError,
+    }) => {
+      // Given
+      const condition = "The checkout suite passes within its budget";
+      const input = new PassThrough();
+      let stderr = "";
+      let providerCalls = 0;
+      let persistedGoal: SessionGoal | undefined;
+      const provider: LLMProvider = {
+        id: "invalid-pending-local-command-provider",
+        async *stream() {
+          providerCalls++;
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
-      }),
+      };
+      const session = runInteractiveSession({
+        cliArgs: { bashMode: "disabled" },
+        workspace: process.cwd(),
+        platform: process.platform,
+        session: savedInteractiveSession({
+          id: "invalid-pending-goal-budget-session",
+          persistGoal: ({ goal }) => {
+            persistedGoal = goal ?? undefined;
+            return persistedGoal;
+          },
+        }),
 
-      goalAutomaticContinuationTurnLimit: 1,
-      input,
-      writeStdout: () => {},
-      writeStderr: (text) => {
-        stderr += text;
-      },
-      onSigint: () => {},
-      offSigint: () => {},
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
+        goalAutomaticContinuationTurnLimit: 1,
+        input,
+        writeStdout: () => {},
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
 
-      resolveProvider: () => ({
-        provider,
-        providerId: "fake",
-        model: "fake",
-        costModel: ZERO_COST_MODEL,
-      }),
-      requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async (stream) => {
-        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
-        for await (const event of stream) {
-          if (event.type === "end") finalEnd = event;
-        }
-        return finalEnd;
-      },
-      formatCostReport: () => "",
-    });
-    input.end(`/goal ${condition}\n${invalidCommand}\n`);
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") finalEnd = event;
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+      });
+      input.end(`/goal ${condition}\n${invalidCommand}\n`);
 
-    // When
-    await withTimeout(
-      session,
-      5000,
-      "invalid local command left goal activation running",
-    );
+      // When
+      await withTimeout(
+        session,
+        5000,
+        "invalid local command left goal activation running",
+      );
 
-    // Then
-    expect(providerCalls).toBe(expectedProviderCalls);
-    expect(persistedGoal).toMatchObject({
-      objective: condition,
-      status: expectedStatus,
-      budget: {},
-      completion: {
-        kind: "assertion",
-        assertion: condition,
-      },
-    });
-    expect(stderr).toContain(`${expectedError}\n`);
-  });
+      // Then
+      expect(providerCalls).toBe(expectedProviderCalls);
+      expect(persistedGoal).toMatchObject({
+        objective: condition,
+        status: expectedStatus,
+        budget: {},
+        completion: {
+          kind: "assertion",
+          assertion: condition,
+        },
+      });
+      expect(stderr).toContain(`${expectedError}\n`);
+    },
+  );
 
   test(`Given a saved interactive session has an active goal,
     When the user pauses and resumes it,
@@ -1621,113 +1626,114 @@ describe("Interactive Session - Goals", () => {
     },
   ];
 
-  test.each(
-    resumableGoalCases,
-  )(`Given a saved interactive session has a $label goal,
+  test.each(resumableGoalCases)(
+    `Given a saved interactive session has a $label goal,
     When the user resumes it,
-    Then Keel clears the status reason and starts resumed work immediately`, async ({
-    initialGoal,
-  }) => {
-    // Given
-    const input = new PassThrough();
-    let stdout = "";
-    let stderr = "";
-    let persistedGoal: SessionGoal | undefined = initialGoal;
-    let persistedMessages: readonly Message[] = [];
-    const providerMessages: (readonly Message[])[] = [];
-    const provider: LLMProvider = {
-      id: "goal-resume-provider",
-      async *stream(options) {
-        providerMessages.push(structuredClone([...options.messages]));
-        yield { type: "text", text: "Resumed goal work." };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-    const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
-      workspace: process.cwd(),
-      platform: process.platform,
-      session: savedInteractiveSession({
-        id: "goal-resume-session",
-        persistGoal: ({ goal }) => {
-          persistedGoal = goal ?? undefined;
-          return persistedGoal;
+    Then Keel clears the status reason and starts resumed work immediately`,
+    async ({ initialGoal }) => {
+      // Given
+      const input = new PassThrough();
+      let stdout = "";
+      let stderr = "";
+      let persistedGoal: SessionGoal | undefined = initialGoal;
+      let persistedMessages: readonly Message[] = [];
+      const providerMessages: (readonly Message[])[] = [];
+      const provider: LLMProvider = {
+        id: "goal-resume-provider",
+        async *stream(options) {
+          providerMessages.push(structuredClone([...options.messages]));
+          yield { type: "text", text: "Resumed goal work." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
-        persistMessages: ({ messages }) => {
-          persistedMessages = [...messages];
+      };
+      const session = runInteractiveSession({
+        cliArgs: { bashMode: "disabled" },
+        workspace: process.cwd(),
+        platform: process.platform,
+        session: savedInteractiveSession({
+          id: "goal-resume-session",
+          persistGoal: ({ goal }) => {
+            persistedGoal = goal ?? undefined;
+            return persistedGoal;
+          },
+          persistMessages: ({ messages }) => {
+            persistedMessages = [...messages];
+          },
+        }),
+
+        goalAutomaticContinuationTurnLimit: 1,
+        initialSessionGoal: persistedGoal,
+        input,
+        writeStdout: (text) => {
+          stdout += text;
         },
-      }),
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
 
-      goalAutomaticContinuationTurnLimit: 1,
-      initialSessionGoal: persistedGoal,
-      input,
-      writeStdout: (text) => {
-        stdout += text;
-      },
-      writeStderr: (text) => {
-        stderr += text;
-      },
-      onSigint: () => {},
-      offSigint: () => {},
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "end") finalEnd = event;
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+      });
 
-      resolveProvider: () => ({
-        provider,
-        providerId: "fake",
-        model: "fake",
-        costModel: ZERO_COST_MODEL,
-      }),
-      requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async (stream) => {
-        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
-        for await (const event of stream) {
-          if (event.type === "end") finalEnd = event;
-        }
-        return finalEnd;
-      },
-      formatCostReport: () => "",
-    });
+      // When
+      input.end("/goal resume\n");
+      await session;
 
-    // When
-    input.end("/goal resume\n");
-    await session;
-
-    // Then
-    expect(persistedGoal).toEqual({
-      objective: initialGoal.objective,
-      status: "usage_limited",
-      statusReason:
-        "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",
-      latestRuntimeOutcome: {
-        kind: "limit_reached",
-        reason:
+      // Then
+      expect(persistedGoal).toEqual({
+        objective: initialGoal.objective,
+        status: "usage_limited",
+        statusReason:
           "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",
-      },
-      budget: {},
-      usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-      completion: {
-        kind: "command",
-        command: "pnpm test",
-      },
-    });
-    expect(stdout).toContain(`Goal resumed: ${initialGoal.objective}\n`);
-    expect(providerMessages).toHaveLength(1);
-    expect(providerMessages[0]?.at(-1)).toEqual({
-      role: "user",
-      content: expect.stringContaining('source="goal_resumption"'),
-    });
-    expect(persistedMessages.at(-2)).toMatchObject({
-      role: "user",
-      content: expect.stringContaining('source="goal_resumption"'),
-      origin: { type: "runtime_goal_resumption" },
-    });
-    expect(stderr).toContain(
-      "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",
-    );
-  });
+        latestRuntimeOutcome: {
+          kind: "limit_reached",
+          reason:
+            "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",
+        },
+        budget: {},
+        usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
+      });
+      expect(stdout).toContain(`Goal resumed: ${initialGoal.objective}\n`);
+      expect(providerMessages).toHaveLength(1);
+      expect(providerMessages[0]?.at(-1)).toEqual({
+        role: "user",
+        content: expect.stringContaining('source="goal_resumption"'),
+      });
+      expect(persistedMessages.at(-2)).toMatchObject({
+        role: "user",
+        content: expect.stringContaining('source="goal_resumption"'),
+        origin: { type: "runtime_goal_resumption" },
+      });
+      expect(stderr).toContain(
+        "Automatic goal continuation stopped after 1 continuation turns without completing the active goal.",
+      );
+    },
+  );
 
   test(`Given a paused goal has no completion criterion,
     When the user resumes it,

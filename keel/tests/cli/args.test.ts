@@ -128,20 +128,23 @@ describe("CLI Args", () => {
   test.each([
     [["/undo", "--to", "1", "extra"], 'Error: unknown undo option "extra"\n'],
     [["/undo", "--to=1", "extra"], 'Error: unknown undo option "extra"\n'],
-  ])(`Given undo target command %j has an extra argument,
+  ])(
+    `Given undo target command %j has an extra argument,
     When the user runs the CLI,
-    Then the CLI rejects the extra argument before running undo`, async (args, message) => {
-    // Given
-    const fixture = createRuntime(args);
+    Then the CLI rejects the extra argument before running undo`,
+    async (args, message) => {
+      // Given
+      const fixture = createRuntime(args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test(`Given an extra undo list argument,
     When the user runs the CLI,
@@ -218,22 +221,25 @@ describe("CLI Args", () => {
     ["--fork", "--fork-before-message"],
     ["--model", "--pick"],
     ["--skill", "--provider"],
-  ])(`Given the %s run option is followed by the %s flag,
+  ])(
+    `Given the %s run option is followed by the %s flag,
     When the user runs the CLI,
-    Then the CLI rejects the missing value instead of treating the flag as data`, async (option, nextFlag) => {
-    // Given
-    const fixture = createRuntime([option, nextFlag, "value", "fix it"]);
+    Then the CLI rejects the missing value instead of treating the flag as data`,
+    async (option, nextFlag) => {
+      // Given
+      const fixture = createRuntime([option, nextFlag, "value", "fix it"]);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toContain(
-      `Error: ${option} requires a value, but got option "${nextFlag}".`,
-    );
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        `Error: ${option} requires a value, but got option "${nextFlag}".`,
+      );
+    },
+  );
 
   test(`Given the user requests an ordinary run without workflow Skills,
     When the CLI parses --no-skills,
@@ -262,14 +268,17 @@ describe("CLI Args", () => {
       ["skills", "enable", "repo:review"],
       { action: "enable", target: { kind: "skill", lookup: "repo:review" } },
     ],
-  ])(`Given a persisted Skill control command %j,
+  ])(
+    `Given a persisted Skill control command %j,
     When the CLI parses it,
-    Then it produces one explicit control contract`, (args, expected) => {
-    expect(parseCliArgs(args)).toEqual({
-      ok: true,
-      value: { command: "skills", mode: "configure", ...expected },
-    });
-  });
+    Then it produces one explicit control contract`,
+    (args, expected) => {
+      expect(parseCliArgs(args)).toEqual({
+        ok: true,
+        value: { command: "skills", mode: "configure", ...expected },
+      });
+    },
+  );
 
   test.each([
     [["skills", "disable"], "Error: skills disable requires <skill> or --all."],
@@ -281,27 +290,33 @@ describe("CLI Args", () => {
       ["skills", "enable", "--bogus"],
       'Error: unknown skills enable option "--bogus"',
     ],
-  ])(`Given an invalid persisted Skill control command %j,
+  ])(
+    `Given an invalid persisted Skill control command %j,
     When the CLI parses it,
-    Then it rejects the malformed control before filesystem access`, (args, message) => {
-    expect(parseCliArgs(args)).toEqual({ ok: false, message });
-  });
+    Then it rejects the malformed control before filesystem access`,
+    (args, message) => {
+      expect(parseCliArgs(args)).toEqual({ ok: false, message });
+    },
+  );
 
   test.each([
     [["--no-skills", "--skill", "review", "review this"]],
     [["--skill=review", "--no-skills", "review this"]],
-  ])(`Given --no-skills and an explicit --skill are both present in %j,
+  ])(
+    `Given --no-skills and an explicit --skill are both present in %j,
     When the CLI parses the run,
-    Then it rejects the contradictory Skill policy before execution`, (args) => {
-    // When
-    const parsed = parseCliArgs(args);
+    Then it rejects the contradictory Skill policy before execution`,
+    (args) => {
+      // When
+      const parsed = parseCliArgs(args);
 
-    // Then
-    expect(parsed).toEqual({
-      ok: false,
-      message: "Error: --no-skills cannot be combined with --skill.",
-    });
-  });
+      // Then
+      expect(parsed).toEqual({
+        ok: false,
+        message: "Error: --no-skills cannot be combined with --skill.",
+      });
+    },
+  );
 
   test(`Given a doctor model option is followed by the offline flag,
     When the user runs the CLI,
@@ -340,42 +355,48 @@ describe("CLI Args", () => {
   test.each([
     ["--trials", "--check"],
     ["--provider", "--model"],
-  ])(`Given the %s eval option is followed by the %s flag,
+  ])(
+    `Given the %s eval option is followed by the %s flag,
     When the user runs the CLI,
-    Then the CLI rejects the missing value instead of returning a type-specific error`, async (option, nextFlag) => {
-    // Given
-    const fixture = createRuntime(["eval", option, nextFlag, "value"]);
+    Then the CLI rejects the missing value instead of returning a type-specific error`,
+    async (option, nextFlag) => {
+      // Given
+      const fixture = createRuntime(["eval", option, nextFlag, "value"]);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      `Error: ${option} requires a value, but got option "${nextFlag}".\n`,
-    );
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        `Error: ${option} requires a value, but got option "${nextFlag}".\n`,
+      );
+    },
+  );
 
   test.each([
     ["--suite=", "Error: --suite requires a value.\n"],
     ["--out=", "Error: --out requires a value.\n"],
     ["--task=", "Error: --task requires a value.\n"],
     ["--trials=0", "Error: --trials must be a positive integer.\n"],
-  ])(`Given eval run option %s has an invalid inline value,
+  ])(
+    `Given eval run option %s has an invalid inline value,
     When the user runs the CLI,
-    Then the CLI prints the option-specific validation error`, async (arg, message) => {
-    // Given
-    const fixture = createRuntime(["eval", arg]);
+    Then the CLI prints the option-specific validation error`,
+    async (arg, message) => {
+      // Given
+      const fixture = createRuntime(["eval", arg]);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test(`Given an eval compare base option is followed by the head flag,
     When the user runs the CLI,
@@ -486,22 +507,25 @@ describe("CLI Args", () => {
       ["goal", "--objective", "Ship it", "--verify", "pnpm test", "--bogus"],
       'Error: unknown goal option "--bogus".\n',
     ],
-  ])(`Given headless Goal arguments %j are incomplete or ambiguous,
+  ])(
+    `Given headless Goal arguments %j are incomplete or ambiguous,
     When the user runs the CLI,
-    Then Keel rejects them before provider resolution`, async (args, message) => {
-    // Given
-    const fixture = createRuntime(args, {
-      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
-    });
+    Then Keel rejects them before provider resolution`,
+    async (args, message) => {
+      // Given
+      const fixture = createRuntime(args, {
+        env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+      });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test.each([
     [
@@ -527,28 +551,31 @@ describe("CLI Args", () => {
       "Error: --provider must be one of: fake, deepseek, kimi, qwen.\n",
     ],
     ["--max-cost", "0", "Error: --max-cost must be a positive number.\n"],
-  ])(`Given a headless Goal has invalid %s value %s,
+  ])(
+    `Given a headless Goal has invalid %s value %s,
     When the user runs the CLI,
-    Then Keel rejects the malformed contract before provider resolution`, async (option, value, message) => {
-    // Given
-    const fixture = createRuntime([
-      "goal",
-      "--objective",
-      "Ship it",
-      "--verify",
-      "pnpm test",
-      option,
-      value,
-    ]);
+    Then Keel rejects the malformed contract before provider resolution`,
+    async (option, value, message) => {
+      // Given
+      const fixture = createRuntime([
+        "goal",
+        "--objective",
+        "Ship it",
+        "--verify",
+        "pnpm test",
+        option,
+        value,
+      ]);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test(`Given a headless Goal option is missing its separated value,
     When the next token never arrives,
@@ -691,18 +718,21 @@ describe("CLI Args", () => {
       "launch",
     ],
     [["goal", "resume", "review-session", "--no-memory"], "resume"],
-  ])(`Given a headless Goal %s requests --no-memory,
+  ])(
+    `Given a headless Goal %s requests --no-memory,
     When the CLI parses the Goal,
-    Then it propagates clean mode into the shared runtime contract`, (args, mode) => {
-    // When
-    const parsed = parseCliArgs(args);
+    Then it propagates clean mode into the shared runtime contract`,
+    (args, mode) => {
+      // When
+      const parsed = parseCliArgs(args);
 
-    // Then
-    expect(parsed).toMatchObject({
-      ok: true,
-      value: { command: "goal", mode, memoryEnabled: false },
-    });
-  });
+      // Then
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: { command: "goal", mode, memoryEnabled: false },
+      });
+    },
+  );
 
   test.each([
     [
@@ -738,41 +768,48 @@ describe("CLI Args", () => {
         sessionId: "checkout",
       },
     ],
-  ])(`Given a resumable headless Goal selector %j,
+  ])(
+    `Given a resumable headless Goal selector %j,
     When the CLI parses the command,
-    Then it preserves the non-interactive resume target and invocation options`, (args, resumeSession) => {
-    // When
-    const parsed = parseCliArgs(args);
+    Then it preserves the non-interactive resume target and invocation options`,
+    (args, resumeSession) => {
+      // When
+      const parsed = parseCliArgs(args);
 
-    // Then
-    expect(parsed).toEqual({
-      ok: true,
-      value: {
-        command: "goal",
-        mode: "resume",
-        resumeSession,
-        bashMode: args.includes("--bash-policy=deny") ? "disabled" : "trusted",
-        skillsEnabled: true,
-        memoryEnabled: true,
-        budget: args.includes("--turns=12")
-          ? {
-              turns: 12,
-              tokens: 50_000,
-              activeTimeMs: 7_200_000,
-            }
-          : {},
-        ...(args.includes("--provider=fake") ? { providerId: "fake" } : {}),
-        ...(args.includes("--model=test-model") ? { model: "test-model" } : {}),
-        ...(args.includes("--skill=release")
-          ? { skillNames: ["release"] }
-          : {}),
-        ...(args.includes("--max-cost=1.25") ? { maxCostUsd: 1.25 } : {}),
-        ...(args.includes("--report=goal.json")
-          ? { reportFile: "goal.json" }
-          : {}),
-      },
-    });
-  });
+      // Then
+      expect(parsed).toEqual({
+        ok: true,
+        value: {
+          command: "goal",
+          mode: "resume",
+          resumeSession,
+          bashMode: args.includes("--bash-policy=deny")
+            ? "disabled"
+            : "trusted",
+          skillsEnabled: true,
+          memoryEnabled: true,
+          budget: args.includes("--turns=12")
+            ? {
+                turns: 12,
+                tokens: 50_000,
+                activeTimeMs: 7_200_000,
+              }
+            : {},
+          ...(args.includes("--provider=fake") ? { providerId: "fake" } : {}),
+          ...(args.includes("--model=test-model")
+            ? { model: "test-model" }
+            : {}),
+          ...(args.includes("--skill=release")
+            ? { skillNames: ["release"] }
+            : {}),
+          ...(args.includes("--max-cost=1.25") ? { maxCostUsd: 1.25 } : {}),
+          ...(args.includes("--report=goal.json")
+            ? { reportFile: "goal.json" }
+            : {}),
+        },
+      });
+    },
+  );
 
   test.each([
     [
@@ -785,18 +822,21 @@ describe("CLI Args", () => {
       "launch",
     ],
     [["goal", "resume", "review-session", "--no-skills"], "resume"],
-  ])(`Given a headless Goal %s requests --no-skills,
+  ])(
+    `Given a headless Goal %s requests --no-skills,
     When the CLI parses the Goal,
-    Then it propagates the per-run disable into the shared runtime contract`, (args, mode) => {
-    // When
-    const parsed = parseCliArgs(args);
+    Then it propagates the per-run disable into the shared runtime contract`,
+    (args, mode) => {
+      // When
+      const parsed = parseCliArgs(args);
 
-    // Then
-    expect(parsed).toMatchObject({
-      ok: true,
-      value: { command: "goal", mode, skillsEnabled: false },
-    });
-  });
+      // Then
+      expect(parsed).toMatchObject({
+        ok: true,
+        value: { command: "goal", mode, skillsEnabled: false },
+      });
+    },
+  );
 
   test.each([
     [
@@ -809,18 +849,21 @@ describe("CLI Args", () => {
       ],
     ],
     [["goal", "resume", "review-session", "--skill=review", "--no-skills"]],
-  ])(`Given a headless Goal combines --no-skills with --skill in %j,
+  ])(
+    `Given a headless Goal combines --no-skills with --skill in %j,
     When the CLI parses the Goal,
-    Then it rejects the contradictory Skill policy before execution`, (args) => {
-    // When
-    const parsed = parseCliArgs(args);
+    Then it rejects the contradictory Skill policy before execution`,
+    (args) => {
+      // When
+      const parsed = parseCliArgs(args);
 
-    // Then
-    expect(parsed).toEqual({
-      ok: false,
-      message: "Error: --no-skills cannot be combined with --skill.",
-    });
-  });
+      // Then
+      expect(parsed).toEqual({
+        ok: false,
+        message: "Error: --no-skills cannot be combined with --skill.",
+      });
+    },
+  );
 
   test.each([
     [
@@ -893,20 +936,23 @@ describe("CLI Args", () => {
       ],
       "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
     ],
-  ])(`Given ambiguous headless Goal resume arguments %j,
+  ])(
+    `Given ambiguous headless Goal resume arguments %j,
     When the user runs the CLI,
-    Then Keel rejects them before session or provider work`, async (args, message) => {
-    // Given
-    const fixture = createRuntime(args);
+    Then Keel rejects them before session or provider work`,
+    async (args, message) => {
+      // Given
+      const fixture = createRuntime(args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test(`Given headless Goal text is at or beyond its durable schema boundary,
     When the CLI parses the normalized contract,
@@ -1013,20 +1059,23 @@ describe("CLI Args", () => {
       ],
       "Error: --allow-bash does not accept a value.\n",
     ],
-  ])(`Given a headless Goal has conflicting shell option arguments %j,
+  ])(
+    `Given a headless Goal has conflicting shell option arguments %j,
     When the CLI parses the command,
-    Then it reports the authorization contract error`, async (args, message) => {
-    // Given
-    const fixture = createRuntime(args);
+    Then it reports the authorization contract error`,
+    async (args, message) => {
+      // Given
+      const fixture = createRuntime(args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test.each([
     [
@@ -1246,11 +1295,14 @@ describe("CLI Args", () => {
       },
     ],
     [["memory", "--help"], { command: "memory", mode: "help" }],
-  ])(`Given explicit project-memory arguments %j,
+  ])(
+    `Given explicit project-memory arguments %j,
     When the CLI parses them,
-    Then it preserves the deterministic command contract`, (args, value) => {
-    expect(parseCliArgs(args)).toEqual({ ok: true, value });
-  });
+    Then it preserves the deterministic command contract`,
+    (args, value) => {
+      expect(parseCliArgs(args)).toEqual({ ok: true, value });
+    },
+  );
 
   test(`Given the user combines ephemeral session state with default memory,
     When the CLI parses the run,
@@ -1305,14 +1357,17 @@ describe("CLI Args", () => {
       ["--resume", "source", "--fork-points", ""],
       "Error: --fork-points cannot be combined with a message.",
     ],
-  ])(`Given session-only options and an explicit empty message %j,
+  ])(
+    `Given session-only options and an explicit empty message %j,
     When the CLI parses the run,
-    Then it preserves the existing message-conflict error`, (args, message) => {
-    expect(parseCliArgs(args)).toEqual({
-      ok: false,
-      message,
-    });
-  });
+    Then it preserves the existing message-conflict error`,
+    (args, message) => {
+      expect(parseCliArgs(args)).toEqual({
+        ok: false,
+        message,
+      });
+    },
+  );
 
   test.each([
     [
@@ -1592,9 +1647,12 @@ describe("CLI Args", () => {
       'Error: unknown memory candidates subcommand "unknown"',
     ],
     [["memory", "remember"], 'Error: unknown memory subcommand "remember"'],
-  ])(`Given invalid project-memory arguments %j,
+  ])(
+    `Given invalid project-memory arguments %j,
     When the CLI parses them,
-    Then it returns a precise validation error`, (args, message) => {
-    expect(parseCliArgs(args)).toEqual({ ok: false, message });
-  });
+    Then it returns a precise validation error`,
+    (args, message) => {
+      expect(parseCliArgs(args)).toEqual({ ok: false, message });
+    },
+  );
 });

@@ -19,23 +19,23 @@ describe("agent memory mutation validation", () => {
       currentUserText: "覚えておいて：リリース確認は pnpm test:coverage。",
       memoryText: "リリース確認は pnpm test:coverage。",
     },
-  ])(`Given a current-user message in natural language,
+  ])(
+    `Given a current-user message in natural language,
     When memory_add supplies one exact contiguous durable-claim span,
-    Then validation accepts it without parsing the request grammar`, ({
-    currentUserText,
-    memoryText,
-  }) => {
-    expect(
-      validateAgentMemoryAdd({
-        currentUserMessage: {
-          role: "user",
-          content: currentUserText,
-          origin: { type: "user_prompt" },
-        },
-        text: memoryText,
-      }),
-    ).toEqual({ ok: true });
-  });
+    Then validation accepts it without parsing the request grammar`,
+    ({ currentUserText, memoryText }) => {
+      expect(
+        validateAgentMemoryAdd({
+          currentUserMessage: {
+            role: "user",
+            content: currentUserText,
+            origin: { type: "user_prompt" },
+          },
+          text: memoryText,
+        }),
+      ).toEqual({ ok: true });
+    },
+  );
 
   test(`Given there is no eligible current-user message,
     When memory_add attempts a mutation,

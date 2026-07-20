@@ -150,37 +150,39 @@ describe("CLI Main - Provider Auth Setup", () => {
       stdin: "first-line\nsecond-line\n",
       message: "Error: setup requires a single-line API key on stdin.\n",
     },
-  ])(`Given setup receives invalid API key input %#,
+  ])(
+    `Given setup receives invalid API key input %#,
     When the user tries to configure a provider,
-    Then Keel rejects it before writing provider state`, async ({
-    stdin,
-    message,
-  }) => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-provider-setup-invalid-"));
-    const setup = createRuntime(["setup", "deepseek", "--with-api-key"], {
-      env: { KEEL_HOME: home },
-      input: inputText(stdin),
-    });
-
-    try {
-      // When
-      const exitCode = await runCliMain(setup.runtime);
-
-      // Then
-      expect(exitCode).toBe(1);
-      expect(setup.stdout()).toBe("");
-      expect(setup.stderr()).toBe(message);
-      await expect(readFile(join(home, "auth.json"), "utf8")).rejects.toThrow(
-        /ENOENT/u,
+    Then Keel rejects it before writing provider state`,
+    async ({ stdin, message }) => {
+      // Given
+      const home = await mkdtemp(
+        join(tmpdir(), "keel-provider-setup-invalid-"),
       );
-      await expect(readFile(join(home, "config.json"), "utf8")).rejects.toThrow(
-        /ENOENT/u,
-      );
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+      const setup = createRuntime(["setup", "deepseek", "--with-api-key"], {
+        env: { KEEL_HOME: home },
+        input: inputText(stdin),
+      });
+
+      try {
+        // When
+        const exitCode = await runCliMain(setup.runtime);
+
+        // Then
+        expect(exitCode).toBe(1);
+        expect(setup.stdout()).toBe("");
+        expect(setup.stderr()).toBe(message);
+        await expect(readFile(join(home, "auth.json"), "utf8")).rejects.toThrow(
+          /ENOENT/u,
+        );
+        await expect(
+          readFile(join(home, "config.json"), "utf8"),
+        ).rejects.toThrow(/ENOENT/u);
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a user accepts provider defaults during setup,
     When the user runs minimal setup offline,
@@ -322,20 +324,23 @@ describe("CLI Main - Provider Auth Setup", () => {
       ["setup", "deepseek", "--with-api-key", "--offline=1"],
       'Error: unknown setup option "--offline=1"\n',
     ],
-  ])(`Given invalid setup command syntax %j,
+  ])(
+    `Given invalid setup command syntax %j,
     When the user runs Keel,
-    Then Keel reports the setup syntax problem`, async (args, message) => {
-    // Given
-    const fixture = createRuntime(args);
+    Then Keel reports the setup syntax problem`,
+    async (args, message) => {
+      // Given
+      const fixture = createRuntime(args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test(`Given a user stores a provider key and default provider,
     When the user runs doctor without provider env,
@@ -855,20 +860,23 @@ describe("CLI Main - Provider Auth Setup", () => {
       ["auth"],
       "Error: auth requires a subcommand: login, logout, or status.\n",
     ],
-  ])(`Given invalid auth command syntax %j,
+  ])(
+    `Given invalid auth command syntax %j,
     When the user runs Keel,
-    Then Keel reports the auth syntax problem`, async (args, message) => {
-    // Given
-    const fixture = createRuntime(args);
+    Then Keel reports the auth syntax problem`,
+    async (args, message) => {
+      // Given
+      const fixture = createRuntime(args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test(`Given auth storage contains invalid JSON,
     When the user checks auth status,
@@ -1123,20 +1131,23 @@ describe("CLI Main - Provider Auth Setup", () => {
       ["config"],
       "Error: config requires a subcommand: set-provider or show.\n",
     ],
-  ])(`Given invalid config command syntax %j,
+  ])(
+    `Given invalid config command syntax %j,
     When the user runs Keel,
-    Then Keel reports the config syntax problem`, async (args, message) => {
-    // Given
-    const fixture = createRuntime(args);
+    Then Keel reports the config syntax problem`,
+    async (args, message) => {
+      // Given
+      const fixture = createRuntime(args);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(message);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(message);
+    },
+  );
 
   test(`Given fake provider config includes an unused model override,
     When the user stores provider config,

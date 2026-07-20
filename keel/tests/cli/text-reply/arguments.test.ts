@@ -2,20 +2,23 @@ import { describe, expect, test } from "vitest";
 import { runCli, USAGE } from "./fixtures.ts";
 
 describe("CLI Text Reply", () => {
-  test.each([["--help"], ["-h"]])(`Given the %s help flag,
+  test.each([["--help"], ["-h"]])(
+    `Given the %s help flag,
     When user runs the CLI process,
-    Then the CLI prints usage and exits successfully`, async (flag) => {
-    // Given
-    const args = [flag];
+    Then the CLI prints usage and exits successfully`,
+    async (flag) => {
+      // Given
+      const args = [flag];
 
-    // When
-    const result = await runCli(args, { KEEL_PROVIDER: "fake" });
+      // When
+      const result = await runCli(args, { KEEL_PROVIDER: "fake" });
 
-    // Then
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(`${USAGE}\n`);
-    expect(result.stderr).toBe("");
-  });
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe(`${USAGE}\n`);
+      expect(result.stderr).toBe("");
+    },
+  );
 
   test(`Given an unknown run option,
     When user runs the CLI process,
@@ -61,23 +64,26 @@ describe("CLI Text Reply", () => {
     expect(result.stderr).toBe(`${USAGE}\n`);
   });
 
-  test.each(["0", "abc"])(`Given an invalid max cost value %s,
+  test.each(["0", "abc"])(
+    `Given an invalid max cost value %s,
     When user runs the CLI,
-    Then the CLI exits with a validation error before requiring a provider`, async (maxCost) => {
-    // Given
-    const args: readonly string[] = ["--max-cost", maxCost, "hello"];
+    Then the CLI exits with a validation error before requiring a provider`,
+    async (maxCost) => {
+      // Given
+      const args: readonly string[] = ["--max-cost", maxCost, "hello"];
 
-    // When
-    const result = await runCli(args, {
-      KEEL_PROVIDER: "deepseek",
-      DEEPSEEK_API_KEY: "",
-    });
+      // When
+      const result = await runCli(args, {
+        KEEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "",
+      });
 
-    // Then
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "Error: --max-cost must be a positive number.\n",
-    );
-  });
+      // Then
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        "Error: --max-cost must be a positive number.\n",
+      );
+    },
+  );
 });

@@ -130,23 +130,23 @@ describe("CLI Main - Bash Project Approvals", () => {
       args: ["approvals", "unknown"] as const,
       stderr: 'Error: unknown approvals option "unknown"',
     },
-  ])(`Given invalid approvals CLI arguments %#,
+  ])(
+    `Given invalid approvals CLI arguments %#,
     When Keel parses the top-level command,
-    Then it prints the argument error without reading approvals`, async ({
-    args,
-    stderr,
-  }) => {
-    // Given
-    const run = createRuntime(args);
+    Then it prints the argument error without reading approvals`,
+    async ({ args, stderr }) => {
+      // Given
+      const run = createRuntime(args);
 
-    // When
-    const exitCode = await runCliMain(run.runtime);
+      // When
+      const exitCode = await runCliMain(run.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(run.stdout()).toBe("");
-    expect(run.stderr()).toBe(`${stderr}\n`);
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(run.stdout()).toBe("");
+      expect(run.stderr()).toBe(`${stderr}\n`);
+    },
+  );
 
   test(`Given ask bash policy is enabled for one-shot runs,
     When the user approves a command family for the current project,

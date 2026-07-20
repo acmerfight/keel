@@ -3104,34 +3104,34 @@ describe("DeepSeek Provider", () => {
     });
   });
 
-  test.each([
-    "negative-usage",
-    "fractional-usage",
-  ])(`Given a stream chunk has %s tokens,
+  test.each(["negative-usage", "fractional-usage"])(
+    `Given a stream chunk has %s tokens,
     When provider reads the chunk,
-    Then it throws a protocol error before reporting usage`, async (message) => {
-    // Given
-    const provider = createDeepseekProvider({
-      apiKey: "test-key",
-      baseUrl,
-      model: "deepseek-v4-flash",
-    });
+    Then it throws a protocol error before reporting usage`,
+    async (message) => {
+      // Given
+      const provider = createDeepseekProvider({
+        apiKey: "test-key",
+        baseUrl,
+        model: "deepseek-v4-flash",
+      });
 
-    // When / Then
-    await expect(
-      collect(
-        provider.stream({
-          systemPrompt: "You are helpful.",
-          messages: [{ role: "user", content: message }],
-          signal: freshSignal(),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_protocol_error",
-      message: "DeepSeek stream chunk has invalid schema",
-    });
-  });
+      // When / Then
+      await expect(
+        collect(
+          provider.stream({
+            systemPrompt: "You are helpful.",
+            messages: [{ role: "user", content: message }],
+            signal: freshSignal(),
+          }),
+        ),
+      ).rejects.toMatchObject({
+        name: "KeelError",
+        code: "provider_protocol_error",
+        message: "DeepSeek stream chunk has invalid schema",
+      });
+    },
+  );
 
   test(`Given a stream chunk has inconsistent cache usage totals,
     When provider reads the chunk,
@@ -3712,76 +3712,79 @@ describe("DeepSeek Provider", () => {
     });
   });
 
-  test.each([
-    "negative-tool-call-index",
-    "fractional-tool-call-index",
-  ])(`Given a tool call delta has an invalid numeric index,
+  test.each(["negative-tool-call-index", "fractional-tool-call-index"])(
+    `Given a tool call delta has an invalid numeric index,
     When provider validates the stream chunk,
-    Then it throws a protocol error before accumulating the tool call`, async (message) => {
-    // Given
-    const provider = createDeepseekProvider({
-      apiKey: "test-key",
-      baseUrl,
-      model: "deepseek-v4-flash",
-    });
+    Then it throws a protocol error before accumulating the tool call`,
+    async (message) => {
+      // Given
+      const provider = createDeepseekProvider({
+        apiKey: "test-key",
+        baseUrl,
+        model: "deepseek-v4-flash",
+      });
 
-    // When / Then
-    await expect(
-      collect(
+      // When / Then
+      await expect(
+        collect(
+          provider.stream({
+            systemPrompt: "You are helpful.",
+            messages: [{ role: "user", content: message }],
+            signal: freshSignal(),
+          }),
+        ),
+      ).rejects.toMatchObject({
+        name: "KeelError",
+        code: "provider_protocol_error",
+        message: "DeepSeek stream chunk has invalid schema",
+      });
+    },
+  );
+
+  test.each([
+    ["empty arguments", "empty-tool-arguments"],
+    ["omitted arguments", "missing-zero-argument-tool-arguments"],
+  ])(
+    `Given a zero-argument tool call sends %s,
+    When provider finishes the tool call,
+    Then it treats them as an empty object`,
+    async (_description, message) => {
+      // Given
+      const provider = createDeepseekProvider({
+        apiKey: "test-key",
+        baseUrl,
+        model: "deepseek-v4-flash",
+      });
+
+      // When
+      const events = await collect(
         provider.stream({
           systemPrompt: "You are helpful.",
           messages: [{ role: "user", content: message }],
           signal: freshSignal(),
         }),
-      ),
-    ).rejects.toMatchObject({
-      name: "KeelError",
-      code: "provider_protocol_error",
-      message: "DeepSeek stream chunk has invalid schema",
-    });
-  });
+      );
 
-  test.each([
-    ["empty arguments", "empty-tool-arguments"],
-    ["omitted arguments", "missing-zero-argument-tool-arguments"],
-  ])(`Given a zero-argument tool call sends %s,
-    When provider finishes the tool call,
-    Then it treats them as an empty object`, async (_description, message) => {
-    // Given
-    const provider = createDeepseekProvider({
-      apiKey: "test-key",
-      baseUrl,
-      model: "deepseek-v4-flash",
-    });
-
-    // When
-    const events = await collect(
-      provider.stream({
-        systemPrompt: "You are helpful.",
-        messages: [{ role: "user", content: message }],
-        signal: freshSignal(),
-      }),
-    );
-
-    // Then
-    expect(events).toEqual([
-      {
-        type: "tool_call",
-        id: "call_ls_0",
-        tool: "ls",
-      },
-      {
-        type: "stop",
-        reason: "stop",
-        usage: {
-          inputTokens: 30,
-          cachedInputTokens: 0,
-          uncachedInputTokens: 30,
-          outputTokens: 8,
+      // Then
+      expect(events).toEqual([
+        {
+          type: "tool_call",
+          id: "call_ls_0",
+          tool: "ls",
         },
-      },
-    ]);
-  });
+        {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 30,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 30,
+            outputTokens: 8,
+          },
+        },
+      ]);
+    },
+  );
 
   test(`Given a read tool call sends invalid JSON arguments,
     When provider validates the completed tool call,

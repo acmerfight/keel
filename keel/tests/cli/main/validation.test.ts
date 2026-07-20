@@ -7,22 +7,25 @@ import { runCliMain } from "../../../src/cli/index.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 
 describe("CLI Main - Validation", () => {
-  test.each([["--help"], ["-h"]])(`Given the %s help flag,
+  test.each([["--help"], ["-h"]])(
+    `Given the %s help flag,
     When the CLI main is invoked in-process,
-    Then it prints usage to stdout and exits successfully`, async (flag) => {
-    // Given
-    const fixture = createRuntime([flag], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
+    Then it prints usage to stdout and exits successfully`,
+    async (flag) => {
+      // Given
+      const fixture = createRuntime([flag], {
+        env: { KEEL_PROVIDER: "fake" },
+      });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toBe(`${USAGE}\n`);
-    expect(fixture.stderr()).toBe("");
-  });
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toBe(`${USAGE}\n`);
+      expect(fixture.stderr()).toBe("");
+    },
+  );
 
   test(`Given no user message and no interactive terminal,
     When the CLI main is invoked in-process,
@@ -178,24 +181,27 @@ describe("CLI Main - Validation", () => {
     );
   });
 
-  test.each(["0", "abc", "0x10", " 5 "])(`Given invalid max cost value %s,
+  test.each(["0", "abc", "0x10", " 5 "])(
+    `Given invalid max cost value %s,
     When the CLI main parses the request,
-    Then it returns a validation error before resolving a provider`, async (maxCost) => {
-    // Given
-    const fixture = createRuntime(["--max-cost", maxCost, "hello"], {
-      env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
-    });
+    Then it returns a validation error before resolving a provider`,
+    async (maxCost) => {
+      // Given
+      const fixture = createRuntime(["--max-cost", maxCost, "hello"], {
+        env: { KEEL_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "" },
+      });
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: --max-cost must be a positive number.\n",
-    );
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: --max-cost must be a positive number.\n",
+      );
+    },
+  );
 
   test(`Given invalid max cost uses equals syntax,
     When the CLI main parses the request,

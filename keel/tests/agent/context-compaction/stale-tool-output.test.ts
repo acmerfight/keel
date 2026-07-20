@@ -1767,31 +1767,31 @@ describe("Context Compaction Stale Tool Output", () => {
       } satisfies ToolCall,
       prefix: "APPLY_PATCH_OUTPUT_START",
     },
-  ])(`Given retained $toolCall.tool output uses generic projection,
+  ])(
+    `Given retained $toolCall.tool output uses generic projection,
     When context compaction projects the tool output,
-    Then Keel preserves the existing bounded prefix behavior`, async ({
-    toolCall,
-    prefix,
-  }) => {
-    // Given
-    const output = [
-      prefix,
-      ...numberedLines("generic tool output", 30),
-      "GENERIC_TAIL_SHOULD_NOT_APPEAR",
-    ].join("\n");
+    Then Keel preserves the existing bounded prefix behavior`,
+    async ({ toolCall, prefix }) => {
+      // Given
+      const output = [
+        prefix,
+        ...numberedLines("generic tool output", 30),
+        "GENERIC_TAIL_SHOULD_NOT_APPEAR",
+      ].join("\n");
 
-    // When
-    const compacted = await compactRetainedToolOutput({
-      toolCall,
-      content: output,
-      toolOutputMaxChars: 120,
-    });
+      // When
+      const compacted = await compactRetainedToolOutput({
+        toolCall,
+        content: output,
+        toolOutputMaxChars: 120,
+      });
 
-    // Then
-    expect(compacted.content).toContain(output.slice(0, 120));
-    expect(compacted.content).not.toContain("GENERIC_TAIL_SHOULD_NOT_APPEAR");
-    expect(compacted.content).toContain("full output artifact: tool-output:");
-  });
+      // Then
+      expect(compacted.content).toContain(output.slice(0, 120));
+      expect(compacted.content).not.toContain("GENERIC_TAIL_SHOULD_NOT_APPEAR");
+      expect(compacted.content).toContain("full output artifact: tool-output:");
+    },
+  );
 
   test(`Given retained output has no matching tool identity,
     When context compaction projects the tool output,
@@ -2768,92 +2768,95 @@ describe("Context Compaction Stale Tool Output", () => {
       marker:
         "[Read output stopped at requested limit of 100 lines. Use offset=101 to continue.]",
     },
-  ])(`Given retained stale $label lacks typed source metadata,
+  ])(
+    `Given retained stale $label lacks typed source metadata,
     When context compaction stores it as an artifact,
-    Then Keel falls back to the read marker source status`, async ({
-    marker,
-  }) => {
-    // Given
-    const body = [
-      "READ_MARKER_REPORT_START",
-      "read marker fallback line ".repeat(500),
-      marker,
-    ].join("\n");
-    const messages: Message[] = [
-      { role: "user", content: "Remember the setup." },
-      { role: "assistant", content: "Setup remembered.", toolCalls: [] },
-      { role: "user", content: "Read the metadata report." },
-      {
-        role: "assistant",
-        content: "",
-        toolCalls: [
-          {
-            id: "read_marker_report",
-            tool: "read",
-            path: "marker-report.log",
-          },
-        ],
-      },
-      {
-        role: "tool",
+    Then Keel falls back to the read marker source status`,
+    async ({ marker }) => {
+      // Given
+      const body = [
+        "READ_MARKER_REPORT_START",
+        "read marker fallback line ".repeat(500),
+        marker,
+      ].join("\n");
+      const messages: Message[] = [
+        { role: "user", content: "Remember the setup." },
+        { role: "assistant", content: "Setup remembered.", toolCalls: [] },
+        { role: "user", content: "Read the metadata report." },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "read_marker_report",
+              tool: "read",
+              path: "marker-report.log",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "read_marker_report",
+          content: body,
+        },
+        {
+          role: "assistant",
+          content: "The marker report was inspected.",
+          toolCalls: [],
+        },
+        { role: "user", content: "Continue." },
+      ];
+      const artifacts = memoryArtifactStore();
+      const provider: LLMProvider = {
+        id: "read-marker-fallback-source-status-provider",
+        async *stream(options) {
+          expect(options.toolExposure?.kind).toBe("none");
+          yield { type: "text", text: "Earlier setup summary." };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        },
+      };
+
+      // When
+      const result = await compactMessages({
+        provider,
+        systemPrompt: "You are helpful.",
+        messages,
+        signal: freshSignal(),
+        contextCompaction: {
+          keepRecentTokens: 100_000,
+          toolOutputMaxChars: 128,
+        },
+        toolOutputArtifacts: { store: artifacts.store },
+      });
+
+      // Then
+      expect(result.compacted).toBe(true);
+      if (!result.compacted) {
+        throw new Error(
+          "Expected context compaction to retain the tool result",
+        );
+      }
+      expect(artifacts.saved).toHaveLength(1);
+      expect(artifacts.saved[0]?.input.sourceStatus).toBe("source-truncated");
+      expect(result.artifactNotices).toContainEqual({
+        status: "stored",
+        ref: "tool-output:test/1",
         toolCallId: "read_marker_report",
-        content: body,
-      },
-      {
-        role: "assistant",
-        content: "The marker report was inspected.",
-        toolCalls: [],
-      },
-      { role: "user", content: "Continue." },
-    ];
-    const artifacts = memoryArtifactStore();
-    const provider: LLMProvider = {
-      id: "read-marker-fallback-source-status-provider",
-      async *stream(options) {
-        expect(options.toolExposure?.kind).toBe("none");
-        yield { type: "text", text: "Earlier setup summary." };
-        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
-      },
-    };
-
-    // When
-    const result = await compactMessages({
-      provider,
-      systemPrompt: "You are helpful.",
-      messages,
-      signal: freshSignal(),
-      contextCompaction: {
-        keepRecentTokens: 100_000,
-        toolOutputMaxChars: 128,
-      },
-      toolOutputArtifacts: { store: artifacts.store },
-    });
-
-    // Then
-    expect(result.compacted).toBe(true);
-    if (!result.compacted) {
-      throw new Error("Expected context compaction to retain the tool result");
-    }
-    expect(artifacts.saved).toHaveLength(1);
-    expect(artifacts.saved[0]?.input.sourceStatus).toBe("source-truncated");
-    expect(result.artifactNotices).toContainEqual({
-      status: "stored",
-      ref: "tool-output:test/1",
-      toolCallId: "read_marker_report",
-      toolName: "read",
-      sourceStatus: "source-truncated",
-      omittedChars: expect.any(Number),
-    });
-    const compactedToolOutput =
-      messages.find(
-        (message) =>
-          message.role === "tool" &&
-          message.toolCallId === "read_marker_report",
-      )?.content ?? "";
-    expect(compactedToolOutput).toContain(
-      "source status: source-truncated/lossy before artifact capture",
-    );
-  });
+        toolName: "read",
+        sourceStatus: "source-truncated",
+        omittedChars: expect.any(Number),
+      });
+      const compactedToolOutput =
+        messages.find(
+          (message) =>
+            message.role === "tool" &&
+            message.toolCallId === "read_marker_report",
+        )?.content ?? "";
+      expect(compactedToolOutput).toContain(
+        "source status: source-truncated/lossy before artifact capture",
+      );
+    },
+  );
 
   test(`Given a fresh complete read output contains truncation-looking text,
     When later context compaction stores it as an artifact,

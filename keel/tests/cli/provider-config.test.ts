@@ -309,34 +309,33 @@ describe("Provider Config", () => {
     });
   });
 
-  test.each([
-    "move old.txt",
-    "move  to new.txt",
-    "move old.txt to ",
-  ])(`Given the fake provider receives an invalid move demo prompt,
+  test.each(["move old.txt", "move  to new.txt", "move old.txt to "])(
+    `Given the fake provider receives an invalid move demo prompt,
     When it streams the response for "%s",
-    Then it falls back to the plain fake reply`, async (message) => {
-    // Given
-    const resolved = resolveProvider(
-      message,
-      runtime({ KEEL_PROVIDER: "fake" }),
-    );
+    Then it falls back to the plain fake reply`,
+    async (message) => {
+      // Given
+      const resolved = resolveProvider(
+        message,
+        runtime({ KEEL_PROVIDER: "fake" }),
+      );
 
-    // When
-    const events = await collect(
-      resolved.provider.stream({
-        systemPrompt: "",
-        messages: [],
-        signal: new AbortController().signal,
-      }),
-    );
+      // When
+      const events = await collect(
+        resolved.provider.stream({
+          systemPrompt: "",
+          messages: [],
+          signal: new AbortController().signal,
+        }),
+      );
 
-    // Then
-    expect(events).toContainEqual({
-      type: "text",
-      text: "Hello from fake provider.",
-    });
-  });
+      // Then
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Hello from fake provider.",
+      });
+    },
+  );
 
   test(`Given the fake provider cannot read the apply patch demo target,
     When it receives the failed read result,

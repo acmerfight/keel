@@ -16,37 +16,40 @@ describe("CLI Main - Artifact Commands", () => {
   test.each([
     ["already ends with a newline", "already newline\n", "already newline\n"],
     ["does not end with a newline", "no final newline", "no final newline\n"],
-  ])(`Given a stored artifact %s,
+  ])(
+    `Given a stored artifact %s,
     When CLI main shows the artifact,
-    Then stdout contains exactly one final newline`, async (_name, content, expected) => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
-    const scopeDirectory = join(
-      home,
-      "artifacts",
-      "tool-output",
-      "show-newline",
-    );
-    await mkdir(scopeDirectory, { recursive: true });
-    await writeFile(join(scopeDirectory, "artifact.txt"), content);
-
-    try {
-      // When
-      const show = createRuntime(
-        ["artifacts", "show", "tool-output:show-newline/artifact"],
-        {
-          env: { KEEL_HOME: home },
-        },
+    Then stdout contains exactly one final newline`,
+    async (_name, content, expected) => {
+      // Given
+      const home = await mkdtemp(join(tmpdir(), "keel-artifact-home-"));
+      const scopeDirectory = join(
+        home,
+        "artifacts",
+        "tool-output",
+        "show-newline",
       );
-      const exitCode = await runCliMain(show.runtime);
+      await mkdir(scopeDirectory, { recursive: true });
+      await writeFile(join(scopeDirectory, "artifact.txt"), content);
 
-      // Then
-      expect(exitCode).toBe(0);
-      expect(show.stdout()).toBe(expected);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+      try {
+        // When
+        const show = createRuntime(
+          ["artifacts", "show", "tool-output:show-newline/artifact"],
+          {
+            env: { KEEL_HOME: home },
+          },
+        );
+        const exitCode = await runCliMain(show.runtime);
+
+        // Then
+        expect(exitCode).toBe(0);
+        expect(show.stdout()).toBe(expected);
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given artifact commands have missing, unknown, or extra arguments,
     When CLI main parses the command,

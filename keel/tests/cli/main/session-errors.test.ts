@@ -33,86 +33,86 @@ import {
 } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Session Errors", () => {
-  test.each([
-    "next prompt",
-    "bash approval",
-  ] as const)(`Given queued-input persistence fails from a real filesystem race before the %s,
+  test.each(["next prompt", "bash approval"] as const)(
+    `Given queued-input persistence fails from a real filesystem race before the %s,
     When the failure originates in the asynchronous input event,
-    Then the named session exits through the normal CLI error boundary instead of an uncaught exception`, async (failureConsumer) => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    const sessionId = `queued-failure-${failureConsumer.replace(" ", "-")}`;
-    const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
-    const command =
-      "node -e \"require('node:fs').writeFileSync('must-not-run.txt', 'bad')\"";
-    const input = new PassThrough();
-    const server = createServer((req, res) => {
-      let body = "";
-      req.on("data", (chunk) => {
-        body += chunk;
+    Then the named session exits through the normal CLI error boundary instead of an uncaught exception`,
+    async (failureConsumer) => {
+      // Given
+      const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+      const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+      const sessionId = `queued-failure-${failureConsumer.replace(" ", "-")}`;
+      const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
+      const command =
+        "node -e \"require('node:fs').writeFileSync('must-not-run.txt', 'bad')\"";
+      const input = new PassThrough();
+      const server = createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          JSON.parse(body);
+          mkdirSync(ledgerPath, { recursive: true });
+          input.write("queue while the turn is active\n");
+          input.write("ignore input after persistence fails\n");
+          rmSync(ledgerPath, { recursive: true, force: true });
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          if (failureConsumer === "bash approval") {
+            res.write(sseToolCall("blocked_bash", "bash", { command }));
+            res.write(sseToolFinish());
+            res.end("data: [DONE]\n\n");
+            return;
+          }
+          res.end(sseTextReplyWithUsage("Turn completed."));
+        });
       });
-      req.on("end", () => {
-        JSON.parse(body);
-        mkdirSync(ledgerPath, { recursive: true });
-        input.write("queue while the turn is active\n");
-        input.write("ignore input after persistence fails\n");
-        rmSync(ledgerPath, { recursive: true, force: true });
-        res.writeHead(200, { "Content-Type": "text/event-stream" });
-        if (failureConsumer === "bash approval") {
-          res.write(sseToolCall("blocked_bash", "bash", { command }));
-          res.write(sseToolFinish());
-          res.end("data: [DONE]\n\n");
-          return;
-        }
-        res.end(sseTextReplyWithUsage("Turn completed."));
-      });
-    });
-    await listen(server);
-    const fixture = createRuntime(
-      [
-        "--session",
-        sessionId,
-        ...(failureConsumer === "bash approval"
-          ? ["--bash-policy", "ask"]
-          : []),
-      ],
-      {
-        cwd: workspace,
-        env: {
-          KEEL_FORCE_INTERACTIVE: "1",
-          KEEL_HOME: home,
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      await listen(server);
+      const fixture = createRuntime(
+        [
+          "--session",
+          sessionId,
+          ...(failureConsumer === "bash approval"
+            ? ["--bash-policy", "ask"]
+            : []),
+        ],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+          input,
+          inputIsTTY: failureConsumer === "bash approval",
         },
-        input,
-        inputIsTTY: failureConsumer === "bash approval",
-      },
-    );
-
-    try {
-      // When
-      const run = runCliMain(fixture.runtime);
-      setTimeout(() => input.write("start the turn\n"), 0);
-      const exitCode = await run;
-
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stderr()).toContain(
-        `Error: session "${sessionId}" already exists.`,
       );
-      expect(fixture.stderr()).not.toContain("UNCAUGHT");
-      expect(fixture.stderr()).not.toContain("unexpected runtime failure");
-      await expect(
-        access(join(workspace, "must-not-run.txt")),
-      ).rejects.toThrow();
-    } finally {
-      input.end();
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+
+      try {
+        // When
+        const run = runCliMain(fixture.runtime);
+        setTimeout(() => input.write("start the turn\n"), 0);
+        const exitCode = await run;
+
+        // Then
+        expect(exitCode).toBe(1);
+        expect(fixture.stderr()).toContain(
+          `Error: session "${sessionId}" already exists.`,
+        );
+        expect(fixture.stderr()).not.toContain("UNCAUGHT");
+        expect(fixture.stderr()).not.toContain("unexpected runtime failure");
+        await expect(
+          access(join(workspace, "must-not-run.txt")),
+        ).rejects.toThrow();
+      } finally {
+        input.end();
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a sessions fork point is beyond the restored user messages,
     When the user forks a source session at that point,

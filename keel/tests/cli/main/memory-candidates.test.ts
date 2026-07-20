@@ -454,69 +454,72 @@ describe("CLI memory candidate inbox", () => {
     ["financial", "Card: 4242 4242 4242 4242"],
     ["health", "Medical diagnosis: hypertension"],
     ["customer", "Private customer data: account 48291 is in dispute"],
-  ])(`Given eligible user evidence contains prohibited %s data,
+  ])(
+    `Given eligible user evidence contains prohibited %s data,
     When the user requests candidate extraction,
-    Then Keel sends no provider request and records a safe admission rejection`, async (_category, sensitiveText) => {
-    // Given
-    const workspace = await createGitWorkspace("keel-memory-sensitive-");
-    const keelHome = await mkdtemp(
-      join(tmpdir(), "keel-memory-sensitive-home-"),
-    );
-    const sessionId = "sensitive-boundary";
-    const session = createSessionStore({
-      sessionId,
-      workspace,
-      runtime: runtime(keelHome, 1),
-    });
-    persistSessionMessages({
-      session,
-      previousMessages: [],
-      currentMessages: [
-        {
-          role: "user",
-          content: sensitiveText,
-          origin: { type: "user_prompt" },
-        },
-        { role: "assistant", content: "Understood.", toolCalls: [] },
-      ],
-      runtime: runtime(keelHome, 2),
-      reason: "turn",
-    });
-    let requestCount = 0;
-    const server = createServer((_request, response) => {
-      requestCount += 1;
-      response.writeHead(500);
-      response.end();
-    });
-    await listen(server);
-    const env = providerEnv(keelHome, getPort(server));
-
-    try {
-      // When
-      const extracted = await runInProcess(
-        ["memory", "candidates", "extract", sessionId, "--max-cost", "0.05"],
-        { cwd: workspace, env },
+    Then Keel sends no provider request and records a safe admission rejection`,
+    async (_category, sensitiveText) => {
+      // Given
+      const workspace = await createGitWorkspace("keel-memory-sensitive-");
+      const keelHome = await mkdtemp(
+        join(tmpdir(), "keel-memory-sensitive-home-"),
       );
-
-      // Then
-      expect(extracted.exitCode).toBe(1);
-      expect(extracted.stdout).toBe("");
-      expect(extracted.stderr).toContain("prohibited sensitive data");
-      expect(extracted.stderr).not.toContain(sensitiveText);
-      expect(requestCount).toBe(0);
-      const listed = await runCli(["memory", "candidates", "list"], {
-        cwd: workspace,
-        env,
+      const sessionId = "sensitive-boundary";
+      const session = createSessionStore({
+        sessionId,
+        workspace,
+        runtime: runtime(keelHome, 1),
       });
-      expect(listed.stdout).toContain("No project-memory candidates");
-      expect(listed.stdout).toContain("admission_rejected");
-      expect(listed.stdout).not.toContain(sensitiveText);
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(keelHome, { recursive: true, force: true });
-    }
-  });
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: [
+          {
+            role: "user",
+            content: sensitiveText,
+            origin: { type: "user_prompt" },
+          },
+          { role: "assistant", content: "Understood.", toolCalls: [] },
+        ],
+        runtime: runtime(keelHome, 2),
+        reason: "turn",
+      });
+      let requestCount = 0;
+      const server = createServer((_request, response) => {
+        requestCount += 1;
+        response.writeHead(500);
+        response.end();
+      });
+      await listen(server);
+      const env = providerEnv(keelHome, getPort(server));
+
+      try {
+        // When
+        const extracted = await runInProcess(
+          ["memory", "candidates", "extract", sessionId, "--max-cost", "0.05"],
+          { cwd: workspace, env },
+        );
+
+        // Then
+        expect(extracted.exitCode).toBe(1);
+        expect(extracted.stdout).toBe("");
+        expect(extracted.stderr).toContain("prohibited sensitive data");
+        expect(extracted.stderr).not.toContain(sensitiveText);
+        expect(requestCount).toBe(0);
+        const listed = await runCli(["memory", "candidates", "list"], {
+          cwd: workspace,
+          env,
+        });
+        expect(listed.stdout).toContain("No project-memory candidates");
+        expect(listed.stdout).toContain("admission_rejected");
+        expect(listed.stdout).not.toContain(sensitiveText);
+      } finally {
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(keelHome, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given an eligible session ID itself contains a detected credential,
     When the user requests candidate extraction,
@@ -977,110 +980,113 @@ describe("CLI memory candidate inbox", () => {
       "stream finished with reason: none",
       "provider_error",
     ],
-  ])(`Given the provider returns %s after a completed eligible session,
+  ])(
+    `Given the provider returns %s after a completed eligible session,
     When candidate extraction validates the entire streamed result,
-    Then no candidate activates and the exact terminal failure remains inspectable`, async (_caseName, responseKind, expectedError, expectedFailure) => {
-    // Given
-    const workspace = await createGitWorkspace("keel-memory-output-error-");
-    const keelHome = await mkdtemp(
-      join(tmpdir(), "keel-memory-output-error-home-"),
-    );
-    const sessionId = `output-${String(responseKind).replace(/[^a-z]+/gu, "-")}`;
-    const evidence = "Release tags use a v prefix.";
-    const session = createSessionStore({
-      sessionId,
-      workspace,
-      runtime: runtime(keelHome, 1),
-    });
-    persistSessionMessages({
-      session,
-      previousMessages: [],
-      currentMessages: [
-        { role: "user", content: evidence, origin: { type: "user_prompt" } },
-        { role: "assistant", content: "Understood.", toolCalls: [] },
-      ],
-      runtime: runtime(keelHome, 2),
-      reason: "turn",
-    });
-    const messageId = sessionStoredMessages(session).find(
-      (stored) => stored.message.role === "user",
-    )?.id;
-    expect(messageId).toBeDefined();
-    const validCandidate = (statement: string, quote: string) =>
-      JSON.stringify({
-        candidates: [
-          {
-            kind: "project_context",
-            statement,
-            why: "This invariant should survive future release work.",
-            sources: [{ messageId, quote }],
-            conflictMemoryIds:
-              responseKind === "__UNKNOWN_CONFLICT__"
-                ? ["mem_00000000-0000-4000-8000-000000000000"]
-                : [],
-          },
+    Then no candidate activates and the exact terminal failure remains inspectable`,
+    async (_caseName, responseKind, expectedError, expectedFailure) => {
+      // Given
+      const workspace = await createGitWorkspace("keel-memory-output-error-");
+      const keelHome = await mkdtemp(
+        join(tmpdir(), "keel-memory-output-error-home-"),
+      );
+      const sessionId = `output-${String(responseKind).replace(/[^a-z]+/gu, "-")}`;
+      const evidence = "Release tags use a v prefix.";
+      const session = createSessionStore({
+        sessionId,
+        workspace,
+        runtime: runtime(keelHome, 1),
+      });
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: [
+          { role: "user", content: evidence, origin: { type: "user_prompt" } },
+          { role: "assistant", content: "Understood.", toolCalls: [] },
         ],
+        runtime: runtime(keelHome, 2),
+        reason: "turn",
       });
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "Content-Type": "text/event-stream" });
-      if (responseKind === "__TOOL__") {
-        response.end(
-          `${sseToolCall("tool_1", "memory_add", { text: evidence })}${sseToolFinish()}data: [DONE]\n\n`,
-        );
-        return;
-      }
-      if (responseKind === "__NO_STOP__") {
-        response.end(
-          `data: ${JSON.stringify({ choices: [{ delta: { content: validCandidate(evidence, evidence) } }] })}\n\ndata: [DONE]\n\n`,
-        );
-        return;
-      }
-      const text =
-        responseKind === "__SENSITIVE__"
-          ? validCandidate(
-              "Contact owner@example.com before release.",
-              evidence,
-            )
-          : responseKind === "__BAD_QUOTE__"
-            ? validCandidate(evidence, "This quote was never said.")
-            : responseKind === "__UNKNOWN_CONFLICT__"
-              ? validCandidate(evidence, evidence)
-              : responseKind === "__LENGTH__"
+      const messageId = sessionStoredMessages(session).find(
+        (stored) => stored.message.role === "user",
+      )?.id;
+      expect(messageId).toBeDefined();
+      const validCandidate = (statement: string, quote: string) =>
+        JSON.stringify({
+          candidates: [
+            {
+              kind: "project_context",
+              statement,
+              why: "This invariant should survive future release work.",
+              sources: [{ messageId, quote }],
+              conflictMemoryIds:
+                responseKind === "__UNKNOWN_CONFLICT__"
+                  ? ["mem_00000000-0000-4000-8000-000000000000"]
+                  : [],
+            },
+          ],
+        });
+      const server = createServer((_request, response) => {
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (responseKind === "__TOOL__") {
+          response.end(
+            `${sseToolCall("tool_1", "memory_add", { text: evidence })}${sseToolFinish()}data: [DONE]\n\n`,
+          );
+          return;
+        }
+        if (responseKind === "__NO_STOP__") {
+          response.end(
+            `data: ${JSON.stringify({ choices: [{ delta: { content: validCandidate(evidence, evidence) } }] })}\n\ndata: [DONE]\n\n`,
+          );
+          return;
+        }
+        const text =
+          responseKind === "__SENSITIVE__"
+            ? validCandidate(
+                "Contact owner@example.com before release.",
+                evidence,
+              )
+            : responseKind === "__BAD_QUOTE__"
+              ? validCandidate(evidence, "This quote was never said.")
+              : responseKind === "__UNKNOWN_CONFLICT__"
                 ? validCandidate(evidence, evidence)
-                : responseKind;
-      response.end(
-        responseKind === "__LENGTH__"
-          ? sseTextReplyWithReason(text, "length")
-          : sseTextReplyWithUsage(text, {
-              prompt_tokens: 20,
-              completion_tokens: 10,
-            }),
-      );
-    });
-    await listen(server);
-    const env = providerEnv(keelHome, getPort(server));
-    try {
-      // When
-      const extracted = await runInProcess(
-        ["memory", "candidates", "extract", sessionId, "--max-cost", "0.05"],
-        { cwd: workspace, env },
-      );
-
-      // Then
-      expect(extracted.exitCode).toBe(1);
-      expect(extracted.stderr).toContain(expectedError);
-      const listed = await runInProcess(["memory", "candidates", "list"], {
-        cwd: workspace,
-        env,
+                : responseKind === "__LENGTH__"
+                  ? validCandidate(evidence, evidence)
+                  : responseKind;
+        response.end(
+          responseKind === "__LENGTH__"
+            ? sseTextReplyWithReason(text, "length")
+            : sseTextReplyWithUsage(text, {
+                prompt_tokens: 20,
+                completion_tokens: 10,
+              }),
+        );
       });
-      expect(listed.stdout).toContain("No project-memory candidates");
-      expect(listed.stdout).toContain(`failure=${expectedFailure}`);
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(keelHome, { recursive: true, force: true });
-    }
-  });
+      await listen(server);
+      const env = providerEnv(keelHome, getPort(server));
+      try {
+        // When
+        const extracted = await runInProcess(
+          ["memory", "candidates", "extract", sessionId, "--max-cost", "0.05"],
+          { cwd: workspace, env },
+        );
+
+        // Then
+        expect(extracted.exitCode).toBe(1);
+        expect(extracted.stderr).toContain(expectedError);
+        const listed = await runInProcess(["memory", "candidates", "list"], {
+          cwd: workspace,
+          env,
+        });
+        expect(listed.stdout).toContain("No project-memory candidates");
+        expect(listed.stdout).toContain(`failure=${expectedFailure}`);
+      } finally {
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(keelHome, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given unavailable, busy, incomplete, derived, queued, or oversized sessions,
     When explicit extraction performs admission checks,

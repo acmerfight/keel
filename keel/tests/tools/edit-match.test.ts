@@ -69,45 +69,51 @@ describe("Edit Match", () => {
     expect(locateExactEditSpans("alpha\n", "")).toEqual([]);
   });
 
-  test.each(fuzzyRoundTripCases)(`Given a $name fuzzy edit target,
+  test.each(fuzzyRoundTripCases)(
+    `Given a $name fuzzy edit target,
     When the matched source span is reconstructed for an identity edit,
-    Then the original source bytes are preserved`, ({ content, oldText }) => {
-    // Given / When
-    const matchResult = locateUniqueEditSpan(content, oldText);
+    Then the original source bytes are preserved`,
+    ({ content, oldText }) => {
+      // Given / When
+      const matchResult = locateUniqueEditSpan(content, oldText);
 
-    // Then
-    expect(matchResult.status).toBe("matched");
-    if (matchResult.status !== "matched") {
-      throw new Error("expected the fuzzy edit target to match");
-    }
-    const source = content.slice(
-      matchResult.match.index,
-      matchResult.match.index + matchResult.match.length,
-    );
-    expect(source).not.toBe(oldText);
+      // Then
+      expect(matchResult.status).toBe("matched");
+      if (matchResult.status !== "matched") {
+        throw new Error("expected the fuzzy edit target to match");
+      }
+      const source = content.slice(
+        matchResult.match.index,
+        matchResult.match.index + matchResult.match.length,
+      );
+      expect(source).not.toBe(oldText);
 
-    const replacementResult = sourcePreservingReplacement(
-      source,
-      oldText,
-      oldText,
-    );
-    expect(replacementResult.status).toBe("matched");
-    if (replacementResult.status !== "matched") {
-      throw new Error("expected the fuzzy edit target to be preservable");
-    }
-    expect(replacementResult.replacement).toBe(source);
-  });
+      const replacementResult = sourcePreservingReplacement(
+        source,
+        oldText,
+        oldText,
+      );
+      expect(replacementResult.status).toBe("matched");
+      if (replacementResult.status !== "matched") {
+        throw new Error("expected the fuzzy edit target to be preservable");
+      }
+      expect(replacementResult.replacement).toBe(source);
+    },
+  );
 
-  test.each(mismatchedSourceSpanCases)(`Given a $name source span mismatch,
+  test.each(mismatchedSourceSpanCases)(
+    `Given a $name source span mismatch,
     When reconstructing a source-preserving replacement,
-    Then it refuses the mismatched span`, ({ newText, oldText, source }) => {
-    // Given / When
-    const result = sourcePreservingReplacement(source, oldText, newText);
+    Then it refuses the mismatched span`,
+    ({ newText, oldText, source }) => {
+      // Given / When
+      const result = sourcePreservingReplacement(source, oldText, newText);
 
-    // Then
-    expect(result).toEqual({
-      status: "not_preservable",
-      reason: "fuzzy source span does not match any edit strategy",
-    });
-  });
+      // Then
+      expect(result).toEqual({
+        status: "not_preservable",
+        reason: "fuzzy source span does not match any edit strategy",
+      });
+    },
+  );
 });

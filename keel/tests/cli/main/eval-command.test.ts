@@ -475,22 +475,25 @@ describe("CLI Main - Eval Command", () => {
     }
   });
 
-  test.each(["0", "0x10", " 5 "])(`Given invalid eval trial count %s,
+  test.each(["0", "0x10", " 5 "])(
+    `Given invalid eval trial count %s,
     When the CLI main parses the eval request,
-    Then it returns a trial validation error`, async (trials) => {
-    // Given
-    const fixture = createRuntime(["eval", "--trials", trials]);
+    Then it returns a trial validation error`,
+    async (trials) => {
+      // Given
+      const fixture = createRuntime(["eval", "--trials", trials]);
 
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
 
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: --trials must be a positive integer.\n",
-    );
-  });
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: --trials must be a positive integer.\n",
+      );
+    },
+  );
 
   test(`Given eval options are valid but the suite is missing,
     When the CLI main dispatches to the eval runner,
