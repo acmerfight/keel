@@ -16,6 +16,7 @@ import {
   selectCompactionSplit,
 } from "./context-compaction/planning.ts";
 import {
+  type CurrentToolOutputCompactionPolicy,
   type CurrentToolOutputCompactionReason,
   compactCurrentToolOutputs,
   compactCurrentToolOutputsWithArtifacts,
@@ -70,8 +71,19 @@ export type ContextCompactionRequestMetadata =
 export type ContextCompactionAccountingSnapshot =
   InternalContextCompactionAccountingSnapshot;
 export type ContextCompactionStats = InternalContextCompactionStats;
-export type { CurrentToolOutputCompactionReason };
+export type {
+  CurrentToolOutputCompactionPolicy,
+  CurrentToolOutputCompactionReason,
+};
 export { estimateTextTokens };
+
+interface CurrentToolOutputCompactionBase {
+  readonly mode: "combined" | "current_only";
+  readonly maxChars?: number;
+}
+
+export type CurrentToolOutputCompaction = CurrentToolOutputCompactionBase &
+  CurrentToolOutputCompactionPolicy;
 
 export function isCompactedCurrentToolOutput(text: string): boolean {
   return isCompactedCurrentToolOutputFromContent(text);
@@ -95,11 +107,7 @@ interface CompactMessagesOptions {
   readonly requestMetadata?: ContextCompactionRequestMetadata;
   readonly taskProgress?: SessionTaskProgress;
   readonly focusInstruction?: string;
-  readonly allowCurrentToolOutputCompaction?: boolean;
-  readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
-  readonly onlyCurrentToolOutputCompaction?: boolean;
-  readonly currentToolOutputMaxCharsOverride?: number;
-  readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
+  readonly currentToolOutputCompaction?: CurrentToolOutputCompaction;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly modelOperation?: ModelOperationRequest<
     Extract<
@@ -162,12 +170,6 @@ async function discardStoredArtifactReports(
       await options.store.discard(ref);
     }),
   );
-}
-
-function currentToolOutputCompactionReason(
-  options: CompactMessagesOptions,
-): CurrentToolOutputCompactionReason {
-  return options.currentToolOutputCompactionReason ?? "overflow_recovery";
 }
 
 const CURRENT_TOOL_OUTPUT_COMPACTION_MARKER_BUDGET_CHARS = 512;
@@ -247,14 +249,11 @@ async function compactCurrentToolOutputsForRequest(options: {
   readonly beforeEstimatedTokens: number;
   readonly contextAccounting: ContextCompactionAccountingSnapshot | undefined;
   readonly requestMetadata: ContextCompactionRequestMetadata | undefined;
-  readonly reason: CurrentToolOutputCompactionReason;
+  readonly currentToolOutputCompaction: CurrentToolOutputCompaction;
   readonly toolOutputArtifacts: ToolOutputArtifactsOptions | undefined;
-  readonly maxCharsOverride: number | undefined;
-  readonly requireUnderBudgetUnlessSettledBudgetExceeded: boolean;
-  readonly allowPreflightRecompaction: boolean;
 }): Promise<CompactMessagesResult> {
   const currentToolOutputMaxChars =
-    options.maxCharsOverride ??
+    options.currentToolOutputCompaction.maxChars ??
     currentToolOutputMaxCharsForCompaction({
       messages: options.messages,
       resolved: options.resolved,
@@ -263,18 +262,16 @@ async function compactCurrentToolOutputsForRequest(options: {
   const currentToolOutputCompaction =
     options.toolOutputArtifacts === undefined
       ? compactCurrentToolOutputs(options.messages, currentToolOutputMaxChars, {
-          reason: options.reason,
+          policy: options.currentToolOutputCompaction,
           settledMaxChars: options.resolved.toolOutputMaxChars,
-          allowPreflightRecompaction: options.allowPreflightRecompaction,
         })
       : await compactCurrentToolOutputsWithArtifacts(
           options.messages,
           currentToolOutputMaxChars,
           options.toolOutputArtifacts.store,
           {
-            reason: options.reason,
+            policy: options.currentToolOutputCompaction,
             settledMaxChars: options.resolved.toolOutputMaxChars,
-            allowPreflightRecompaction: options.allowPreflightRecompaction,
           },
         );
   /* v8 ignore next 3: agent preflight covers this no-op path; the guard preserves the compacted-result invariant when no current output is eligible. */
@@ -289,8 +286,9 @@ async function compactCurrentToolOutputsForRequest(options: {
     options.requestMetadata,
   );
   const allowEqualEstimatePreflightOverflowRetry =
-    options.reason === "overflow_recovery" &&
-    options.allowPreflightRecompaction &&
+    options.currentToolOutputCompaction.reason === "overflow_recovery" &&
+    options.currentToolOutputCompaction.preflightCompactedOutputs ===
+      "recompact" &&
     currentToolOutputCompaction.stats.currentToolOutputsCompacted > 0 &&
     currentToolOutputCompaction.stats.toolOutputCharsAfter <
       currentToolOutputCompaction.stats.toolOutputCharsBefore;
@@ -299,7 +297,8 @@ async function compactCurrentToolOutputsForRequest(options: {
     afterEstimatedTokens > options.beforeEstimatedTokens ||
     (afterEstimatedTokens === options.beforeEstimatedTokens &&
       !allowEqualEstimatePreflightOverflowRetry) ||
-    (options.requireUnderBudgetUnlessSettledBudgetExceeded &&
+    (options.currentToolOutputCompaction.mode === "current_only" &&
+      options.currentToolOutputCompaction.reason === "preflight" &&
       targetTokens !== undefined &&
       afterEstimatedTokens > targetTokens &&
       !compactedCurrentOutputsExceededSettledBudget({
@@ -414,9 +413,9 @@ export async function compactMessages(
     options.contextAccounting,
     options.requestMetadata,
   );
-  const reason = currentToolOutputCompactionReason(options);
+  const currentToolOutputPolicy = options.currentToolOutputCompaction;
 
-  if (options.onlyCurrentToolOutputCompaction === true) {
+  if (currentToolOutputPolicy?.mode === "current_only") {
     return await compactCurrentToolOutputsForRequest({
       systemPrompt: options.systemPrompt,
       messages: options.messages,
@@ -425,12 +424,8 @@ export async function compactMessages(
       beforeEstimatedTokens,
       contextAccounting: options.contextAccounting,
       requestMetadata: options.requestMetadata,
-      reason,
+      currentToolOutputCompaction: currentToolOutputPolicy,
       toolOutputArtifacts: options.toolOutputArtifacts,
-      maxCharsOverride: options.currentToolOutputMaxCharsOverride,
-      requireUnderBudgetUnlessSettledBudgetExceeded: reason === "preflight",
-      allowPreflightRecompaction:
-        options.allowPreflightCurrentToolOutputRecompaction === true,
     });
   }
 
@@ -443,7 +438,7 @@ export async function compactMessages(
 
   const plan = planCompaction(options.messages, split, resolved);
   if (plan.messagesToSummarize.length === 0) {
-    if (options.allowCurrentToolOutputCompaction === true) {
+    if (currentToolOutputPolicy !== undefined) {
       return await compactCurrentToolOutputsForRequest({
         systemPrompt: options.systemPrompt,
         messages: options.messages,
@@ -452,12 +447,8 @@ export async function compactMessages(
         beforeEstimatedTokens,
         contextAccounting: options.contextAccounting,
         requestMetadata: options.requestMetadata,
-        reason,
+        currentToolOutputCompaction: currentToolOutputPolicy,
         toolOutputArtifacts: options.toolOutputArtifacts,
-        maxCharsOverride: options.currentToolOutputMaxCharsOverride,
-        requireUnderBudgetUnlessSettledBudgetExceeded: false,
-        allowPreflightRecompaction:
-          options.allowPreflightCurrentToolOutputRecompaction === true,
       });
     }
     // The protected current suffix starts at the beginning of the transcript and
@@ -527,29 +518,23 @@ export async function compactMessages(
     ),
   });
   const currentToolOutputCompaction =
-    options.allowCurrentToolOutputCompaction === true
+    currentToolOutputPolicy !== undefined
       ? options.toolOutputArtifacts === undefined
         ? compactCurrentToolOutputs(
             compacted.messages,
-            options.currentToolOutputMaxCharsOverride ??
-              currentToolOutputMaxChars,
+            currentToolOutputPolicy.maxChars ?? currentToolOutputMaxChars,
             {
-              reason,
+              policy: currentToolOutputPolicy,
               settledMaxChars: resolved.toolOutputMaxChars,
-              allowPreflightRecompaction:
-                options.allowPreflightCurrentToolOutputRecompaction === true,
             },
           )
         : await compactCurrentToolOutputsWithArtifacts(
             compacted.messages,
-            options.currentToolOutputMaxCharsOverride ??
-              currentToolOutputMaxChars,
+            currentToolOutputPolicy.maxChars ?? currentToolOutputMaxChars,
             options.toolOutputArtifacts.store,
             {
-              reason,
+              policy: currentToolOutputPolicy,
               settledMaxChars: resolved.toolOutputMaxChars,
-              allowPreflightRecompaction:
-                options.allowPreflightCurrentToolOutputRecompaction === true,
             },
           )
       : {
