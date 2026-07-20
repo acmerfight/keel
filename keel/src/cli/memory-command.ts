@@ -280,7 +280,6 @@ export async function runMemoryCommand(
     );
     return 0;
   } catch (error) {
-    /* v8 ignore next -- unexpected errors belong to the shared top-level runtime boundary. */
     if (!(error instanceof ProjectMemoryError)) throw error;
     runtime.writeStderr(`${error.message}\n`);
     return 1;
