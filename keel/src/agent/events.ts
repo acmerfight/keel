@@ -11,12 +11,19 @@ import type {
   ToolOutputArtifactToolName,
 } from "./tool-output-artifacts.ts";
 
-export interface CostReport {
+type CostBudgetReport =
+  | { readonly kind: "unbounded" }
+  | { readonly kind: "within_budget"; readonly maxUsd: number }
+  | {
+      readonly kind: "budget_limited";
+      readonly maxUsd: number;
+      readonly overshootUsd: number;
+    };
+
+export type CostReport = {
   readonly spentUsd: number;
-  readonly maxUsd?: number;
-  readonly budgetLimited: boolean;
-  readonly overshootUsd: number;
-}
+  readonly budget: CostBudgetReport;
+};
 
 type ContextCompactionReason = "proactive" | "preflight" | "overflow_recovery";
 

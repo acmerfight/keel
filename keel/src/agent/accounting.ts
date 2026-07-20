@@ -59,19 +59,25 @@ export function buildCostReport(
   if (costTracking === undefined) {
     return undefined;
   }
-  const budgetLimited =
-    costTracking.maxCostUsd !== undefined &&
-    spentUsd >= costTracking.maxCostUsd;
+  if (costTracking.maxCostUsd === undefined) {
+    return {
+      spentUsd,
+      budget: { kind: "unbounded" },
+    };
+  }
+  if (spentUsd >= costTracking.maxCostUsd) {
+    return {
+      spentUsd,
+      budget: {
+        kind: "budget_limited",
+        maxUsd: costTracking.maxCostUsd,
+        overshootUsd: Math.max(0, spentUsd - costTracking.maxCostUsd),
+      },
+    };
+  }
   return {
     spentUsd,
-    ...(costTracking.maxCostUsd !== undefined
-      ? { maxUsd: costTracking.maxCostUsd }
-      : {}),
-    budgetLimited,
-    overshootUsd:
-      costTracking.maxCostUsd === undefined
-        ? 0
-        : Math.max(0, spentUsd - costTracking.maxCostUsd),
+    budget: { kind: "within_budget", maxUsd: costTracking.maxCostUsd },
   };
 }
 
@@ -81,8 +87,10 @@ export function buildCostBudgetLimitedReport(
 ): CostReport {
   return {
     spentUsd,
-    maxUsd: costTracking.maxCostUsd,
-    budgetLimited: true,
-    overshootUsd: Math.max(0, spentUsd - costTracking.maxCostUsd),
+    budget: {
+      kind: "budget_limited",
+      maxUsd: costTracking.maxCostUsd,
+      overshootUsd: Math.max(0, spentUsd - costTracking.maxCostUsd),
+    },
   };
 }

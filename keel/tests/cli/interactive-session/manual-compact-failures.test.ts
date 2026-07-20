@@ -759,8 +759,12 @@ describe("Interactive Session - Manual Compact Failures", () => {
           "budget-limited compaction must not start an agent turn",
         );
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(3)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(3)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When

@@ -538,8 +538,12 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       printAgentEvents: async () => {
         throw new Error("budget-limited switch must not start an agent turn");
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(3)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(3)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When

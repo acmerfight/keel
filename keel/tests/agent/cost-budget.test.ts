@@ -106,9 +106,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 0,
-          maxUsd: 0.5,
-          budgetLimited: true,
-          overshootUsd: 0,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.5,
+            overshootUsd: 0,
+          },
         },
       });
     } finally {
@@ -293,7 +295,10 @@ describe("Cost Budget", () => {
         type: "end",
         turns: 1,
         stopReason: "cost_budget",
-        cost: { spentUsd: 0.4998, overshootUsd: 0 },
+        cost: {
+          spentUsd: 0.4998,
+          budget: { kind: "budget_limited", overshootUsd: 0 },
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -402,7 +407,10 @@ describe("Cost Budget", () => {
         type: "end",
         turns: 1,
         stopReason: "cost_budget",
-        cost: { spentUsd: 0.5, overshootUsd: 0 },
+        cost: {
+          spentUsd: 0.5,
+          budget: { kind: "budget_limited", overshootUsd: 0 },
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -465,7 +473,7 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 0.4998,
-          overshootUsd: 0,
+          budget: { kind: "budget_limited", overshootUsd: 0 },
         },
       });
     } finally {
@@ -592,9 +600,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
-          maxUsd: 0.5,
-          budgetLimited: true,
-          overshootUsd: 0.5,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.5,
+            overshootUsd: 0.5,
+          },
         },
       });
     } finally {
@@ -756,9 +766,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 0.36,
-          maxUsd: 0.2,
-          budgetLimited: true,
-          overshootUsd: 0.15999999999999998,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.2,
+            overshootUsd: 0.15999999999999998,
+          },
         },
       });
     } finally {
@@ -837,9 +849,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
-          maxUsd: 0.5,
-          budgetLimited: true,
-          overshootUsd: 0.5,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.5,
+            overshootUsd: 0.5,
+          },
         },
       });
     } finally {

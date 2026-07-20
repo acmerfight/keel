@@ -175,7 +175,14 @@ export function assertEndEventHasCost(
 
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const accounting = accountModelOperations(input.modelOperations);
-  const costBudgetUsd = input.end.cost.maxUsd;
+  const costBudgetUsd =
+    input.end.cost.budget.kind === "unbounded"
+      ? undefined
+      : input.end.cost.budget.maxUsd;
+  const costOvershootUsd =
+    input.end.cost.budget.kind === "budget_limited"
+      ? input.end.cost.budget.overshootUsd
+      : 0;
   const report: RunReport = {
     schemaVersion: 17,
     tasks: input.tasks,
@@ -194,10 +201,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     durationMs: input.durationMs,
     costUsd: accounting.costUsd,
     ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
-    costOvershootUsd:
-      costBudgetUsd === undefined
-        ? 0
-        : Math.max(0, accounting.costUsd - costBudgetUsd),
+    costOvershootUsd,
     contextCompactions: input.contextCompactions,
     skillActivations: input.skillActivations,
     activeSkills: input.activeSkills,

@@ -158,9 +158,7 @@ export async function executeManualCompaction(
       if (manualCostModel !== undefined) {
         const cost = recordCompactionCost(result.usage, manualCostModel);
         if (options.cliArgs.maxCostUsd !== undefined) {
-          options.writeStderr(
-            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-          );
+          options.writeStderr(options.formatCostReport(cost));
         }
         return { status: "committed", cost };
       }
@@ -178,9 +176,7 @@ export async function executeManualCompaction(
         result.failure.error instanceof CostBudgetAdmissionError
       ) {
         const cost = compactionCost.budgetLimitedReport();
-        options.writeStderr(
-          options.formatCostReport(cost, compactionCost.maxCostUsd),
-        );
+        options.writeStderr(options.formatCostReport(cost));
         return { status: "not_committed", cost };
       }
       options.writeStderr(
@@ -189,9 +185,7 @@ export async function executeManualCompaction(
       if (failedCost !== undefined) {
         const cost = failedCost;
         if (options.cliArgs.maxCostUsd !== undefined) {
-          options.writeStderr(
-            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-          );
+          options.writeStderr(options.formatCostReport(cost));
         }
         return { status: "not_committed", cost };
       }
@@ -212,9 +206,7 @@ export async function executeManualCompaction(
       error instanceof CostBudgetAdmissionError
     ) {
       const cost = compactionCost.budgetLimitedReport();
-      options.writeStderr(
-        options.formatCostReport(cost, compactionCost.maxCostUsd),
-      );
+      options.writeStderr(options.formatCostReport(cost));
       return { status: "not_committed", cost };
     }
     options.writeStderr(formatManualCompactionFailure(error));

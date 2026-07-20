@@ -230,7 +230,7 @@ interface InteractiveSessionOptionsBase {
   readonly printAgentEvents: (
     stream: AsyncIterable<AgentEvent>,
   ) => Promise<EndEvent | undefined>;
-  readonly formatCostReport: (cost: CostReport, maxUsd: number) => string;
+  readonly formatCostReport: (cost: CostReport) => string;
 }
 
 export type InteractiveSessionOptions = InteractiveSessionOptionsBase &

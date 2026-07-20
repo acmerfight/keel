@@ -294,7 +294,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
       formatCostReport: (cost) =>
         `Cost: ${cost.spentUsd.toFixed(2)} exceeded=${String(
-          cost.budgetLimited,
+          cost.budget.kind === "budget_limited",
         )}\n`,
     });
 

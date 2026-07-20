@@ -908,7 +908,7 @@ export async function runInteractiveSession(
     sessionUsage = addUsage(sessionUsage, end.usage);
     sessionAgentLoopTurns += end.turns;
     sessionStopReason = end.stopReason;
-    if (end.cost?.budgetLimited === true) {
+    if (end.cost?.budget.kind === "budget_limited") {
       sessionCostBudgetLimited = true;
     }
     const turnCostUsd = end.cost?.spentUsd ?? 0;
@@ -1419,13 +1419,11 @@ export async function runInteractiveSession(
         options.cliArgs.maxCostUsd !== undefined &&
         cumulativeCost !== undefined
       ) {
-        options.writeStderr(
-          options.formatCostReport(cumulativeCost, options.cliArgs.maxCostUsd),
-        );
+        options.writeStderr(options.formatCostReport(cumulativeCost));
       }
       if (
         finalEnd?.stopReason === "cost_budget" ||
-        cumulativeCost?.budgetLimited === true
+        cumulativeCost?.budget.kind === "budget_limited"
       ) {
         sessionStopReason = "cost_budget";
         limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
@@ -2364,7 +2362,7 @@ export async function runInteractiveSession(
                 modelOperations,
               });
               if (compaction.status === "rejected") {
-                if (compaction.cost?.budgetLimited === true) {
+                if (compaction.cost?.budget.kind === "budget_limited") {
                   sessionStopReason = "cost_budget";
                   break;
                 }
@@ -2403,7 +2401,7 @@ export async function runInteractiveSession(
           options.writeStdout(
             `Model switched to ${formatActiveModel(resolved)}\n`,
           );
-          if (modelSwitchCost?.budgetLimited === true) {
+          if (modelSwitchCost?.budget.kind === "budget_limited") {
             if (!consumedByPersistence) {
               consumeQueuedInputLines([rawInput]);
             }
@@ -2564,7 +2562,7 @@ export async function runInteractiveSession(
             reservedMessageIds: [],
           });
         }
-        if (compactCost?.budgetLimited === true) {
+        if (compactCost?.budget.kind === "budget_limited") {
           sessionStopReason = "cost_budget";
           break;
         }

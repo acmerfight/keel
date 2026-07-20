@@ -260,9 +260,7 @@ export async function executeModelSwitchCompaction(
           result.failure.error instanceof CostBudgetAdmissionError
         ) {
           const cost = compactionCost.budgetLimitedReport();
-          options.writeStderr(
-            options.formatCostReport(cost, compactionCost.maxCostUsd),
-          );
+          options.writeStderr(options.formatCostReport(cost));
           return { status: "rejected", cost };
         }
         options.writeStderr(
@@ -271,9 +269,7 @@ export async function executeModelSwitchCompaction(
         if (failedCost !== undefined) {
           const cost = failedCost;
           if (options.cliArgs.maxCostUsd !== undefined) {
-            options.writeStderr(
-              options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-            );
+            options.writeStderr(options.formatCostReport(cost));
           }
           return { status: "rejected", cost };
         }
@@ -336,9 +332,7 @@ export async function executeModelSwitchCompaction(
     }
     const cost = recordCompactionCost(result.usage, compactionCostModel);
     if (options.cliArgs.maxCostUsd !== undefined) {
-      options.writeStderr(
-        options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-      );
+      options.writeStderr(options.formatCostReport(cost));
     }
     return { status: "accepted", cost };
   } catch (error) {
@@ -352,9 +346,7 @@ export async function executeModelSwitchCompaction(
       error instanceof CostBudgetAdmissionError
     ) {
       const cost = compactionCost.budgetLimitedReport();
-      options.writeStderr(
-        options.formatCostReport(cost, compactionCost.maxCostUsd),
-      );
+      options.writeStderr(options.formatCostReport(cost));
       return { status: "rejected", cost };
     }
     options.writeStderr(formatManualCompactionFailure(error));

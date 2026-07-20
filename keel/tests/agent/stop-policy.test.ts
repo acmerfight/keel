@@ -441,9 +441,11 @@ describe("Agent Stopping", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
-          maxUsd: 0.5,
-          budgetLimited: true,
-          overshootUsd: 0.5,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.5,
+            overshootUsd: 0.5,
+          },
         },
       });
     } finally {

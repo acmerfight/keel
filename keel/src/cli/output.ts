@@ -241,14 +241,22 @@ export function formatUndoCheckpointWarning(): string {
   return "Warning: change applied; undo checkpoint unavailable for this task.";
 }
 
-export function formatCostReport(cost: CostReport, maxUsd: number): string {
+export function formatCostReport(cost: CostReport): string {
   const spent = `$${formatUsd(cost.spentUsd)}`;
-  const budget = `$${formatUsd(maxUsd)}`;
-  return cost.overshootUsd > 0
-    ? `Cost: ${spent} (best-effort budget ${budget} exceeded by $${formatUsd(cost.overshootUsd)})\n`
-    : cost.budgetLimited
-      ? `Cost: ${spent} (remaining best-effort budget cannot admit another provider request)\n`
-      : `Cost: ${spent} (budget ${budget})\n`;
+  switch (cost.budget.kind) {
+    case "unbounded":
+      return `Cost: ${spent}\n`;
+    case "within_budget": {
+      const budget = `$${formatUsd(cost.budget.maxUsd)}`;
+      return `Cost: ${spent} (budget ${budget})\n`;
+    }
+    case "budget_limited": {
+      const budget = `$${formatUsd(cost.budget.maxUsd)}`;
+      return cost.budget.overshootUsd > 0
+        ? `Cost: ${spent} (best-effort budget ${budget} exceeded by $${formatUsd(cost.budget.overshootUsd)})\n`
+        : `Cost: ${spent} (remaining best-effort budget cannot admit another provider request)\n`;
+    }
+  }
 }
 
 export async function printAgentEvents(

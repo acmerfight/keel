@@ -365,7 +365,7 @@ describe("Run Outcome Reporting", () => {
       const finalEvent = endEvent(events);
       expect(finalEvent.usage.inputTokens).toBe(300_000);
       expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-      expect(finalEvent.cost?.budgetLimited).toBe(false);
+      expect(finalEvent.cost?.budget.kind).toBe("unbounded");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -439,7 +439,7 @@ describe("Run Outcome Reporting", () => {
     const finalEvent = endEvent(events);
     expect(finalEvent.usage.inputTokens).toBe(300_000);
     expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-    expect(finalEvent.cost?.budgetLimited).toBe(false);
+    expect(finalEvent.cost?.budget.kind).toBe("unbounded");
   });
 
   test(`Given turn-limit wrap-up adds a low-tier provider request,
@@ -508,7 +508,7 @@ describe("Run Outcome Reporting", () => {
       expect(finalEvent.stopReason).toBe("turn_limit");
       expect(finalEvent.usage.inputTokens).toBe(300_000);
       expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-      expect(finalEvent.cost?.budgetLimited).toBe(false);
+      expect(finalEvent.cost?.budget.kind).toBe("unbounded");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
