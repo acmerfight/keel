@@ -90,13 +90,29 @@ type ChangedTrackedEntry = z.infer<typeof changedTrackedEntrySchema>;
 interface GitDiffRefComparison {
   readonly baseRef: string;
   readonly headRef: string;
-  readonly mergeBase: boolean;
+  readonly comparison: "direct" | "merge_base";
 }
 
 interface ResolvedGitDiffRefComparison extends GitDiffRefComparison {
   readonly baseCommit: string;
   readonly headCommit: string;
 }
+
+type GitDiffRequestMode =
+  | { readonly kind: "worktree"; readonly mode: GitDiffMode }
+  | { readonly kind: "refs"; readonly comparison: GitDiffRefComparison };
+
+type GitDiffRequest =
+  | {
+      readonly kind: "worktree";
+      readonly mode: GitDiffMode;
+      readonly pathspecs: GitPathspecs;
+    }
+  | {
+      readonly kind: "refs";
+      readonly comparison: GitDiffRefComparison;
+      readonly pathspecs: GitPathspecs;
+    };
 
 interface GitDiffSourceTruncation {
   readonly preview: boolean;
@@ -201,9 +217,9 @@ function normalizeGitRef(requestedRef: string): string {
   return requestedRef;
 }
 
-function normalizeRefComparison(
+function normalizeGitDiffRequestMode(
   options: GitDiffOptions,
-): GitDiffRefComparison | null {
+): GitDiffRequestMode {
   if (options.baseRef === undefined) {
     if (options.headRef !== undefined) {
       throw gitRefError("headRef requires baseRef");
@@ -211,7 +227,7 @@ function normalizeRefComparison(
     if (options.mergeBase === true) {
       throw gitRefError("mergeBase requires baseRef");
     }
-    return null;
+    return { kind: "worktree", mode: options.mode ?? "all" };
   }
 
   if (options.mode !== undefined) {
@@ -219,14 +235,26 @@ function normalizeRefComparison(
   }
 
   return {
-    baseRef: normalizeGitRef(options.baseRef),
-    headRef: normalizeGitRef(options.headRef ?? "HEAD"),
-    mergeBase: options.mergeBase === true,
+    kind: "refs",
+    comparison: {
+      baseRef: normalizeGitRef(options.baseRef),
+      headRef: normalizeGitRef(options.headRef ?? "HEAD"),
+      comparison: options.mergeBase === true ? "merge_base" : "direct",
+    },
   };
 }
 
+function gitDiffRequestWithPathspecs(
+  mode: GitDiffRequestMode,
+  pathspecs: GitPathspecs,
+): GitDiffRequest {
+  return mode.kind === "worktree"
+    ? { kind: "worktree", mode: mode.mode, pathspecs }
+    : { kind: "refs", comparison: mode.comparison, pathspecs };
+}
+
 function refComparisonLabel(comparison: GitDiffRefComparison): string {
-  const separator = comparison.mergeBase ? "..." : "..";
+  const separator = comparison.comparison === "merge_base" ? "..." : "..";
   return `Ref comparison (${comparison.baseRef}${separator}${comparison.headRef})`;
 }
 
@@ -424,8 +452,9 @@ async function refComparisonDiffArgs(
   config: readonly string[],
   signal: AbortSignal | undefined,
 ): Promise<readonly string[]> {
-  if (!comparison.mergeBase)
+  if (comparison.comparison === "direct") {
     return [comparison.baseCommit, comparison.headCommit];
+  }
   return [
     await mergeBaseRef(workspacePath, comparison, config, signal),
     comparison.headCommit,
@@ -677,8 +706,8 @@ export async function executeGitDiff(
   options: GitDiffOptions = {},
 ): Promise<GitDiffResult> {
   const workspacePath = realpathSync(workspace);
-  const refComparison = normalizeRefComparison(options);
-  const paths = normalizeGitPathFilters(
+  const requestMode = normalizeGitDiffRequestMode(options);
+  const pathFilters = normalizeGitPathFilters(
     "git_diff",
     workspacePath,
     options.paths,
@@ -686,7 +715,7 @@ export async function executeGitDiff(
   const scope = await resolveGitWorkTreeScope(
     "git_diff",
     workspacePath,
-    paths,
+    pathFilters,
     options.signal,
   );
   if (scope === null) {
@@ -704,9 +733,10 @@ export async function executeGitDiff(
   assertGitPathFiltersAllowed(
     "git_diff",
     workspacePath,
-    paths,
+    pathFilters,
     projectIgnorePolicy,
   );
+  const request = gitDiffRequestWithPathspecs(requestMode, scope.pathspecs);
 
   const config = await configuredFilterOverrides(
     scope.rootPath,
@@ -716,10 +746,10 @@ export async function executeGitDiff(
   const artifactSections: string[] = [];
   const sourceTruncations: GitDiffSourceTruncation[] = [];
 
-  if (refComparison !== null) {
+  if (request.kind === "refs") {
     const resolvedComparison = await resolveRefComparison(
       scope.rootPath,
-      refComparison,
+      request.comparison,
       config,
       options.signal,
     );
@@ -733,7 +763,7 @@ export async function executeGitDiff(
         options.signal,
       ),
       [scope.workspacePathspec],
-      scope.pathspecs,
+      request.pathspecs,
       config,
       options.signal,
       projectIgnorePolicy,
@@ -743,21 +773,19 @@ export async function executeGitDiff(
         appendProcessSections(
           sections,
           artifactSections,
-          refComparisonLabel(refComparison),
+          refComparisonLabel(request.comparison),
           refDiff,
         ),
       );
     }
   } else {
-    const mode = options.mode ?? "all";
-
-    if (mode === "all" || mode === "unstaged") {
+    if (request.mode === "all" || request.mode === "unstaged") {
       const unstagedDiff = await runTrackedDiff(
         workspacePath,
         scope.rootPath,
         [],
         [scope.workspacePathspec],
-        scope.pathspecs,
+        request.pathspecs,
         config,
         options.signal,
         projectIgnorePolicy,
@@ -774,13 +802,13 @@ export async function executeGitDiff(
       }
     }
 
-    if (mode === "all" || mode === "staged") {
+    if (request.mode === "all" || request.mode === "staged") {
       const stagedDiff = await runTrackedDiff(
         workspacePath,
         scope.rootPath,
         ["--cached"],
         [scope.workspacePathspec],
-        scope.pathspecs,
+        request.pathspecs,
         config,
         options.signal,
         projectIgnorePolicy,
@@ -797,14 +825,14 @@ export async function executeGitDiff(
       }
     }
 
-    if (mode === "all" || mode === "unstaged") {
+    if (request.mode === "all" || request.mode === "unstaged") {
       sourceTruncations.push(
         await appendUntrackedDiffs(
           sections,
           artifactSections,
           workspacePath,
           scope.rootPath,
-          scope.pathspecs,
+          request.pathspecs,
           config,
           options.signal,
           projectIgnorePolicy,
