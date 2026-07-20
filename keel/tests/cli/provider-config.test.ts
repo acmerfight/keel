@@ -56,6 +56,61 @@ describe("Provider Config", () => {
     }
   });
 
+  test(`Given provider auth lookup hits an unexpected runtime failure,
+    When provider resolution falls back from environment credentials,
+    Then it preserves the original failure for the CLI runtime boundary`, () => {
+    // Given
+    const unexpected = new Error("provider auth lookup failed");
+    const failingRuntime: ProviderConfigRuntime = {
+      env: (key) => {
+        if (key === "KEEL_HOME") {
+          throw unexpected;
+        }
+        return undefined;
+      },
+    };
+
+    // When
+    let thrown: unknown;
+    try {
+      resolveProvider("Hello", failingRuntime, {
+        providerId: "deepseek",
+        model: "deepseek-v4",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Then
+    expect(thrown).toBe(unexpected);
+  });
+
+  test(`Given optional provider config lookup hits an unexpected runtime failure,
+    When provider resolution has no explicit or environment selection,
+    Then it preserves the original failure for the CLI runtime boundary`, () => {
+    // Given
+    const unexpected = new Error("provider config lookup failed");
+    const failingRuntime: ProviderConfigRuntime = {
+      env: (key) => {
+        if (key === "KEEL_HOME") {
+          throw unexpected;
+        }
+        return undefined;
+      },
+    };
+
+    // When
+    let thrown: unknown;
+    try {
+      resolveProvider("Hello", failingRuntime);
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Then
+    expect(thrown).toBe(unexpected);
+  });
+
   test(`Given the fake provider receives the apply patch demo prompt,
     When it streams through the read and patch turns,
     Then it requests apply_patch and reports the final patch reply`, async () => {

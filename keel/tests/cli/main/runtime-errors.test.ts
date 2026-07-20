@@ -336,6 +336,56 @@ describe("CLI Main - Runtime Errors", () => {
     expectNoCrashOutput(fixture.stderr());
   });
 
+  test.each([
+    {
+      command: "auth status",
+      args: ["auth", "status"],
+      inputText: undefined,
+    },
+    {
+      command: "config show",
+      args: ["config", "show"],
+      inputText: undefined,
+    },
+    {
+      command: "provider setup",
+      args: ["setup", "deepseek", "--with-api-key"],
+      inputText: "provider-setup-secret\n",
+    },
+  ])(`Given provider storage environment lookup fails during $command,
+    When the user runs the command,
+    Then the shared CLI boundary reports the unexpected failure without leaking input`, async ({
+    args,
+    inputText,
+  }) => {
+    // Given
+    const input = new PassThrough();
+    if (inputText !== undefined) {
+      input.end(inputText);
+    }
+    const fixture = createRuntime(args, { input });
+    const runtime = {
+      ...fixture.runtime,
+      env: () => {
+        throw new Error(
+          "provider storage environment failed\n    at raw-stack.ts:1:1",
+        );
+      },
+    };
+
+    // When
+    const exitCode = await runCliMain(runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: unexpected runtime failure: provider storage environment failed\n",
+    );
+    expect(fixture.stderr()).not.toContain("provider-setup-secret");
+    expectNoCrashOutput(fixture.stderr());
+  });
+
   test(`Given startup is aborted before command dispatch,
     When the user starts an interactive session,
     Then the CLI exits as interrupted without crash output`, async () => {
