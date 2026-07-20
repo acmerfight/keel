@@ -6,7 +6,6 @@ import { setImmediate } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   persistSessionGoal,
@@ -24,6 +23,7 @@ import {
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,

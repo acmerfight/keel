@@ -6,7 +6,6 @@ import type {
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
@@ -14,6 +13,7 @@ import {
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,

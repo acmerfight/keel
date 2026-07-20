@@ -6,11 +6,14 @@ import { expect } from "vitest";
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
 import type {
+  InteractiveMemoryRuntime,
   InteractiveResolvedProvider,
   InteractiveSession,
+  InteractiveSessionOptions,
+  InteractiveSessionResult,
   SavedInteractiveSession,
 } from "../cli/interactive-session/types.ts";
-import { runInteractiveSession } from "../cli/interactive-session.ts";
+import { runInteractiveSession as runProductionInteractiveSession } from "../cli/interactive-session.ts";
 import type { ModelSource } from "../cli/provider-config.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { ModelMetadata } from "../core/model-metadata.ts";
@@ -34,6 +37,30 @@ export const ZERO_COST_MODEL: CostModel = {
 export const EPHEMERAL_INTERACTIVE_SESSION = {
   kind: "ephemeral",
 } satisfies InteractiveSession;
+
+const DISABLED_TEST_MEMORY = {
+  kind: "disabled",
+  status: () => ({
+    enabled: false,
+    scope: null,
+    loadedIds: [],
+    loadedEntries: [],
+    renderedBytes: 0,
+    estimatedTokens: 0,
+    operations: [],
+  }),
+} satisfies InteractiveMemoryRuntime;
+
+export function runInteractiveSessionWithoutMemory(
+  options: Omit<InteractiveSessionOptions, "session" | "memory"> & {
+    readonly session: InteractiveSession;
+  },
+): Promise<InteractiveSessionResult> {
+  return runProductionInteractiveSession({
+    ...options,
+    memory: DISABLED_TEST_MEMORY,
+  });
+}
 
 type SavedInteractiveSessionFixtureOptions = {
   readonly id: string;
@@ -326,7 +353,7 @@ export async function expectInterruptedTurnPreservesVisibleScopedInstructions(
   const input = new PassThrough();
   const sigintHandlers = new Set<() => void>();
   let stdout = "";
-  const session = runInteractiveSession({
+  const session = runInteractiveSessionWithoutMemory({
     cliArgs: { bashMode: "disabled" },
     workspace,
     platform: process.platform,

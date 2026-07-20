@@ -35,6 +35,7 @@ import { createStableInteractiveDisplay } from "./interactive-session/display.ts
 import {
   type InteractiveForkSessionRequest,
   type InteractiveSession,
+  type InteractiveSessionMemoryBinding,
   type InteractiveSessionOptions,
   runInteractiveSession,
 } from "./interactive-session.ts";
@@ -1255,28 +1256,39 @@ async function runSessionCli(
       };
       interactiveDisplay?.writeIntro();
       interactiveTerminalDisplay?.start();
-      const reviewedMemoryEnabled =
+      const sessionMemory: InteractiveSessionMemoryBinding =
         cliArgs.memoryEnabled &&
         mode.kind === "interactive" &&
-        activeSessionId !== undefined &&
-        runtime.input.isTTY === true;
+        interactiveSession.kind === "saved" &&
+        runtime.input.isTTY === true
+          ? {
+              session: interactiveSession,
+              memory: {
+                kind: "reviewed",
+                prompt: loadMemoryPrompt,
+                mutation: agentMemory.capability,
+                proposal: agentMemory.proposalCapability,
+                status: inspectMemoryStatus,
+              },
+            }
+          : {
+              session: interactiveSession,
+              memory: !cliArgs.memoryEnabled
+                ? { kind: "disabled", status: inspectMemoryStatus }
+                : {
+                    kind: "direct",
+                    prompt: loadMemoryPrompt,
+                    mutation: agentMemory.capability,
+                    status: inspectMemoryStatus,
+                  },
+            };
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
         reportRecorder,
-        ...(cliArgs.memoryEnabled ? { memoryPrompt: loadMemoryPrompt } : {}),
-        ...(cliArgs.memoryEnabled
-          ? { memoryMutation: agentMemory.capability }
-          : {}),
-        ...(reviewedMemoryEnabled
-          ? {
-              memoryProposal: agentMemory.proposalCapability,
-            }
-          : {}),
-        memoryStatus: inspectMemoryStatus,
+        ...sessionMemory,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
-        session: interactiveSession,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
         ...(mode.kind === "headless-goal" &&
         headlessGoalBashPermission !== undefined

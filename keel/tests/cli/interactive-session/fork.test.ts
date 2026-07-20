@@ -1,10 +1,10 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { SessionQueuedInput } from "../../../src/cli/session-store.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   ZERO_COST_MODEL,
 } from "../../../src/testing/interactive-session-fixtures.ts";

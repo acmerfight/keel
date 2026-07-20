@@ -138,12 +138,50 @@ export type InteractiveSession =
   | { readonly kind: "ephemeral" }
   | SavedInteractiveSession;
 
-export interface InteractiveSessionOptions {
+export type InteractiveMemoryRuntime =
+  | {
+      readonly kind: "disabled";
+      readonly status: () => RunReportMemory;
+    }
+  | {
+      readonly kind: "direct";
+      readonly prompt: () => string;
+      readonly mutation: AgentMemoryMutationCapability;
+      readonly status: () => RunReportMemory;
+    }
+  | {
+      readonly kind: "reviewed";
+      readonly prompt: () => string;
+      readonly mutation: AgentMemoryMutationCapability;
+      readonly proposal: AgentMemoryProposalCapability;
+      readonly status: () => RunReportMemory;
+    };
+
+type NonReviewedInteractiveMemoryRuntime = Exclude<
+  InteractiveMemoryRuntime,
+  { readonly kind: "reviewed" }
+>;
+
+export interface ReviewedInteractiveSessionMemoryBinding {
+  readonly session: SavedInteractiveSession;
+  readonly memory: Extract<
+    InteractiveMemoryRuntime,
+    { readonly kind: "reviewed" }
+  >;
+}
+
+export type InteractiveSessionMemoryBinding =
+  | {
+      readonly session: InteractiveSession;
+      readonly memory: NonReviewedInteractiveMemoryRuntime;
+    }
+  | ReviewedInteractiveSessionMemoryBinding;
+
+interface InteractiveSessionOptionsBase {
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly platform: NodeJS.Platform;
-  readonly session: InteractiveSession;
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkills?: readonly WorkflowSkill[];
   readonly skillCatalog?: readonly SkillDescriptor[];
@@ -166,10 +204,6 @@ export interface InteractiveSessionOptions {
   readonly bashPermission?: SessionBashPermissionPolicy;
   readonly goalAutomaticContinuationTurnLimit?: number;
   readonly reportRecorder?: AgentEventReportRecorder;
-  readonly memoryPrompt?: () => string;
-  readonly memoryMutation?: AgentMemoryMutationCapability;
-  readonly memoryProposal?: AgentMemoryProposalCapability;
-  readonly memoryStatus?: () => RunReportMemory;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
   readonly persistProjectBashApprovalGrant?: (
@@ -205,6 +239,9 @@ export interface InteractiveSessionOptions {
   ) => Promise<EndEvent | undefined>;
   readonly formatCostReport: (cost: CostReport, maxUsd: number) => string;
 }
+
+export type InteractiveSessionOptions = InteractiveSessionOptionsBase &
+  InteractiveSessionMemoryBinding;
 
 export type InteractiveComposerMode = "approval" | "queue" | "ready" | "steer";
 

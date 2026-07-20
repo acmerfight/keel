@@ -5,7 +5,6 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   persistSessionBashApprovalGrant,
@@ -23,6 +22,7 @@ import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   savedInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
