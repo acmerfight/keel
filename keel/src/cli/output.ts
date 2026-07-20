@@ -34,7 +34,7 @@ function formatMemoryOperation(operation: AgentMemoryOperation): string {
     return `Forgot project memory ${operation.id} for ${operation.scope.id}.`;
   }
   if (operation.outcome === "approved") {
-    return `Approved project-memory candidate ${operation.candidateId} as ${String(operation.memoryId)} for ${operation.scope.id}.`;
+    return `Approved project-memory candidate ${operation.candidateId} as ${operation.memoryId} for ${operation.scope.id}.`;
   }
   if (operation.outcome === "rejected") {
     return `Rejected project-memory candidate ${operation.candidateId} for ${operation.scope.id}.`;

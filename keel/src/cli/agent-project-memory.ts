@@ -1,6 +1,7 @@
 import type {
   AgentMemoryMutationCapability,
   AgentMemoryProposalCapability,
+  AgentMemoryProposalResult,
 } from "../tools/memory.ts";
 import {
   addProjectMemory,
@@ -98,15 +99,14 @@ export function createAgentProjectMemory(options: {
           },
         );
         const pending = () => {
-          const operation = {
-            operation: "propose" as const,
+          const result: AgentMemoryProposalResult = {
             candidateId: recorded.candidate.id,
             memoryId: null,
             scope: recorded.scope,
-            outcome: "pending" as const,
+            outcome: "pending",
           };
-          operations.push(operation);
-          return operation;
+          operations.push({ operation: "propose", ...result });
+          return result;
         };
         if (recorded.candidate.conflictMemoryIds.length > 0) {
           return pending();
@@ -132,15 +132,14 @@ export function createAgentProjectMemory(options: {
             options.workspace,
             recorded.candidate.id,
           );
-          const operation = {
-            operation: "propose" as const,
+          const result: AgentMemoryProposalResult = {
             candidateId: recorded.candidate.id,
             memoryId: null,
             scope: recorded.scope,
-            outcome: "rejected" as const,
+            outcome: "rejected",
           };
-          operations.push(operation);
-          return operation;
+          operations.push({ operation: "propose", ...result });
+          return result;
         }
         const approved = approveReviewedProjectMemoryCandidate(
           options.runtime,
@@ -152,15 +151,14 @@ export function createAgentProjectMemory(options: {
             sessionId: source.sessionId,
           },
         );
-        const operation = {
-          operation: "propose" as const,
+        const result: AgentMemoryProposalResult = {
           candidateId: recorded.candidate.id,
           memoryId: approved.memory.id,
           scope: recorded.scope,
-          outcome: "approved" as const,
+          outcome: "approved",
         };
-        operations.push(operation);
-        return operation;
+        operations.push({ operation: "propose", ...result });
+        return result;
       },
     },
     operations: () => [...operations],

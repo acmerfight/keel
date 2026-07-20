@@ -582,7 +582,7 @@ describe("Model Operations", () => {
             userMessage: "Run the model request.",
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             modelOperations: {
               recorder,
