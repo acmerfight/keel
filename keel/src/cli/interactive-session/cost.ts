@@ -1,6 +1,23 @@
 import type { CostReport } from "../../agent/events.ts";
+import type { CostModel } from "../../core/cost.ts";
 import type { Usage } from "../../llm/types.ts";
 import type { InteractiveSessionArgs } from "./types.ts";
+
+export type InteractiveCompactionCost =
+  | {
+      readonly kind: "untracked";
+    }
+  | {
+      readonly kind: "tracked";
+      readonly model: CostModel;
+    }
+  | {
+      readonly kind: "budgeted";
+      readonly model: CostModel;
+      readonly maxCostUsd: number;
+      readonly remainingCostUsd: number;
+      readonly budgetLimitedReport: () => CostReport;
+    };
 
 export const EMPTY_USAGE: Usage = {
   inputTokens: 0,

@@ -124,6 +124,7 @@ import {
   buildSessionCostBudgetLimitedReport,
   buildSessionCostReport,
   EMPTY_USAGE,
+  type InteractiveCompactionCost,
   shouldTrackInteractiveCost,
 } from "./interactive-session/cost.ts";
 import { readForkPointPickerSelection } from "./interactive-session/fork-picker.ts";
@@ -815,16 +816,27 @@ export async function runInteractiveSession(
         )
       : cost;
   };
-  const currentSessionCostBudgetLimitedReport = (): CostReport => {
-    /* v8 ignore next 3 -- admission can call this only when --max-cost created the budget wrapper. */
-    if (options.cliArgs.maxCostUsd === undefined) {
-      return currentSessionCostReport();
+  const currentCompactionCost = (
+    operationResolved: InteractiveResolvedProvider,
+  ): InteractiveCompactionCost => {
+    if (!shouldTrackInteractiveCost(options.cliArgs)) {
+      return { kind: "untracked" };
     }
-    sessionCostBudgetLimited = true;
-    return buildSessionCostBudgetLimitedReport(
-      sessionCostUsd,
-      options.cliArgs.maxCostUsd,
-    );
+    const model = options.requireKnownCostModel(operationResolved);
+    const maxCostUsd = options.cliArgs.maxCostUsd;
+    if (maxCostUsd === undefined) {
+      return { kind: "tracked", model };
+    }
+    return {
+      kind: "budgeted",
+      model,
+      maxCostUsd,
+      remainingCostUsd: Math.max(0, maxCostUsd - sessionCostUsd),
+      budgetLimitedReport: () => {
+        sessionCostBudgetLimited = true;
+        return buildSessionCostBudgetLimitedReport(sessionCostUsd, maxCostUsd);
+      },
+    };
   };
   const currentReportEnd = (): EndEventWithCost | undefined => {
     if (sessionPromptTurnAttempted && !sessionEndObserved) {
@@ -2316,7 +2328,6 @@ export async function runInteractiveSession(
             activeAbortController = compactAbortController;
             setComposerMode("queue");
             try {
-              const remainingCostUsd = remainingMaxCostUsd();
               const modelOperations = reportModelOperations(currentResolved, {
                 type: "session",
               });
@@ -2336,8 +2347,7 @@ export async function runInteractiveSession(
                 options,
                 bashToolVisible: bashRuntimeExposesTool(bash),
                 recordCompactionCost,
-                ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
-                costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
+                compactionCost: currentCompactionCost(currentResolved),
                 modelOperations,
               });
               if (compaction.status === "rejected") {
@@ -2503,7 +2513,6 @@ export async function runInteractiveSession(
         let compactCost: CostReport | undefined;
         let compactCommitted = false;
         try {
-          const remainingCostUsd = remainingMaxCostUsd();
           const modelOperations = reportModelOperations(compactResolved, {
             type: "session",
           });
@@ -2522,8 +2531,7 @@ export async function runInteractiveSession(
             taskProgress,
             options,
             recordCompactionCost,
-            ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
-            costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
+            compactionCost: currentCompactionCost(compactResolved),
             modelOperations,
           });
           compactCost = compaction.cost;

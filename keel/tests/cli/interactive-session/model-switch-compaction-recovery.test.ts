@@ -158,22 +158,41 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       mode: "max-cost metered",
       cliArgs: { bashMode: "disabled" as const, maxCostUsd: 1 },
       expectsCostOutput: true,
+      summaryFailure: "truncated" as const,
+      expectedFailure:
+        "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
     },
     {
       mode: "report-only metered",
       cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
       expectsCostOutput: false,
+      summaryFailure: "truncated" as const,
+      expectedFailure:
+        "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
     },
     {
       mode: "unmetered",
       cliArgs: { bashMode: "disabled" as const },
       expectsCostOutput: false,
+      summaryFailure: "truncated" as const,
+      expectedFailure:
+        "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
+    },
+    {
+      mode: "unmetered provider-error",
+      cliArgs: { bashMode: "disabled" as const },
+      expectsCostOutput: false,
+      summaryFailure: "thrown" as const,
+      expectedFailure:
+        "Context compaction failed: model-switch summary unavailable",
     },
   ])(`Given $mode model-switch compaction fails,
     When user enters /model for a smaller target,
     Then the old provider remains active and the transcript is unchanged`, async ({
     cliArgs,
     expectsCostOutput,
+    summaryFailure,
+    expectedFailure,
   }) => {
     // Given
     const input = new PassThrough();
@@ -191,6 +210,9 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       async *stream(options) {
         if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
+          if (summaryFailure === "thrown") {
+            throw new Error("model-switch summary unavailable");
+          }
           yield {
             type: "text",
             text: "Partial model-switch checkpoint that must not commit",
@@ -278,9 +300,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
 
     // Then
     await session;
-    expect(stderr).toContain(
-      "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
-    );
+    expect(stderr).toContain(expectedFailure);
     expect(stderr.includes("Rejected compaction cost recorded.")).toBe(
       expectsCostOutput,
     );

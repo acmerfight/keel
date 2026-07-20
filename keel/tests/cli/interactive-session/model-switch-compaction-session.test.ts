@@ -207,15 +207,16 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
-  test(`Given model-switch compaction exceeds the cost budget,
+  test(`Given budgeted model-switch compaction has an old-model output limit,
     When user enters /model for a smaller target,
-    Then Keel records the compaction cost and stops before the queued prompt`, async () => {
+    Then Keel applies that limit, records the cost, and stops before the queued prompt`, async () => {
     // Given
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     let stderr = "";
     let oldProviderSummaryRequests = 0;
+    let oldProviderSummaryMaxOutputTokens: number | undefined;
     let targetProviderTurns = 0;
     const initialMessages: readonly Message[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
@@ -226,6 +227,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       async *stream(options) {
         if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
+          oldProviderSummaryMaxOutputTokens = options.maxOutputTokens;
           yield { type: "text", text: "Costly checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
           return;
@@ -284,6 +286,20 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
           "fake",
           oldProvider,
           ONE_DOLLAR_PER_MILLION_INPUT,
+          undefined,
+          {
+            status: "known",
+            source: "registry",
+            contextWindowTokens: null,
+            maxOutputTokens: 300,
+            capabilities: {
+              textInput: true,
+              toolCalls: true,
+              reasoning: false,
+            },
+            costModel: ONE_DOLLAR_PER_MILLION_INPUT,
+            lastVerified: "2026-06-26",
+          },
         );
       },
       requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
@@ -312,6 +328,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     expect(stderr).toContain("Context compacted: model switch");
     expect(stderr).toContain("Cost: 2.00 / 0.01 limited=true");
     expect(oldProviderSummaryRequests).toBe(1);
+    expect(oldProviderSummaryMaxOutputTokens).toBe(300);
     expect(targetProviderTurns).toBe(0);
     expect(sigintHandlers.size).toBe(0);
   });

@@ -1067,20 +1067,28 @@ describe("Interactive Session - Manual Compact Success", () => {
     }
   });
 
-  test(`Given manual compaction has cost tracking enabled,
+  test(`Given budgeted manual compaction has a model output limit,
     When user enters /compact,
-    Then the session prints the compaction cost report`, async () => {
+    Then the session applies that limit and prints the compaction cost report`, async () => {
     // Given
     let receiveFirstEnd: () => void = () => {};
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
     let requestTurn = 0;
+    let summaryMaxOutputTokens: number | undefined;
+    const costModel: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 100,
+      cachedInputPerMillionTokens: 0,
+      outputPerMillionTokens: 200,
+    };
     const provider: LLMProvider = {
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
         if (options.toolExposure?.kind === "none") {
+          summaryMaxOutputTokens = options.maxOutputTokens;
           yield { type: "text", text: "Costed checkpoint summary." };
           yield {
             type: "stop",
@@ -1125,19 +1133,22 @@ describe("Interactive Session - Manual Compact Success", () => {
         provider,
         providerId: "fake",
         model: "fake",
-        costModel: {
-          type: "fixed",
-          uncachedInputPerMillionTokens: 100,
-          cachedInputPerMillionTokens: 0,
-          outputPerMillionTokens: 200,
+        costModel,
+        modelMetadata: {
+          status: "known",
+          source: "registry",
+          contextWindowTokens: null,
+          maxOutputTokens: 300,
+          capabilities: {
+            textInput: true,
+            toolCalls: true,
+            reasoning: false,
+          },
+          costModel,
+          lastVerified: "2026-06-26",
         },
       }),
-      requireKnownCostModel: () => ({
-        type: "fixed",
-        uncachedInputPerMillionTokens: 100,
-        cachedInputPerMillionTokens: 0,
-        outputPerMillionTokens: 200,
-      }),
+      requireKnownCostModel: () => costModel,
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {
@@ -1165,6 +1176,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     // Then
     await session;
     expect(stdout).toBe("First done\n");
+    expect(summaryMaxOutputTokens).toBe(300);
     expect(stderr).toContain("Context compacted: manual");
     expect(stderr).toContain("Cost: 0.005000 / 0.1 limited=false\n");
   });
