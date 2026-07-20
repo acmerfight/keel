@@ -59,7 +59,7 @@ import {
   type ValidToolCall,
 } from "./tool-call.ts";
 import { invalidBuiltinToolCallError } from "./tool-error.ts";
-import type { ToolResult } from "./types.ts";
+import type { ToolOutputArtifact, ToolResult } from "./types.ts";
 import {
   resolveWorkspaceCreateTarget,
   resolveWorkspaceTarget,
@@ -154,8 +154,7 @@ export interface ToolExecution {
   readonly content: string;
   readonly ok: boolean;
   readonly sourceTruncated?: boolean;
-  readonly artifactContent?: string;
-  readonly artifactSourceTruncated?: boolean;
+  readonly artifact?: ToolOutputArtifact;
   readonly readTargetPath?: string;
   readonly readTargetOffset?: number;
   readonly readTargetLimit?: number;
@@ -177,17 +176,11 @@ export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
 
 function sourceTruncation(result: ToolResult): {
   readonly sourceTruncated?: true;
-  readonly artifactContent?: string;
-  readonly artifactSourceTruncated?: boolean;
+  readonly artifact?: ToolOutputArtifact;
 } {
   return {
     ...(result.sourceTruncated === true ? { sourceTruncated: true } : {}),
-    ...(result.artifactContent !== undefined
-      ? { artifactContent: result.artifactContent }
-      : {}),
-    ...(result.artifactSourceTruncated !== undefined
-      ? { artifactSourceTruncated: result.artifactSourceTruncated }
-      : {}),
+    ...(result.artifact !== undefined ? { artifact: result.artifact } : {}),
   };
 }
 
@@ -698,13 +691,16 @@ async function executeUpdateGoalTool(
     return {
       ...rejection,
       ...truncation,
-      ...(truncation.artifactContent !== undefined
+      ...(truncation.artifact !== undefined
         ? {
-            artifactContent: commandVerificationFailureContent(
-              expectedCommand,
-              verification.exitCode,
-              truncation.artifactContent,
-            ),
+            artifact: {
+              content: commandVerificationFailureContent(
+                expectedCommand,
+                verification.exitCode,
+                truncation.artifact.content,
+              ),
+              sourceTruncated: truncation.artifact.sourceTruncated,
+            },
           }
         : {}),
     };

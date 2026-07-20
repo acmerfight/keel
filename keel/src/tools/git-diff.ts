@@ -831,10 +831,12 @@ export async function executeGitDiff(
     inGitWorkTree: true,
     ...(previewSourceTruncated ? { sourceTruncated: true } : {}),
     ...(previewSourceTruncated || artifactSourceTruncated
-      ? { artifactContent }
-      : {}),
-    ...(previewSourceTruncated || artifactSourceTruncated
-      ? { artifactSourceTruncated }
+      ? {
+          artifact: {
+            content: artifactContent,
+            sourceTruncated: artifactSourceTruncated,
+          },
+        }
       : {}),
   };
 }

@@ -489,8 +489,10 @@ describe("git_diff tool", () => {
       expect(result.content).toContain("git stderr:\nwarning from git");
       expect(result.content).toContain("[git_diff stderr truncated:");
       expect(result.sourceTruncated).toBe(true);
-      expect(result.artifactContent).toContain("git stderr:\nwarning from git");
-      expect(result.artifactSourceTruncated).toBe(false);
+      expect(result.artifact?.content).toContain(
+        "git stderr:\nwarning from git",
+      );
+      expect(result.artifact?.sourceTruncated).toBe(false);
     });
   });
 
@@ -720,8 +722,7 @@ describe("git_diff tool", () => {
         "+[git_diff stdout truncated: ordinary file content]",
       );
       expect(result.sourceTruncated).toBeUndefined();
-      expect(result.artifactContent).toBeUndefined();
-      expect(result.artifactSourceTruncated).toBeUndefined();
+      expect(result.artifact).toBeUndefined();
     });
   });
 

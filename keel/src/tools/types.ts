@@ -1,6 +1,10 @@
+export interface ToolOutputArtifact {
+  readonly content: string;
+  readonly sourceTruncated: boolean;
+}
+
 export interface ToolResult {
   readonly content: string;
   readonly sourceTruncated?: boolean;
-  readonly artifactContent?: string;
-  readonly artifactSourceTruncated?: boolean;
+  readonly artifact?: ToolOutputArtifact;
 }
