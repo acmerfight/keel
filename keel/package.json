@@ -35,20 +35,20 @@
     "pre-commit": "pnpm typecheck && pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git -C .. update-index --again"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "0.80.6",
+    "@earendil-works/pi-tui": "0.80.10",
     "@vscode/ripgrep": "1.18.0",
     "ignore": "7.0.6",
     "yaml": "2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.3",
+    "@biomejs/biome": "2.5.4",
     "@fast-check/vitest": "^0.4.1",
     "@types/node": "^24.13.3",
     "@vitest/coverage-v8": "^4.1.10",
     "@xterm/headless": "6.0.0",
     "fast-check": "^4.9.0",
-    "knip": "^6.26.0",
+    "knip": "^6.27.0",
     "node-pty": "1.2.0-beta.14",
     "simple-git-hooks": "^2.13.1",
     "typescript": "^6.0.3",
