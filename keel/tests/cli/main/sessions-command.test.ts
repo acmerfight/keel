@@ -134,8 +134,10 @@ describe("CLI Main - Sessions Command", () => {
             status: "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "command",
-            completionCriterion: 'node  -e "process.exit(0)"',
+            completion: {
+              kind: "command",
+              command: 'node  -e "process.exit(0)"',
+            },
           },
         }),
       ],

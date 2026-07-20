@@ -226,8 +226,10 @@ describe("Cost Budget", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The work is demonstrably complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "The work is demonstrably complete.",
+      },
     };
     let providerCalls = 0;
     const provider: LLMProvider = {

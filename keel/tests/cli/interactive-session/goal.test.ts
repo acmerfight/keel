@@ -135,8 +135,10 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       }),
     ).toBe(
       "Session goal: active - Continue checkout; criterion(command): pnpm test\n",
@@ -169,8 +171,10 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 2, tokens: 30, activeTimeMs: 40 },
-        criterionKind: "assertion",
-        completionCriterion: "Checkout passes.",
+        completion: {
+          kind: "assertion",
+          assertion: "Checkout passes.",
+        },
         latestRuntimeOutcome: {
           kind: "recovery_requested",
           reason: "The last three continuations repeated.",
@@ -482,7 +486,6 @@ describe("Interactive Session - Goals", () => {
     ).toEqual({
       kind: "goal",
       action: "criterion",
-      criterionKind: "assertion",
       criterion: "release notes cover every flag",
     });
     expect(parseInteractiveCommand("/goal verify")).toEqual({
@@ -522,16 +525,20 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
       {
         objective: "Ship the default atomic goal",
         status: "paused",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     ]);
     expect(result.stdout).toContain(
@@ -620,9 +627,11 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
       },
       persistence: "normal",
     });
@@ -633,9 +642,11 @@ describe("Interactive Session - Goals", () => {
         statusReason: "Session goal budget reached: turns 1/1.",
         budget: { turns: 1 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -647,9 +658,11 @@ describe("Interactive Session - Goals", () => {
         statusReason: "Session goal budget reached: turns 1/1.",
         budget: { turns: 2 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -660,9 +673,11 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: { turns: 2 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -673,9 +688,11 @@ describe("Interactive Session - Goals", () => {
         status: "paused",
         budget: { turns: 2 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -729,8 +746,10 @@ describe("Interactive Session - Goals", () => {
         statusReason: "Session goal budget reached: turns 2/2.",
         budget: { turns: 2 },
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       input,
       writeStdout: (text) => {
@@ -782,32 +801,40 @@ describe("Interactive Session - Goals", () => {
         statusReason: "Session goal budget reached: turns 2/2.",
         budget: { turns: 3, tokens: 1_000, activeTimeMs: 5_000 },
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       {
         objective: "Finish the budgeted checkout goal",
         status: "active",
         budget: { turns: 3, tokens: 1_000, activeTimeMs: 5_000 },
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       {
         objective: "Finish the budgeted checkout goal",
         status: "active",
         budget: {},
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       {
         objective: "Finish the budgeted checkout goal",
         status: "paused",
         budget: {},
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
     ]);
     expect(stdout).toContain("Goal budget updated.\n");
@@ -908,8 +935,10 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       });
       expect(stdout).toContain("Goal set: active\n");
       expect(stdout).toContain("Goal verification command set: pnpm test\n");
@@ -1026,8 +1055,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
     });
     expect(providerPrompts).toHaveLength(1);
     expect(providerPrompts[0]).toContain(`Objective: ${condition}`);
@@ -1129,8 +1160,10 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toMatchObject({
       objective: condition,
       status: "budget_limited",
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
       budget: { turns: 1 },
       usage: { turns: 1 },
     });
@@ -1215,8 +1248,10 @@ describe("Interactive Session - Goals", () => {
       objective: condition,
       status: "active",
       budget: {},
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
     });
     expect(stderr).toBe("goal budget store unavailable\n");
   });
@@ -1313,8 +1348,10 @@ describe("Interactive Session - Goals", () => {
       objective: condition,
       status: expectedStatus,
       budget: {},
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
     });
     expect(stderr).toContain(`${expectedError}\n`);
   });
@@ -1331,9 +1368,11 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
-      verificationTimeoutMs: 45_000,
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+        verificationTimeoutMs: 45_000,
+      },
     };
     const providerPrompts: string[] = [];
     const providerMessages: (readonly Message[])[] = [];
@@ -1414,9 +1453,11 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
-      verificationTimeoutMs: 45_000,
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+        verificationTimeoutMs: 45_000,
+      },
     });
     expect(stdout).toContain("Goal paused: Finish lifecycle states\n");
     expect(stdout).toContain(
@@ -1516,8 +1557,10 @@ describe("Interactive Session - Goals", () => {
       status: "paused",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "Blocked objective",
+      completion: {
+        kind: "assertion",
+        assertion: "Blocked objective",
+      },
     });
     expect(stderr).toBe(
       "Error: only active session goals can be paused.\n" +
@@ -1542,8 +1585,10 @@ describe("Interactive Session - Goals", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need credentials.",
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     },
     {
@@ -1554,8 +1599,10 @@ describe("Interactive Session - Goals", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Automatic continuation stopped.",
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     },
     {
@@ -1566,8 +1613,10 @@ describe("Interactive Session - Goals", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Session budget stopped continuation.",
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     },
   ];
@@ -1659,8 +1708,10 @@ describe("Interactive Session - Goals", () => {
       },
       budget: {},
       usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
     });
     expect(stdout).toContain(`Goal resumed: ${initialGoal.objective}\n`);
     expect(providerMessages).toHaveLength(1);
@@ -1801,8 +1852,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "release notes cover every changed command",
+      completion: {
+        kind: "assertion",
+        assertion: "release notes cover every changed command",
+      },
     });
     expect(stdout).toContain(
       "Goal assertion criterion set: release notes cover every changed command\n",
@@ -1955,8 +2008,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: 'node  -e "process.exit(0)"',
+      completion: {
+        kind: "command",
+        command: 'node  -e "process.exit(0)"',
+      },
     });
     expect(stdout).toContain(
       'Goal verification command set: node  -e "process.exit(0)"\n',
@@ -2219,8 +2274,10 @@ describe("Interactive Session - Goals", () => {
         status: "paused",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "Resume persistence succeeds",
+        completion: {
+          kind: "assertion",
+          assertion: "Resume persistence succeeds",
+        },
       },
       input,
       writeStdout: () => {},
@@ -2265,8 +2322,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
     };
     const providerPrompts: string[] = [];
     const provider: LLMProvider = {
@@ -2340,8 +2399,10 @@ describe("Interactive Session - Goals", () => {
       status: "completed",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       completionEvidence: { kind: "user_override" },
       latestRuntimeOutcome: {
         kind: "completed",
@@ -2384,8 +2445,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: 'node -e "process.exit(0)"',
+      completion: {
+        kind: "command",
+        command: 'node -e "process.exit(0)"',
+      },
     };
     let providerRequestCount = 0;
     const provider: LLMProvider = {
@@ -2479,8 +2542,10 @@ describe("Interactive Session - Goals", () => {
         status: "completed",
         budget: {},
         usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-        criterionKind: "command",
-        completionCriterion: 'node -e "process.exit(0)"',
+        completion: {
+          kind: "command",
+          command: 'node -e "process.exit(0)"',
+        },
         completionEvidence: {
           kind: "command",
           command: 'node -e "process.exit(0)"',
@@ -2536,8 +2601,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "release notes explain every changed command",
+      completion: {
+        kind: "assertion",
+        assertion: "release notes explain every changed command",
+      },
     };
     const persistedGoals: SessionGoal[] = [];
     const expandingReason = redactionExpandingText(
@@ -2685,8 +2752,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: 'node -e "process.exit(0)"',
+      completion: {
+        kind: "command",
+        command: 'node -e "process.exit(0)"',
+      },
     };
     let providerRequestCount = 0;
     const provider: LLMProvider = {

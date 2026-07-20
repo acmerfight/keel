@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
-import {
-  copySessionGoal,
-  type SessionGoal,
-  sessionGoalSchema,
-} from "../../core/session-goal.ts";
+import { copySessionGoal, type SessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
@@ -700,14 +696,7 @@ export function persistSessionGoal(options: {
     if (options.goal === null) {
       return null;
     }
-    const redactedGoal = redactSessionGoalForPersistence(options.goal);
-    const validatedGoal = sessionGoalSchema.safeParse(redactedGoal);
-    if (!validatedGoal.success) {
-      sessionStoreError(
-        "Error: session goal is invalid after persistence redaction.",
-      );
-    }
-    return validatedGoal.data;
+    return redactSessionGoalForPersistence(options.goal);
   })();
   const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
   const timestamp = isoTimestamp(options.runtime);

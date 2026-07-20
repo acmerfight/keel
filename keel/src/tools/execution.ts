@@ -596,10 +596,7 @@ async function executeUpdateGoalTool(
       sessionGoalUpdate: copySessionGoal(blockedProposalGoal),
     };
   }
-  if (
-    sessionGoal.criterionKind === undefined ||
-    sessionGoal.completionCriterion === undefined
-  ) {
+  if (sessionGoal.completion === undefined) {
     return rejectedGoalCompletion(
       sessionGoal,
       "Tool failed: update_goal failed: no completion criterion is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command> or /goal done-when <criterion>, continue working, or ask the user to use /goal complete for an explicit override.",
@@ -613,7 +610,7 @@ async function executeUpdateGoalTool(
       "Completion was rejected because update_goal(completed) was not the final tool call in its agent turn.",
     );
   }
-  if (sessionGoal.criterionKind === "assertion") {
+  if (sessionGoal.completion.kind === "assertion") {
     if (evaluateAssertionGoalCompletion === undefined) {
       return rejectedGoalCompletion(
         sessionGoal,
@@ -623,7 +620,7 @@ async function executeUpdateGoalTool(
     }
     const evaluation = await evaluateAssertionGoalCompletion({
       objective: sessionGoal.objective,
-      completionCriterion: sessionGoal.completionCriterion,
+      completionCriterion: sessionGoal.completion.assertion,
     });
     if (!evaluation.completed) {
       return rejectedGoalCompletion(
@@ -658,7 +655,7 @@ async function executeUpdateGoalTool(
     };
   }
   const expectedCommand = normalizeSessionGoalCompletionCommand(
-    sessionGoal.completionCriterion,
+    sessionGoal.completion.command,
   );
   if (bash.kind === "disabled") {
     return rejectedGoalCompletion(
@@ -683,8 +680,8 @@ async function executeUpdateGoalTool(
   }
   const verification = await executeBash(workspace, expectedCommand, {
     signal,
-    ...(sessionGoal.verificationTimeoutMs !== undefined
-      ? { timeoutMs: sessionGoal.verificationTimeoutMs }
+    ...(sessionGoal.completion.verificationTimeoutMs !== undefined
+      ? { timeoutMs: sessionGoal.completion.verificationTimeoutMs }
       : {}),
   });
   if (verification.exitCode !== 0) {

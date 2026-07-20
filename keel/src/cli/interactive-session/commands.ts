@@ -10,7 +10,6 @@ import {
   normalizeSessionGoalObjective,
   type SessionGoal,
   type SessionGoalBudget,
-  type SessionGoalCriterionKind,
 } from "../../core/session-goal.ts";
 import {
   parseGoalDuration,
@@ -116,7 +115,6 @@ type GoalCommand =
   | {
       readonly kind: "goal";
       readonly action: "criterion";
-      readonly criterionKind: SessionGoalCriterionKind;
       readonly criterion: string;
     }
   | {
@@ -511,7 +509,6 @@ function parseGoalCommandArgs(
     return {
       kind: "goal",
       action: "criterion",
-      criterionKind: "assertion",
       criterion,
     };
   }
@@ -1110,18 +1107,20 @@ export function formatInteractiveGoalBudgetCleared(goal: SessionGoal): string {
 
 export function formatInteractiveGoalVerificationSet(
   goal: SessionGoal & {
-    readonly criterionKind: "command";
-    readonly completionCriterion: string;
+    readonly completion: Extract<
+      NonNullable<SessionGoal["completion"]>,
+      { readonly kind: "command" }
+    >;
   },
   options: { readonly bashToolVisible: boolean },
 ): string {
   const setMessage = `Goal verification command set: ${formatInteractiveGoalText(
-    goal.completionCriterion,
+    goal.completion.command,
   )}\n`;
   const timeoutMessage =
-    goal.verificationTimeoutMs === undefined
+    goal.completion.verificationTimeoutMs === undefined
       ? ""
-      : `Goal verification timeout: ${formatSessionGoalDuration(goal.verificationTimeoutMs)}\n`;
+      : `Goal verification timeout: ${formatSessionGoalDuration(goal.completion.verificationTimeoutMs)}\n`;
   if (options.bashToolVisible) {
     return `${setMessage}${timeoutMessage}`;
   }
@@ -1130,11 +1129,13 @@ export function formatInteractiveGoalVerificationSet(
 
 export function formatInteractiveGoalCriterionSet(
   goal: SessionGoal & {
-    readonly criterionKind: SessionGoalCriterionKind;
-    readonly completionCriterion: string;
+    readonly completion: Extract<
+      NonNullable<SessionGoal["completion"]>,
+      { readonly kind: "assertion" }
+    >;
   },
 ): string {
-  return `Goal ${goal.criterionKind} criterion set: ${formatInteractiveGoalText(goal.completionCriterion)}\n`;
+  return `Goal assertion criterion set: ${formatInteractiveGoalText(goal.completion.assertion)}\n`;
 }
 
 export function formatInteractiveGoalCleared(): string {

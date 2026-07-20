@@ -29,14 +29,40 @@ import {
   parseSessionHeaderRecord,
   parseSessionMutationRecord,
   parseSnapshotSessionMutationRecord,
+  serializeSessionGoalForPersistence,
 } from "./records.ts";
+
+function serializeSessionMutationRecord(
+  record: SessionMutationRecord,
+): unknown {
+  if (record.type === "session_goal") {
+    return {
+      ...record,
+      goal:
+        record.goal === null
+          ? null
+          : serializeSessionGoalForPersistence(record.goal),
+    };
+  }
+  if (record.type === "snapshot" && record.goal !== undefined) {
+    return {
+      ...record,
+      goal: serializeSessionGoalForPersistence(record.goal),
+    };
+  }
+  return record;
+}
 
 function appendJsonLine(filePath: string, record: SessionMutationRecord): void {
   let fd: number | undefined;
   try {
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
     fd = openSync(filePath, "a", 0o600);
-    appendFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
+    appendFileSync(
+      fd,
+      `${JSON.stringify(serializeSessionMutationRecord(record))}\n`,
+      "utf8",
+    );
     fsyncSync(fd);
   } catch (error) {
     sessionStoreError(
@@ -70,7 +96,9 @@ function writeInitialHeader(
 ): void {
   const headerLine = serializeSessionHeaderLine(filePath, header);
   const content = `${headerLine}${mutations
-    .map((record) => `${JSON.stringify(record)}\n`)
+    .map(
+      (record) => `${JSON.stringify(serializeSessionMutationRecord(record))}\n`,
+    )
     .join("")}`;
   let fd: number | undefined;
   try {

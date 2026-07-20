@@ -17,6 +17,7 @@ import {
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
   type SessionGoal,
   type SessionGoalCompletionEvidence,
+  type SessionGoalRecord,
   type SessionGoalRuntimeOutcome,
   sessionGoalAccounting,
   sessionGoalSchema,
@@ -1032,7 +1033,7 @@ function redactSessionGoalRuntimeOutcomeForPersistence(
   });
 }
 
-function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
+function sessionGoalRecordForPersistence(goal: SessionGoal): SessionGoalRecord {
   const accounting = sessionGoalAccounting(goal);
   const objective = redactBoundedGoalTextForPersistence({
     value: goal.objective,
@@ -1042,18 +1043,18 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
     lengthError: `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
   });
   const completionCriterion =
-    goal.completionCriterion === undefined
+    goal.completion === undefined
       ? undefined
-      : goal.criterionKind === "command"
+      : goal.completion.kind === "command"
         ? redactBoundedGoalTextForPersistence({
-            value: goal.completionCriterion,
+            value: goal.completion.command,
             normalize: normalizeSessionGoalCompletionCommand,
             maxLength: SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
             emptyError: "Error: /goal completion criterion requires text.",
             lengthError: `Error: /goal completion criterion must be ${SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH} characters or fewer.`,
           })
         : redactBoundedGoalTextForPersistence({
-            value: goal.completionCriterion,
+            value: goal.completion.assertion,
             normalize: normalizeSessionGoalCompletionCriterion,
             maxLength: SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH,
             emptyError: "Error: /goal completion criterion requires text.",
@@ -1094,20 +1095,40 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
     goal.latestRuntimeOutcome === undefined
       ? {}
       : {
-          latestRuntimeOutcome: redactSessionGoalRuntimeOutcomeForPersistence(
-            goal.latestRuntimeOutcome,
-          ),
+          latestRuntimeOutcome: (() => {
+            const outcome = redactSessionGoalRuntimeOutcomeForPersistence(
+              goal.latestRuntimeOutcome,
+            );
+            return {
+              kind: outcome.kind,
+              reason: outcome.reason,
+              ...(outcome.observedEvidenceFingerprints === undefined
+                ? {}
+                : {
+                    observedEvidenceFingerprints: [
+                      ...outcome.observedEvidenceFingerprints,
+                    ],
+                  }),
+            };
+          })(),
         };
   const criterion =
-    goal.criterionKind !== undefined && completionCriterion !== undefined
-      ? {
-          criterionKind: goal.criterionKind,
-          completionCriterion,
-          ...(goal.verificationTimeoutMs !== undefined
-            ? { verificationTimeoutMs: goal.verificationTimeoutMs }
-            : {}),
-        }
-      : {};
+    goal.completion === undefined || completionCriterion === undefined
+      ? {}
+      : goal.completion.kind === "command"
+        ? {
+            criterionKind: "command" as const,
+            completionCriterion,
+            ...(goal.completion.verificationTimeoutMs !== undefined
+              ? {
+                  verificationTimeoutMs: goal.completion.verificationTimeoutMs,
+                }
+              : {}),
+          }
+        : {
+            criterionKind: "assertion" as const,
+            completionCriterion,
+          };
   switch (goal.status) {
     case "active":
       return {
@@ -1173,6 +1194,24 @@ function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
           ),
       };
   }
+}
+
+function redactSessionGoalForPersistence(goal: SessionGoal): SessionGoal {
+  const redactedGoal = sessionGoalSchema.safeParse(
+    sessionGoalRecordForPersistence(goal),
+  );
+  if (!redactedGoal.success) {
+    sessionStoreError(
+      "Error: session goal is invalid after persistence redaction.",
+    );
+  }
+  return redactedGoal.data;
+}
+
+function serializeSessionGoalForPersistence(
+  goal: SessionGoal,
+): SessionGoalRecord {
+  return sessionGoalRecordForPersistence(goal);
 }
 
 function redactSessionTaskProgressCheckpointForPersistence(
@@ -1644,5 +1683,6 @@ export {
   redactSessionTaskProgressForPersistence,
   redactSkillActivationForPersistence,
   redactStoredMessageForPersistence,
+  serializeSessionGoalForPersistence,
   validateCompletedTranscript,
 };
