@@ -1163,8 +1163,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(1)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1262,8 +1266,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1373,8 +1381,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(1)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1478,8 +1490,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(1)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1496,7 +1512,10 @@ describe("Interactive Session - Manual Compact Success", () => {
     expect(result.report?.end.stopReason).toBe("cost_budget");
     expect(result.report?.end.cost).toMatchObject({
       spentUsd: 0.099,
-      overshootUsd: 0,
+      budget: {
+        kind: "budget_limited",
+        overshootUsd: 0,
+      },
     });
   });
 

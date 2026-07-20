@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import {
+  formatCostReport,
   formatLiveSessionGoalStatus,
   printAgentEvents,
   printStableInteractiveAgentEvents,
@@ -11,6 +12,37 @@ import {
 import { runCli } from "../../src/testing/cli-harness.ts";
 
 describe("CLI Tool Progress", () => {
+  test(`Given cost reports encode their budget state,
+    When the CLI formats the cost line,
+    Then each budget variant is rendered from the discriminant`, () => {
+    expect(
+      formatCostReport({
+        spentUsd: 1.25,
+        budget: { kind: "unbounded" },
+      }),
+    ).toBe("Cost: $1.2500\n");
+    expect(
+      formatCostReport({
+        spentUsd: 1.25,
+        budget: { kind: "within_budget", maxUsd: 2 },
+      }),
+    ).toBe("Cost: $1.2500 (budget $2.0000)\n");
+    expect(
+      formatCostReport({
+        spentUsd: 2,
+        budget: { kind: "budget_limited", maxUsd: 2, overshootUsd: 0 },
+      }),
+    ).toBe(
+      "Cost: $2.0000 (remaining best-effort budget cannot admit another provider request)\n",
+    );
+    expect(
+      formatCostReport({
+        spentUsd: 2.5,
+        budget: { kind: "budget_limited", maxUsd: 2, overshootUsd: 0.5 },
+      }),
+    ).toBe("Cost: $2.5000 (best-effort budget $2.0000 exceeded by $0.5000)\n");
+  });
+
   test(`Given live Goal status may be absent or contain long model-owned reasons,
     When it is formatted for the bounded TUI region,
     Then missing state clears the region and rendered state stays single-line safe`, () => {

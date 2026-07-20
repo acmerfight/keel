@@ -399,7 +399,7 @@ export async function runOneShotCli(
     const undoProtection = reportRecorder.undoProtection();
     writeUndoProtectionWarning();
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
-      runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
+      runtime.writeStderr(formatCostReport(finalEnd.cost));
     }
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
       assertEndEventHasCost(finalEnd);

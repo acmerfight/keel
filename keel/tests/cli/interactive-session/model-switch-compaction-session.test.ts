@@ -98,8 +98,12 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         }
         return undefined;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
     input.end("/model qwen/tiny\nsecond prompt\n");
 
@@ -314,8 +318,12 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -456,8 +464,12 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -599,7 +611,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         usage: EXPENSIVE_USAGE,
         turns: 0,
         stopReason: "completed",
-        cost: { spentUsd: 2, budgetLimited: false, overshootUsd: 0 },
+        cost: { spentUsd: 2, budget: { kind: "unbounded" } },
       },
       skillCatalog: {
         exposed: 0,
