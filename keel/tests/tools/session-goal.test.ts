@@ -16,7 +16,11 @@ import {
   sessionGoalStatesEqual,
   sessionGoalsEqual,
 } from "../../src/core/session-goal.ts";
-import { executeToolCall } from "../../src/tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+} from "../../src/tools/execution.ts";
 import {
   openAICompatibleTools,
   toolCallFromParsedArguments,
@@ -24,6 +28,10 @@ import {
 
 function freshSignal(): AbortSignal {
   return new AbortController().signal;
+}
+
+function sessionGoalUpdate(execution: ToolExecution) {
+  return toolExecutionEffect(execution, "session_goal")?.goal;
 }
 
 describe("Session Goal Tool", () => {
@@ -809,24 +817,23 @@ describe("Session Goal Tool", () => {
         ok: true,
         content:
           "Session goal blocked proposal recorded (1/3): Finish the durable checkout goal. Reason: Need an API key from the user. Goal remains active; continue working unless progress remains blocked in later turns.",
-        sessionGoalUpdate: {
-          objective: "Finish the durable checkout goal",
-          status: "active",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          completion: {
-            kind: "command",
-            command: "pnpm test",
-          },
-          blockedAudit: {
-            consecutiveCount: 1,
-            reason: "Need an API key from the user.",
-          },
-          latestRuntimeOutcome: {
-            kind: "blocker_audit",
-            reason:
-              "Blocked audit 1/3 recorded: Need an API key from the user.",
-          },
+      });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        objective: "Finish the durable checkout goal",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Need an API key from the user.",
+        },
+        latestRuntimeOutcome: {
+          kind: "blocker_audit",
+          reason: "Blocked audit 1/3 recorded: Need an API key from the user.",
         },
       });
     } finally {
@@ -878,20 +885,20 @@ describe("Session Goal Tool", () => {
         ok: true,
         content:
           "Session goal blocked: Finish the durable checkout goal. Reason: Need an API key from the user.",
-        sessionGoalUpdate: {
-          objective: "Finish the durable checkout goal",
-          status: "blocked",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          statusReason: "Need an API key from the user.",
-          completion: {
-            kind: "command",
-            command: "pnpm test",
-          },
-          latestRuntimeOutcome: {
-            kind: "blocked",
-            reason: "Need an API key from the user.",
-          },
+      });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        objective: "Finish the durable checkout goal",
+        status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        statusReason: "Need an API key from the user.",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
+        latestRuntimeOutcome: {
+          kind: "blocked",
+          reason: "Need an API key from the user.",
         },
       });
     } finally {
@@ -944,17 +951,17 @@ describe("Session Goal Tool", () => {
         ok: true,
         content:
           "Session goal blocked: Finish the durable checkout goal. Reason: Credentials are unavailable from the user, so checkout cannot proceed.",
-        sessionGoalUpdate: {
-          objective: "Finish the durable checkout goal",
-          status: "blocked",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          statusReason:
-            "Credentials are unavailable from the user, so checkout cannot proceed.",
-          completion: {
-            kind: "command",
-            command: "pnpm test",
-          },
+      });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        objective: "Finish the durable checkout goal",
+        status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        statusReason:
+          "Credentials are unavailable from the user, so checkout cannot proceed.",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
         },
       });
     } finally {
@@ -1002,21 +1009,19 @@ describe("Session Goal Tool", () => {
       });
 
       // Then
-      expect(execution).toMatchObject({
-        ok: true,
-        sessionGoalUpdate: {
-          objective: "Finish the durable checkout goal",
-          status: "active",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          completion: {
-            kind: "command",
-            command: "pnpm test",
-          },
-          blockedAudit: {
-            consecutiveCount: 2,
-            reason: "Need VPN access.",
-          },
+      expect(execution).toMatchObject({ ok: true });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        objective: "Finish the durable checkout goal",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
+        blockedAudit: {
+          consecutiveCount: 2,
+          reason: "Need VPN access.",
         },
       });
     } finally {
@@ -1062,7 +1067,7 @@ describe("Session Goal Tool", () => {
           "reason: reason is required when status is blocked",
         ),
       });
-      expect(execution.sessionGoalUpdate).toBeUndefined();
+      expect(sessionGoalUpdate(execution)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1100,17 +1105,15 @@ describe("Session Goal Tool", () => {
       });
 
       // Then
-      expect(execution).toMatchObject({
-        ok: true,
-        sessionGoalUpdate: {
-          objective: "Finish the durable checkout goal",
-          status: "active",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          blockedAudit: {
-            consecutiveCount: 1,
-            reason: "Need user input.",
-          },
+      expect(execution).toMatchObject({ ok: true });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        objective: "Finish the durable checkout goal",
+        status: "active",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        blockedAudit: {
+          consecutiveCount: 1,
+          reason: "Need user input.",
         },
       });
     } finally {
@@ -1154,15 +1157,13 @@ describe("Session Goal Tool", () => {
       });
 
       // Then
-      expect(execution).toMatchObject({
-        ok: true,
-        sessionGoalUpdate: {
-          objective: "Finish the durable checkout goal",
-          status: "blocked",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          statusReason: "Need user input.",
-        },
+      expect(execution).toMatchObject({ ok: true });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        objective: "Finish the durable checkout goal",
+        status: "blocked",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        statusReason: "Need user input.",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1211,7 +1212,7 @@ describe("Session Goal Tool", () => {
           "reason: reason is only valid when status is blocked",
         ),
       });
-      expect(execution.sessionGoalUpdate).toBeUndefined();
+      expect(sessionGoalUpdate(execution)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1252,7 +1253,7 @@ describe("Session Goal Tool", () => {
           "Tool failed: update_goal failed: no completion criterion is set",
         ),
       });
-      expect(execution.sessionGoalUpdate).toMatchObject({
+      expect(sessionGoalUpdate(execution)).toMatchObject({
         status: "active",
         latestRuntimeOutcome: {
           kind: "completion_rejected",
@@ -1306,7 +1307,7 @@ describe("Session Goal Tool", () => {
           "Tool failed: update_goal failed: assertion completion evaluator is unavailable",
         ),
       });
-      expect(execution.sessionGoalUpdate).toMatchObject({
+      expect(sessionGoalUpdate(execution)).toMatchObject({
         status: "active",
         latestRuntimeOutcome: {
           kind: "completion_rejected",
@@ -1358,14 +1359,12 @@ describe("Session Goal Tool", () => {
       });
 
       // Then
-      expect(execution).toMatchObject({
-        ok: false,
-        sessionGoalUpdate: {
-          status: "active",
-          latestRuntimeOutcome: {
-            kind: "completion_rejected",
-            reason: "No trusted tool evidence shows the release notes.",
-          },
+      expect(execution).toMatchObject({ ok: false });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        status: "active",
+        latestRuntimeOutcome: {
+          kind: "completion_rejected",
+          reason: "No trusted tool evidence shows the release notes.",
         },
       });
     } finally {
@@ -1416,27 +1415,27 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: true,
         content: `Session goal completed: Finish the durable checkout goal. Evidence: node -e "process.exit(0)" exited 0 at the completion boundary in ${workspace}.`,
-        sessionGoalUpdate: {
-          objective: "Finish the durable checkout goal",
-          status: "completed",
-          budget: {},
-          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          completion: {
-            kind: "command",
-            command: 'node -e "process.exit(0)"',
-          },
-          completionEvidence: {
-            kind: "command",
-            command: 'node -e "process.exit(0)"',
-            cwd: workspace,
-            exitCode: 0,
-            freshness: "at_completion",
-          },
-          latestRuntimeOutcome: {
-            kind: "completed",
-            reason:
-              'Completion command "node -e \\"process.exit(0)\\"" exited 0 at the completion boundary.',
-          },
+      });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        objective: "Finish the durable checkout goal",
+        status: "completed",
+        budget: {},
+        usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+        completion: {
+          kind: "command",
+          command: 'node -e "process.exit(0)"',
+        },
+        completionEvidence: {
+          kind: "command",
+          command: 'node -e "process.exit(0)"',
+          cwd: workspace,
+          exitCode: 0,
+          freshness: "at_completion",
+        },
+        latestRuntimeOutcome: {
+          kind: "completed",
+          reason:
+            'Completion command "node -e \\"process.exit(0)\\"" exited 0 at the completion boundary.',
         },
       });
     } finally {
@@ -1485,7 +1484,7 @@ describe("Session Goal Tool", () => {
           'Runtime cannot run command completion criterion "pnpm test" because Bash is disabled.',
         ),
       });
-      expect(execution.sessionGoalUpdate).toMatchObject({
+      expect(sessionGoalUpdate(execution)).toMatchObject({
         status: "active",
         latestRuntimeOutcome: {
           kind: "completion_rejected",
@@ -1541,7 +1540,7 @@ describe("Session Goal Tool", () => {
         ),
       });
       expect(execution.content).toContain("still failing");
-      expect(execution.sessionGoalUpdate).toMatchObject({
+      expect(sessionGoalUpdate(execution)).toMatchObject({
         status: "active",
         latestRuntimeOutcome: {
           kind: "completion_rejected",
@@ -1595,8 +1594,8 @@ describe("Session Goal Tool", () => {
         ok: false,
         sourceTruncated: true,
         artifact: { sourceTruncated: false },
-        sessionGoalUpdate: { status: "active" },
       });
+      expect(sessionGoalUpdate(execution)).toMatchObject({ status: "active" });
       expect(execution.content.length).toBeLessThan(23_000);
       expect(execution.artifact?.content.length).toBeGreaterThan(25_000);
       expect(execution.artifact?.content).toContain("Recovery:");
@@ -1654,7 +1653,7 @@ describe("Session Goal Tool", () => {
           "command completion verification was denied: The user declined this verifier.",
         ),
       });
-      expect(execution.sessionGoalUpdate).toMatchObject({
+      expect(sessionGoalUpdate(execution)).toMatchObject({
         status: "active",
         latestRuntimeOutcome: {
           kind: "completion_rejected",
@@ -1707,13 +1706,13 @@ describe("Session Goal Tool", () => {
         content: expect.stringContaining(
           "exited with code unknown at the completion boundary",
         ),
-        sessionGoalUpdate: {
-          status: "active",
-          latestRuntimeOutcome: {
-            kind: "completion_rejected",
-            reason:
-              'Completion was rejected because command criterion "kill -TERM $$" exited with code unknown at the completion boundary.',
-          },
+      });
+      expect(sessionGoalUpdate(execution)).toMatchObject({
+        status: "active",
+        latestRuntimeOutcome: {
+          kind: "completion_rejected",
+          reason:
+            'Completion was rejected because command criterion "kill -TERM $$" exited with code unknown at the completion boundary.',
         },
       });
     } finally {
@@ -1750,7 +1749,7 @@ describe("Session Goal Tool", () => {
           "Tool failed: update_goal failed: no active session goal is set.",
         ),
       });
-      expect(execution.sessionGoalUpdate).toBeUndefined();
+      expect(sessionGoalUpdate(execution)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1792,7 +1791,7 @@ describe("Session Goal Tool", () => {
           "Tool failed: update_goal failed: invalid arguments",
         ),
       });
-      expect(result.sessionGoalUpdate).toBeUndefined();
+      expect(sessionGoalUpdate(result)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

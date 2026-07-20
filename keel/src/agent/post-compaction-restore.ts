@@ -1,7 +1,11 @@
 import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
 import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { Message, ToolCall } from "../llm/types.ts";
-import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+} from "../tools/execution.ts";
 import type { ProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
 import {
@@ -136,10 +140,14 @@ function publishVisibleProjectInstructions(
   executions: readonly ToolExecution[],
 ): void {
   for (const execution of executions) {
-    if (execution.visibleProjectInstructionPaths === undefined) {
+    const visibleInstructions = toolExecutionEffect(
+      execution,
+      "visible_project_instructions",
+    );
+    if (visibleInstructions === undefined) {
       continue;
     }
-    state.markInstructionPathsVisible(execution.visibleProjectInstructionPaths);
+    state.markInstructionPathsVisible(visibleInstructions.instructionPaths);
   }
 }
 
@@ -239,11 +247,8 @@ export async function restorePostCompactionReads(options: {
       hiddenWorkspacePaths,
       projectInstructions: options.projectInstructionVisibility,
     });
-    if (
-      !execution.ok ||
-      execution.readTargetPath === undefined ||
-      execution.resourceObservation === undefined
-    ) {
+    const readEffect = toolExecutionEffect(execution, "read");
+    if (!execution.ok || readEffect === undefined) {
       continue;
     }
     const fittedContent = fitPostCompactionReadContent(
@@ -254,7 +259,7 @@ export async function restorePostCompactionReads(options: {
     restored.push({
       toolCall,
       execution,
-      resourceObservation: execution.resourceObservation,
+      resourceObservation: readEffect.resourceObservation,
       content: fittedContent.content,
       complete: fittedContent.complete,
     });

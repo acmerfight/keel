@@ -4,9 +4,14 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   formatSessionTaskProgressToolResult,
+  type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../../src/core/task-progress.ts";
-import { executeToolCall } from "../../src/tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+} from "../../src/tools/execution.ts";
 import {
   openAICompatibleTools,
   toolCallFromParsedArguments,
@@ -14,6 +19,12 @@ import {
 
 function freshSignal(): AbortSignal {
   return new AbortController().signal;
+}
+
+function taskProgressUpdate(
+  execution: ToolExecution,
+): SessionTaskProgress | undefined {
+  return toolExecutionEffect(execution, "task_progress")?.taskProgress;
 }
 
 describe("Task Progress Tool", () => {
@@ -82,13 +93,13 @@ describe("Task Progress Tool", () => {
         ok: true,
         content:
           "Task progress updated: 1/3 completed; current: Patch implementation.",
-        taskProgressUpdate: {
-          tasks: [
-            { step: "Inspect failing test", status: "completed" },
-            { step: "Patch implementation", status: "in_progress" },
-            { step: "Run verification", status: "pending" },
-          ],
-        },
+      });
+      expect(taskProgressUpdate(execution)).toEqual({
+        tasks: [
+          { step: "Inspect failing test", status: "completed" },
+          { step: "Patch implementation", status: "in_progress" },
+          { step: "Run verification", status: "pending" },
+        ],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -143,7 +154,7 @@ describe("Task Progress Tool", () => {
             "Tool failed: update_plan failed: invalid arguments",
           ),
         });
-        expect(result.taskProgressUpdate).toBeUndefined();
+        expect(taskProgressUpdate(result)).toBeUndefined();
       }
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -186,7 +197,7 @@ describe("Task Progress Tool", () => {
           "Tool failed: update_plan failed: invalid arguments",
         ),
       });
-      expect(result.taskProgressUpdate).toBeUndefined();
+      expect(taskProgressUpdate(result)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -224,8 +235,8 @@ describe("Task Progress Tool", () => {
       expect(clearExecution).toMatchObject({
         ok: true,
         content: "Task progress cleared.",
-        taskProgressUpdate: { tasks: [] },
       });
+      expect(taskProgressUpdate(clearExecution)).toEqual({ tasks: [] });
       expect(formatSessionTaskProgressToolResult(doneProgress)).toBe(
         "Task progress updated: 2/2 completed.",
       );

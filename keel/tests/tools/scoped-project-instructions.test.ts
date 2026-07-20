@@ -11,7 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { executeToolCall } from "../../src/tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+} from "../../src/tools/execution.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -23,6 +27,13 @@ async function createWorkspace(): Promise<string> {
 
 function freshSignal(): AbortSignal {
   return new AbortController().signal;
+}
+
+function visibleProjectInstructionPaths(
+  execution: ToolExecution,
+): readonly string[] | undefined {
+  return toolExecutionEffect(execution, "visible_project_instructions")
+    ?.instructionPaths;
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -105,7 +116,7 @@ describe("Scoped Project Instructions", () => {
         ok: true,
         content: "hello\n",
       });
-      expect(readResult.visibleProjectInstructionPaths).toBeUndefined();
+      expect(visibleProjectInstructionPaths(readResult)).toBeUndefined();
       expect(writeResult).toMatchObject({
         ok: true,
         content: "Wrote created.txt",
@@ -117,7 +128,7 @@ describe("Scoped Project Instructions", () => {
         ok: true,
         content: "note.txt:1:hello",
       });
-      expect(grepResult.visibleProjectInstructionPaths).toBeUndefined();
+      expect(visibleProjectInstructionPaths(grepResult)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -163,7 +174,7 @@ describe("Scoped Project Instructions", () => {
         ok: true,
         content: "export const route = 'api';\n",
       });
-      expect(result.visibleProjectInstructionPaths).toBeUndefined();
+      expect(visibleProjectInstructionPaths(result)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -216,7 +227,7 @@ describe("Scoped Project Instructions", () => {
       expect(result.content.indexOf("Project instructions from")).toBeLessThan(
         result.content.indexOf("packages/api/src/server.ts:1:"),
       );
-      expect(result.visibleProjectInstructionPaths).toHaveLength(1);
+      expect(visibleProjectInstructionPaths(result)).toHaveLength(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -269,7 +280,7 @@ describe("Scoped Project Instructions", () => {
       expect(result.content.indexOf("Project instructions from")).toBeLessThan(
         result.content.indexOf('No matches found for "missing-search-target"'),
       );
-      expect(result.visibleProjectInstructionPaths).toHaveLength(1);
+      expect(visibleProjectInstructionPaths(result)).toHaveLength(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

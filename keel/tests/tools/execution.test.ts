@@ -220,12 +220,17 @@ describe("Tool Execution", () => {
       expect(first).toEqual({
         content: "Saved project memory mem_release for project_release.",
         ok: true,
-        memoryOperation: {
-          operation: "add",
-          id: "mem_release",
-          scope: { kind: "project", id: "project_release" },
-          outcome: "saved",
-        },
+        effects: [
+          {
+            kind: "memory_operation",
+            operation: {
+              operation: "add",
+              id: "mem_release",
+              scope: { kind: "project", id: "project_release" },
+              outcome: "saved",
+            },
+          },
+        ],
       });
       expect(second.ok).toBe(false);
       expect(second.content).toContain(
@@ -288,12 +293,17 @@ describe("Tool Execution", () => {
       expect(result).toEqual({
         content: "Forgot project memory mem_release for project_release.",
         ok: true,
-        memoryOperation: {
-          operation: "forget",
-          id: "mem_release",
-          scope: { kind: "project", id: "project_release" },
-          outcome: "forgotten",
-        },
+        effects: [
+          {
+            kind: "memory_operation",
+            operation: {
+              operation: "forget",
+              id: "mem_release",
+              scope: { kind: "project", id: "project_release" },
+              outcome: "forgotten",
+            },
+          },
+        ],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -463,6 +473,7 @@ describe("Tool Execution", () => {
       expect(result).toEqual({
         ok: true,
         content: "note.txt",
+        effects: [],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -861,12 +872,17 @@ describe("Tool Execution", () => {
       );
       expect(approved).toMatchObject({
         ok: true,
-        memoryOperation: {
-          operation: "propose",
-          candidateId: "cand_review",
-          memoryId: "mem_review",
-          outcome: "approved",
-        },
+        effects: [
+          {
+            kind: "memory_operation",
+            operation: {
+              operation: "propose",
+              candidateId: "cand_review",
+              memoryId: "mem_review",
+              outcome: "approved",
+            },
+          },
+        ],
       });
       expect(repeated.ok).toBe(false);
       expect(repeated.content).toContain(
@@ -1012,12 +1028,22 @@ describe("Tool Execution", () => {
       expect(rejected).toMatchObject({
         ok: true,
         content: expect.stringContaining("Rejected project-memory candidate"),
-        memoryOperation: { outcome: "rejected", memoryId: null },
+        effects: [
+          {
+            kind: "memory_operation",
+            operation: { outcome: "rejected", memoryId: null },
+          },
+        ],
       });
       expect(pending).toMatchObject({
         ok: true,
         content: expect.stringContaining("remains pending"),
-        memoryOperation: { outcome: "pending", memoryId: null },
+        effects: [
+          {
+            kind: "memory_operation",
+            operation: { outcome: "pending", memoryId: null },
+          },
+        ],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

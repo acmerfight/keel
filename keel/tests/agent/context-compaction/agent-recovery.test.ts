@@ -16,6 +16,7 @@ import {
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 
 describe("Context Compaction Agent Recovery", () => {
   test(`Given overflow recovery only produces length-truncated summaries,
@@ -636,12 +637,7 @@ describe("Context Compaction Agent Recovery", () => {
     ];
     const readVisibility = createReadVisibilityState();
     readVisibility.applyVisibleToolExecutions([
-      {
-        ok: true,
-        content: "",
-        readTargetPath: "package.json",
-        readTargetOffset: 0,
-      },
+      successfulReadToolExecution({ targetPath: "package.json", offset: 0 }),
     ]);
     const provider: LLMProvider = {
       id: "compacting-provider-restore-throws",
