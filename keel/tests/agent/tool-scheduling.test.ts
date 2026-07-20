@@ -115,7 +115,7 @@ describe("Tool Scheduling", () => {
           userMessage: "inspect the files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -201,7 +201,7 @@ describe("Tool Scheduling", () => {
           userMessage: "update note.txt and check it",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -310,7 +310,7 @@ describe("Tool Scheduling", () => {
           userMessage: "inspect the workspace, update note.txt, and verify it",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -408,7 +408,7 @@ describe("Tool Scheduling", () => {
           userMessage: "expand note.txt",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -501,7 +501,7 @@ describe("Tool Scheduling", () => {
           userMessage: "update alpha.txt and beta.txt",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -599,7 +599,7 @@ describe("Tool Scheduling", () => {
           userMessage: "create alpha and beta files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -689,7 +689,7 @@ describe("Tool Scheduling", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: abortController.signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: storedArtifactStore(saved),
@@ -783,7 +783,7 @@ describe("Tool Scheduling", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: abortController.signal,
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: storedArtifactStore(saved),

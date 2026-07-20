@@ -84,7 +84,7 @@ describe("Agent git status tool use", () => {
           userMessage: "check the git status",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

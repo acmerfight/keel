@@ -121,7 +121,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "inspect_status",
           tool: "git_status",
@@ -155,7 +155,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "clean_status",
           tool: "git_status",
@@ -184,7 +184,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "sha256_status",
           tool: "git_status",
@@ -211,7 +211,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "malformed_status",
           tool: "git_status",
@@ -375,7 +375,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: `malformed_status_${scenario}`,
           tool: "git_status",
@@ -412,7 +412,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "truncated_rename_status",
             tool: "git_status",
@@ -452,7 +452,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "truncated_malformed_rename_status",
             tool: "git_status",
@@ -482,7 +482,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "truncated_before_status_record",
             tool: "git_status",
@@ -515,7 +515,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "truncated_empty_status_record",
             tool: "git_status",
@@ -546,7 +546,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "path_status",
           tool: "git_status",
@@ -586,7 +586,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace: join(workspace, "src"),
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "subdir_status",
           tool: "git_status",
@@ -634,7 +634,7 @@ describe("git_status tool", () => {
       const currentWorkspaceResult = await executeToolCall({
         workspace: join(workspace, "src"),
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "subdir_dot_status",
           tool: "git_status",
@@ -644,7 +644,7 @@ describe("git_status tool", () => {
       const nestedResult = await executeToolCall({
         workspace: join(workspace, "src"),
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "subdir_nested_status",
           tool: "git_status",
@@ -681,7 +681,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "branch_status",
           tool: "git_status",
@@ -713,7 +713,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "unmerged_status",
           tool: "git_status",
@@ -748,7 +748,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "spaced_rename_status",
           tool: "git_status",
@@ -782,7 +782,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "visible_rename_status",
           tool: "git_status",
@@ -820,7 +820,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "hidden_source_rename_status",
           tool: "git_status",
@@ -856,7 +856,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "many_status",
           tool: "git_status",
@@ -892,7 +892,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "exact_status",
           tool: "git_status",
@@ -919,7 +919,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "non_git_status",
           tool: "git_status",
@@ -952,7 +952,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "producer_truncated_status",
             tool: "git_status",
@@ -988,7 +988,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "producer_truncated_empty_status",
             tool: "git_status",

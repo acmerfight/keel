@@ -74,7 +74,7 @@ describe("Task Progress Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -127,7 +127,7 @@ describe("Task Progress Tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall,
         });
 
@@ -168,7 +168,7 @@ describe("Task Progress Tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall,
       });
 
@@ -217,7 +217,7 @@ describe("Task Progress Tool", () => {
         workspace,
         toolCall: clearCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then

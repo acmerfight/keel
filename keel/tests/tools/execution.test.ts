@@ -43,7 +43,7 @@ describe("Tool Execution", () => {
           pattern: "",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -72,7 +72,7 @@ describe("Tool Execution", () => {
           text: "release tags use a v prefix",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
       const forgetResult = await executeToolCall({
         workspace,
@@ -82,7 +82,7 @@ describe("Tool Execution", () => {
           memoryId: "mem_release",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -133,7 +133,7 @@ describe("Tool Execution", () => {
           text: "release tags use a v prefix",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
 
@@ -200,7 +200,7 @@ describe("Tool Execution", () => {
           text: "release tags use a v prefix",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
       const second = await executeToolCall({
@@ -211,7 +211,7 @@ describe("Tool Execution", () => {
           text: "release tags use a v prefix",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
 
@@ -279,7 +279,7 @@ describe("Tool Execution", () => {
           memoryId: "mem_release",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
 
@@ -336,7 +336,7 @@ describe("Tool Execution", () => {
           memoryId: "mem_release",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
 
@@ -394,7 +394,7 @@ describe("Tool Execution", () => {
           memoryId: "mem_release",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
 
@@ -426,7 +426,7 @@ describe("Tool Execution", () => {
           path: "note.txt",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -456,7 +456,7 @@ describe("Tool Execution", () => {
           limit: 1,
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -490,7 +490,7 @@ describe("Tool Execution", () => {
             path: "locked",
           },
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
         });
 
         // Then
@@ -523,7 +523,7 @@ describe("Tool Execution", () => {
             pattern: "**/*.ts",
           },
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
         });
 
         // Then
@@ -555,7 +555,7 @@ describe("Tool Execution", () => {
           edits: [{ oldText: "old", newText: "new" }],
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -587,7 +587,7 @@ describe("Tool Execution", () => {
         edits: [{ oldText: "old", newText: "new" }],
       },
       signal: new AbortController().signal,
-      allowBash: false,
+      bash: { kind: "disabled" },
     });
 
     // Then
@@ -615,7 +615,7 @@ describe("Tool Execution", () => {
             path: "locked.txt",
           },
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
         });
         const editResult = await executeToolCall({
           workspace,
@@ -626,7 +626,7 @@ describe("Tool Execution", () => {
             edits: [{ oldText: "secret", newText: "public" }],
           },
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
         });
 
         // Then
@@ -655,7 +655,7 @@ describe("Tool Execution", () => {
           pattern: "a\u0000b",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -683,7 +683,7 @@ describe("Tool Execution", () => {
           command: "echo hi",
         },
         signal: new AbortController().signal,
-        allowBash: true,
+        bash: { kind: "trusted" },
       });
 
       // Then
@@ -719,7 +719,7 @@ describe("Tool Execution", () => {
           content: "data",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
       const nulResult = await executeToolCall({
         workspace,
@@ -730,7 +730,7 @@ describe("Tool Execution", () => {
           content: "data",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -837,21 +837,21 @@ describe("Tool Execution", () => {
           sourceQuote: "pnpm deploy",
         },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
       const approved = await executeToolCall({
         workspace,
         toolCall: proposal,
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
       const repeated = await executeToolCall({
         workspace,
         toolCall: { ...proposal, id: "memory_propose_2" },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory,
       });
 
@@ -938,13 +938,13 @@ describe("Tool Execution", () => {
         workspace,
         toolCall,
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
       const missingProposal = await executeToolCall({
         workspace,
         toolCall: { ...toolCall, id: "memory_propose_no_capability" },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory: {
           capability,
           proposal: null,
@@ -956,7 +956,7 @@ describe("Tool Execution", () => {
         workspace,
         toolCall: { ...toolCall, id: "memory_propose_no_user" },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory: {
           ...contextForOutcome("pending"),
           currentUserMessage: () => null,
@@ -966,7 +966,7 @@ describe("Tool Execution", () => {
         workspace,
         toolCall: { ...toolCall, id: "memory_propose_no_source" },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory: {
           capability,
           proposal: {
@@ -990,14 +990,14 @@ describe("Tool Execution", () => {
         workspace,
         toolCall: { ...toolCall, id: "memory_propose_rejected" },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory: contextForOutcome("rejected"),
       });
       const pending = await executeToolCall({
         workspace,
         toolCall: { ...toolCall, id: "memory_propose_pending" },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         memory: contextForOutcome("pending"),
       });
 

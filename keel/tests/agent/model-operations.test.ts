@@ -79,7 +79,7 @@ describe("Model Operations", () => {
           userMessage: "Update and inspect note.txt",
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: maxTurnFallbackPolicy(2),
           modelOperations: {
             recorder,
@@ -160,7 +160,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal: goal,
           modelOperations: {
@@ -216,7 +216,7 @@ describe("Model Operations", () => {
           userMessage: "Do not send this request",
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: costModel, maxCostUsd: 0.01 },
           modelOperations: {
@@ -296,7 +296,7 @@ describe("Model Operations", () => {
           userMessage: "Retry only while the request remains affordable.",
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: costModel,
@@ -386,7 +386,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 120,
@@ -464,7 +464,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 1_000,
@@ -533,7 +533,7 @@ describe("Model Operations", () => {
             userMessage: "Stop the request.",
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             modelOperations: {
               recorder,
@@ -635,7 +635,7 @@ describe("Model Operations", () => {
             messages,
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             contextCompaction: {
               contextWindowTokens: 120,
@@ -764,7 +764,7 @@ describe("Model Operations", () => {
             messages,
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             contextCompaction: {
               contextWindowTokens: 120,
@@ -852,7 +852,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 100_000,

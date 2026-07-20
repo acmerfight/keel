@@ -267,7 +267,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "inspect_changes",
           tool: "git_diff",
@@ -305,7 +305,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "clean_diff",
           tool: "git_diff",
@@ -336,7 +336,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "malformed_name_status",
             tool: "git_diff",
@@ -370,7 +370,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "incomplete_name_status_stream",
             tool: "git_diff",
@@ -415,7 +415,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "truncated_git_metadata",
             tool: "git_diff",
@@ -456,7 +456,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "malformed_git_metadata",
             tool: "git_diff",
@@ -510,7 +510,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "malformed_ref_oid",
             tool: "git_diff",
@@ -562,7 +562,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "invalid_merge_base",
             tool: "git_diff",
@@ -606,7 +606,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "signalled_ref_command",
             tool: "git_diff",
@@ -647,7 +647,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "tracked_diff_exit_one",
             tool: "git_diff",
@@ -748,7 +748,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace: join(workspace, "src"),
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "subdir_diff",
           tool: "git_diff",
@@ -785,7 +785,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "compare_refs",
           tool: "git_diff",
@@ -825,7 +825,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "compare_default_head",
           tool: "git_diff",
@@ -853,7 +853,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "empty_ref_diff",
           tool: "git_diff",
@@ -896,7 +896,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "compare_merge_base",
           tool: "git_diff",
@@ -936,7 +936,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "staged_path_diff",
           tool: "git_diff",
@@ -974,7 +974,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "staged_rename_path_diff",
           tool: "git_diff",
@@ -1012,7 +1012,7 @@ describe("git_diff tool", () => {
       const rootResult = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "root_filter_diff",
           tool: "git_diff",
@@ -1023,7 +1023,7 @@ describe("git_diff tool", () => {
       const dotPrefixedResult = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "dot_prefixed_filter_diff",
           tool: "git_diff",
@@ -1109,7 +1109,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "visible_diff",
           tool: "git_diff",
@@ -1137,7 +1137,7 @@ describe("git_diff tool", () => {
       const ignoredPathResult = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "ignored_path_diff",
           tool: "git_diff",
@@ -1151,7 +1151,7 @@ describe("git_diff tool", () => {
       const missingPathResult = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "missing_path_diff",
           tool: "git_diff",
@@ -1187,7 +1187,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "hidden_source_rename_diff",
           tool: "git_diff",
@@ -1244,7 +1244,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "literal_pathspec_diff",
           tool: "git_diff",
@@ -1275,7 +1275,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "nongit_diff",
           tool: "git_diff",
@@ -1306,7 +1306,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "large_diff",
           tool: "git_diff",
@@ -1340,7 +1340,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "large_complete_diff",
           tool: "git_diff",
@@ -1379,7 +1379,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "many_untracked_diff",
           tool: "git_diff",
@@ -1417,7 +1417,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "exact_untracked_diff",
           tool: "git_diff",
@@ -1469,7 +1469,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "safe_diff",
           tool: "git_diff",
@@ -1506,7 +1506,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "ambiguous_filter_diff",
           tool: "git_diff",
@@ -1542,7 +1542,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "safe_ref_diff",
           tool: "git_diff",
@@ -1581,7 +1581,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "unsafe_ref_diff",
             tool: "git_diff",
@@ -1621,7 +1621,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "non_commit_ref_diff",
             tool: "git_diff",
@@ -1664,7 +1664,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "unrelated_merge_base_diff",
           tool: "git_diff",
@@ -1696,7 +1696,7 @@ describe("git_diff tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "ref_mode_diff",
           tool: "git_diff",
@@ -1728,7 +1728,7 @@ describe("git_diff tool", () => {
       const headOnlyResult = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "head_without_base",
           tool: "git_diff",
@@ -1738,7 +1738,7 @@ describe("git_diff tool", () => {
       const mergeBaseOnlyResult = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "merge_base_without_base",
           tool: "git_diff",
@@ -1780,7 +1780,7 @@ describe("git_diff tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "unsafe_diff",
             tool: "git_diff",

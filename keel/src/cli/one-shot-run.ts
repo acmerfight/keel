@@ -12,8 +12,7 @@ import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
   type BashPermissionDecision,
-  type BashPermissionPolicy,
-  bashModeExposesTool,
+  type BashRuntime,
   createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import {
@@ -98,16 +97,19 @@ function denyOneShotBashPermissionDecision(): BashPermissionDecision {
   };
 }
 
-function oneShotBashPermissionPolicy(
+function oneShotBashRuntime(
   bashMode: BashMode,
   runtime: CliRuntime,
   workspace: string,
 ): {
-  readonly policy?: BashPermissionPolicy;
+  readonly bash: BashRuntime;
   readonly close?: () => void;
 } {
-  if (bashMode !== "ask") {
-    return {};
+  if (bashMode === "disabled") {
+    return { bash: { kind: "disabled" } };
+  }
+  if (bashMode === "trusted") {
+    return { bash: { kind: "trusted" } };
   }
   const projectRoot = bashApprovalProjectRoot(workspace);
   const initialProjectGrants = listBashProjectApprovalGrants(
@@ -116,11 +118,14 @@ function oneShotBashPermissionPolicy(
   );
   if (runtime.input.isTTY !== true) {
     return {
-      policy: createSessionBashPermissionPolicy({
-        projectRoot,
-        initialProjectGrants,
-        prompt: () => denyOneShotBashPermissionDecision(),
-      }),
+      bash: {
+        kind: "reviewed",
+        permission: createSessionBashPermissionPolicy({
+          projectRoot,
+          initialProjectGrants,
+          prompt: () => denyOneShotBashPermissionDecision(),
+        }),
+      },
     };
   }
 
@@ -141,7 +146,10 @@ function oneShotBashPermissionPolicy(
       },
     },
   );
-  return { policy, close: () => input.close() };
+  return {
+    bash: { kind: "reviewed", permission: policy },
+    close: () => input.close(),
+  };
 }
 
 export async function runOneShotCli(
@@ -233,12 +241,12 @@ export async function runOneShotCli(
     runtime.onSigint(abort);
 
     const startedAt = runtime.now();
-    const bashPermission = oneShotBashPermissionPolicy(
+    const bashRuntime = oneShotBashRuntime(
       cliArgs.bashMode,
       runtime,
       workspace,
     );
-    closeBashApprovalInput = bashPermission.close;
+    closeBashApprovalInput = bashRuntime.close;
     await cleanupExpiredToolOutputArtifacts({ runtime });
     const toolOutputArtifacts = {
       store: createToolOutputArtifactStore({
@@ -326,14 +334,11 @@ export async function runOneShotCli(
           }
         : {}),
       signal: abortController.signal,
-      allowBash: bashModeExposesTool(cliArgs.bashMode),
+      bash: bashRuntime.bash,
       ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
       ...(skillActivation !== undefined ? { skillActivation } : {}),
       stopPolicy: defaultStopPolicy(),
       toolOutputArtifacts,
-      ...(bashPermission.policy !== undefined
-        ? { bashPermission: bashPermission.policy }
-        : {}),
       ...(trackedCostModel !== undefined
         ? {
             costTracking: {

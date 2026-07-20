@@ -306,7 +306,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -412,7 +412,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -521,7 +521,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
@@ -661,7 +661,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -824,7 +824,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 50,
@@ -887,7 +887,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 6,
@@ -945,7 +945,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -991,7 +991,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
@@ -1051,7 +1051,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1134,7 +1134,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -1215,7 +1215,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: maxTurnFallbackPolicy(1),
         contextCompaction: {
           keepRecentTokens: 1,

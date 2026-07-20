@@ -32,10 +32,6 @@ export function bashModeFromPolicy(policy: BashPolicy): BashMode {
   return policy === "deny" ? "disabled" : policy;
 }
 
-export function bashModeExposesTool(mode: BashMode): boolean {
-  return mode !== "disabled";
-}
-
 interface BashPermissionReviewRequest {
   readonly command: string;
   readonly cwd: string;
@@ -77,10 +73,21 @@ export type BashPermissionDecision =
       readonly message: string;
     };
 
-export interface BashPermissionPolicy {
+interface BashPermissionPolicy {
   readonly review: (
     request: BashPermissionReviewRequest,
   ) => BashPermissionDecision | Promise<BashPermissionDecision>;
+}
+
+export type BashRuntime<
+  Permission extends BashPermissionPolicy = BashPermissionPolicy,
+> =
+  | { readonly kind: "disabled" }
+  | { readonly kind: "trusted" }
+  | { readonly kind: "reviewed"; readonly permission: Permission };
+
+export function bashRuntimeExposesTool(runtime: BashRuntime): boolean {
+  return runtime.kind !== "disabled";
 }
 
 export interface SessionBashPermissionPolicy extends BashPermissionPolicy {

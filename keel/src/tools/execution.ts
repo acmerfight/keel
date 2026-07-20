@@ -26,7 +26,7 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressFromPlan,
 } from "../core/task-progress.ts";
-import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import type { BashRuntime } from "../permissions/bash.ts";
 import type {
   SkillActivationCapability,
   SkillActivationRecord,
@@ -115,7 +115,7 @@ type UpdateGoalToolCall = Extract<
 interface BuiltinToolExecutionContext {
   readonly workspace: string;
   readonly signal: AbortSignal;
-  readonly allowBash: boolean;
+  readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly skillActivation?: Pick<
     SkillActivationCapability,
@@ -123,7 +123,6 @@ interface BuiltinToolExecutionContext {
   >;
   readonly memory?: AgentMemoryToolContext;
   readonly recordCheckpoints?: boolean;
-  readonly bashPermission?: BashPermissionPolicy;
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
@@ -533,9 +532,8 @@ function commandVerificationFailureContent(
 async function executeUpdateGoalTool(
   {
     workspace,
-    allowBash,
+    bash,
     signal,
-    bashPermission,
     sessionGoal,
     completionProposalHasFollowingToolCalls,
     evaluateAssertionGoalCompletion,
@@ -665,15 +663,15 @@ async function executeUpdateGoalTool(
   const expectedCommand = normalizeSessionGoalCompletionCommand(
     sessionGoal.completionCriterion,
   );
-  if (!allowBash) {
+  if (bash.kind === "disabled") {
     return rejectedGoalCompletion(
       sessionGoal,
       `Tool failed: update_goal failed: Runtime cannot run command completion criterion ${JSON.stringify(expectedCommand)} because Bash is disabled.\nRecovery: Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`,
       `Completion was rejected because Runtime could not run command criterion ${JSON.stringify(expectedCommand)} while Bash was disabled.`,
     );
   }
-  if (bashPermission !== undefined) {
-    const decision = await bashPermission.review({
+  if (bash.kind === "reviewed") {
+    const decision = await bash.permission.review({
       command: expectedCommand,
       cwd: workspace,
       signal,
@@ -973,15 +971,15 @@ function executeApplyPatchTool(
 }
 
 async function executeBashTool(
-  { workspace, signal, allowBash, bashPermission }: BuiltinToolExecutionContext,
+  { workspace, signal, bash }: BuiltinToolExecutionContext,
   toolCall: BashToolCall,
 ): Promise<ToolExecution> {
-  if (!allowBash) {
+  if (bash.kind === "disabled") {
     return { content: disabledBashMessage(), ok: false };
   }
 
-  if (bashPermission !== undefined) {
-    const decision = await bashPermission.review({
+  if (bash.kind === "reviewed") {
+    const decision = await bash.permission.review({
       command: toolCall.command,
       cwd: workspace,
       signal,

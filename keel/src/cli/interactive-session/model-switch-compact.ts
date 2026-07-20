@@ -15,7 +15,6 @@ import type { CostModel } from "../../core/cost.ts";
 import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { Message, Usage } from "../../llm/types.ts";
-import { bashModeExposesTool } from "../../permissions/bash.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
   formatContextCompactionReport,
@@ -41,6 +40,7 @@ export interface ModelSwitchCompactionContext {
   readonly nextPostCompactionReadToolCallId: () => string;
   readonly taskProgress: SessionTaskProgress;
   readonly options: InteractiveSessionOptions;
+  readonly bashToolVisible: boolean;
   readonly recordCompactionCost: (
     usage: Usage,
     costModel: CostModel,
@@ -149,13 +149,13 @@ export function modelSwitchRequiresCompaction(options: {
   readonly systemPrompt: string;
   readonly messages: readonly Message[];
   readonly target: InteractiveResolvedProvider;
-  readonly cliArgs: InteractiveSessionOptions["cliArgs"];
+  readonly bashToolVisible: boolean;
 }): boolean {
   return switchWouldOverflowTargetContext({
     systemPrompt: options.systemPrompt,
     messages: options.messages,
     target: options.target,
-    bashToolVisible: bashModeExposesTool(options.cliArgs.bashMode),
+    bashToolVisible: options.bashToolVisible,
   });
 }
 
@@ -175,6 +175,7 @@ export async function executeModelSwitchCompaction(
     nextPostCompactionReadToolCallId,
     taskProgress,
     options,
+    bashToolVisible,
     recordCompactionCost,
     remainingCostUsd,
     costBudgetLimitedReport,
@@ -308,7 +309,7 @@ export async function executeModelSwitchCompaction(
         systemPrompt,
         messages,
         target,
-        bashToolVisible: bashModeExposesTool(options.cliArgs.bashMode),
+        bashToolVisible,
       })
     ) {
       rollback();
@@ -324,9 +325,7 @@ export async function executeModelSwitchCompaction(
       messages,
       requestMetadata: {
         kind: "auto",
-        ...(bashModeExposesTool(options.cliArgs.bashMode)
-          ? { bash: true }
-          : {}),
+        ...(bashToolVisible ? { bash: true } : {}),
       },
     });
     options.writeStderr(

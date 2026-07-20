@@ -120,7 +120,7 @@ describe("File Editing Ignored Edit And Binary", () => {
           userMessage: "change the leaked key",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -228,7 +228,7 @@ describe("File Editing Ignored Edit And Binary", () => {
           userMessage: "read the text-named binary file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

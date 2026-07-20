@@ -75,7 +75,7 @@ describe("Scoped Project Instructions", () => {
         workspace,
         toolCall: { id: "read_note", tool: "read", path: "note.txt" },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
       const writeResult = await executeToolCall({
         workspace,
@@ -86,7 +86,7 @@ describe("Scoped Project Instructions", () => {
           content: "created\n",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
       const grepResult = await executeToolCall({
         workspace,
@@ -97,7 +97,7 @@ describe("Scoped Project Instructions", () => {
           path: "note.txt",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -154,7 +154,7 @@ describe("Scoped Project Instructions", () => {
           path: "packages/api/src/server.ts",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -201,7 +201,7 @@ describe("Scoped Project Instructions", () => {
           path: "packages/api",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -254,7 +254,7 @@ describe("Scoped Project Instructions", () => {
           path: "packages/api",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -301,7 +301,7 @@ describe("Scoped Project Instructions", () => {
           content: "export const value = 1;\n",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -346,7 +346,7 @@ describe("Scoped Project Instructions", () => {
           path: "packages/api/src/server.ts",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -384,7 +384,7 @@ describe("Scoped Project Instructions", () => {
           content: "export const value = 1;\n",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -431,7 +431,7 @@ describe("Scoped Project Instructions", () => {
             content: "export const value = 1;\n",
           },
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           projectInstructions,
         });
 
@@ -492,7 +492,7 @@ describe("Scoped Project Instructions", () => {
             content: "export const value = 1;\n",
           },
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           projectInstructions,
         });
 
@@ -538,7 +538,7 @@ describe("Scoped Project Instructions", () => {
           content: "export const value = 1;\n",
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -589,7 +589,7 @@ describe("Scoped Project Instructions", () => {
             ].join("\n"),
           },
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           projectInstructions,
         });
 
@@ -653,7 +653,7 @@ describe("Scoped Project Instructions", () => {
             ].join("\n"),
           },
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           projectInstructions,
         });
 
@@ -707,7 +707,7 @@ describe("Scoped Project Instructions", () => {
             content: "export const value = 1;\n",
           },
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           projectInstructions,
         });
 
@@ -755,7 +755,7 @@ describe("Scoped Project Instructions", () => {
           ].join("\n"),
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -812,7 +812,7 @@ describe("Scoped Project Instructions", () => {
           ].join("\n"),
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 
@@ -870,7 +870,7 @@ describe("Scoped Project Instructions", () => {
           ].join("\n"),
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         projectInstructions,
       });
 

@@ -185,7 +185,7 @@ describe("Agent git diff tool use", () => {
           userMessage: "review the current diff",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -245,7 +245,7 @@ describe("Agent git diff tool use", () => {
           userMessage: "review the last commit diff",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -325,7 +325,7 @@ describe("Agent git diff tool use", () => {
           userMessage: "review the current diff",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -387,7 +387,7 @@ describe("Agent git diff tool use", () => {
           userMessage: "review the current diff",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

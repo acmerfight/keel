@@ -80,7 +80,7 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -128,7 +128,7 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -177,7 +177,7 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -243,7 +243,7 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => [
           { role: "user", content: "Also explain the scripts." },
@@ -346,7 +346,7 @@ describe("Conversation History", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 200,
@@ -430,7 +430,7 @@ describe("Conversation History", () => {
           mutation: UNUSED_MEMORY_MUTATION,
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 200,
@@ -508,7 +508,7 @@ describe("Conversation History", () => {
           mutation: UNUSED_MEMORY_MUTATION,
         },
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: maxTurnFallbackPolicy(1),
       }),
     );

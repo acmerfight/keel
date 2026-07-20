@@ -216,7 +216,7 @@ describe("tool registry", () => {
       executeToolCall({
         workspace: ".",
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: call,
       }),
     ).resolves.toMatchObject({
@@ -239,7 +239,7 @@ describe("tool registry", () => {
       executeToolCall({
         workspace: ".",
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: call,
         skillActivation: {
           search: () => [],
@@ -274,7 +274,7 @@ describe("tool registry", () => {
     const base = {
       workspace: ".",
       signal: new AbortController().signal,
-      allowBash: false,
+      bash: { kind: "disabled" },
     } as const;
     const capability = {
       search: () => [],
@@ -399,7 +399,7 @@ describe("tool registry", () => {
       const result = await executeToolCall({
         workspace,
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: call,
       });
 
@@ -731,7 +731,7 @@ describe("tool registry", () => {
       executeToolCall({
         workspace: ".",
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: callWithAbsentOptional,
       }),
     ).resolves.toEqual({
@@ -756,7 +756,7 @@ describe("tool registry", () => {
       executeToolCall({
         workspace: ".",
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: callWithNullOptional,
       }),
     ).resolves.toEqual({
