@@ -89,6 +89,20 @@ Default to required fields. Model the runtime meaning directly:
 | Absence is meaningful | Optional field (`?`) |
 | Field is present but may explicitly contain no value | `null` |
 
+Make invalid internal states unrepresentable. When fields are mutually exclusive
+or conditionally required, model the valid modes with a discriminated union and
+put each mode's required data on that variant. Do not use independently optional
+fields plus downstream guards to encode a relationship. Couple values that must
+vary together in one type so invalid constructions fail typecheck at the call
+site.
+
+This rule applies to trusted internal state, not unvalidated external data. Parse
+external values as `unknown` with a schema at the trust boundary, then convert
+them into precise internal types. Tests prove reachable behavior, transitions,
+and side effects; do not construct TypeScript-invalid combinations or retain
+runtime guards to compensate for a type model that admits illegal internal
+states.
+
 Do not use `| undefined` on data properties. Put defaults in constructors or factories instead of making stable state optional, and remember that zero and empty strings are values. Reserve `Partial<T>` for update or override boundaries, not stored domain state. Check sentinels explicitly rather than with broad truthiness.
 
 Function parameter types are contracts, not caller conveniences. Put conditional absence at the call site where it is visible.
