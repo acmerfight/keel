@@ -355,7 +355,7 @@ function settlementPlanByExecutionIndex(
 
   executions.forEach(({ execution }, index) => {
     const inlineLength =
-      execution.artifactContent?.length ?? execution.content.length;
+      execution.artifact?.content.length ?? execution.content.length;
     if (
       inlineLength - maxInlineChars >=
       MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
@@ -374,7 +374,7 @@ function settlementPlanByExecutionIndex(
   const candidates = executions
     .map(({ execution }, index) => ({
       index,
-      length: execution.artifactContent?.length ?? execution.content.length,
+      length: execution.artifact?.content.length ?? execution.content.length,
     }))
     .filter(
       ({ length }) =>
@@ -402,19 +402,19 @@ function settlementPlanByExecutionIndex(
 function artifactSourceStatus(
   execution: ToolExecution,
 ): ToolOutputArtifactSourceStatus {
-  return execution.artifactSourceTruncated === true
+  return execution.artifact?.sourceTruncated === true
     ? "source-truncated"
     : "complete";
 }
 
 function inlineSettledContent(execution: ToolExecution): string {
-  return execution.artifactContent ?? execution.content;
+  return execution.artifact?.content ?? execution.content;
 }
 
 function inlineSourceTruncated(execution: ToolExecution): boolean {
-  return execution.artifactContent === undefined
+  return execution.artifact === undefined
     ? execution.sourceTruncated === true
-    : execution.artifactSourceTruncated === true;
+    : execution.artifact.sourceTruncated;
 }
 
 async function settleToolExecutionContents(options: {
@@ -447,9 +447,9 @@ async function settleToolExecutionContents(options: {
       });
       continue;
     }
-    if (execution.artifactContent !== undefined) {
+    if (execution.artifact !== undefined) {
       const projection = projectCompactedToolOutput({
-        text: execution.artifactContent,
+        text: execution.artifact.content,
         maxChars: maxInlineChars,
         context: { toolCall },
       });
@@ -458,7 +458,7 @@ async function settleToolExecutionContents(options: {
         toolCallId: toolCall.id,
         toolName: toolCall.tool,
         previewContent: projection.preview,
-        artifactContent: execution.artifactContent,
+        artifactContent: execution.artifact.content,
         sourceStatus: artifactSourceStatus(execution),
         purpose: "settlement",
       });

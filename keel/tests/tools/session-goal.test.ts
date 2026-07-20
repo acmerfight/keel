@@ -1594,12 +1594,12 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: false,
         sourceTruncated: true,
-        artifactSourceTruncated: false,
+        artifact: { sourceTruncated: false },
         sessionGoalUpdate: { status: "active" },
       });
       expect(execution.content.length).toBeLessThan(23_000);
-      expect(execution.artifactContent?.length).toBeGreaterThan(25_000);
-      expect(execution.artifactContent).toContain("Recovery:");
+      expect(execution.artifact?.content.length).toBeGreaterThan(25_000);
+      expect(execution.artifact?.content).toContain("Recovery:");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

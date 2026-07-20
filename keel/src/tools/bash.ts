@@ -157,9 +157,13 @@ function formatResult(result: BashProcessResult): BashToolResult {
     content,
     exitCode: result.exitCode,
     ...(previewTruncated ? { sourceTruncated: true } : {}),
-    ...(previewTruncated || artifactSourceTruncated ? { artifactContent } : {}),
     ...(previewTruncated || artifactSourceTruncated
-      ? { artifactSourceTruncated }
+      ? {
+          artifact: {
+            content: artifactContent,
+            sourceTruncated: artifactSourceTruncated,
+          },
+        }
       : {}),
   };
 }
