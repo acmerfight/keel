@@ -5,7 +5,6 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   persistSessionMessages,
@@ -19,7 +18,10 @@ import {
   createGitWorkspace,
 } from "../../../src/testing/cli-harness.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
@@ -39,6 +41,7 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -96,6 +99,7 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -238,6 +242,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "first.txt"),
       beforeContent: "before first\n",
       afterContent: "after first\n",
+      modeOwnership: { kind: "unowned" },
     });
     await commitFile(workspace, "second.txt", "before second\n");
     await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
@@ -246,6 +251,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "second.txt"),
       beforeContent: "before second\n",
       afterContent: "after second\n",
+      modeOwnership: { kind: "unowned" },
     });
     const input = new PassThrough();
     let stdout = "";
@@ -255,6 +261,7 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -313,6 +320,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "first.txt"),
       beforeContent: "before first\n",
       afterContent: "after first\n",
+      modeOwnership: { kind: "unowned" },
     });
     await commitFile(workspace, "second.txt", "before second\n");
     await writeFile(join(workspace, "second.txt"), "after second\n", "utf8");
@@ -321,6 +329,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "second.txt"),
       beforeContent: "before second\n",
       afterContent: "after second\n",
+      modeOwnership: { kind: "unowned" },
     });
     const input = new PassThrough();
     let stdout = "";
@@ -330,6 +339,7 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -388,6 +398,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "note.txt"),
       beforeContent: "before\n",
       afterContent: "after\n",
+      modeOwnership: { kind: "unowned" },
     });
     await writeFile(join(workspace, "note.txt"), "user change\n", "utf8");
 
@@ -399,6 +410,7 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -513,6 +525,7 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -657,6 +670,7 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -732,6 +746,7 @@ describe("Interactive Session - Undo", () => {
       filePath: join(workspace, "note.txt"),
       beforeContent: "before\n",
       afterContent: "after\n",
+      modeOwnership: { kind: "unowned" },
     });
     const storedSession = createSessionStore({
       sessionId: "undo-resume",
@@ -752,6 +767,20 @@ describe("Interactive Session - Undo", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          now = 1;
+          persistedMessages = persistSessionMessages({
+            session: storedSession,
+            previousMessages: persistedMessages,
+            currentMessages: messages,
+            runtime,
+            reason,
+            consumedInputIds,
+          });
+        },
+      }),
       initialMessages: storedSession.messages,
       initialQueuedInputs: [queuedUndo],
       input: firstInput,
@@ -775,17 +804,6 @@ describe("Interactive Session - Undo", () => {
         throw new Error("queued undo should not start a model turn");
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        now = 1;
-        persistedMessages = persistSessionMessages({
-          session: storedSession,
-          previousMessages: persistedMessages,
-          currentMessages: messages,
-          runtime,
-          reason,
-          consumedInputIds,
-        });
-      },
     });
     firstInput.end();
 
@@ -811,6 +829,7 @@ describe("Interactive Session - Undo", () => {
         cliArgs: { bashMode: "disabled" },
         workspace,
         platform: process.platform,
+        session: EPHEMERAL_INTERACTIVE_SESSION,
         initialMessages: resumed.messages,
         initialQueuedInputs: resumed.pendingInputs,
         input: secondInput,

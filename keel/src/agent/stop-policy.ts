@@ -41,7 +41,7 @@ export function composeStopPolicies(
 export function costBudgetStopPolicy(): AgentStopPolicy {
   return {
     shouldStopAfterTurn: (context) =>
-      context.cost?.budgetLimited === true
+      context.cost?.budget.kind === "budget_limited"
         ? { type: "stop", reason: "cost_budget" }
         : { type: "continue" },
   };

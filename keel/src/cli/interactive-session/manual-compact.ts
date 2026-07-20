@@ -23,7 +23,7 @@ import {
   formatManualCompactionFailure,
   type ManualCompactCommand,
 } from "./commands.ts";
-import { shouldTrackInteractiveCost } from "./cost.ts";
+import type { InteractiveCompactionCost } from "./cost.ts";
 import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
@@ -46,8 +46,7 @@ export interface ManualCompactContext {
     usage: Usage,
     costModel: CostModel,
   ) => CostReport;
-  readonly remainingCostUsd?: number;
-  readonly costBudgetLimitedReport: () => CostReport;
+  readonly compactionCost: InteractiveCompactionCost;
   readonly modelOperations: ModelOperationInstrumentation | null;
 }
 
@@ -73,25 +72,22 @@ export async function executeManualCompaction(
     taskProgress,
     options,
     recordCompactionCost,
-    remainingCostUsd,
-    costBudgetLimitedReport,
+    compactionCost,
     modelOperations,
   } = ctx;
-  const manualCostModel = !shouldTrackInteractiveCost(options.cliArgs)
-    ? undefined
-    : options.requireKnownCostModel(resolved);
+  const manualCostModel =
+    compactionCost.kind === "untracked" ? undefined : compactionCost.model;
   const messagesBeforeCompact = messages.slice();
   const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
     resolved.modelMetadata,
   );
   const provider =
-    manualCostModel === undefined || remainingCostUsd === undefined
+    compactionCost.kind !== "budgeted"
       ? resolved.provider
       : createCostBudgetedProvider({
           provider: resolved.provider,
-          model: manualCostModel,
-          maxCostUsd: remainingCostUsd,
-          /* v8 ignore next 3 -- metadata normalization is covered at the model-metadata boundary. */
+          model: compactionCost.model,
+          maxCostUsd: compactionCost.remainingCostUsd,
           ...(modelMaxOutputTokens !== undefined
             ? { modelMaxOutputTokens }
             : {}),
@@ -162,9 +158,7 @@ export async function executeManualCompaction(
       if (manualCostModel !== undefined) {
         const cost = recordCompactionCost(result.usage, manualCostModel);
         if (options.cliArgs.maxCostUsd !== undefined) {
-          options.writeStderr(
-            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-          );
+          options.writeStderr(options.formatCostReport(cost));
         }
         return { status: "committed", cost };
       }
@@ -178,15 +172,11 @@ export async function executeManualCompaction(
           : recordCompactionCost(result.usage, manualCostModel);
       if (
         result.failure.code === "summary_error" &&
+        compactionCost.kind === "budgeted" &&
         result.failure.error instanceof CostBudgetAdmissionError
       ) {
-        const cost = costBudgetLimitedReport();
-        /* v8 ignore else -- CostBudgetAdmissionError is created only by --max-cost's budget wrapper. */
-        if (options.cliArgs.maxCostUsd !== undefined) {
-          options.writeStderr(
-            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-          );
-        }
+        const cost = compactionCost.budgetLimitedReport();
+        options.writeStderr(options.formatCostReport(cost));
         return { status: "not_committed", cost };
       }
       options.writeStderr(
@@ -195,9 +185,7 @@ export async function executeManualCompaction(
       if (failedCost !== undefined) {
         const cost = failedCost;
         if (options.cliArgs.maxCostUsd !== undefined) {
-          options.writeStderr(
-            options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-          );
+          options.writeStderr(options.formatCostReport(cost));
         }
         return { status: "not_committed", cost };
       }
@@ -213,14 +201,12 @@ export async function executeManualCompaction(
       options.writeStdout("\n");
       return { status: "not_committed" };
     }
-    if (error instanceof CostBudgetAdmissionError) {
-      const cost = costBudgetLimitedReport();
-      /* v8 ignore next 3 -- the wrapper exists only when --max-cost supplied the remaining budget. */
-      if (options.cliArgs.maxCostUsd !== undefined) {
-        options.writeStderr(
-          options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-        );
-      }
+    if (
+      compactionCost.kind === "budgeted" &&
+      error instanceof CostBudgetAdmissionError
+    ) {
+      const cost = compactionCost.budgetLimitedReport();
+      options.writeStderr(options.formatCostReport(cost));
       return { status: "not_committed", cost };
     }
     options.writeStderr(formatManualCompactionFailure(error));

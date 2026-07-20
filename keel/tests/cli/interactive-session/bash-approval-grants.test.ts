@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   persistSessionBashApprovalGrant,
@@ -19,7 +18,10 @@ import {
 } from "../../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -46,6 +48,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -122,6 +125,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -205,6 +209,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       projectRoot: workspace,
       input,
       writeStdout: (text) => {
@@ -301,6 +306,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -374,6 +380,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -445,6 +452,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -519,6 +527,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -592,6 +601,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -681,6 +691,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -767,6 +778,32 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persistedMessages = persistSessionMessages({
+            session,
+            previousMessages: persistedMessages,
+            currentMessages: messages,
+            runtime: {
+              env: (key) => (key === "KEEL_HOME" ? home : undefined),
+              now: () => 1,
+            },
+            reason,
+            consumedInputIds,
+          });
+        },
+        persistBashApprovalGrant: (grant) => {
+          persistSessionBashApprovalGrant({
+            session,
+            grant,
+            runtime: {
+              env: (key) => (key === "KEEL_HOME" ? home : undefined),
+              now: () => 2,
+            },
+          });
+        },
+      }),
       initialMessages: session.messages,
       initialQueuedInputs: session.pendingInputs,
       initialBashApprovalGrants: session.bashApprovalGrants,
@@ -802,29 +839,6 @@ describe("Interactive Session - Bash Approval Grants", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persistedMessages = persistSessionMessages({
-          session,
-          previousMessages: persistedMessages,
-          currentMessages: messages,
-          runtime: {
-            env: (key) => (key === "KEEL_HOME" ? home : undefined),
-            now: () => 1,
-          },
-          reason,
-          consumedInputIds,
-        });
-      },
-      persistBashApprovalGrant: (grant) => {
-        persistSessionBashApprovalGrant({
-          session,
-          grant,
-          runtime: {
-            env: (key) => (key === "KEEL_HOME" ? home : undefined),
-            now: () => 2,
-          },
-        });
-      },
     });
 
     try {
@@ -849,6 +863,19 @@ describe("Interactive Session - Bash Approval Grants", () => {
         cliArgs: { bashMode: "ask" },
         workspace,
         platform: process.platform,
+        session: savedInteractiveSession({
+          id: "test-session",
+          persistBashApprovalGrant: (grant) => {
+            persistSessionBashApprovalGrant({
+              session: resumedSession,
+              grant,
+              runtime: {
+                env: (key) => (key === "KEEL_HOME" ? home : undefined),
+                now: () => 4,
+              },
+            });
+          },
+        }),
         initialMessages: resumedSession.messages,
         initialQueuedInputs: resumedSession.pendingInputs,
         initialBashApprovalGrants: resumedSession.bashApprovalGrants,
@@ -884,16 +911,6 @@ describe("Interactive Session - Bash Approval Grants", () => {
           return finalEnd;
         },
         formatCostReport: () => "",
-        persistBashApprovalGrant: (grant) => {
-          persistSessionBashApprovalGrant({
-            session: resumedSession,
-            grant,
-            runtime: {
-              env: (key) => (key === "KEEL_HOME" ? home : undefined),
-              now: () => 4,
-            },
-          });
-        },
       });
 
       // When
@@ -942,6 +959,32 @@ describe("Interactive Session - Bash Approval Grants", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persistedMessages = persistSessionMessages({
+            session,
+            previousMessages: persistedMessages,
+            currentMessages: messages,
+            runtime: {
+              env: (key) => (key === "KEEL_HOME" ? home : undefined),
+              now: () => 1,
+            },
+            reason,
+            consumedInputIds,
+          });
+        },
+        persistBashApprovalGrant: (grant) => {
+          persistSessionBashApprovalGrant({
+            session,
+            grant,
+            runtime: {
+              env: (key) => (key === "KEEL_HOME" ? home : undefined),
+              now: () => 2,
+            },
+          });
+        },
+      }),
       initialMessages: session.messages,
       initialQueuedInputs: session.pendingInputs,
       initialBashApprovalGrants: session.bashApprovalGrants,
@@ -977,29 +1020,6 @@ describe("Interactive Session - Bash Approval Grants", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persistedMessages = persistSessionMessages({
-          session,
-          previousMessages: persistedMessages,
-          currentMessages: messages,
-          runtime: {
-            env: (key) => (key === "KEEL_HOME" ? home : undefined),
-            now: () => 1,
-          },
-          reason,
-          consumedInputIds,
-        });
-      },
-      persistBashApprovalGrant: (grant) => {
-        persistSessionBashApprovalGrant({
-          session,
-          grant,
-          runtime: {
-            env: (key) => (key === "KEEL_HOME" ? home : undefined),
-            now: () => 2,
-          },
-        });
-      },
     });
 
     try {
@@ -1027,6 +1047,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
         cliArgs: { bashMode: "ask" },
         workspace,
         platform: process.platform,
+        session: EPHEMERAL_INTERACTIVE_SESSION,
         initialMessages: resumedSession.messages,
         initialQueuedInputs: resumedSession.pendingInputs,
         initialBashApprovalGrants: resumedSession.bashApprovalGrants,

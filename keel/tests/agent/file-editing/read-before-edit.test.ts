@@ -15,6 +15,10 @@ import {
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import {
+  successfulMutationToolExecution,
+  successfulReadToolExecution,
+} from "../../../src/testing/tool-execution-fixtures.ts";
 
 describe("File Editing Read Before Edit", () => {
   test(`Given the assistant edits a file before reading it,
@@ -87,7 +91,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -138,7 +142,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -173,11 +177,9 @@ describe("File Editing Read Before Edit", () => {
 
     // When
     readVisibility.applyVisibleToolExecutions(
-      targetPaths.map((targetPath) => ({
-        ok: true,
-        content: "",
-        readTargetPath: targetPath,
-      })),
+      targetPaths.map((targetPath) =>
+        successfulReadToolExecution({ targetPath }),
+      ),
     );
 
     // Then
@@ -190,9 +192,7 @@ describe("File Editing Read Before Edit", () => {
     expect(readVisibility.hasRead(newestTarget)).toBe(true);
 
     readVisibility.applyImmediateMutation({
-      ok: true,
-      content: "",
-      mutatedTargetPath: newestTarget,
+      ...successfulMutationToolExecution({ targetPaths: [newestTarget] }),
     });
     expect(readVisibility.hasRead(newestTarget)).toBe(false);
   });
@@ -234,7 +234,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "update timeout and retry count",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -315,7 +315,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -422,7 +422,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "read and update the API server",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -561,7 +561,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace two words",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -661,7 +661,7 @@ describe("File Editing Read Before Edit", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

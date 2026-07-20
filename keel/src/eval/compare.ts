@@ -6,11 +6,13 @@ import { type RunReport, runReportSchema } from "./report-schema.ts";
 const outcomes = ["verified", "verify_failed", "timeout", "crashed"] as const;
 
 const evalResultLineSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   timestamp: z.string(),
   keelVersion: z.string(),
   taskId: z.string(),
   trial: z.number().int().positive(),
+  condition: z.enum(["standard", "memory_disabled", "memory_enabled"]),
+  requiredToPass: z.boolean(),
   pass: z.boolean(),
   outcome: z.enum(outcomes),
   wallMs: z.number().nonnegative(),
@@ -79,7 +81,7 @@ function readEvalResultLines(filePath: string): readonly ResultLine[] {
     const parsedLine = evalResultLineSchema.safeParse(parsedJson);
     if (!parsedLine.success) {
       throw new Error(
-        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 1 eval result.`,
+        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 2 eval result.`,
       );
     }
     results.push(parsedLine.data);
@@ -97,10 +99,14 @@ function groupByTask(
 ): ReadonlyMap<string, readonly ResultLine[]> {
   const groups = new Map<string, ResultLine[]>();
   for (const line of lines) {
-    let group = groups.get(line.taskId);
+    const groupId =
+      line.condition === "standard"
+        ? line.taskId
+        : `${line.taskId} [${line.condition}]`;
+    let group = groups.get(groupId);
     if (group === undefined) {
       group = [];
-      groups.set(line.taskId, group);
+      groups.set(groupId, group);
     }
     group.push(line);
   }

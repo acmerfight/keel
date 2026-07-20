@@ -1,10 +1,22 @@
 import type { ToolCall } from "../../llm/types.ts";
-import type { ToolOutputArtifactToolName } from "../tool-output-artifacts.ts";
 
-export interface ToolOutputProjectionContext {
-  readonly toolName: ToolOutputArtifactToolName;
-  readonly toolCall?: ToolCall;
-}
+export type ToolOutputProjectionContext =
+  | { readonly toolCall: ToolCall }
+  | { readonly toolCall: null };
+
+type SourceToolCall = Extract<
+  ToolCall,
+  {
+    readonly tool:
+      | "bash"
+      | "read"
+      | "grep"
+      | "glob"
+      | "ls"
+      | "git_status"
+      | "git_diff";
+  }
+>;
 
 type ToolOutputProjectionPurpose =
   | "artifact-backed-compaction"
@@ -120,32 +132,20 @@ function tailLinesWithinBudget(
   lines: readonly string[],
   maxChars: number,
 ): readonly string[] {
-  const candidateLines = [...lines];
-  while (candidateLines.at(-1) === "") {
-    candidateLines.pop();
-  }
-
   const selected: string[] = [];
-  for (const line of Array.from(candidateLines).reverse()) {
+  for (const line of Array.from(lines).reverse()) {
     if (!prependLineWithinBudget(selected, line, maxChars)) {
       break;
     }
   }
-  const lastLine = candidateLines.at(-1);
+  const lastLine = lines.at(-1);
   if (selected.length === 0 && lastLine !== undefined && maxChars > 0) {
     return [lastLine.slice(-maxChars)];
   }
   return selected;
 }
 
-function sourceLineForToolCall(
-  context: ToolOutputProjectionContext,
-): string | null {
-  const { toolCall } = context;
-  /* v8 ignore next 3: active ledger context supplies a toolCall for every known tool identity. */
-  if (toolCall === undefined) {
-    return null;
-  }
+function sourceLineForToolCall(toolCall: SourceToolCall): string {
   switch (toolCall.tool) {
     case "bash":
       return `bash command: ${toolCall.command}`;
@@ -193,32 +193,24 @@ function sourceLineForToolCall(
         : `git_diff source: ${toolCall.paths.join(" ")}`;
     }
   }
-  /* v8 ignore next: generic edit/write/apply_patch projections do not request source lines. */
-  return null;
 }
 
 function appendSourceLine(
   lines: string[],
-  context: ToolOutputProjectionContext,
+  toolCall: SourceToolCall,
   maxChars: number,
 ): void {
-  const sourceLine = sourceLineForToolCall(context);
-  /* v8 ignore next 3: generic projections do not call appendSourceLine. */
-  if (sourceLine === null) {
-    return;
-  }
-  appendLineWithinBudget(lines, sourceLine, maxChars);
+  appendLineWithinBudget(lines, sourceLineForToolCall(toolCall), maxChars);
 }
 
 function compactLineAware(
   text: string,
   maxChars: number,
-  context: ToolOutputProjectionContext,
+  toolCall: Extract<ToolCall, { readonly tool: "git_diff" }>,
 ): string {
   const selected: string[] = [];
-  appendSourceLine(selected, context, maxChars);
+  appendSourceLine(selected, toolCall, maxChars);
   for (const line of headLinesWithinBudget(text.split("\n"), maxChars)) {
-    /* v8 ignore next 3: compactLineAware content lines are preselected against the same budget. */
     if (!appendLineWithinBudget(selected, line, maxChars)) {
       break;
     }
@@ -229,12 +221,12 @@ function compactLineAware(
 function projectBashOutput(
   text: string,
   maxChars: number,
-  context: ToolOutputProjectionContext,
+  toolCall: Extract<ToolCall, { readonly tool: "bash" }>,
 ): string {
   const lines = text.split("\n");
   const parsed = parseBashOutput(lines);
   const selected: string[] = [];
-  appendSourceLine(selected, context, maxChars);
+  appendSourceLine(selected, toolCall, maxChars);
   for (const line of parsed.statusLines) {
     appendLineWithinBudget(selected, line, maxChars);
   }
@@ -257,12 +249,7 @@ function projectBashOutput(
   ) {
     appendLineWithinBudget(selected, "[bash output tail preview]", maxChars);
     const remaining = Math.max(0, maxChars - joinedLines(selected).length - 1);
-    for (const line of tailLinesWithinBudget(parsed.otherLines, remaining)) {
-      /* v8 ignore next 3: tail lines are preselected against the exact remaining budget. */
-      if (!appendLineWithinBudget(selected, line, maxChars)) {
-        break;
-      }
-    }
+    selected.push(...tailLinesWithinBudget(parsed.otherLines, remaining));
   }
   return boundedText(joinedLines(selected), maxChars);
 }
@@ -413,14 +400,14 @@ function readContinuationNotice(lines: readonly string[]): string | undefined {
 function projectReadOutput(
   text: string,
   maxChars: number,
-  context: ToolOutputProjectionContext,
+  toolCall: Extract<ToolCall, { readonly tool: "read" }>,
 ): string {
   const lines = text.split("\n");
   const notice = readContinuationNotice(lines);
   const contentLines =
     notice === undefined ? lines : lines.filter((line) => line !== notice);
   const selected: string[] = [];
-  appendSourceLine(selected, context, maxChars);
+  appendSourceLine(selected, toolCall, maxChars);
   const noticeLines =
     notice === undefined ? [] : ["[read continuation]", notice];
   const reservedNoticeLength =
@@ -429,14 +416,12 @@ function projectReadOutput(
     0,
     maxChars - reservedNoticeLength - joinedLines(selected).length - 1,
   );
-  let contentLinesAdded = 0;
-  for (const line of headLinesWithinBudget(contentLines, contentBudget)) {
-    /* v8 ignore next 3: read content lines are preselected against the notice-reserved budget. */
-    if (!appendLineWithinBudget(selected, line, maxChars)) {
-      break;
-    }
-    contentLinesAdded++;
-  }
+  const selectedContentLines = headLinesWithinBudget(
+    contentLines,
+    contentBudget,
+  );
+  selected.push(...selectedContentLines);
+  const contentLinesAdded = selectedContentLines.length;
   if (contentLinesAdded === 0 && contentLines[0] !== undefined) {
     const remaining = Math.max(0, maxChars - joinedLines(selected).length - 1);
     appendLineWithinBudget(
@@ -484,7 +469,10 @@ function listedOutputNoticeLines(
 function projectListedOutput(options: {
   readonly text: string;
   readonly maxChars: number;
-  readonly context: ToolOutputProjectionContext;
+  readonly toolCall: Extract<
+    ToolCall,
+    { readonly tool: "grep" | "glob" | "ls" | "git_status" }
+  >;
   readonly noticePrefixes: readonly string[];
 }): string {
   const lines = options.text.split("\n");
@@ -495,7 +483,7 @@ function projectListedOutput(options: {
   ]);
   const entryLines = lines.filter((line) => !noticeLineSet.has(line));
   const selected: string[] = [];
-  appendSourceLine(selected, options.context, options.maxChars);
+  appendSourceLine(selected, options.toolCall, options.maxChars);
   const reservedNoticeLength =
     noticeLines.required.length === 0
       ? 0
@@ -533,6 +521,8 @@ interface GitDiffHunk {
 
 interface GitDiffBlock {
   readonly section: string | null;
+  readonly heading: string;
+  readonly pathSpec: string;
   readonly lines: readonly string[];
 }
 
@@ -564,6 +554,8 @@ const EMPTY_GIT_DIFF_OMITTED_DETAILS: GitDiffOmittedDetails = {
   deletions: 0,
 };
 
+const GIT_DIFF_HEADING_PREFIX = "diff --git ";
+
 function unitLabel(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
@@ -583,33 +575,43 @@ function gitDiffBlocksWithPrelude(lines: readonly string[]): {
   const preludeLines: string[] = [];
   const blocks: GitDiffBlock[] = [];
   let currentSection: string | null = null;
-  let current: string[] = [];
+  let current: {
+    readonly section: string | null;
+    readonly heading: string;
+    readonly pathSpec: string;
+    readonly lines: string[];
+  } | null = null;
   for (const line of lines) {
     if (isGitDiffSectionLine(line)) {
-      if (current.length > 0) {
-        blocks.push({ section: currentSection, lines: current });
-        current = [];
+      if (current !== null) {
+        blocks.push(current);
+        current = null;
       }
       currentSection = line;
       continue;
     }
-    if (line.startsWith("diff --git ")) {
-      if (current.length > 0) {
-        blocks.push({ section: currentSection, lines: current });
+    if (line.startsWith(GIT_DIFF_HEADING_PREFIX)) {
+      if (current !== null) {
+        blocks.push(current);
       }
-      current = [line];
+      current = {
+        section: currentSection,
+        heading: line,
+        pathSpec: line.slice(GIT_DIFF_HEADING_PREFIX.length),
+        lines: [line],
+      };
       continue;
     }
-    if (current.length > 0) {
-      current.push(line);
+    if (current !== null) {
+      current.lines.push(line);
       continue;
     }
     if (line !== "") {
       preludeLines.push(line);
     }
   }
-  if (current.length > 0) {
-    blocks.push({ section: currentSection, lines: current });
+  if (current !== null) {
+    blocks.push(current);
   }
   return { preludeLines, blocks };
 }
@@ -668,22 +670,19 @@ function skipSpaces(input: string, startIndex: number): number {
   return index;
 }
 
-function gitDiffDisplayPath(heading: string): string {
-  const prefix = "diff --git ";
-  /* v8 ignore next 3: gitDiffBlocksWithPrelude only passes headings with this prefix. */
-  if (!heading.startsWith(prefix)) {
-    return heading;
-  }
-  const rest = heading.slice(prefix.length);
-  const oldPath = gitDiffPathToken(rest, 0);
+function gitDiffDisplayPath(block: GitDiffBlock): string {
+  const oldPath = gitDiffPathToken(block.pathSpec, 0);
   /* v8 ignore next 3: git_diff headings contain the old path token. */
   if (oldPath === null) {
-    return heading;
+    return block.heading;
   }
-  const newPath = gitDiffPathToken(rest, skipSpaces(rest, oldPath.nextIndex));
+  const newPath = gitDiffPathToken(
+    block.pathSpec,
+    skipSpaces(block.pathSpec, oldPath.nextIndex),
+  );
   /* v8 ignore next 3: git_diff headings contain the new path token. */
   if (newPath === null) {
-    return heading;
+    return block.heading;
   }
   return normalizedGitDiffPath(newPath.token);
 }
@@ -778,16 +777,11 @@ function gitDiffHunks(block: readonly string[]): readonly GitDiffHunk[] {
 function gitDiffFiles(blocks: readonly GitDiffBlock[]): readonly GitDiffFile[] {
   const files: GitDiffFile[] = [];
   for (const block of blocks) {
-    const heading = block.lines[0];
-    /* v8 ignore next 3: gitDiffBlocksWithPrelude only yields non-empty blocks that begin with a diff heading. */
-    if (heading === undefined) {
-      continue;
-    }
     const hunks = gitDiffHunks(block.lines);
     const additions = hunks.reduce((total, hunk) => total + hunk.additions, 0);
     const deletions = hunks.reduce((total, hunk) => total + hunk.deletions, 0);
     files.push({
-      path: gitDiffDisplayPath(heading),
+      path: gitDiffDisplayPath(block),
       section: block.section,
       status: gitDiffFileStatus(block.lines, hunks),
       hunks,
@@ -997,13 +991,13 @@ function appendGitDiffHunkPreview(options: {
 function projectGitDiffOutput(
   text: string,
   maxChars: number,
-  context: ToolOutputProjectionContext,
+  toolCall: Extract<ToolCall, { readonly tool: "git_diff" }>,
   purpose: ToolOutputProjectionPurpose,
 ): string {
   const lines = text.split("\n");
   const parsed = parseGitDiffOutput(lines);
   if (parsed.files.length === 0) {
-    return compactLineAware(text, maxChars, context);
+    return compactLineAware(text, maxChars, toolCall);
   }
 
   const additions = parsed.files.reduce(
@@ -1136,11 +1130,12 @@ function projectGitDiffOutput(
     omittedDetailsLines(omittedDetails),
     maxChars,
   );
-  const sourceLine = sourceLineForToolCall(context);
-  /* v8 ignore next 3: valid git_diff tool-result ledgers preserve a matching tool call. */
-  if (sourceLine !== null) {
-    insertLineWithinBudget(previewLines, 1, sourceLine, maxChars);
-  }
+  insertLineWithinBudget(
+    previewLines,
+    1,
+    sourceLineForToolCall(toolCall),
+    maxChars,
+  );
   return boundedText(joinedLines(previewLines), maxChars);
 }
 
@@ -1150,16 +1145,20 @@ function projectToolOutputPreview(
   context: ToolOutputProjectionContext,
   purpose: ToolOutputProjectionPurpose,
 ): string {
-  switch (context.toolName) {
+  const { toolCall } = context;
+  if (toolCall === null) {
+    return boundedText(text, maxChars);
+  }
+  switch (toolCall.tool) {
     case "bash":
-      return projectBashOutput(text, maxChars, context);
+      return projectBashOutput(text, maxChars, toolCall);
     case "read":
-      return projectReadOutput(text, maxChars, context);
+      return projectReadOutput(text, maxChars, toolCall);
     case "grep":
       return projectListedOutput({
         text,
         maxChars,
-        context,
+        toolCall,
         noticePrefixes: [
           "[grep warning: some paths were inaccessible",
           "[grep output truncated:",
@@ -1169,25 +1168,25 @@ function projectToolOutputPreview(
       return projectListedOutput({
         text,
         maxChars,
-        context,
+        toolCall,
         noticePrefixes: ["[glob output truncated:"],
       });
     case "ls":
       return projectListedOutput({
         text,
         maxChars,
-        context,
+        toolCall,
         noticePrefixes: ["[ls output truncated:"],
       });
     case "git_status":
       return projectListedOutput({
         text,
         maxChars,
-        context,
+        toolCall,
         noticePrefixes: ["[git_status output truncated:"],
       });
     case "git_diff":
-      return projectGitDiffOutput(text, maxChars, context, purpose);
+      return projectGitDiffOutput(text, maxChars, toolCall, purpose);
     case "edit":
     case "write":
     case "apply_patch":
@@ -1195,10 +1194,10 @@ function projectToolOutputPreview(
     case "update_goal":
     case "memory_add":
     case "memory_forget":
+    case "memory_propose":
     case "skill_resource":
     case "skill_search":
     case "skill":
-    case "unknown":
       return boundedText(text, maxChars);
   }
 }

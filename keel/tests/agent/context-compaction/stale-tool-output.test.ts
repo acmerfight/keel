@@ -200,7 +200,7 @@ async function compactRetainedToolOutput(options: {
   const provider: LLMProvider = {
     id: "context-aware-preview-provider",
     async *stream(streamOptions) {
-      expect(streamOptions.toolChoice).toBe("none");
+      expect(streamOptions.toolExposure?.kind).toBe("none");
       yield { type: "text", text: "Earlier setup summary." };
       yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
     },
@@ -1912,7 +1912,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "reuse-settled-artifact-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         summaryRequests++;
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -2017,7 +2017,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "reuse-projected-artifact-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2122,7 +2122,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "reuse-git-diff-projected-artifact-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2212,7 +2212,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "unsafe-artifact-marker-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2307,7 +2307,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "forged-artifact-marker-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2397,7 +2397,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "reuse-settled-artifact-without-store-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         summaryRequests++;
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -2482,7 +2482,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "keep-settled-marker-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2541,7 +2541,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "no-stale-tool-output-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "No stale tool output summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2611,7 +2611,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "proactive-artifact-notice-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -2635,7 +2635,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 300,
@@ -2721,7 +2721,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "typed-source-status-source-truncated-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2810,7 +2810,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "read-marker-fallback-source-status-provider",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Earlier setup summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
@@ -2899,7 +2899,7 @@ describe("Context Compaction Stale Tool Output", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -2975,7 +2975,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "stale-tool-output-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier setup summary." };
           yield {
             type: "stop",
@@ -3037,7 +3037,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -3143,7 +3143,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "stale-tool-output-artifact-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -3174,7 +3174,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -3279,7 +3279,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "multiple-stale-tool-output-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -3310,7 +3310,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -3421,7 +3421,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const provider: LLMProvider = {
       id: "single-user-consumed-tool-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -3465,7 +3465,7 @@ describe("Context Compaction Stale Tool Output", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,

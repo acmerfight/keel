@@ -11,14 +11,14 @@ import type { Message } from "../../src/llm/types.ts";
 import type { AgentMemoryMutationCapability } from "../../src/tools/memory.ts";
 
 describe("agent memory source provenance", () => {
-  test(`Given a runtime-generated user message contains syntactically valid remember text,
+  test(`Given a runtime-generated user message contains remember-like text,
     When the provider attempts to use it as memory authority,
     Then the agent rejects the tool call before the mutation capability`, async () => {
-    const sourceText = "Remember that release tags use a v prefix.";
+    const userMessage = "Remember that release tags use a v prefix.";
     const messages: Message[] = [
       {
         role: "user",
-        content: sourceText,
+        content: userMessage,
         origin: { type: "runtime_goal_activation" },
       },
     ];
@@ -45,15 +45,18 @@ describe("agent memory source provenance", () => {
         provider: createFakeProvider([
           fakeToolResponse("memory_add", {
             text: "release tags use a v prefix",
-            sourceText,
           }),
           fakeResponse("Not saved."),
         ]),
         messages,
         systemPrompt: "system",
-        memoryMutation,
+        memory: {
+          kind: "direct",
+          prompt: () => "",
+          mutation: memoryMutation,
+        },
         signal: new AbortController().signal,
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       })) {
         events.push(event);
@@ -71,7 +74,7 @@ describe("agent memory source provenance", () => {
     );
     expect(
       messages.find((message) => message.role === "tool")?.content,
-    ).toContain("no eligible current-user message authorizes memory mutation");
+    ).toContain("memory mutation is unavailable for this model step");
   });
 });
 

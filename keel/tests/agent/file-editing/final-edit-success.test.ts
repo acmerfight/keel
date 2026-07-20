@@ -39,7 +39,7 @@ describe("File Editing Final Edit Success", () => {
           userMessage: "fix the bug in app.ts",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

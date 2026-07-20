@@ -5,13 +5,15 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   EXPENSIVE_USAGE,
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   textProvider,
   withTimeout,
   ZERO_COST_MODEL,
@@ -53,6 +55,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: (text) => {
@@ -95,8 +98,12 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         }
         return undefined;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
     input.end("/model qwen/tiny\nsecond prompt\n");
 
@@ -141,6 +148,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages: [{ role: "user", content: largePrompt }],
       input,
       writeStdout: (text) => {
@@ -203,15 +211,16 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     expect(sigintHandlers.size).toBe(0);
   });
 
-  test(`Given model-switch compaction exceeds the cost budget,
+  test(`Given budgeted model-switch compaction has an old-model output limit,
     When user enters /model for a smaller target,
-    Then Keel records the compaction cost and stops before the queued prompt`, async () => {
+    Then Keel applies that limit, records the cost, and stops before the queued prompt`, async () => {
     // Given
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     let stderr = "";
     let oldProviderSummaryRequests = 0;
+    let oldProviderSummaryMaxOutputTokens: number | undefined;
     let targetProviderTurns = 0;
     const initialMessages: readonly Message[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
@@ -220,8 +229,9 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
+          oldProviderSummaryMaxOutputTokens = options.maxOutputTokens;
           yield { type: "text", text: "Costly checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
           return;
@@ -242,6 +252,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: (text) => {
@@ -279,6 +290,20 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
           "fake",
           oldProvider,
           ONE_DOLLAR_PER_MILLION_INPUT,
+          undefined,
+          {
+            status: "known",
+            source: "registry",
+            contextWindowTokens: null,
+            maxOutputTokens: 300,
+            capabilities: {
+              textInput: true,
+              toolCalls: true,
+              reasoning: false,
+            },
+            costModel: ONE_DOLLAR_PER_MILLION_INPUT,
+            lastVerified: "2026-06-26",
+          },
         );
       },
       requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
@@ -293,8 +318,12 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -307,6 +336,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     expect(stderr).toContain("Context compacted: model switch");
     expect(stderr).toContain("Cost: 2.00 / 0.01 limited=true");
     expect(oldProviderSummaryRequests).toBe(1);
+    expect(oldProviderSummaryMaxOutputTokens).toBe(300);
     expect(targetProviderTurns).toBe(0);
     expect(sigintHandlers.size).toBe(0);
   });
@@ -333,7 +363,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Persisted costly checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
@@ -355,6 +385,21 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persisted.push({
+            reason,
+            messages: structuredClone([...messages]),
+            consumedInputIds,
+          });
+        },
+        consumeQueuedInputs: () => {
+          throw new Error(
+            "compaction persistence already consumed model input",
+          );
+        },
+      }),
       initialMessages,
       initialQueuedInputs: [
         {
@@ -407,16 +452,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
               ONE_DOLLAR_PER_MILLION_INPUT,
             ),
       requireKnownCostModel: () => ONE_DOLLAR_PER_MILLION_INPUT,
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persisted.push({
-          reason,
-          messages: structuredClone([...messages]),
-          consumedInputIds,
-        });
-      },
-      consumeQueuedInputs: () => {
-        throw new Error("compaction persistence already consumed model input");
-      },
+
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {
@@ -428,8 +464,12 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(2)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(2)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -468,7 +508,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const attempt = options.providerRequestAttempts?.begin();
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Report checkpoint summary." };
@@ -484,6 +524,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       input,
       writeStdout: (text) => {
@@ -570,7 +611,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         usage: EXPENSIVE_USAGE,
         turns: 0,
         stopReason: "completed",
-        cost: { spentUsd: 2, budgetLimited: false, overshootUsd: 0 },
+        cost: { spentUsd: 2, budget: { kind: "unbounded" } },
       },
       skillCatalog: {
         exposed: 0,
@@ -623,7 +664,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Persisted checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -644,6 +685,24 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persisted.push({
+            reason,
+            messages: structuredClone([...messages]),
+            consumedInputIds,
+          });
+        },
+        persistModelSwitch: (switchRecord) => {
+          switches.push(switchRecord);
+        },
+        consumeQueuedInputs: () => {
+          throw new Error(
+            "persisted model switch should not consume separately",
+          );
+        },
+      }),
       initialMessages,
       initialQueuedInputs: [
         {
@@ -691,19 +750,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
             )
           : resolvedProvider("fake", "fake", oldProvider),
       requireKnownCostModel: () => ZERO_COST_MODEL,
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persisted.push({
-          reason,
-          messages: structuredClone([...messages]),
-          consumedInputIds,
-        });
-      },
-      persistModelSwitch: (switchRecord) => {
-        switches.push(switchRecord);
-      },
-      consumeQueuedInputs: () => {
-        throw new Error("persisted model switch should not consume separately");
-      },
+
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {
@@ -766,7 +813,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "model-switch-read-restore-old",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Read checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -793,7 +840,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const targetProvider: LLMProvider = {
       id: "model-switch-read-restore-target",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -826,6 +873,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;

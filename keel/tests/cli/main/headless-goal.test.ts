@@ -1325,8 +1325,10 @@ describe("CLI Main - Headless Goal", () => {
             status: attemptsUnapprovedBash ? "paused" : "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "assertion",
-            completionCriterion: "the saved assertion remains externally gated",
+            completion: {
+              kind: "assertion",
+              assertion: "the saved assertion remains externally gated",
+            },
           },
         }),
       ],
@@ -1573,8 +1575,10 @@ describe("CLI Main - Headless Goal", () => {
             statusReason: "Session goal budget reached: turns 1/1.",
             budget: { turns: 1 },
             usage: { turns: 1, tokens: 10, activeTimeMs: 100 },
-            criterionKind: "command",
-            completionCriterion: "true",
+            completion: {
+              kind: "command",
+              command: "true",
+            },
           },
         }),
       ],
@@ -1643,8 +1647,10 @@ describe("CLI Main - Headless Goal", () => {
             status: "paused",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "command",
-            completionCriterion: "true",
+            completion: {
+              kind: "command",
+              command: "true",
+            },
           },
         }),
       ],
@@ -1663,8 +1669,10 @@ describe("CLI Main - Headless Goal", () => {
             statusReason: "Session goal budget reached: turns 1/1.",
             budget: { turns: 1 },
             usage: { turns: 1, tokens: 10, activeTimeMs: 100 },
-            criterionKind: "command",
-            completionCriterion: "true",
+            completion: {
+              kind: "command",
+              command: "true",
+            },
           },
         }),
       ],
@@ -1794,7 +1802,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(4);
       expect(providerCalls).toBe(1);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 14,
+        schemaVersion: 17,
         stopReason: "cost_budget",
         costBudgetUsd: 0.01,
         costUsd: 0.14,
@@ -2255,7 +2263,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(0);
       expect(providerCalls).toBe(3);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 14,
+        schemaVersion: 17,
         agentLoopTurns: 3,
         tasks: [
           {

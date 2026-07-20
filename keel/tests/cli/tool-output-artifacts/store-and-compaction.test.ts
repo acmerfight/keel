@@ -148,7 +148,7 @@ describe("CLI Tool Output Artifacts", () => {
       const provider: LLMProvider = {
         id: "cli-artifact-reuse-success-provider",
         async *stream(options) {
-          expect(options.toolChoice).toBe("none");
+          expect(options.toolExposure?.kind).toBe("none");
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
@@ -269,7 +269,7 @@ describe("CLI Tool Output Artifacts", () => {
       const provider: LLMProvider = {
         id: "cli-projection-artifact-reuse-provider",
         async *stream(options) {
-          expect(options.toolChoice).toBe("none");
+          expect(options.toolExposure?.kind).toBe("none");
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
@@ -373,7 +373,7 @@ describe("CLI Tool Output Artifacts", () => {
       const provider: LLMProvider = {
         id: "cli-artifact-reuse-verification-provider",
         async *stream(options) {
-          expect(options.toolChoice).toBe("none");
+          expect(options.toolExposure?.kind).toBe("none");
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },
@@ -548,7 +548,7 @@ describe("CLI Tool Output Artifacts", () => {
       const provider: LLMProvider = {
         id: "cli-artifact-reuse-fallback-provider",
         async *stream(options) {
-          expect(options.toolChoice).toBe("none");
+          expect(options.toolExposure?.kind).toBe("none");
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
         },

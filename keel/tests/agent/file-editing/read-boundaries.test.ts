@@ -76,7 +76,7 @@ describe("File Editing Read Boundaries", () => {
           userMessage: "read the large file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -159,7 +159,7 @@ describe("File Editing Read Boundaries", () => {
           userMessage: "read a file window",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -217,7 +217,7 @@ describe("File Editing Read Boundaries", () => {
           userMessage: "read from line 3",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -325,7 +325,7 @@ describe("File Editing Read Boundaries", () => {
           userMessage: "read missing file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -429,7 +429,7 @@ describe("File Editing Read Boundaries", () => {
           userMessage: "inspect the workspace",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -517,7 +517,7 @@ describe("File Editing Read Boundaries", () => {
           userMessage: "read the binary file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -588,7 +588,7 @@ describe("File Editing Read Boundaries", () => {
           userMessage: "read from line zero",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

@@ -135,7 +135,6 @@ const modelOperationBase = {
       agentRunOrdinal: z.number().int().positive(),
     }),
     z.object({ type: z.literal("session") }),
-    z.object({ type: z.literal("invocation") }),
   ]),
   purpose: z.enum([
     "agent_turn",
@@ -161,8 +160,106 @@ const modelOperationBase = {
 
 const modelOperationSchema = z.object(modelOperationBase);
 
+const projectMemoryScopeSchema = z.object({
+  kind: z.literal("project"),
+  id: z.string(),
+});
+
+const runReportMemoryOperationSchema = z.union([
+  z.object({
+    operation: z.literal("add"),
+    id: z.string(),
+    scope: projectMemoryScopeSchema,
+    outcome: z.literal("saved"),
+  }),
+  z.object({
+    operation: z.literal("forget"),
+    id: z.string(),
+    scope: projectMemoryScopeSchema,
+    outcome: z.literal("forgotten"),
+  }),
+  z.discriminatedUnion("outcome", [
+    z.object({
+      operation: z.literal("propose"),
+      candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+      memoryId: z.string().regex(/^mem_[0-9a-f-]+$/u),
+      scope: projectMemoryScopeSchema,
+      outcome: z.literal("approved"),
+    }),
+    z.object({
+      operation: z.literal("propose"),
+      candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+      memoryId: z.null(),
+      scope: projectMemoryScopeSchema,
+      outcome: z.literal("rejected"),
+    }),
+    z.object({
+      operation: z.literal("propose"),
+      candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+      memoryId: z.null(),
+      scope: projectMemoryScopeSchema,
+      outcome: z.literal("pending"),
+    }),
+  ]),
+]);
+
+const runReportMemorySchema = z
+  .object({
+    enabled: z.boolean(),
+    scope: projectMemoryScopeSchema.nullable(),
+    loadedIds: z.array(z.string()),
+    loadedEntries: z.array(
+      z.object({
+        id: z.string(),
+        status: z.enum(["current", "stale"]),
+        source: z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("user_explicit"),
+            channel: z.enum(["agent", "cli"]),
+            candidateId: z.null(),
+          }),
+          z.object({
+            type: z.literal("user_approved"),
+            channel: z.enum(["cli", "interactive"]),
+            candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+          }),
+        ]),
+        createdAt: z.string(),
+        lastVerifiedAt: z.string(),
+        supersedes: z.array(z.string()),
+        supersededBy: z.null(),
+        reviewAfter: z.string().nullable(),
+        expiresAt: z.string().nullable(),
+      }),
+    ),
+    renderedBytes: z.number().int().nonnegative(),
+    estimatedTokens: z.number().int().nonnegative().optional(),
+    operations: z.array(runReportMemoryOperationSchema),
+    error: z.string().optional(),
+  })
+  .superRefine((memory, ctx) => {
+    const entryIds = memory.loadedEntries.map((entry) => entry.id);
+    if (new Set(entryIds).size !== entryIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["loadedEntries"],
+        message: "loaded memory entry IDs must be unique",
+      });
+    }
+    if (
+      memory.loadedIds.length !== entryIds.length ||
+      memory.loadedIds.some((id, index) => id !== entryIds[index])
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["loadedIds"],
+        message: "loadedIds must exactly match loadedEntries",
+      });
+    }
+  });
+
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(14),
+  schemaVersion: z.literal(17),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),
@@ -244,35 +341,7 @@ export const runReportSchema = z.object({
       ])
       .nullable(),
   }),
-  memory: z.object({
-    enabled: z.boolean(),
-    scope: z
-      .object({
-        kind: z.literal("project"),
-        id: z.string(),
-      })
-      .nullable(),
-    loadedIds: z.array(z.string()),
-    renderedBytes: z.number().int().nonnegative(),
-    estimatedTokens: z.number().int().nonnegative().optional(),
-    operations: z.array(
-      z.discriminatedUnion("operation", [
-        z.object({
-          operation: z.literal("add"),
-          id: z.string(),
-          scope: z.object({ kind: z.literal("project"), id: z.string() }),
-          outcome: z.literal("saved"),
-        }),
-        z.object({
-          operation: z.literal("forget"),
-          id: z.string(),
-          scope: z.object({ kind: z.literal("project"), id: z.string() }),
-          outcome: z.literal("forgotten"),
-        }),
-      ]),
-    ),
-    error: z.string().optional(),
-  }),
+  memory: runReportMemorySchema,
   goalOutcome: z
     .object({
       sessionId: z.string(),

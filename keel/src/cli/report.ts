@@ -6,7 +6,9 @@ import type {
   ActiveSkillStatus,
   SkillActivationRecord,
 } from "../skills/model.ts";
+import type { AgentMemoryOperation } from "../tools/memory.ts";
 import type { EndEvent } from "./output.ts";
+import type { ActiveProjectMemoryEntry } from "./project-memory.ts";
 import {
   accountModelOperations,
   type RunReportContextCompaction,
@@ -38,25 +40,63 @@ export interface RunReportMemory {
   readonly enabled: boolean;
   readonly scope: { readonly kind: "project"; readonly id: string } | null;
   readonly loadedIds: readonly string[];
+  readonly loadedEntries: readonly RunReportMemoryEntry[];
   readonly renderedBytes: number;
   readonly estimatedTokens?: number;
   readonly operations: readonly RunReportMemoryOperation[];
   readonly error?: string;
 }
 
-export type RunReportMemoryOperation =
-  | {
-      readonly operation: "add";
-      readonly id: string;
-      readonly scope: { readonly kind: "project"; readonly id: string };
-      readonly outcome: "saved";
-    }
-  | {
-      readonly operation: "forget";
-      readonly id: string;
-      readonly scope: { readonly kind: "project"; readonly id: string };
-      readonly outcome: "forgotten";
-    };
+export interface RunReportMemoryEntry {
+  readonly id: string;
+  readonly status: ActiveProjectMemoryEntry["status"];
+  readonly source:
+    | {
+        readonly type: "user_explicit";
+        readonly channel: "agent" | "cli";
+        readonly candidateId: null;
+      }
+    | {
+        readonly type: "user_approved";
+        readonly channel: "cli" | "interactive";
+        readonly candidateId: string;
+      };
+  readonly createdAt: string;
+  readonly lastVerifiedAt: string;
+  readonly supersedes: readonly string[];
+  readonly supersededBy: null;
+  readonly reviewAfter: string | null;
+  readonly expiresAt: string | null;
+}
+
+export function projectMemoryReportEntry(
+  entry: ActiveProjectMemoryEntry,
+): RunReportMemoryEntry {
+  return {
+    id: entry.id,
+    status: entry.status,
+    source:
+      entry.source.type === "user_approved"
+        ? {
+            type: entry.source.type,
+            channel: entry.source.channel,
+            candidateId: entry.source.candidateId,
+          }
+        : {
+            type: entry.source.type,
+            channel: entry.source.channel,
+            candidateId: null,
+          },
+    createdAt: entry.createdAt,
+    lastVerifiedAt: entry.lastVerifiedAt,
+    supersedes: entry.supersedes,
+    supersededBy: entry.supersededBy,
+    reviewAfter: entry.reviewAfter,
+    expiresAt: entry.expiresAt,
+  };
+}
+
+export type RunReportMemoryOperation = AgentMemoryOperation;
 
 interface RunReportSkillCatalog {
   readonly exposed: number;
@@ -81,7 +121,7 @@ export interface RunReportGoalOutcome {
 }
 
 interface RunReport {
-  readonly schemaVersion: 14;
+  readonly schemaVersion: 17;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -135,9 +175,16 @@ export function assertEndEventHasCost(
 
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const accounting = accountModelOperations(input.modelOperations);
-  const costBudgetUsd = input.end.cost.maxUsd;
+  const costBudgetUsd =
+    input.end.cost.budget.kind === "unbounded"
+      ? undefined
+      : input.end.cost.budget.maxUsd;
+  const costOvershootUsd =
+    input.end.cost.budget.kind === "budget_limited"
+      ? input.end.cost.budget.overshootUsd
+      : 0;
   const report: RunReport = {
-    schemaVersion: 14,
+    schemaVersion: 17,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,
@@ -154,10 +201,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     durationMs: input.durationMs,
     costUsd: accounting.costUsd,
     ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
-    costOvershootUsd:
-      costBudgetUsd === undefined
-        ? 0
-        : Math.max(0, accounting.costUsd - costBudgetUsd),
+    costOvershootUsd,
     contextCompactions: input.contextCompactions,
     skillActivations: input.skillActivations,
     activeSkills: input.activeSkills,

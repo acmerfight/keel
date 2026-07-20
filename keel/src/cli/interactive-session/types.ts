@@ -21,7 +21,10 @@ import type {
   SkillLifecycleState,
   WorkflowSkill,
 } from "../../skills/model.ts";
-import type { AgentMemoryMutationCapability } from "../../tools/memory.ts";
+import type {
+  AgentMemoryProposalCapability,
+  AgentMemoryRuntime,
+} from "../../tools/memory.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type { RunReportMemory } from "../report.ts";
@@ -38,7 +41,6 @@ import type {
 import type { InteractiveLineInput } from "./line-reader.ts";
 
 export type { ProviderSelection } from "../provider-config.ts";
-export type { SessionPersistenceReason } from "../session-store.ts";
 
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 export type EndEventWithCost = EndEvent & { readonly cost: CostReport };
@@ -82,12 +84,97 @@ export type InteractiveResolvedProvider =
       readonly modelSource: ModelSource;
     });
 
-export interface InteractiveSessionOptions {
+export interface SavedInteractiveSession {
+  readonly kind: "saved";
+  readonly id: string;
+  readonly resumeAvailable: () => boolean;
+  readonly reserveMessageId: () => string;
+  readonly persistQueuedInput: (input: {
+    readonly sequence: number;
+    readonly line: string;
+  }) => SessionQueuedInput;
+  readonly consumeQueuedInputs: (inputIds: readonly string[]) => void;
+  readonly persistMessages: (request: {
+    readonly messages: readonly Message[];
+    readonly reason: SessionPersistenceReason;
+    readonly consumedInputIds: readonly string[];
+    readonly skillState: SkillLifecycleState | null;
+    readonly reservedMessageIds: readonly {
+      readonly message: Message;
+      readonly id: string;
+    }[];
+  }) => void;
+  readonly persistTitle: (titleRecord: {
+    readonly title: string;
+    readonly consumedInputIds: readonly string[];
+  }) => string;
+  readonly persistGoal: (update: {
+    readonly goal: SessionGoal | null;
+    readonly consumedInputIds: readonly string[];
+  }) => SessionGoal | undefined;
+  readonly persistTaskProgress: (update: {
+    readonly taskProgress: SessionTaskProgress;
+    readonly messageOrdinal: number;
+  }) => void;
+  readonly persistModelSwitch: (switchRecord: {
+    readonly from: SessionModelSelection | null;
+    readonly to: SessionModelSelection;
+    readonly consumedInputIds: readonly string[];
+  }) => void;
+  readonly persistSkillState: (state: SkillLifecycleState) => void;
+  readonly fork: (request: InteractiveForkSessionRequest) => string;
+  readonly listForkPoints: () => SessionForkPoints;
+  readonly persistBashApprovalGrant: (grant: BashApprovalGrant) => void;
+  readonly persistBashApprovalRevoked: (revocation: {
+    readonly grant: BashApprovalGrant;
+    readonly consumedInputIds: readonly string[];
+  }) => void;
+  readonly persistBashApprovalsCleared: (clear: {
+    readonly consumedInputIds: readonly string[];
+  }) => void;
+}
+
+export type InteractiveSession =
+  | { readonly kind: "ephemeral" }
+  | SavedInteractiveSession;
+
+type EnabledInteractiveMemoryRuntime =
+  AgentMemoryRuntime<AgentMemoryProposalCapability> & {
+    readonly status: () => RunReportMemory;
+  };
+
+export type InteractiveMemoryRuntime =
+  | {
+      readonly kind: "disabled";
+      readonly status: () => RunReportMemory;
+    }
+  | EnabledInteractiveMemoryRuntime;
+
+type NonReviewedInteractiveMemoryRuntime = Exclude<
+  InteractiveMemoryRuntime,
+  { readonly kind: "reviewed" }
+>;
+
+export interface ReviewedInteractiveSessionMemoryBinding {
+  readonly session: SavedInteractiveSession;
+  readonly memory: Extract<
+    InteractiveMemoryRuntime,
+    { readonly kind: "reviewed" }
+  >;
+}
+
+export type InteractiveSessionMemoryBinding =
+  | {
+      readonly session: InteractiveSession;
+      readonly memory: NonReviewedInteractiveMemoryRuntime;
+    }
+  | ReviewedInteractiveSessionMemoryBinding;
+
+interface InteractiveSessionOptionsBase {
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly platform: NodeJS.Platform;
-  readonly sessionId?: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly workflowSkills?: readonly WorkflowSkill[];
   readonly skillCatalog?: readonly SkillDescriptor[];
@@ -101,7 +188,6 @@ export interface InteractiveSessionOptions {
   readonly initialTaskProgress?: SessionTaskProgress;
   readonly initialModelSelection?: SessionModelSelection;
   readonly configuredModelSelection?: ProviderSelection;
-  readonly sessionResumeAvailable?: () => boolean;
   readonly initialModelSwitchCount?: number;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
   readonly initialInputLines?: readonly string[];
@@ -111,53 +197,11 @@ export interface InteractiveSessionOptions {
   readonly bashPermission?: SessionBashPermissionPolicy;
   readonly goalAutomaticContinuationTurnLimit?: number;
   readonly reportRecorder?: AgentEventReportRecorder;
-  readonly memoryPrompt?: () => string;
-  readonly memoryMutation?: AgentMemoryMutationCapability;
-  readonly memoryStatus?: () => RunReportMemory;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
   readonly persistProjectBashApprovalGrant?: (
     grant: BashProjectApprovalGrant,
   ) => void;
-  readonly persistQueuedInput?: (input: {
-    readonly sequence: number;
-    readonly line: string;
-  }) => SessionQueuedInput;
-  readonly consumeQueuedInputs?: (inputIds: readonly string[]) => void;
-  readonly persistSessionMessages?: (
-    messages: readonly Message[],
-    reason: SessionPersistenceReason,
-    consumedInputIds: readonly string[],
-    skillState?: SkillLifecycleState,
-  ) => void;
-  readonly persistSessionTitle?: (titleRecord: {
-    readonly title: string;
-    readonly consumedInputIds: readonly string[];
-  }) => string;
-  readonly persistSessionGoal?: (update: {
-    readonly goal: SessionGoal | null;
-    readonly consumedInputIds: readonly string[];
-  }) => SessionGoal | undefined;
-  readonly persistTaskProgress?: (update: {
-    readonly taskProgress: SessionTaskProgress;
-    readonly messageOrdinal: number;
-  }) => void;
-  readonly persistModelSwitch?: (switchRecord: {
-    readonly from: SessionModelSelection | null;
-    readonly to: SessionModelSelection;
-    readonly consumedInputIds: readonly string[];
-  }) => void;
-  readonly persistSkillState?: (state: SkillLifecycleState) => void;
-  readonly forkSession?: (request: InteractiveForkSessionRequest) => string;
-  readonly listForkPoints?: () => SessionForkPoints;
-  readonly persistBashApprovalGrant?: (grant: BashApprovalGrant) => void;
-  readonly persistBashApprovalRevoked?: (revocation: {
-    readonly grant: BashApprovalGrant;
-    readonly consumedInputIds: readonly string[];
-  }) => void;
-  readonly persistBashApprovalsCleared?: (clear: {
-    readonly consumedInputIds: readonly string[];
-  }) => void;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly input: NodeJS.ReadableStream;
   readonly lineInput?: InteractiveLineInput;
@@ -186,8 +230,11 @@ export interface InteractiveSessionOptions {
   readonly printAgentEvents: (
     stream: AsyncIterable<AgentEvent>,
   ) => Promise<EndEvent | undefined>;
-  readonly formatCostReport: (cost: CostReport, maxUsd: number) => string;
+  readonly formatCostReport: (cost: CostReport) => string;
 }
+
+export type InteractiveSessionOptions = InteractiveSessionOptionsBase &
+  InteractiveSessionMemoryBinding;
 
 export type InteractiveComposerMode = "approval" | "queue" | "ready" | "steer";
 

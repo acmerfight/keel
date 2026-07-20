@@ -39,7 +39,7 @@ describe("File Editing Writes And Creates", () => {
         userMessage: "create config.json",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       })) {
         if (event.type === "text") break;
@@ -81,7 +81,7 @@ describe("File Editing Writes And Creates", () => {
           userMessage: "create config.json",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -181,7 +181,7 @@ describe("File Editing Writes And Creates", () => {
           userMessage: "write both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -295,7 +295,7 @@ describe("File Editing Writes And Creates", () => {
           userMessage: "write a generated config",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -399,7 +399,7 @@ describe("File Editing Writes And Creates", () => {
           userMessage: "read the API server",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -527,7 +527,7 @@ describe("File Editing Writes And Creates", () => {
           userMessage: "create an API file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -580,7 +580,7 @@ describe("File Editing Writes And Creates", () => {
           userMessage: "create a file",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       ),

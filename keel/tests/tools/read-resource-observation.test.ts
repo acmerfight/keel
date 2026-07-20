@@ -2,7 +2,10 @@ import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { executeToolCall } from "../../src/tools/execution.ts";
+import {
+  executeToolCall,
+  toolExecutionEffect,
+} from "../../src/tools/execution.ts";
 import { revalidateReadResource } from "../../src/tools/read-resource-observation.ts";
 
 function freshSignal(): AbortSignal {
@@ -25,12 +28,16 @@ async function observedRead(
     workspace,
     toolCall,
     signal: freshSignal(),
-    allowBash: false,
+    bash: { kind: "disabled" },
   });
-  if (execution.resourceObservation === undefined) {
+  if (!execution.ok) {
+    throw new Error("expected successful read execution");
+  }
+  const read = toolExecutionEffect(execution, "read");
+  if (read === undefined) {
     throw new Error("expected read resource observation");
   }
-  return { toolCall, observation: execution.resourceObservation };
+  return { toolCall, observation: read.resourceObservation };
 }
 
 describe("Read Resource Observation", () => {

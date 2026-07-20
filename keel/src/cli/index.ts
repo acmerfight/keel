@@ -88,40 +88,13 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
     return runSessionsCommand(cliArgs, runtime);
   }
 
-  const userMessage = cliArgs.userMessage;
-  if (cliArgs.forkPoints && cliArgs.resumeSession?.kind === "id") {
-    return runForkPointsCommand(
-      cliArgs,
-      runtime,
-      cliArgs.resumeSession.sessionId,
-    );
+  if (cliArgs.mode === "fork-points") {
+    return runForkPointsCommand(cliArgs, runtime);
   }
-  if (
-    userMessage !== undefined &&
-    (cliArgs.sessionId !== undefined || cliArgs.resumeSession !== undefined)
-  ) {
-    runtime.writeStderr(
-      "Error: --session and --resume are only supported for interactive sessions.\n",
-    );
-    return 1;
-  }
-  if (userMessage !== undefined && cliArgs.ephemeral) {
-    runtime.writeStderr(
-      "Error: --ephemeral is only supported for interactive sessions.\n",
-    );
-    return 1;
-  }
-  if (!userMessage && cliArgs.transcriptFile !== undefined) {
-    runtime.writeStderr(
-      "Error: --transcript is only supported for one-shot runs.\n",
-    );
-    return 1;
-  }
-  if (!userMessage) {
+  if (cliArgs.mode === "interactive") {
     return await runInteractiveCli(cliArgs, runtime);
   }
-
-  return await runOneShotCli(cliArgs, runtime, userMessage);
+  return await runOneShotCli(cliArgs, runtime);
 }
 
 export async function runCliMain(runtime: CliRuntime): Promise<number> {

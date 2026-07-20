@@ -84,7 +84,7 @@ describe("Run Outcome Reporting", () => {
         userMessage: "say hi",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -125,7 +125,7 @@ describe("Run Outcome Reporting", () => {
         userMessage: "write a long answer",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -193,7 +193,7 @@ describe("Run Outcome Reporting", () => {
             userMessage: "fix the note",
             systemPrompt: "You are helpful.",
             signal: freshSignal(),
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
           }),
         ),
@@ -232,7 +232,7 @@ describe("Run Outcome Reporting", () => {
           userMessage: "fix the note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -286,7 +286,7 @@ describe("Run Outcome Reporting", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: budgetModel, maxCostUsd: 0.5 },
         }),
@@ -355,7 +355,7 @@ describe("Run Outcome Reporting", () => {
           userMessage: "read the note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: tieredBudgetModel },
         }),
@@ -365,7 +365,7 @@ describe("Run Outcome Reporting", () => {
       const finalEvent = endEvent(events);
       expect(finalEvent.usage.inputTokens).toBe(300_000);
       expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-      expect(finalEvent.cost?.budgetLimited).toBe(false);
+      expect(finalEvent.cost?.budget.kind).toBe("unbounded");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -421,7 +421,7 @@ describe("Run Outcome Reporting", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         costTracking: { model: tieredBudgetModel },
         contextCompaction: {
@@ -439,7 +439,7 @@ describe("Run Outcome Reporting", () => {
     const finalEvent = endEvent(events);
     expect(finalEvent.usage.inputTokens).toBe(300_000);
     expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-    expect(finalEvent.cost?.budgetLimited).toBe(false);
+    expect(finalEvent.cost?.budget.kind).toBe("unbounded");
   });
 
   test(`Given turn-limit wrap-up adds a low-tier provider request,
@@ -472,7 +472,7 @@ describe("Run Outcome Reporting", () => {
           };
           return;
         }
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Need to stop before reading note.txt." };
         yield {
           type: "stop",
@@ -496,7 +496,7 @@ describe("Run Outcome Reporting", () => {
           userMessage: "read the note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: maxTurnFallbackPolicy(1),
           costTracking: { model: tieredBudgetModel },
         }),
@@ -508,7 +508,7 @@ describe("Run Outcome Reporting", () => {
       expect(finalEvent.stopReason).toBe("turn_limit");
       expect(finalEvent.usage.inputTokens).toBe(300_000);
       expect(finalEvent.cost?.spentUsd).toBeCloseTo(0.12);
-      expect(finalEvent.cost?.budgetLimited).toBe(false);
+      expect(finalEvent.cost?.budget.kind).toBe("unbounded");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -534,7 +534,7 @@ describe("Run Outcome Reporting", () => {
           userMessage: "read the file forever",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -575,7 +575,7 @@ describe("Run Outcome Reporting", () => {
           userMessage: "edit twice",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: maxTurnFallbackPolicy(2),
         }),
       );

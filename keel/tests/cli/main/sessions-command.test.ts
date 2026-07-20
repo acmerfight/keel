@@ -134,8 +134,10 @@ describe("CLI Main - Sessions Command", () => {
             status: "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "command",
-            completionCriterion: 'node  -e "process.exit(0)"',
+            completion: {
+              kind: "command",
+              command: 'node  -e "process.exit(0)"',
+            },
           },
         }),
       ],
@@ -578,6 +580,44 @@ describe("CLI Main - Sessions Command", () => {
     expect(fixture.stderr()).toBe(
       'Error: unknown sessions fork option "--all"\n',
     );
+  });
+
+  test(`Given sessions fork names a missing source session,
+    When the user forks it into a new session,
+    Then the CLI reports the supported resume error without creating the target`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const fixture = createRuntime(
+      ["sessions", "fork", "missing-source", "target"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        'Error: cannot resume session "missing-source": session ledger not found at ',
+      );
+      expect(fixture.stderr()).toContain(
+        join(home, "sessions", "missing-source", "ledger.jsonl"),
+      );
+      await expect(
+        realpath(join(home, "sessions", "target", "ledger.jsonl")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given sessions show is missing or receives invalid options,

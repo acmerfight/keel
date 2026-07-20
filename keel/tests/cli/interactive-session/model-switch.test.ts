@@ -3,11 +3,13 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { LLMProvider } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
   resolvedProvider,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   textProvider,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -53,6 +55,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -107,6 +110,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -173,6 +177,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -260,6 +265,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -333,6 +339,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -411,6 +418,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -477,6 +485,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -562,6 +571,7 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -620,6 +630,12 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistModelSwitch: () => {
+          throw new Error("same model should not persist a switch");
+        },
+      }),
       initialModelSelection: { providerId: "qwen", model: "qwen3.7-plus" },
       input,
       writeStdout: (text) => {
@@ -647,9 +663,7 @@ describe("Interactive Session - Model Switch", () => {
         );
       },
       requireKnownCostModel: () => ZERO_COST_MODEL,
-      persistModelSwitch: () => {
-        throw new Error("same model should not persist a switch");
-      },
+
       printAgentEvents: async () => {
         throw new Error("same model command should not start a turn");
       },
@@ -687,6 +701,12 @@ describe("Interactive Session - Model Switch", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistModelSwitch: (switchRecord) => {
+          switches.push(switchRecord);
+        },
+      }),
       initialQueuedInputs: [
         {
           id: "model-input",
@@ -725,9 +745,7 @@ describe("Interactive Session - Model Switch", () => {
           ),
         ),
       requireKnownCostModel: () => ZERO_COST_MODEL,
-      persistModelSwitch: (switchRecord) => {
-        switches.push(switchRecord);
-      },
+
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {

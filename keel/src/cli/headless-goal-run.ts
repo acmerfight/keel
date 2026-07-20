@@ -5,7 +5,7 @@ import {
   pauseActiveSessionGoal,
   type SessionGoal,
   type SessionGoalBudget,
-  type SessionGoalCriterionKind,
+  type SessionGoalCompletion,
   type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
 import {
@@ -19,6 +19,7 @@ import {
   listBashProjectApprovalGrants,
 } from "./bash-project-approvals.ts";
 import {
+  type HeadlessSessionCliArgs,
   type HeadlessSessionCliResult,
   runHeadlessSessionCli,
 } from "./interactive-run.ts";
@@ -57,15 +58,14 @@ function headlessGoalActivationCommand(cliArgs: GoalLaunchCliArgs): string {
 async function headlessGoalBashPermission(
   contract: {
     readonly bashMode: GoalCliArgs["bashMode"];
-    readonly criterionKind: SessionGoalCriterionKind;
-    readonly completionCriterion: string;
+    readonly completion: SessionGoalCompletion;
   },
   runtime: CliRuntime,
 ): Promise<SessionBashPermissionPolicy | null | undefined> {
   if (contract.bashMode === "trusted") {
     return undefined;
   }
-  if (contract.criterionKind === "assertion") {
+  if (contract.completion.kind === "assertion") {
     if (contract.bashMode === "disabled") {
       return undefined;
     }
@@ -99,7 +99,7 @@ async function headlessGoalBashPermission(
     }),
   });
   const decision = await policy.review({
-    command: contract.completionCriterion,
+    command: contract.completion.command,
     cwd: workspace,
     signal: new AbortController().signal,
   });
@@ -129,19 +129,14 @@ async function prepareHeadlessGoalResume(
     return { kind: "rejected" };
   }
   /* v8 ignore start: the shared resume gate guarantees a durable criterion. */
-  if (
-    preparedGoal === undefined ||
-    preparedGoal.criterionKind === undefined ||
-    preparedGoal.completionCriterion === undefined
-  ) {
+  if (preparedGoal === undefined || preparedGoal.completion === undefined) {
     return { kind: "rejected" };
   }
   /* v8 ignore stop */
   const bashPermission = await headlessGoalBashPermission(
     {
       bashMode: cliArgs.bashMode,
-      criterionKind: preparedGoal.criterionKind,
-      completionCriterion: preparedGoal.completionCriterion,
+      completion: preparedGoal.completion,
     },
     runtime,
   );
@@ -208,20 +203,25 @@ function writeHeadlessGoalOutcome(
   }
 }
 
-function headlessGoalRunArgs(
-  cliArgs: GoalCliArgs,
-): Extract<CliArgs, { readonly command: "run" }> {
+function headlessGoalRunArgs(cliArgs: GoalCliArgs): HeadlessSessionCliArgs {
   return {
     command: "run",
+    mode: "interactive",
     bashMode: cliArgs.bashMode,
     skillsEnabled: cliArgs.skillsEnabled,
-    ephemeral: false,
     memoryEnabled: cliArgs.memoryEnabled,
-    ...(cliArgs.mode === "launch"
-      ? {
-          sessionId: cliArgs.sessionId ?? createAutomaticSessionId(),
-        }
-      : { resumeSession: cliArgs.resumeSession }),
+    session:
+      cliArgs.mode === "launch"
+        ? {
+            kind: "create",
+            sessionId: cliArgs.sessionId ?? createAutomaticSessionId(),
+          }
+        : cliArgs.resumeSession.kind === "id"
+          ? {
+              kind: "resume",
+              sessionId: cliArgs.resumeSession.sessionId,
+            }
+          : { kind: "resume-latest" },
     ...(cliArgs.maxCostUsd !== undefined
       ? { maxCostUsd: cliArgs.maxCostUsd }
       : {}),
@@ -249,11 +249,22 @@ export async function runHeadlessGoalCli(
       const preparedBashPermission = await headlessGoalBashPermission(
         {
           bashMode: cliArgs.bashMode,
-          criterionKind: cliArgs.criterion.kind,
-          completionCriterion:
+          completion:
             cliArgs.criterion.kind === "command"
-              ? cliArgs.criterion.command
-              : cliArgs.criterion.assertion,
+              ? {
+                  kind: "command",
+                  command: cliArgs.criterion.command,
+                  ...(cliArgs.criterion.verificationTimeoutMs === undefined
+                    ? {}
+                    : {
+                        verificationTimeoutMs:
+                          cliArgs.criterion.verificationTimeoutMs,
+                      }),
+                }
+              : {
+                  kind: "assertion",
+                  assertion: cliArgs.criterion.assertion,
+                },
         },
         runtime,
       );
@@ -281,9 +292,7 @@ export async function runHeadlessGoalCli(
         : undefined,
     );
   } catch (error) {
-    /* v8 ignore start: approval loading is the only expected preflight throw; unexpected faults must reach the CLI boundary. */
     if (!(error instanceof BashProjectApprovalsError)) throw error;
-    /* v8 ignore stop */
     runtime.writeStderr(`${error.message}\n`);
     return 1;
   }

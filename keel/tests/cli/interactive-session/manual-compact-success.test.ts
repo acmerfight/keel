@@ -11,13 +11,15 @@ import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { CostModel } from "../../../src/core/cost.ts";
 import { createDeepseekProvider } from "../../../src/llm/providers/deepseek.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -178,7 +180,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Manual checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -202,6 +204,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -339,7 +342,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("manual compaction should not start an agent turn");
         }
         yield { type: "text", text: "Manual artifact summary." };
@@ -353,6 +356,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store },
       input,
@@ -469,7 +473,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("manual compaction should not start an agent turn");
         }
         yield { type: "text", text: "Manual failure summary." };
@@ -483,6 +487,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store },
       input,
@@ -580,7 +585,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: "Manual summary that omits the artifact ref.",
@@ -610,6 +615,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store: artifact.store },
       input,
@@ -676,7 +682,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("manual compaction should not start an agent turn");
         }
         summaryPrompt = options.messages[0]?.content ?? "";
@@ -697,6 +703,16 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persisted.push({
+            reason,
+            messages: structuredClone([...messages]),
+            consumedInputIds: [...consumedInputIds],
+          });
+        },
+      }),
       initialMessages,
       input,
       writeStdout: () => {},
@@ -728,13 +744,6 @@ describe("Interactive Session - Manual Compact Success", () => {
         throw new Error("manual compaction should not print agent events");
       },
       formatCostReport: () => "",
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persisted.push({
-          reason,
-          messages: structuredClone([...messages]),
-          consumedInputIds: [...consumedInputIds],
-        });
-      },
     });
 
     // When
@@ -773,7 +782,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "manual-compact-read-restore",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Manual checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -825,6 +834,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -985,6 +995,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1056,20 +1067,28 @@ describe("Interactive Session - Manual Compact Success", () => {
     }
   });
 
-  test(`Given manual compaction has cost tracking enabled,
+  test(`Given budgeted manual compaction has a model output limit,
     When user enters /compact,
-    Then the session prints the compaction cost report`, async () => {
+    Then the session applies that limit and prints the compaction cost report`, async () => {
     // Given
     let receiveFirstEnd: () => void = () => {};
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
     let requestTurn = 0;
+    let summaryMaxOutputTokens: number | undefined;
+    const costModel: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 100,
+      cachedInputPerMillionTokens: 0,
+      outputPerMillionTokens: 200,
+    };
     const provider: LLMProvider = {
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
+          summaryMaxOutputTokens = options.maxOutputTokens;
           yield { type: "text", text: "Costed checkpoint summary." };
           yield {
             type: "stop",
@@ -1096,6 +1115,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 0.1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1113,19 +1133,22 @@ describe("Interactive Session - Manual Compact Success", () => {
         provider,
         providerId: "fake",
         model: "fake",
-        costModel: {
-          type: "fixed",
-          uncachedInputPerMillionTokens: 100,
-          cachedInputPerMillionTokens: 0,
-          outputPerMillionTokens: 200,
+        costModel,
+        modelMetadata: {
+          status: "known",
+          source: "registry",
+          contextWindowTokens: null,
+          maxOutputTokens: 300,
+          capabilities: {
+            textInput: true,
+            toolCalls: true,
+            reasoning: false,
+          },
+          costModel,
+          lastVerified: "2026-06-26",
         },
       }),
-      requireKnownCostModel: () => ({
-        type: "fixed",
-        uncachedInputPerMillionTokens: 100,
-        cachedInputPerMillionTokens: 0,
-        outputPerMillionTokens: 200,
-      }),
+      requireKnownCostModel: () => costModel,
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {
@@ -1140,8 +1163,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(1)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1153,6 +1180,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     // Then
     await session;
     expect(stdout).toBe("First done\n");
+    expect(summaryMaxOutputTokens).toBe(300);
     expect(stderr).toContain("Context compacted: manual");
     expect(stderr).toContain("Cost: 0.005000 / 0.1 limited=false\n");
   });
@@ -1169,7 +1197,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Report checkpoint summary." };
           yield {
             type: "stop",
@@ -1202,6 +1230,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1237,8 +1266,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(2)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(2)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1275,7 +1308,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Costed checkpoint summary." };
           yield {
             type: "stop",
@@ -1312,6 +1345,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1347,8 +1381,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(6)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(6)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(1)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1382,7 +1420,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "unexpected summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -1419,6 +1457,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -1451,8 +1490,12 @@ describe("Interactive Session - Manual Compact Success", () => {
         }
         return finalEnd;
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(1)} limited=${cost.budgetLimited}\n`,
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(1)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -1469,7 +1512,10 @@ describe("Interactive Session - Manual Compact Success", () => {
     expect(result.report?.end.stopReason).toBe("cost_budget");
     expect(result.report?.end.cost).toMatchObject({
       spentUsd: 0.099,
-      overshootUsd: 0,
+      budget: {
+        kind: "budget_limited",
+        overshootUsd: 0,
+      },
     });
   });
 
@@ -1486,7 +1532,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Unexpected checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -1504,6 +1550,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;

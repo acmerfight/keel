@@ -212,11 +212,13 @@ describe("CLI Eval", () => {
     await writeFile(
       baseFile,
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         timestamp: "2026-06-22T00:00:00.000Z",
         keelVersion: "0.0.1",
         taskId: "old-report",
         trial: 1,
+        condition: "standard",
+        requiredToPass: true,
         pass: true,
         outcome: "verified",
         wallMs: 1000,
@@ -259,7 +261,7 @@ describe("CLI Eval", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(baseFile);
       expect(result.stderr).toContain(
-        "line 1 is not a schemaVersion 1 eval result",
+        "line 1 is not a schemaVersion 2 eval result",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

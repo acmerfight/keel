@@ -10,6 +10,7 @@ import type {
   ProviderRequestAttemptObserver,
   StreamOptions,
 } from "../llm/types.ts";
+import { modelToolExposureAccounting } from "../tools/registry.ts";
 
 const MIN_USEFUL_OUTPUT_TOKENS = 256;
 const UNKNOWN_PROVIDER_TOOL_SCHEMA_TOKEN_RESERVE = 16_384;
@@ -42,15 +43,12 @@ function conservativeFallbackInputTokens(options: StreamOptions): number {
     JSON.stringify({
       systemPrompt: options.systemPrompt,
       messages: options.messages,
-      allowBash: options.allowBash === true,
-      allowSkill: options.allowSkill === true,
-      allowMemory: options.allowMemory === true,
-      toolChoice: options.toolChoice ?? "auto",
+      ...modelToolExposureAccounting(options.toolExposure),
     }),
   ).length;
   return (
     serializedBytes +
-    (options.toolChoice === "none"
+    (options.toolExposure?.kind === "none"
       ? 0
       : UNKNOWN_PROVIDER_TOOL_SCHEMA_TOKEN_RESERVE)
   );

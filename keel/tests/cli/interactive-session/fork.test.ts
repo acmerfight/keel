@@ -1,9 +1,11 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import type { SessionQueuedInput } from "../../../src/cli/session-store.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   ZERO_COST_MODEL,
 } from "../../../src/testing/interactive-session-fixtures.ts";
 
@@ -23,6 +25,14 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        fork: (request) => {
+          forkTarget = request.targetSessionId;
+          forkBeforeMessageId = request.beforeMessageId;
+          return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -49,11 +59,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("fork should not start a model turn");
       },
       formatCostReport: () => "",
-      forkSession: (request) => {
-        forkTarget = request.targetSessionId;
-        forkBeforeMessageId = request.beforeMessageId;
-        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
-      },
     });
 
     // When
@@ -85,6 +90,30 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        listForkPoints: () => {
+          listCalls += 1;
+          return {
+            sessionId: "source",
+            points:
+              listCalls === 1
+                ? [
+                    {
+                      choice: 1,
+                      messageId: "msg_alpha",
+                      preview: "remember alpha",
+                    },
+                    {
+                      choice: 2,
+                      messageId: "msg_beta",
+                      preview: "remember beta",
+                    },
+                  ]
+                : [],
+          };
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -111,27 +140,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("fork points should not start a model turn");
       },
       formatCostReport: () => "",
-      listForkPoints: () => {
-        listCalls += 1;
-        return {
-          sessionId: "source",
-          points:
-            listCalls === 1
-              ? [
-                  {
-                    choice: 1,
-                    messageId: "msg_alpha",
-                    preview: "remember alpha",
-                  },
-                  {
-                    choice: 2,
-                    messageId: "msg_beta",
-                    preview: "remember beta",
-                  },
-                ]
-              : [],
-        };
-      },
     });
 
     // When
@@ -170,6 +178,21 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        listForkPoints: () => ({
+          sessionId: "source",
+          points: [
+            { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+            { choice: 2, messageId: "msg_beta", preview: "remember beta" },
+          ],
+        }),
+        fork: (request) => {
+          forkTarget = request.targetSessionId;
+          forkBeforeMessageId = request.beforeMessageId;
+          return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -196,18 +219,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("fork picker should not start a model turn");
       },
       formatCostReport: () => "",
-      listForkPoints: () => ({
-        sessionId: "source",
-        points: [
-          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
-          { choice: 2, messageId: "msg_beta", preview: "remember beta" },
-        ],
-      }),
-      forkSession: (request) => {
-        forkTarget = request.targetSessionId;
-        forkBeforeMessageId = request.beforeMessageId;
-        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
-      },
     });
 
     // When
@@ -249,6 +260,19 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        listForkPoints: () => ({
+          sessionId: "source",
+          points: [
+            { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+          ],
+        }),
+        fork: (request) => {
+          forkBeforeMessageId = request.beforeMessageId;
+          return 'Forked session "source" to "target".\nresume: keel --resume target\n';
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -279,16 +303,6 @@ describe("Interactive Session - Fork", () => {
         );
       },
       formatCostReport: () => "",
-      listForkPoints: () => ({
-        sessionId: "source",
-        points: [
-          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
-        ],
-      }),
-      forkSession: (request) => {
-        forkBeforeMessageId = request.beforeMessageId;
-        return 'Forked session "source" to "target".\nresume: keel --resume target\n';
-      },
     });
 
     // When
@@ -317,6 +331,19 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        listForkPoints: () => ({
+          sessionId: "source",
+          points: [
+            { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+          ],
+        }),
+        fork: () => {
+          forkCalled = true;
+          throw new Error("fork picker should have been closed");
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -343,16 +370,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("closed fork picker should not start a model turn");
       },
       formatCostReport: () => "",
-      listForkPoints: () => ({
-        sessionId: "source",
-        points: [
-          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
-        ],
-      }),
-      forkSession: () => {
-        forkCalled = true;
-        throw new Error("fork picker should have been closed");
-      },
     });
 
     // When
@@ -389,6 +406,18 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        listForkPoints: () => ({
+          sessionId: "source",
+          points: [
+            { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+          ],
+        }),
+        fork: () => {
+          throw "picker fork failed";
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -415,15 +444,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("failed fork picker should not start a model turn");
       },
       formatCostReport: () => "",
-      listForkPoints: () => ({
-        sessionId: "source",
-        points: [
-          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
-        ],
-      }),
-      forkSession: () => {
-        throw "picker fork failed";
-      },
     });
 
     // When
@@ -442,67 +462,6 @@ describe("Interactive Session - Fork", () => {
       ].join("\n"),
     );
     expect(stderr).toBe("picker fork failed\n");
-    expect(providerResolved).toBe(false);
-    expect(sigintHandlers.size).toBe(0);
-  });
-
-  test(`Given picker support is unavailable in a fork-capable session,
-    When user asks to pick a fork point,
-    Then the command fails locally without starting a model turn`, async () => {
-    // Given
-    const input = new PassThrough();
-    const sigintHandlers = new Set<() => void>();
-    let stdout = "";
-    let stderr = "";
-    let providerResolved = false;
-    const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
-      workspace: process.cwd(),
-      platform: process.platform,
-      input,
-      writeStdout: (text) => {
-        stdout += text;
-      },
-      writeStderr: (text) => {
-        stderr += text;
-      },
-      onSigint: (handler) => {
-        sigintHandlers.add(handler);
-      },
-      offSigint: (handler) => {
-        sigintHandlers.delete(handler);
-      },
-      setExitCode: () => {},
-      forceExit: (code) => {
-        throw new ForcedExit(code);
-      },
-      resolveProvider: () => {
-        providerResolved = true;
-        throw new Error(
-          "unavailable fork picker should not resolve a provider",
-        );
-      },
-      requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async () => {
-        throw new Error(
-          "unavailable fork picker should not start a model turn",
-        );
-      },
-      formatCostReport: () => "",
-      forkSession: () => {
-        throw new Error("fork picker should fail before forking");
-      },
-    });
-
-    // When
-    input.end("/fork target --pick\n");
-
-    // Then
-    await session;
-    expect(stdout).toBe("");
-    expect(stderr).toBe(
-      "Error: /fork requires a saved session. Start without --ephemeral, or use --session or --resume.\n",
-    );
     expect(providerResolved).toBe(false);
     expect(sigintHandlers.size).toBe(0);
   });
@@ -536,6 +495,23 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        consumeQueuedInputs: (inputIds) => {
+          consumedInputIds.push([...inputIds]);
+        },
+        listForkPoints: () => ({
+          sessionId: "source",
+          points: [
+            { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+            { choice: 2, messageId: "msg_beta", preview: "remember beta" },
+          ],
+        }),
+        fork: (request) => {
+          forkBeforeMessageId = request.beforeMessageId;
+          return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
+        },
+      }),
       initialQueuedInputs,
       input,
       writeStdout: (text) => {
@@ -563,20 +539,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("queued fork picker should not start a model turn");
       },
       formatCostReport: () => "",
-      consumeQueuedInputs: (inputIds) => {
-        consumedInputIds.push([...inputIds]);
-      },
-      listForkPoints: () => ({
-        sessionId: "source",
-        points: [
-          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
-          { choice: 2, messageId: "msg_beta", preview: "remember beta" },
-        ],
-      }),
-      forkSession: (request) => {
-        forkBeforeMessageId = request.beforeMessageId;
-        return 'Forked session "source" to "target" before message msg_beta.\nresume: keel --resume target\n';
-      },
     });
 
     // When
@@ -608,6 +570,19 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        listForkPoints: () => ({
+          sessionId: "source",
+          points: [
+            { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
+          ],
+        }),
+        fork: () => {
+          forkCalled = true;
+          throw new Error("fork picker should have been cancelled");
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -634,16 +609,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("cancelled fork picker should not start a model turn");
       },
       formatCostReport: () => "",
-      listForkPoints: () => ({
-        sessionId: "source",
-        points: [
-          { choice: 1, messageId: "msg_alpha", preview: "remember alpha" },
-        ],
-      }),
-      forkSession: () => {
-        forkCalled = true;
-        throw new Error("fork picker should have been cancelled");
-      },
     });
 
     // When
@@ -686,6 +651,7 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -745,6 +711,7 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -821,6 +788,12 @@ describe("Interactive Session - Fork", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        fork: () => {
+          throw "fork failed";
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -847,9 +820,6 @@ describe("Interactive Session - Fork", () => {
         throw new Error("failed fork should not start a model turn");
       },
       formatCostReport: () => "",
-      forkSession: () => {
-        throw "fork failed";
-      },
     });
 
     // When

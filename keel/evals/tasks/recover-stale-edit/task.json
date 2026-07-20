@@ -1,4 +1,5 @@
 {
+  "kind": "standard",
   "prompt": "A stale bug report says status.js contains `const statusText = \"Pending\";`, but the file has changed since then. Update the current implementation so `statusLabel()` returns \"Ready\". Do not rewrite unrelated exports.",
   "timeoutMs": 240000,
   "maxCostUsd": 0.05

@@ -92,7 +92,11 @@ describe("CLI Eval", () => {
     const { root, suiteDir, outFile } = await createEvalDir();
     const taskDir = join(suiteDir, "bad-task");
     await mkdir(taskDir, { recursive: true });
-    await writeFile(join(taskDir, "task.json"), '{"prompt":""}', "utf8");
+    await writeFile(
+      join(taskDir, "task.json"),
+      '{"kind":"standard","prompt":""}',
+      "utf8",
+    );
 
     try {
       // When
@@ -118,7 +122,7 @@ describe("CLI Eval", () => {
     await mkdir(taskDir, { recursive: true });
     await writeFile(
       join(taskDir, "task.json"),
-      JSON.stringify({ prompt: "do the task" }),
+      JSON.stringify({ kind: "standard", prompt: "do the task" }),
       "utf8",
     );
     await writeFile(join(taskDir, "verify.sh"), "exit 0\n", "utf8");

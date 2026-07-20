@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
-import {
-  copySessionGoal,
-  type SessionGoal,
-  sessionGoalSchema,
-} from "../../core/session-goal.ts";
+import { copySessionGoal, type SessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
@@ -700,14 +696,7 @@ export function persistSessionGoal(options: {
     if (options.goal === null) {
       return null;
     }
-    const redactedGoal = redactSessionGoalForPersistence(options.goal);
-    const validatedGoal = sessionGoalSchema.safeParse(redactedGoal);
-    if (!validatedGoal.success) {
-      sessionStoreError(
-        "Error: session goal is invalid after persistence redaction.",
-      );
-    }
-    return validatedGoal.data;
+    return redactSessionGoalForPersistence(options.goal);
   })();
   const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
   const timestamp = isoTimestamp(options.runtime);
@@ -780,7 +769,35 @@ export function persistSessionMessages(options: {
   readonly reason: SessionPersistenceReason;
   readonly skillState?: SkillLifecycleState;
   readonly consumedInputIds?: readonly string[];
+  readonly reservedMessageIds?: readonly {
+    readonly message: Message;
+    readonly id: string;
+  }[];
 }): readonly SessionMessage[] {
+  const reservedMessageIds = new Map<number, string>();
+  const existingMessageIds = new Set(
+    replayStateForSession(options.session).storedMessages.map(
+      (stored) => stored.id,
+    ),
+  );
+  for (const reservation of options.reservedMessageIds ?? []) {
+    const index = options.currentMessages.indexOf(reservation.message);
+    if (index < 0) {
+      sessionStoreError(
+        `Error: cannot persist session "${options.session.id}": reserved message is no longer present.`,
+      );
+    }
+    if (
+      reservedMessageIds.has(index) ||
+      existingMessageIds.has(reservation.id) ||
+      [...reservedMessageIds.values()].includes(reservation.id)
+    ) {
+      sessionStoreError(
+        `Error: cannot persist session "${options.session.id}": reserved message id is not unique.`,
+      );
+    }
+    reservedMessageIds.set(index, reservation.id);
+  }
   const currentMessages = parseSessionMessages(
     options.session.id,
     options.currentMessages,
@@ -792,6 +809,7 @@ export function persistSessionMessages(options: {
   const currentStoredMessages = storedMessagesForProviderMessages({
     messages: currentMessages,
     previousStoredMessages: replayState.storedMessages,
+    reservedMessageIds,
   });
   const persistedSkillState =
     options.skillState === undefined

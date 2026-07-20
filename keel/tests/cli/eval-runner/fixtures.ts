@@ -19,9 +19,11 @@ export {
   z,
 };
 export const resultLineSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   taskId: z.string(),
   trial: z.number().int().positive(),
+  condition: z.enum(["standard", "memory_disabled", "memory_enabled"]),
+  requiredToPass: z.boolean(),
   pass: z.boolean(),
   outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
   report: runReportSchema.optional(),
@@ -37,6 +39,18 @@ export interface TaskFixture {
   readonly scriptTimeoutMs?: number;
   readonly allowBash?: boolean;
   readonly maxCostUsd?: number;
+}
+
+export interface MemoryPairTaskFixture {
+  readonly prompt: string;
+  readonly files?: Record<string, string>;
+  readonly verify: string;
+  readonly solution: string;
+  readonly timeoutMs: number;
+  readonly scriptTimeoutMs: number;
+  readonly allowBash: boolean;
+  readonly maxCostUsd: number;
+  readonly memory: string;
 }
 
 export async function createEvalDir(): Promise<{
@@ -60,6 +74,7 @@ export async function createTask(
   await writeFile(
     join(taskDir, "task.json"),
     JSON.stringify({
+      kind: "standard",
       prompt: fixture.prompt,
       ...(fixture.timeoutMs !== undefined
         ? { timeoutMs: fixture.timeoutMs }
@@ -87,6 +102,27 @@ export async function createTask(
   );
 }
 
+export async function createMemoryPairTask(
+  suiteDir: string,
+  id: string,
+  fixture: MemoryPairTaskFixture,
+): Promise<void> {
+  await createTask(suiteDir, id, fixture);
+  await writeFile(
+    join(suiteDir, id, "task.json"),
+    JSON.stringify({
+      kind: "memory_pair",
+      prompt: fixture.prompt,
+      timeoutMs: fixture.timeoutMs,
+      scriptTimeoutMs: fixture.scriptTimeoutMs,
+      allowBash: fixture.allowBash,
+      maxCostUsd: fixture.maxCostUsd,
+      memory: fixture.memory,
+    }),
+    "utf8",
+  );
+}
+
 export async function readResultLines(
   outFile: string,
 ): Promise<readonly z.infer<typeof resultLineSchema>[]> {
@@ -107,7 +143,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 14,
+  schemaVersion: 17,
   tasks: [
     {
       ordinal: 1,
@@ -207,6 +243,7 @@ export const VALID_REPORT = {
     enabled: false,
     scope: null,
     loadedIds: [],
+    loadedEntries: [],
     renderedBytes: 0,
     estimatedTokens: 0,
     operations: [],

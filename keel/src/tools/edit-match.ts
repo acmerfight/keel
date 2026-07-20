@@ -45,10 +45,14 @@ interface SearchBlock {
   readonly endsWithNewline: boolean;
 }
 
+interface CommonIndent {
+  readonly length: number;
+  readonly text: string;
+}
+
 interface NormalizedTypographicPunctuation {
   readonly text: string;
-  readonly sourceIndexByNormalizedIndex: readonly number[];
-  readonly sourceLength: number;
+  readonly sourceIndexByNormalizedBoundary: readonly (number | null)[];
 }
 
 export type NormalizedText =
@@ -277,22 +281,22 @@ function typographicPunctuationNormalizedWithSourceMap(
   text: string,
 ): NormalizedTypographicPunctuation {
   const normalized: string[] = [];
-  const sourceIndexByNormalizedIndex: number[] = [];
+  const sourceIndexByNormalizedBoundary: (number | null)[] = [0];
   for (let index = 0; index < text.length; index++) {
     const replacement = typographicPunctuationReplacement(text.charAt(index));
     normalized.push(replacement);
     for (
-      let replacementIndex = 0;
+      let replacementIndex = 1;
       replacementIndex < replacement.length;
       replacementIndex++
     ) {
-      sourceIndexByNormalizedIndex.push(index);
+      sourceIndexByNormalizedBoundary.push(null);
     }
+    sourceIndexByNormalizedBoundary.push(index + 1);
   }
   return {
     text: normalized.join(""),
-    sourceIndexByNormalizedIndex,
-    sourceLength: text.length,
+    sourceIndexByNormalizedBoundary,
   };
 }
 
@@ -312,26 +316,23 @@ function leadingWhitespaceLength(line: string): number {
   return length;
 }
 
-function commonIndentLength(lines: readonly string[]): number {
-  let common: number | undefined;
+function commonIndent(lines: readonly string[]): CommonIndent {
+  let length = 0;
+  let text = "";
+  let foundContent = false;
   for (const line of lines) {
     if (line.trim() === "") continue;
     const indentLength = leadingWhitespaceLength(line);
-    common =
-      common === undefined ? indentLength : Math.min(common, indentLength);
+    if (!foundContent) {
+      length = indentLength;
+      text = line.slice(0, indentLength);
+      foundContent = true;
+      continue;
+    }
+    length = Math.min(length, indentLength);
+    text = text.slice(0, length);
   }
-  /* v8 ignore next: blank-only windows match the trailing-whitespace fallback before indentation matching. */
-  return common ?? 0;
-}
-
-function commonIndent(lines: readonly string[]): string {
-  const indentLength = commonIndentLength(lines);
-  for (const line of lines) {
-    /* v8 ignore next: blank-only windows match the trailing-whitespace fallback before indentation replacement. */
-    if (line.trim() !== "") return line.slice(0, indentLength);
-  }
-  /* v8 ignore next */
-  return "";
+  return { length, text };
 }
 
 function sourceLineIndent(line: string, indentLength: number): string {
@@ -339,8 +340,8 @@ function sourceLineIndent(line: string, indentLength: number): string {
 }
 
 function stripCommonIndent(lines: readonly string[]): readonly string[] {
-  const indentLength = commonIndentLength(lines);
-  return lines.map((line) => line.slice(indentLength));
+  const indent = commonIndent(lines);
+  return lines.map((line) => line.slice(indent.length));
 }
 
 function sameLengthArraysEqual(
@@ -354,40 +355,16 @@ function sameLengthArraysEqual(
 }
 
 function candidateSpan(
-  lines: readonly LineRecord[],
-  startLine: number,
-  lineCount: number,
+  firstLine: LineRecord,
+  lastLine: LineRecord,
   endsWithNewline: boolean,
 ): EditMatchSpan | null {
-  // lineBasedMatches only calls this for bounds-checked line windows; the
-  // nullable result is reserved for trailing-newline mismatches.
-  const firstLine = lines[startLine];
-  const lastLine = lines[startLine + lineCount - 1];
-  /* v8 ignore next 3: lineBasedMatches bounds-checks candidate windows before computing spans. */
-  if (firstLine === undefined || lastLine === undefined) {
-    throw new Error("edit match invariant violated: candidate span is invalid");
-  }
   if (endsWithNewline && lastLine.end === lastLine.contentEnd) return null;
   return {
     index: firstLine.start,
     length:
       (endsWithNewline ? lastLine.end : lastLine.contentEnd) - firstLine.start,
   };
-}
-
-function lineWindowMatches(
-  lines: readonly LineRecord[],
-  startLine: number,
-  searchLines: readonly string[],
-  lineMatches: (
-    candidateLines: readonly string[],
-    searchLines: readonly string[],
-  ) => boolean,
-): boolean {
-  const candidateLines = lines
-    .slice(startLine, startLine + searchLines.length)
-    .map((line) => line.text);
-  return lineMatches(candidateLines, searchLines);
 }
 
 function lineBasedMatches(
@@ -402,15 +379,26 @@ function lineBasedMatches(
   const lines = splitLineRecords(content);
   const matches: EditMatchSpan[] = [];
   const maxStart = lines.length - searchBlock.lines.length;
-  for (let startLine = 0; startLine <= maxStart; startLine++) {
-    if (!lineWindowMatches(lines, startLine, searchBlock.lines, lineMatches)) {
+  for (const [startLine, firstLine] of lines.entries()) {
+    if (startLine > maxStart) break;
+    const candidateLines = lines.slice(
+      startLine,
+      startLine + searchBlock.lines.length,
+    );
+    if (
+      !lineMatches(
+        candidateLines.map((line) => line.text),
+        searchBlock.lines,
+      )
+    ) {
       continue;
     }
 
+    let lastLine = firstLine;
+    for (const line of candidateLines) lastLine = line;
     const span = candidateSpan(
-      lines,
-      startLine,
-      searchBlock.lines.length,
+      firstLine,
+      lastLine,
       searchBlock.endsWithNewline,
     );
     if (span !== null) matches.push(span);
@@ -460,44 +448,11 @@ function typographicPunctuationSourceSpan(
   normalized: NormalizedTypographicPunctuation,
   match: EditMatchSpan,
 ): EditMatchSpan | null {
-  const sourceStart = normalized.sourceIndexByNormalizedIndex[match.index];
-  /* v8 ignore next 3: typographic punctuation scan only returns spans inside the normalized text. */
-  if (sourceStart === undefined) {
-    throw new Error(
-      "edit match invariant violated: punctuation span is invalid",
-    );
-  }
-  if (
-    match.index > 0 &&
-    normalized.sourceIndexByNormalizedIndex[match.index - 1] === sourceStart
-  ) {
-    return null;
-  }
-
-  const normalizedEnd = match.index + match.length;
-  let sourceEnd: number;
-  if (normalizedEnd >= normalized.sourceIndexByNormalizedIndex.length) {
-    sourceEnd = normalized.sourceLength;
-  } else {
-    const endSourceIndex =
-      normalized.sourceIndexByNormalizedIndex[normalizedEnd];
-    /* v8 ignore next 3: typographic punctuation scan only returns spans inside the normalized text. */
-    if (endSourceIndex === undefined) {
-      throw new Error(
-        "edit match invariant violated: punctuation span is invalid",
-      );
-    }
-    if (
-      normalizedEnd > 0 &&
-      normalized.sourceIndexByNormalizedIndex[normalizedEnd - 1] ===
-        endSourceIndex
-    ) {
-      return null;
-    }
-    sourceEnd = endSourceIndex;
-  }
-
-  return { index: sourceStart, length: sourceEnd - sourceStart };
+  return sourceSpanFromNormalizedRange(
+    normalized,
+    match.index,
+    match.index + match.length,
+  );
 }
 
 function typographicPunctuationMatches(
@@ -761,19 +716,7 @@ function sourceIndexAtNormalizedBoundary(
   normalized: NormalizedTypographicPunctuation,
   boundary: number,
 ): number | null {
-  if (boundary === normalized.sourceIndexByNormalizedIndex.length) {
-    return normalized.sourceLength;
-  }
-  const sourceIndex = normalized.sourceIndexByNormalizedIndex[boundary];
-  /* v8 ignore next: callers only ask for ranges inside normalized text. */
-  if (sourceIndex === undefined) return null;
-  if (
-    boundary > 0 &&
-    normalized.sourceIndexByNormalizedIndex[boundary - 1] === sourceIndex
-  ) {
-    return null;
-  }
-  return sourceIndex;
+  return normalized.sourceIndexByNormalizedBoundary[boundary] ?? null;
 }
 
 function sourceSpanFromNormalizedRange(
@@ -954,8 +897,7 @@ function indentationFlexibleReplacement(
   newText: string,
 ): SourcePreservingReplacementResult {
   const sourceBlock = parseSearchBlock(source);
-  const sourceIndentLength = commonIndentLength(sourceBlock.lines);
-  const indent = commonIndent(sourceBlock.lines);
+  const sourceIndent = commonIndent(sourceBlock.lines);
   const oldBlock = parseSearchBlock(oldText);
   const newBlock = parseSearchBlock(newText);
   const strippedOldLines = stripCommonIndent(oldBlock.lines);
@@ -984,7 +926,7 @@ function indentationFlexibleReplacement(
             ? sourceLine
             : line;
         }
-        return `${sourceLine === undefined ? indent : sourceLineIndent(sourceLine, sourceIndentLength)}${line}`;
+        return `${sourceLine === undefined ? sourceIndent.text : sourceLineIndent(sourceLine, sourceIndent.length)}${line}`;
       }),
       endsWithNewline: newBlock.endsWithNewline,
     }),

@@ -163,7 +163,16 @@ function formatMemoryStatus(memory: RunReportMemory | undefined): string {
     memory.loadedIds.length === 0
       ? "none"
       : memory.loadedIds.map(formatStatusText).join(", ");
-  return `${memory.loadedIds.length} loaded for project ${formatStatusText(scope)}; IDs: ${loadedIds} (${memory.renderedBytes} bytes, ${estimatedTokens})`;
+  const lifecycle =
+    memory.loadedEntries.length === 0
+      ? "none"
+      : memory.loadedEntries
+          .map(
+            (entry) =>
+              `${formatStatusText(entry.id)}=${formatStatusText(entry.status)}`,
+          )
+          .join(", ");
+  return `${memory.loadedIds.length} loaded for project ${formatStatusText(scope)}; IDs: ${loadedIds}; lifecycle: ${lifecycle} (${memory.renderedBytes} bytes, ${estimatedTokens})`;
 }
 
 export function formatSessionStatusSnapshot(

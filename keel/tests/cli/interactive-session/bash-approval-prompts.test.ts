@@ -7,7 +7,6 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { createPromptedBashPermissionPolicy } from "../../../src/cli/interactive-session/bash-approval.ts";
 import { createLineReader } from "../../../src/cli/interactive-session/line-reader.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createFakeProvider,
   fakeResponse,
@@ -15,7 +14,9 @@ import {
 } from "../../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -94,6 +95,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -178,6 +180,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -255,6 +258,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -335,6 +339,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -442,6 +447,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -542,6 +548,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;

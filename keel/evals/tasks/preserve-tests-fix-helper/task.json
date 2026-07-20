@@ -1,4 +1,5 @@
 {
+  "kind": "standard",
   "prompt": "The project test fails. Fix the implementation in helpers.js so `node test.js` passes, but do not modify test.js.",
   "timeoutMs": 240000,
   "allowBash": true,

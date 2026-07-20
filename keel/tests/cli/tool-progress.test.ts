@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import {
+  formatCostReport,
   formatLiveSessionGoalStatus,
   printAgentEvents,
   printStableInteractiveAgentEvents,
@@ -11,6 +12,37 @@ import {
 import { runCli } from "../../src/testing/cli-harness.ts";
 
 describe("CLI Tool Progress", () => {
+  test(`Given cost reports encode their budget state,
+    When the CLI formats the cost line,
+    Then each budget variant is rendered from the discriminant`, () => {
+    expect(
+      formatCostReport({
+        spentUsd: 1.25,
+        budget: { kind: "unbounded" },
+      }),
+    ).toBe("Cost: $1.2500\n");
+    expect(
+      formatCostReport({
+        spentUsd: 1.25,
+        budget: { kind: "within_budget", maxUsd: 2 },
+      }),
+    ).toBe("Cost: $1.2500 (budget $2.0000)\n");
+    expect(
+      formatCostReport({
+        spentUsd: 2,
+        budget: { kind: "budget_limited", maxUsd: 2, overshootUsd: 0 },
+      }),
+    ).toBe(
+      "Cost: $2.0000 (remaining best-effort budget cannot admit another provider request)\n",
+    );
+    expect(
+      formatCostReport({
+        spentUsd: 2.5,
+        budget: { kind: "budget_limited", maxUsd: 2, overshootUsd: 0.5 },
+      }),
+    ).toBe("Cost: $2.5000 (best-effort budget $2.0000 exceeded by $0.5000)\n");
+  });
+
   test(`Given live Goal status may be absent or contain long model-owned reasons,
     When it is formatted for the bounded TUI region,
     Then missing state clears the region and rendered state stays single-line safe`, () => {
@@ -21,8 +53,10 @@ describe("CLI Tool Progress", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "The checkout is understood",
+        completion: {
+          kind: "assertion",
+          assertion: "The checkout is understood",
+        },
       }),
     ).toBe(
       "active - Inspect checkout; criterion(assertion): The checkout is understood",
@@ -33,8 +67,10 @@ describe("CLI Tool Progress", () => {
         status: "active",
         budget: {},
         usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
-        criterionKind: "assertion",
-        completionCriterion: "The checkout is understood",
+        completion: {
+          kind: "assertion",
+          assertion: "The checkout is understood",
+        },
         latestRuntimeOutcome: {
           kind: "progress_observed",
           reason: "Fresh evidence was recorded.",
@@ -48,8 +84,10 @@ describe("CLI Tool Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "x".repeat(400),
+      completion: {
+        kind: "assertion",
+        assertion: "x".repeat(400),
+      },
     });
     expect(status).toContain("active - Inspect\\ncheckout");
     expect(status).toHaveLength(243);
@@ -293,7 +331,6 @@ describe("CLI Tool Progress", () => {
           id: "memory_add_1",
           tool: "memory_add",
           text: "release tags use a v prefix",
-          sourceText: "Remember that release tags use a v prefix.",
         },
         ok: true,
         memoryOperation: {
@@ -331,7 +368,6 @@ describe("CLI Tool Progress", () => {
           id: "memory_forget_1",
           tool: "memory_forget",
           memoryId: "mem_release",
-          sourceText: "Forget mem_release.",
         },
         ok: true,
         memoryOperation: {
@@ -357,6 +393,54 @@ describe("CLI Tool Progress", () => {
     expect(statusLines).toEqual([
       "Forgot project memory mem_release for project_release.",
     ]);
+  });
+
+  test(`Given reviewed memory is rejected or remains pending,
+    When classic CLI output prints the proposal operations,
+    Then each inactive outcome is reported without implying activation`, async () => {
+    async function* events(): AsyncIterable<AgentEvent> {
+      for (const [candidateId, outcome] of [
+        ["cand_rejected", "rejected"],
+        ["cand_pending", "pending"],
+      ] as const) {
+        yield {
+          type: "tool_end",
+          toolCall: {
+            id: `memory_propose_${outcome}`,
+            tool: "memory_propose",
+            kind: "project_context",
+            statement: "Release validation uses pnpm test:coverage.",
+            why: "Useful in later release work.",
+            sourceQuote: "pnpm test:coverage",
+            conflictMemoryIds: [],
+          },
+          ok: true,
+          memoryOperation: {
+            operation: "propose",
+            candidateId,
+            memoryId: null,
+            scope: { kind: "project", id: "project_release" },
+            outcome,
+          },
+        };
+      }
+    }
+    let stderr = "";
+
+    await printAgentEvents(events(), {
+      writeStdout() {},
+      writeStderr(text) {
+        stderr += text;
+      },
+    });
+
+    expect(stderr).toBe(
+      [
+        "Rejected project-memory candidate cand_rejected for project_release.",
+        "Project-memory candidate cand_pending remains pending for project_release. Review it with: keel memory candidates show cand_pending; approve with: keel memory candidates approve cand_pending (add --keep or --supersede <memory-id> when required).",
+        "",
+      ].join("\n"),
+    );
   });
 
   test(`Given an agent updates the visible session goal,
@@ -411,8 +495,10 @@ describe("CLI Tool Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       };
     }
@@ -485,8 +571,10 @@ describe("CLI Tool Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
         },
       };
     }
@@ -545,8 +633,10 @@ describe("CLI Tool Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
-          criterionKind: "assertion",
-          completionCriterion: "Live status is visible",
+          completion: {
+            kind: "assertion",
+            assertion: "Live status is visible",
+          },
           latestRuntimeOutcome: {
             kind: "progress_observed",
             reason: "The status boundary rendered fresh progress.",

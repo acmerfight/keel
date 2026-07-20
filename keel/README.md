@@ -72,29 +72,116 @@ not conversation history, a task handoff, or a place for credentials and
 sensitive personal data.
 
 ```bash
-keel memory add "Release tags use the v-prefixed version."
-keel memory list
-keel memory forget <id>
-keel memory clear          # asks for confirmation in a TTY
-keel memory clear --yes    # explicit non-interactive confirmation
+keel memory add "Release tags use the v-prefixed version." --review-after 2026-10-01T00:00:00Z
+keel memory list                 # current and stale active entries
+keel memory list --all           # includes superseded, expired, and forgotten history
+keel memory show <id>
+keel memory update <id> "Release tags use the release/v-prefixed version."
+keel memory review --due
+keel memory verify <id>
+keel memory forget <id>          # logical removal; history remains
+keel memory purge <id>           # application-level removal from local Keel storage
+keel memory clear --yes
+keel memory clear --purge --yes
 keel --no-memory "Run without project memory."
 ```
 
-Memory writes require an explicit current-user action. In addition to the CLI
-commands, a direct request such as “Remember that release tags use a v prefix”
-lets the agent save that exact claim, and an unambiguous “Forget the memory
-about release tags” request can forget one active entry. The runtime verifies
-the exact current-user source span, rejects negated, hypothetical, quoted,
-third-party, interrogative, inferred, or broadened claims, and asks for an ID
-instead of guessing when a forget request could match multiple entries. Keel
-does not automatically extract, consolidate, or promote conversation text.
+Active memory always requires a current-user action: a direct command/request,
+or approval of an exact candidate displayed by Keel. A request such as
+“Remember that release tags use a v prefix” lets the agent save that exact
+claim directly, and an unambiguous “Forget the memory about release tags”
+request can forget one active entry. The model decides
+whether the latest user message is a direct, unambiguous request; it must not
+act on negated, hypothetical, quoted, third-party, interrogative, or inferred
+text, and it must ask instead of guessing when a forget request could match
+multiple entries. This semantic intent judgment is a model-mediated behavioral
+target, not a deterministic language parser or structural invariant.
+
+For each eligible user message, mutation tools are available only on the first
+model step, before tool output enters the turn. `memory_add` accepts one required
+`text` field: an exact contiguous durable-claim span from that user message.
+The runtime rejects paraphrased or broadened text and records the complete
+authorizing user message as event provenance itself; the model cannot provide
+or forge that source evidence. `memory_forget` accepts one required active
+project-memory ID. Keel does not automatically extract, consolidate, or promote
+conversation text into active memory.
+
+In a saved interactive real-TTY session, the current primary model also has a
+`memory_propose` tool on the first model step. It may propose one durable fact
+even when the user did not say “remember,” but must cite one exact quote from
+that current user message and provide all required candidate fields. Keel
+records the proposal as an inactive candidate, displays the candidate ID,
+scope, statement, source quote, reason, and conflicts, and reads a Runtime-owned
+`y`/`n` response. `y` activates the exact displayed candidate; `n` rejects it.
+Closed input or interruption leaves it pending. Conflicts also stay pending for
+the existing review CLI instead of opening a second inline conflict workflow.
+This tool is not exposed in ephemeral, one-shot, headless, non-TTY, or
+`--no-memory` runs. An explicit “remember” request continues to use
+`memory_add` directly without a redundant approval prompt.
+
+Automatic candidate extraction is a separate, off-by-default review workflow.
+It runs only when the user invokes one explicit, cost-bounded command for a
+completed, persisted root session:
+
+```bash
+keel memory candidates extract <session-id> --max-cost <usd>
+keel memory candidates list
+keel memory candidates show <candidate-id>
+keel memory candidates edit <candidate-id> "<replacement>"
+keel memory candidates approve <candidate-id>
+keel memory candidates reject <candidate-id>
+keel memory candidates purge <candidate-id>
+keel memory candidates clear --yes
+```
+
+Extraction sends only a bounded set of eligible current-user messages, never
+assistant or tool text, and rejects detected secrets and prohibited high-risk
+personal data before a provider request. Detection is best-effort defense in
+depth, not a general DLP guarantee. A successful run creates at most five
+inactive project-scoped candidates and reports the created/pending counts,
+provider usage, cost, attempts, and review command. The candidate list retains
+terminal extraction operations, including failures and admission rejections,
+so consumed provider cost remains observable even when no candidate is saved.
+
+Every candidate keeps its exact user-message evidence, reason, producer origin,
+duplicate/conflict matches, and sensitivity-check result. Completed-session
+extraction candidates retain their dedicated model operation and cost fields;
+same-turn proposals retain the primary provider/model plus the originating
+session and message IDs without inventing a second extraction operation.
+Pending candidates
+expire after 30 days and are never loaded into an agent prompt. Only explicit
+approval creates a normal active memory ID; conflicts require `--keep` or
+`--supersede <memory-id>`, and exact duplicates cannot be approved. `--retry`
+is required to extract a session again after a successful extraction. Keel has
+no idle/background extractor, so ordinary session completion and app startup
+make zero candidate-provider requests and schedule no candidate notification.
+Before any candidate-provider request, extraction acquires the project-memory
+write boundary and holds it through terminal accounting. If that boundary
+remains busy, extraction fails without making a provider request or spending
+provider budget.
+Editing invalidates the model's earlier duplicate/conflict analysis. The review
+view marks that analysis as stale, exact duplicates are recomputed and blocked
+at approval, and activation requires an explicit `--keep` or `--supersede`
+decision against current active memory.
+
+Candidate reject and ordinary clear are logical removal. Candidate purge is
+application-level physical removal from addressable Keel-owned local storage.
+An approved candidate is linked to active memory, so its purge must name that
+memory explicitly with `--purge-memory <memory-id>`; bulk purge similarly
+requires `--purge-memories`. The linked payloads are then rewritten under the
+same project lock and atomic event-log generation. These operations cannot
+erase provider retention, exports, backups, filesystem snapshots, or storage
+media remnants. Content-free extraction accounting (terminal state, provider,
+attempts, usage, and cost) remains after candidate purge so provider spend does
+not disappear with the user payload.
 `--ephemeral` only disables the session ledger; it
 does not disable project memory. Use `--no-memory` when a run must skip memory
 identity discovery, storage reads, prompt injection, and memory observability.
 One-shot, interactive, and headless Goal launch/resume runs all support it.
 That flag prevents fresh use by the memory subsystem; it cannot remove the same
-information if it was already written by the user or tools into a resumed
-conversation transcript.
+information after it has become ordinary user, assistant, or tool text in a
+resumed conversation transcript. Keel does not retroactively rewrite session
+history.
 
 Git projects use a random identity marker under the Git common directory, so
 subdirectories, repository renames, and linked worktrees share one scope.
@@ -105,13 +192,26 @@ private directory and file permissions. Storage assumes one machine and a
 reliable local filesystem; cloud-synced directories and concurrent multi-host
 writes are unsupported.
 
-The store is an append-only event log in physical file order. Timestamps are
-display metadata, not conflict-ordering authority. `forget` and `clear` append
-tombstones and remove entries from the active view; they do not physically
-erase prior payload bytes. The writer fsyncs complete newline-terminated events.
-After a crash, reads use the last complete event and a later locked write drops
-only an incomplete final tail. Malformed or unknown schema versions fail closed
-and remain untouched.
+Normal memory and candidate writes share one append-only event log in validated
+physical file order, so approval and linked purge cannot tear across separate
+stores.
+Each entry is `current`, `stale`, `superseded`, `expired`, or `forgotten`.
+`update` appends a replacement with an explicit `supersedes` relation; wall-clock
+timestamps never choose a winner. `reviewAfter` makes an entry stale but still
+visible as needing verification, while `expiresAt` makes it inactive. `verify`
+records explicit user review. Repository state, tests, Git, configuration, live
+APIs, project instructions, and the current user request always outrank memory;
+Keel does not silently rewrite memory from observed tool evidence.
+
+`forget` and ordinary `clear` append tombstones and remove entries from every
+fresh active view, but do not erase historical payload bytes. `purge` is the
+deliberate exception to append-only history: under the same project write lock,
+it validates a replacement event generation and atomically replaces or deletes
+the local store. A successful purge removes the selected payload and dangling
+lifecycle references from addressable Keel-owned memory files. It cannot erase
+provider retention, exported transcripts or reports, user copies, filesystem
+snapshots or backups, or storage-media remnants. The writer fsyncs complete
+newline-terminated events; malformed or unknown schema versions fail closed.
 
 Keel injects the complete active view as quoted, low-authority reference data.
 It is reloaded for every normal provider request attempt, never serialized as transcript
@@ -124,7 +224,8 @@ view. Successful agent add/forget operations also expose their stable memory
 ID, project scope, and outcome in tool results, transcripts, and run reports.
 The rendered block is all-or-nothing: at most 4,096 UTF-8 bytes and 100 active
 entries. Reports and `/status` also expose whether memory is enabled, its
-project scope, rendered bytes, and an approximate token count.
+project scope, lifecycle/provenance metadata, rendered bytes, and an approximate
+token count. Reports intentionally omit remembered text and raw source evidence.
 
 Known secret formats are rejected before persistence without echoing the input,
 but detection is best-effort and is not a privacy guarantee. Do not store API
@@ -180,7 +281,7 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 14. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 15. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
 context-compaction records, and stop reason. A human intervention is one user

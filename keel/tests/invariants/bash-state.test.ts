@@ -3,8 +3,9 @@ import { describe, expect, test } from "vitest";
 import {
   type BashMode,
   type BashPolicy,
-  bashModeExposesTool,
+  type BashRuntime,
   bashModeFromPolicy,
+  bashRuntimeExposesTool,
 } from "../../src/permissions/bash.ts";
 
 const cliEntrySource = readFileSync("src/cli/index.ts", "utf8");
@@ -21,21 +22,33 @@ describe("bash state invariants", () => {
     }
   });
 
-  test("Given user-facing bash policies, When deriving internal bash modes, Then each mode has one tool exposure meaning", () => {
+  test("Given user-facing bash policies, When deriving internal CLI modes, Then each policy has one mode", () => {
     const cases: ReadonlyArray<{
       readonly policy: BashPolicy;
       readonly mode: BashMode;
-      readonly exposesTool: boolean;
     }> = [
-      { policy: "deny", mode: "disabled", exposesTool: false },
-      { policy: "ask", mode: "ask", exposesTool: true },
-      { policy: "trusted", mode: "trusted", exposesTool: true },
+      { policy: "deny", mode: "disabled" },
+      { policy: "ask", mode: "ask" },
+      { policy: "trusted", mode: "trusted" },
     ];
 
     for (const entry of cases) {
-      const mode = bashModeFromPolicy(entry.policy);
-      expect(mode).toBe(entry.mode);
-      expect(bashModeExposesTool(mode)).toBe(entry.exposesTool);
+      expect(bashModeFromPolicy(entry.policy)).toBe(entry.mode);
     }
+  });
+
+  test("Given runtime bash postures, When deriving tool exposure, Then each valid posture has one exposure meaning", () => {
+    const runtimes: readonly BashRuntime[] = [
+      { kind: "disabled" },
+      { kind: "trusted" },
+      {
+        kind: "reviewed",
+        permission: {
+          review: () => ({ type: "deny", message: "not executed" }),
+        },
+      },
+    ];
+
+    expect(runtimes.map(bashRuntimeExposesTool)).toEqual([false, true, true]);
   });
 });

@@ -47,14 +47,22 @@ const PREFLIGHT_CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN =
 const CURRENT_TOOL_OUTPUT_COMPACTED_MARKER_PATTERN =
   /\n\[(?:current tool output compacted after context overflow|current tool output compacted before provider request): approximately omitted ([0-9]+) chars(?:; [^\]]+)?\]$/;
 
+export type CurrentToolOutputCompactionPolicy =
+  | {
+      readonly reason: "preflight";
+      readonly preflightCompactedOutputs?: never;
+    }
+  | {
+      readonly reason: "overflow_recovery";
+      readonly preflightCompactedOutputs: "preserve" | "recompact";
+    };
+
 export type CurrentToolOutputCompactionReason =
-  | "overflow_recovery"
-  | "preflight";
+  CurrentToolOutputCompactionPolicy["reason"];
 
 interface CurrentToolOutputCompactionOptions {
-  readonly reason?: CurrentToolOutputCompactionReason;
-  readonly settledMaxChars?: number;
-  readonly allowPreflightRecompaction?: boolean;
+  readonly policy: CurrentToolOutputCompactionPolicy;
+  readonly settledMaxChars: number;
 }
 
 export interface StaleToolOutputCompactionStats {
@@ -157,8 +165,8 @@ function staleToolOutputCompactedMarker(
 
 function currentToolOutputCompactedMarker(
   omittedChars: number,
+  reason: CurrentToolOutputCompactionReason,
   artifactMarker?: string,
-  reason: CurrentToolOutputCompactionReason = "overflow_recovery",
 ): string {
   const markerPrefix =
     reason === "preflight"
@@ -198,8 +206,7 @@ export function isCompactedCurrentToolOutput(text: string): boolean {
 
 function isAlreadyCompactedCurrentToolOutput(options: {
   readonly text: string;
-  readonly reason: CurrentToolOutputCompactionReason;
-  readonly allowPreflightRecompaction: boolean;
+  readonly policy: CurrentToolOutputCompactionPolicy;
 }): boolean {
   return (
     isCompactedCurrentToolOutput(options.text) &&
@@ -209,12 +216,11 @@ function isAlreadyCompactedCurrentToolOutput(options: {
 
 function canOverflowRecoveryRecompactPreflightCurrentToolOutput(options: {
   readonly text: string;
-  readonly reason: CurrentToolOutputCompactionReason;
-  readonly allowPreflightRecompaction: boolean;
+  readonly policy: CurrentToolOutputCompactionPolicy;
 }): boolean {
   return (
-    options.reason === "overflow_recovery" &&
-    options.allowPreflightRecompaction &&
+    options.policy.reason === "overflow_recovery" &&
+    options.policy.preflightCompactedOutputs === "recompact" &&
     PREFLIGHT_CURRENT_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN.test(options.text)
   );
 }
@@ -231,14 +237,14 @@ function compactStaleToolOutput(
 
 function compactCurrentToolOutput(
   projection: ProjectedToolOutput,
+  reason: CurrentToolOutputCompactionReason,
   artifactMarker?: string,
-  reason?: CurrentToolOutputCompactionReason,
   omittedChars = projection.omittedChars,
 ): string {
   return `${projection.preview}\n${currentToolOutputCompactedMarker(
     omittedChars,
-    artifactMarker,
     reason,
+    artifactMarker,
   )}`;
 }
 
@@ -284,20 +290,18 @@ function shouldCompactCurrentToolOutput(
   currentToolOutputIndexes: ReadonlySet<number>,
   toolOutputMaxChars: number,
   settledMaxChars: number,
-  reason: CurrentToolOutputCompactionReason,
-  allowPreflightRecompaction: boolean,
+  policy: CurrentToolOutputCompactionPolicy,
 ): boolean {
   const allowSettledPreflightRecompaction =
     canOverflowRecoveryRecompactPreflightCurrentToolOutput({
       text: message.content,
-      reason,
-      allowPreflightRecompaction,
+      policy,
     });
   return (
     message.role === "tool" &&
     currentToolOutputIndexes.has(messageIndex) &&
     !(
-      reason === "preflight" &&
+      policy.reason === "preflight" &&
       isPostCompactionReadToolCallId(message.toolCallId)
     ) &&
     message.content.length > toolOutputMaxChars &&
@@ -305,8 +309,7 @@ function shouldCompactCurrentToolOutput(
       !isGeneratedSettledToolOutput(message.content, settledMaxChars)) &&
     !isAlreadyCompactedCurrentToolOutput({
       text: message.content,
-      reason,
-      allowPreflightRecompaction,
+      policy,
     })
   );
 }
@@ -333,11 +336,17 @@ function toolContextForToolOutput(
     );
     /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; corrupted histories fall through below. */
     if (toolCall !== undefined) {
-      return { toolName: toolCall.tool, toolCall };
+      return { toolCall };
     }
   }
   /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; this labels corrupted current-schema histories. */
-  return { toolName: "unknown" };
+  return { toolCall: null };
+}
+
+function artifactToolNameForContext(
+  context: ToolOutputProjectionContext,
+): ToolOutputArtifactToolName {
+  return context.toolCall === null ? "unknown" : context.toolCall.tool;
 }
 
 function rejectedToolOutputCompactionAttempt(options: {
@@ -639,7 +648,7 @@ export async function compactStaleToolOutputsWithArtifacts(
           store,
           message,
           toolCallId: message.toolCallId,
-          toolName: context.toolName,
+          toolName: artifactToolNameForContext(context),
           content: message.content,
           omittedChars: projection.omittedChars,
           purpose: "stale-compaction",
@@ -685,12 +694,8 @@ export async function compactStaleToolOutputsWithArtifacts(
 export function compactCurrentToolOutputs(
   messages: readonly Message[],
   toolOutputMaxChars: number,
-  options?: CurrentToolOutputCompactionOptions,
+  options: CurrentToolOutputCompactionOptions,
 ): StaleToolOutputCompactionResult {
-  const reason = options?.reason ?? "overflow_recovery";
-  const settledMaxChars = options?.settledMaxChars ?? toolOutputMaxChars;
-  const allowPreflightRecompaction =
-    options?.allowPreflightRecompaction === true;
   const currentToolOutputIndexes = new Set(
     currentToolRound(messages)?.toolOutputs.map(
       (toolOutput) => toolOutput.messageIndex,
@@ -702,9 +707,8 @@ export function compactCurrentToolOutputs(
       index,
       currentToolOutputIndexes,
       toolOutputMaxChars,
-      settledMaxChars,
-      reason,
-      allowPreflightRecompaction,
+      options.settledMaxChars,
+      options.policy,
     ),
   );
   if (!needsCompaction) {
@@ -723,9 +727,8 @@ export function compactCurrentToolOutputs(
           index,
           currentToolOutputIndexes,
           toolOutputMaxChars,
-          settledMaxChars,
-          reason,
-          allowPreflightRecompaction,
+          options.settledMaxChars,
+          options.policy,
         )
       ) {
         return {
@@ -740,8 +743,8 @@ export function compactCurrentToolOutputs(
       });
       const compactedContent = compactCurrentToolOutput(
         projection,
+        options.policy.reason,
         undefined,
-        reason,
         omittedCharsForCurrentOutputRecompaction(
           message.content,
           projection.omittedChars,
@@ -771,12 +774,8 @@ export async function compactCurrentToolOutputsWithArtifacts(
   messages: readonly Message[],
   toolOutputMaxChars: number,
   store: ToolOutputArtifactStore,
-  options?: CurrentToolOutputCompactionOptions,
+  options: CurrentToolOutputCompactionOptions,
 ): Promise<StaleToolOutputCompactionResult> {
-  const reason = options?.reason ?? "overflow_recovery";
-  const settledMaxChars = options?.settledMaxChars ?? toolOutputMaxChars;
-  const allowPreflightRecompaction =
-    options?.allowPreflightRecompaction === true;
   const currentToolOutputIndexes = new Set(
     currentToolRound(messages)?.toolOutputs.map(
       (toolOutput) => toolOutput.messageIndex,
@@ -788,9 +787,8 @@ export async function compactCurrentToolOutputsWithArtifacts(
       index,
       currentToolOutputIndexes,
       toolOutputMaxChars,
-      settledMaxChars,
-      reason,
-      allowPreflightRecompaction,
+      options.settledMaxChars,
+      options.policy,
     ),
   );
   if (!needsCompaction) {
@@ -810,9 +808,8 @@ export async function compactCurrentToolOutputsWithArtifacts(
             index,
             currentToolOutputIndexes,
             toolOutputMaxChars,
-            settledMaxChars,
-            reason,
-            allowPreflightRecompaction,
+            options.settledMaxChars,
+            options.policy,
           )
         ) {
           return {
@@ -830,18 +827,18 @@ export async function compactCurrentToolOutputsWithArtifacts(
           store,
           message,
           toolCallId: message.toolCallId,
-          toolName: context.toolName,
+          toolName: artifactToolNameForContext(context),
           content: message.content,
           omittedChars: projection.omittedChars,
           purpose:
-            reason === "preflight"
+            options.policy.reason === "preflight"
               ? "current-preflight-compaction"
               : "current-overflow-compaction",
         });
         const compactedContent = compactCurrentToolOutput(
           projection,
+          options.policy.reason,
           artifact.marker,
-          reason,
           artifact.omittedChars,
         );
         return await settleArtifactToolOutputCompactionAttempt(

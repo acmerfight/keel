@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
+import { runInteractiveSession as runInteractiveSessionWithMemory } from "../../../src/cli/interactive-session.ts";
 import {
   consumeSessionQueuedInputs,
   createSessionStore,
   persistSessionQueuedInput,
   resumeSessionStore,
+  type SessionQueuedInput,
 } from "../../../src/cli/session-store.ts";
 import {
   createFakeProvider,
@@ -20,14 +21,18 @@ import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { createSkillActivation } from "../../../src/skills/lifecycle.ts";
 import { discoverSkillCatalog } from "../../../src/skills/project.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   expectInterruptedTurnPreservesVisibleScopedInstructions,
   ForcedExit,
   fileExists,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
+import type { AgentMemoryProposalCapability } from "../../../src/tools/memory.ts";
 
 describe("Interactive Session - Interrupts", () => {
   test(`Given a model-controlled bash command contains terminal controls,
@@ -47,6 +52,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "ask" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -129,6 +135,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -175,6 +182,206 @@ describe("Interactive Session - Interrupts", () => {
     // Then
     await session;
     expect(stdout).toBe("Working\n");
+  });
+
+  test(`Given a reviewed memory proposal persisted its source before the provider throws after abort,
+    When a later turn persists the session,
+    Then the proposal source remains in session history`, async () => {
+    // Given
+    const durableFact = "Release validation uses pnpm test:coverage.";
+    const queuedSource: SessionQueuedInput = {
+      id: "reviewed-memory-source-input",
+      timestamp: "1970-01-01T00:00:00.001Z",
+      sequence: 1,
+      line: durableFact,
+    };
+    const scriptedProvider = createFakeProvider([
+      fakeToolResponse("memory_propose", {
+        kind: "project_context",
+        statement: durableFact,
+        why: "The command will be reused in later sessions.",
+        sourceQuote: "pnpm test:coverage",
+        conflictMemoryIds: [],
+      }),
+      fakeResponse("Later turn completed."),
+    ]);
+    let providerRequest = 0;
+    let followupStarted: () => void = () => {};
+    const followupRequestStarted = new Promise<void>((resolve) => {
+      followupStarted = resolve;
+    });
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        providerRequest++;
+        if (providerRequest === 2) {
+          followupStarted();
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+          throw new Error("provider failed after reviewed-memory abort");
+        }
+        yield* scriptedProvider.stream(options);
+      },
+    };
+    const memoryProposal: AgentMemoryProposalCapability = {
+      async propose(proposal, _source, review, signal) {
+        const decision = await review(
+          {
+            candidateId: "cand_reviewed_abort",
+            scope: { kind: "project", id: "project_reviewed_abort" },
+            ...proposal,
+          },
+          signal,
+        );
+        const result = {
+          candidateId: "cand_reviewed_abort",
+          scope: {
+            kind: "project" as const,
+            id: "project_reviewed_abort",
+          },
+        };
+        if (decision.type === "approve") {
+          return {
+            ...result,
+            memoryId: "mem_reviewed_abort",
+            outcome: "approved",
+          };
+        }
+        if (decision.type === "reject") {
+          return { ...result, memoryId: null, outcome: "rejected" };
+        }
+        return { ...result, memoryId: null, outcome: "pending" };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    let approvalAnswered = false;
+    let stdout = "";
+    let stderr = "";
+    let persistedMessages: readonly Message[] = [];
+    const persistedInputIdBatches: string[][] = [];
+    let reservedMessageOrdinal = 0;
+    const session = runInteractiveSessionWithMemory({
+      cliArgs: { bashMode: "disabled" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      session: savedInteractiveSession({
+        id: "reviewed-abort",
+        reserveMessageId: () => `message_${++reservedMessageOrdinal}`,
+        persistMessages: ({
+          messages,
+          reason: _reason,
+          consumedInputIds: inputIds,
+        }) => {
+          persistedMessages = structuredClone(messages);
+          persistedInputIdBatches.push([...inputIds]);
+        },
+      }),
+
+      initialQueuedInputs: [queuedSource],
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: (text) => {
+        stderr += text;
+        if (text.includes("any other input rejects") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("y\n");
+        }
+      },
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "text") stdout += event.text;
+          if (event.type === "end") finalEnd = event;
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+      memory: {
+        kind: "reviewed",
+        prompt: () => "",
+        mutation: {
+          list: () => [],
+          add: () => {
+            throw new Error("memory_add is not expected");
+          },
+          forget: () => {
+            throw new Error("memory_forget is not expected");
+          },
+        },
+        proposal: memoryProposal,
+        status: () => ({
+          enabled: true,
+          scope: { kind: "project", id: "project_reviewed_abort" },
+          loadedIds: [],
+          loadedEntries: [],
+          renderedBytes: 0,
+          estimatedTokens: 0,
+          operations: [],
+        }),
+      },
+    });
+
+    // When
+    await withTimeout(
+      followupRequestStarted,
+      5000,
+      "reviewed-memory follow-up did not start",
+    );
+    for (const handler of [...sigintHandlers]) handler();
+    input.write("Continue with the next turn.\n");
+    await withTimeout(
+      (async () => {
+        while (!stdout.includes("Later turn completed.")) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      })(),
+      5000,
+      "later turn did not complete",
+    );
+    input.end();
+    await session;
+
+    // Then
+    expect(approvalAnswered, stderr).toBe(true);
+    expect(
+      persistedMessages.filter(
+        (message) => message.role === "user" && message.content === durableFact,
+      ),
+    ).toHaveLength(1);
+    expect(persistedMessages).toContainEqual(
+      expect.objectContaining({
+        role: "user",
+        content: "Continue with the next turn.",
+      }),
+    );
+    expect(
+      persistedInputIdBatches
+        .flat()
+        .filter((inputId) => inputId === queuedSource.id),
+    ).toHaveLength(1);
   });
 
   test(`Given a completed Task is followed by a provider that stops normally after abort,
@@ -233,6 +440,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -390,6 +598,22 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        consumeQueuedInputs: (inputIds) => {
+          now = 3;
+          consumeSessionQueuedInputs({
+            session: resumed,
+            inputIds,
+            runtime,
+          });
+        },
+        persistMessages: () => {
+          throw new Error(
+            "interrupted queued turn should not persist messages",
+          );
+        },
+      }),
       initialMessages: resumed.messages,
       initialQueuedInputs: resumed.pendingInputs,
       input,
@@ -427,17 +651,6 @@ describe("Interactive Session - Interrupts", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      consumeQueuedInputs: (inputIds) => {
-        now = 3;
-        consumeSessionQueuedInputs({
-          session: resumed,
-          inputIds,
-          runtime,
-        });
-      },
-      persistSessionMessages: () => {
-        throw new Error("interrupted queued turn should not persist messages");
-      },
     });
 
     try {
@@ -538,6 +751,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -654,7 +868,7 @@ describe("Interactive Session - Interrupts", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Summary before retry." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -711,6 +925,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -815,7 +1030,7 @@ describe("Interactive Session - Interrupts", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const [prompt] = options.messages;
           if (prompt?.role === "user") {
             compactionPrompts.push(prompt.content);
@@ -855,6 +1070,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;

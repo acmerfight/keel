@@ -6,16 +6,18 @@ import {
 import type { CliRuntime } from "./runtime.ts";
 import { resumeSessionStore, SessionStoreError } from "./session-store.ts";
 
-type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+type ForkPointsRunCliArgs = Extract<
+  CliArgs,
+  { readonly command: "run"; readonly mode: "fork-points" }
+>;
 
 export function runForkPointsCommand(
-  cliArgs: RunCliArgs,
+  cliArgs: ForkPointsRunCliArgs,
   runtime: CliRuntime,
-  resumeSessionId: string,
 ): number {
   try {
     const session = resumeSessionStore({
-      sessionId: resumeSessionId,
+      sessionId: cliArgs.sessionId,
       workspace: runtime.cwd(),
       runtime,
     });
@@ -45,7 +47,6 @@ export function runForkPointsCommand(
     );
     return 0;
   } catch (error) {
-    /* v8 ignore next 3: resumeSessionStore reports supported fork-point failures as SessionStoreError. */
     if (!(error instanceof SessionStoreError)) {
       throw error;
     }

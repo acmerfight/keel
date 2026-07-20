@@ -133,7 +133,11 @@ describe("Context Compaction Overflow Edge Cases", () => {
         keepRecentTokens: 1,
         toolOutputMaxChars: 128,
       },
-      allowCurrentToolOutputCompaction: true,
+      currentToolOutputCompaction: {
+        mode: "combined",
+        reason: "overflow_recovery",
+        preflightCompactedOutputs: "preserve",
+      },
     });
 
     // Then
@@ -215,7 +219,11 @@ describe("Context Compaction Overflow Edge Cases", () => {
         keepRecentTokens: 1,
         toolOutputMaxChars: 128,
       },
-      allowCurrentToolOutputCompaction: true,
+      currentToolOutputCompaction: {
+        mode: "combined",
+        reason: "overflow_recovery",
+        preflightCompactedOutputs: "preserve",
+      },
       toolOutputArtifacts: { store },
     });
 
@@ -306,7 +314,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -412,7 +420,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -475,7 +483,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     const provider: LLMProvider = {
       id: "real-current-read-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Unexpected summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -521,7 +529,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
@@ -592,7 +600,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     const provider: LLMProvider = {
       id: "tool-tail-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "The log was read; continue analysis." };
@@ -661,7 +669,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -806,7 +814,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     const provider: LLMProvider = {
       id: "proactive-without-safe-split-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           throw new Error("Compaction should not summarize an empty prefix");
         }
@@ -824,7 +832,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 50,
@@ -866,7 +874,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       id: "persistent-overflow",
       async *stream(options) {
         requestCount++;
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier task summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -887,7 +895,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 6,
@@ -918,7 +926,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     const provider: LLMProvider = {
       id: "empty-delta-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier task summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -945,7 +953,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -991,7 +999,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
@@ -1023,7 +1031,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     const provider: LLMProvider = {
       id: "default-overflow-recovery-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Default context summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -1051,7 +1059,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1095,7 +1103,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     const provider: LLMProvider = {
       id: "two-request-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: `Summary ${summaryRequests}.` };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -1134,7 +1142,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -1172,7 +1180,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       async *stream(options) {
         const firstMessage = options.messages[0];
         if (
-          options.toolChoice === "none" &&
+          options.toolExposure?.kind === "none" &&
           firstMessage?.role === "user" &&
           firstMessage.content.includes("<conversation>")
         ) {
@@ -1182,7 +1190,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           return;
         }
 
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           if (!wrapUpOverflowed) {
             wrapUpOverflowed = true;
             throw new KeelError(
@@ -1215,7 +1223,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: maxTurnFallbackPolicy(1),
         contextCompaction: {
           keepRecentTokens: 1,

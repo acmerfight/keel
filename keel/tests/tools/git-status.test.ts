@@ -12,11 +12,23 @@ function freshSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
-async function createGitWorkspace(prefix: string): Promise<string> {
+async function createGitWorkspace(
+  prefix: string,
+  options: { readonly objectFormat?: "sha256" } = {},
+): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), prefix));
-  execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
-    cwd: workspace,
-  });
+  execFileSync(
+    "git",
+    [
+      "init",
+      "--quiet",
+      "--initial-branch=main",
+      ...(options.objectFormat === undefined
+        ? []
+        : [`--object-format=${options.objectFormat}`]),
+    ],
+    { cwd: workspace },
+  );
   execFileSync("git", ["config", "user.email", "keel@example.test"], {
     cwd: workspace,
   });
@@ -39,41 +51,39 @@ async function withFakeGitStatusOutput<T>(
   const workspace = await mkdtemp(join(tmpdir(), "keel-git-status-fake-"));
   const bin = await mkdtemp(join(tmpdir(), "keel-fake-git-"));
   const fakeGitPath = join(bin, "git");
+  const statusOutputPath = join(bin, "status-output");
+  const quotedStatusOutputPath = `'${statusOutputPath.replaceAll("'", "'\\''")}'`;
+  await writeFile(
+    statusOutputPath,
+    options.statusOutput + "x".repeat(options.extraOutputBytes ?? 0),
+    "utf8",
+  );
   await writeFile(
     fakeGitPath,
-    `#!/usr/bin/env node
-const { writeSync } = require("node:fs");
-const statusOutput = ${JSON.stringify(options.statusOutput)};
-const extraOutputBytes = ${options.extraOutputBytes ?? 0};
-const args = process.argv.slice(2);
-while (
-  args[0] === "--no-pager" ||
-  args[0] === "--no-optional-locks" ||
-  args[0] === "-c"
-) {
-  if (args[0] === "-c") {
-    args.splice(0, 2);
-  } else {
-    args.shift();
-  }
-}
-if (args[0] === "rev-parse") {
-  if (args.includes("--show-toplevel")) {
-    writeSync(1, process.cwd() + "\\n");
-    process.exit(0);
-  }
-  writeSync(1, "true\\n");
-  process.exit(0);
-}
-if (args[0] === "status") {
-  writeSync(1, statusOutput);
-  if (extraOutputBytes > 0) {
-    writeSync(1, "x".repeat(extraOutputBytes));
-  }
-  process.exit(0);
-}
-process.stderr.write(\`unexpected fake git command: \${args.join(" ")}\\n\`);
-process.exit(2);
+    `#!/bin/sh
+while [ "$1" = "--no-pager" ] || [ "$1" = "--no-optional-locks" ] || [ "$1" = "-c" ]; do
+  if [ "$1" = "-c" ]; then
+    shift 2
+  else
+    shift
+  fi
+done
+if [ "$1" = "rev-parse" ]; then
+  case " $* " in
+    *" --show-toplevel "*)
+      /bin/pwd -P
+      exit 0
+      ;;
+  esac
+  printf 'true\\n'
+  exit 0
+fi
+if [ "$1" = "status" ]; then
+  /bin/cat ${quotedStatusOutputPath}
+  exit $?
+fi
+printf 'unexpected fake git command: %s\\n' "$*" >&2
+exit 2
 `,
     "utf8",
   );
@@ -111,7 +121,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "inspect_status",
           tool: "git_status",
@@ -145,7 +155,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "clean_status",
           tool: "git_status",
@@ -158,6 +168,367 @@ describe("git_status tool", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given a SHA-256 repository has a tracked change,
+    When git_status inspects real porcelain-v2 metadata,
+    Then it accepts the repository object format`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-status-sha256-", {
+      objectFormat: "sha256",
+    });
+    await writeFile(join(workspace, "tracked.txt"), "after\n", "utf8");
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        bash: { kind: "disabled" },
+        toolCall: {
+          id: "sha256_status",
+          tool: "git_status",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("Branch: main");
+      expect(result.content).toContain("- M tracked.txt");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given git returns a complete malformed porcelain record,
+    When git_status inspects the workspace,
+    Then it fails instead of silently reporting a clean working tree`, async () => {
+    // Given
+    const statusOutput = ["# branch.head main", "1 M.", ""].join("\0");
+
+    await withFakeGitStatusOutput({ statusOutput }, async (workspace) => {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        bash: { kind: "disabled" },
+        toolCall: {
+          id: "malformed_status",
+          tool: "git_status",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "git_status failed: git status returned malformed output",
+      );
+      expect(result.content).not.toContain("No git changes found.");
+    });
+  });
+
+  const firstOid = "1".repeat(40);
+  const secondOid = "2".repeat(40);
+  const thirdOid = "3".repeat(40);
+  const malformedStatusScenarios = [
+    [
+      "ordinary mode",
+      [
+        "# branch.head main",
+        `1 M. N... invalid 100644 100644 ${firstOid} ${secondOid} tracked.txt`,
+        "",
+      ].join("\0"),
+    ],
+    [
+      "ordinary path",
+      [
+        "# branch.head main",
+        `1 M. N... 100644 100644 100644 ${firstOid} ${secondOid} `,
+        "",
+      ].join("\0"),
+    ],
+    [
+      "ordinary conflict status",
+      [
+        "# branch.head main",
+        `1 DD N... 100644 100644 100644 ${firstOid} ${secondOid} conflict.txt`,
+        "",
+      ].join("\0"),
+    ],
+    [
+      "mixed object IDs within a record",
+      [
+        "# branch.head main",
+        `1 M. N... 100644 100644 100644 ${firstOid} ${"2".repeat(64)} tracked.txt`,
+        "",
+      ].join("\0"),
+    ],
+    [
+      "mixed object IDs across records",
+      [
+        "# branch.head main",
+        `1 M. N... 100644 100644 100644 ${firstOid} ${secondOid} first.txt`,
+        `1 .M N... 100644 100644 100644 ${"3".repeat(64)} ${"4".repeat(64)} second.txt`,
+        "",
+      ].join("\0"),
+    ],
+    [
+      "rename score",
+      [
+        "# branch.head main",
+        `2 R. N... 100644 100644 100644 ${firstOid} ${secondOid} invalid renamed.txt`,
+        "original.txt",
+        "",
+      ].join("\0"),
+    ],
+    [
+      "rename conflict status",
+      [
+        "# branch.head main",
+        `2 RR N... 100644 100644 100644 ${firstOid} ${secondOid} R100 renamed.txt`,
+        "original.txt",
+        "",
+      ].join("\0"),
+    ],
+    [
+      "rename score kind",
+      [
+        "# branch.head main",
+        `2 R. N... 100644 100644 100644 ${firstOid} ${secondOid} C75 renamed.txt`,
+        "original.txt",
+        "",
+      ].join("\0"),
+    ],
+    [
+      "rename source",
+      [
+        "# branch.head main",
+        `2 R. N... 100644 100644 100644 ${firstOid} ${secondOid} R100 renamed.txt`,
+        "",
+      ].join("\0"),
+    ],
+    [
+      "rename source path",
+      [
+        "# branch.head main",
+        `2 R. N... 100644 100644 100644 ${firstOid} ${secondOid} R100 renamed.txt`,
+        "../original.txt",
+        "",
+      ].join("\0"),
+    ],
+    [
+      "rename target",
+      [
+        "# branch.head main",
+        `2 R. N... 100644 100644 100644 ${firstOid} ${secondOid} R100 `,
+        "original.txt",
+        "",
+      ].join("\0"),
+    ],
+    [
+      "unmerged fields",
+      [
+        "# branch.head main",
+        `u UU N... 100644 100644 100644 invalid ${firstOid} ${secondOid} ${thirdOid} conflict.txt`,
+        "",
+      ].join("\0"),
+    ],
+    [
+      "unmerged path",
+      [
+        "# branch.head main",
+        `u UU N... 100644 100644 100644 100644 ${firstOid} ${secondOid} ${thirdOid} `,
+        "",
+      ].join("\0"),
+    ],
+    ["untracked path", ["# branch.head main", "? ", ""].join("\0")],
+    [
+      "parent-relative path",
+      ["# branch.head main", "? ../outside.txt", ""].join("\0"),
+    ],
+    ["absolute path", ["# branch.head main", "? /outside.txt", ""].join("\0")],
+    ["branch head", ["# branch.head", ""].join("\0")],
+    [
+      "branch upstream",
+      ["# branch.head main", "# branch.upstream", ""].join("\0"),
+    ],
+    [
+      "ahead behind",
+      ["# branch.head main", "# branch.ab +1 invalid", ""].join("\0"),
+    ],
+    ["empty stream", "\0"],
+    ["terminator", "# branch.head main\0? note.txt"],
+    ["interior empty record", "# branch.head main\0\0? note.txt\0"],
+    [
+      "unknown entry kind",
+      ["# branch.head main", "x unsupported", ""].join("\0"),
+    ],
+    ["missing branch head", ["? note.txt", ""].join("\0")],
+  ] satisfies readonly (readonly [string, string])[];
+
+  test.each(malformedStatusScenarios)(`Given complete porcelain %s is malformed,
+    When git_status parses the external status stream,
+    Then it fails through the recoverable contract`, async (scenario, statusOutput) => {
+    // Given
+    await withFakeGitStatusOutput({ statusOutput }, async (workspace) => {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        bash: { kind: "disabled" },
+        toolCall: {
+          id: `malformed_status_${scenario}`,
+          tool: "git_status",
+        },
+      });
+
+      // Then
+      expect(result.ok, scenario).toBe(false);
+      expect(result.content, scenario).toContain(
+        "git_status failed: git status returned malformed output",
+      );
+    });
+  });
+
+  test(`Given producer truncation cuts a rename pair after complete earlier records,
+    When git_status parses the bounded stream,
+    Then it keeps completed entries and reports truncation without accepting the partial rename`, async () => {
+    // Given
+    const oid = "1".repeat(40);
+    const statusOutput = [
+      "# branch.head main",
+      "? visible.txt",
+      `2 R. N... 100644 100644 100644 ${oid} ${oid} R100 renamed.txt`,
+      "",
+    ].join("\0");
+
+    await withFakeGitStatusOutput(
+      {
+        statusOutput,
+        extraOutputBytes: GIT_ARTIFACT_OUTPUT_MAX_BYTES + 1,
+      },
+      async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          toolCall: {
+            id: "truncated_rename_status",
+            tool: "git_status",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(true);
+        expect(result.sourceTruncated).toBe(true);
+        expect(result.content).toContain("- visible.txt");
+        expect(result.content).not.toContain("renamed.txt");
+        expect(result.content).toContain(
+          `[git_status output truncated: git status exceeded ${GIT_ARTIFACT_OUTPUT_MAX_BYTES} bytes before parsing completed. Use paths to narrow output.]`,
+        );
+      },
+    );
+  });
+
+  test(`Given producer truncation follows a completed malformed rename record,
+    When git_status parses the bounded stream,
+    Then it rejects the completed metadata before tolerating the partial source path`, async () => {
+    // Given
+    const oid = "1".repeat(40);
+    const statusOutput = [
+      "# branch.head main",
+      `2 RR N... 100644 100644 100644 ${oid} ${oid} R100 renamed.txt`,
+      "",
+    ].join("\0");
+
+    await withFakeGitStatusOutput(
+      {
+        statusOutput,
+        extraOutputBytes: GIT_ARTIFACT_OUTPUT_MAX_BYTES + 1,
+      },
+      async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          toolCall: {
+            id: "truncated_malformed_rename_status",
+            tool: "git_status",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(
+          "git_status failed: git status returned malformed output",
+        );
+      },
+    );
+  });
+
+  test(`Given producer truncation occurs before the first complete record,
+    When git_status parses the bounded stream,
+    Then it reports unknown branch metadata without claiming the workspace is clean`, async () => {
+    // Given
+    await withFakeGitStatusOutput(
+      {
+        statusOutput: "",
+        extraOutputBytes: GIT_ARTIFACT_OUTPUT_MAX_BYTES + 1,
+      },
+      async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          toolCall: {
+            id: "truncated_before_status_record",
+            tool: "git_status",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(true);
+        expect(result.sourceTruncated).toBe(true);
+        expect(result.content).toContain("Branch: unknown");
+        expect(result.content).toContain(
+          `[git_status output truncated: git status exceeded ${GIT_ARTIFACT_OUTPUT_MAX_BYTES} bytes before parsing completed. Use paths to narrow output.]`,
+        );
+        expect(result.content).not.toContain("No git changes found.");
+      },
+    );
+  });
+
+  test(`Given a producer-truncated stream contains a completed empty record,
+    When git_status parses the bounded stream,
+    Then it rejects the malformed record instead of treating it as missing metadata`, async () => {
+    // Given
+    await withFakeGitStatusOutput(
+      {
+        statusOutput: "\0",
+        extraOutputBytes: GIT_ARTIFACT_OUTPUT_MAX_BYTES + 1,
+      },
+      async (workspace) => {
+        // When
+        const result = await executeToolCall({
+          workspace,
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          toolCall: {
+            id: "truncated_empty_status_record",
+            tool: "git_status",
+          },
+        });
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(
+          "git_status failed: git status returned malformed output",
+        );
+      },
+    );
   });
 
   test(`Given current git changes in multiple directories,
@@ -175,7 +546,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "path_status",
           tool: "git_status",
@@ -215,7 +586,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace: join(workspace, "src"),
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "subdir_status",
           tool: "git_status",
@@ -263,7 +634,7 @@ describe("git_status tool", () => {
       const currentWorkspaceResult = await executeToolCall({
         workspace: join(workspace, "src"),
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "subdir_dot_status",
           tool: "git_status",
@@ -273,7 +644,7 @@ describe("git_status tool", () => {
       const nestedResult = await executeToolCall({
         workspace: join(workspace, "src"),
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "subdir_nested_status",
           tool: "git_status",
@@ -310,7 +681,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "branch_status",
           tool: "git_status",
@@ -342,7 +713,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "unmerged_status",
           tool: "git_status",
@@ -355,6 +726,45 @@ describe("git_status tool", () => {
       expect(result.content).toContain("- UU conflict.txt");
       expect(result.content).not.toContain("Staged changes:");
       expect(result.content).not.toContain("Unstaged changes:");
+    });
+  });
+
+  test(`Given porcelain records contain spaced paths and a status-looking rename source,
+    When git_status consumes the paired rename record,
+    Then it preserves every path and does not parse the source as another entry`, async () => {
+    // Given
+    const statusOutput = [
+      "# branch.head main",
+      "1 M. N... 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 ordinary  path.txt",
+      "2 R. N... 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 R75 renamed target.txt",
+      "? old name.txt",
+      "u UU N... 100644 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 3333333333333333333333333333333333333333 conflict  path.txt",
+      "? later file.txt",
+      "",
+    ].join("\0");
+
+    await withFakeGitStatusOutput({ statusOutput }, async (workspace) => {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        signal: freshSignal(),
+        bash: { kind: "disabled" },
+        toolCall: {
+          id: "spaced_rename_status",
+          tool: "git_status",
+        },
+      });
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toBe(
+        [
+          "Branch: main",
+          "Staged changes:\n- M ordinary  path.txt\n- R ? old name.txt -> renamed target.txt",
+          "Unmerged paths:\n- UU conflict  path.txt",
+          "Untracked files:\n- later file.txt",
+        ].join("\n\n"),
+      );
     });
   });
 
@@ -372,7 +782,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "visible_rename_status",
           tool: "git_status",
@@ -410,7 +820,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "hidden_source_rename_status",
           tool: "git_status",
@@ -446,7 +856,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "many_status",
           tool: "git_status",
@@ -482,7 +892,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "exact_status",
           tool: "git_status",
@@ -509,7 +919,7 @@ describe("git_status tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall: {
           id: "non_git_status",
           tool: "git_status",
@@ -542,7 +952,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "producer_truncated_status",
             tool: "git_status",
@@ -578,7 +988,7 @@ describe("git_status tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall: {
             id: "producer_truncated_empty_status",
             tool: "git_status",

@@ -75,7 +75,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -174,7 +174,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -240,8 +240,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
     };
     const blockedReasons = [
       "Need credentials from the user.",
@@ -284,7 +286,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -299,8 +301,10 @@ describe("Task Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 1,
             reason: "Need credentials from the user.",
@@ -320,8 +324,10 @@ describe("Task Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 2,
             reason: "Credentials remain unavailable.",
@@ -342,8 +348,10 @@ describe("Task Progress", () => {
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
           statusReason: "The user still has not provided credentials.",
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           latestRuntimeOutcome: {
             kind: "blocked",
             reason: "The user still has not provided credentials.",
@@ -393,8 +401,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-blocked-burst-provider",
@@ -442,7 +452,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -461,8 +471,10 @@ describe("Task Progress", () => {
             status: "active",
             budget: {},
             usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-            criterionKind: "command",
-            completionCriterion: "pnpm test",
+            completion: {
+              kind: "command",
+              command: "pnpm test",
+            },
             blockedAudit: {
               consecutiveCount: 1,
               reason: "Need credentials from the user.",
@@ -552,7 +564,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -587,8 +599,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       blockedAudit: {
         consecutiveCount: 1,
         reason: "Need credentials from the user.",
@@ -636,7 +650,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -651,8 +665,10 @@ describe("Task Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           latestRuntimeOutcome: {
             kind: "progress_observed",
             reason:
@@ -668,8 +684,10 @@ describe("Task Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           blockedAudit: {
             consecutiveCount: 1,
             reason: "Credentials are unavailable again.",
@@ -707,8 +725,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       blockedAudit: {
         consecutiveCount: 1,
         reason: "Need credentials from the user.",
@@ -734,7 +754,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -749,8 +769,10 @@ describe("Task Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           latestRuntimeOutcome: {
             kind: "progress_observed",
             reason:
@@ -783,8 +805,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       blockedAudit: {
         consecutiveCount: 1,
         reason: "Need credentials from the user.",
@@ -813,7 +837,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: stopAfterFirstTurn,
           sessionGoal,
         }),
@@ -828,8 +852,10 @@ describe("Task Progress", () => {
           status: "active",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "pnpm test",
+          completion: {
+            kind: "command",
+            command: "pnpm test",
+          },
           latestRuntimeOutcome: {
             kind: "progress_observed",
             reason:
@@ -864,8 +890,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: 'node -e "process.exit(0)"',
+      completion: {
+        kind: "command",
+        command: 'node -e "process.exit(0)"',
+      },
     };
     const provider: LLMProvider = {
       id: "goal-command-evidence-provider",
@@ -905,7 +933,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -920,8 +948,10 @@ describe("Task Progress", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: 'node -e "process.exit(0)"',
+          completion: {
+            kind: "command",
+            command: 'node -e "process.exit(0)"',
+          },
           completionEvidence: {
             kind: "command",
             command: 'node -e "process.exit(0)"',
@@ -1002,8 +1032,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "node verify.mjs",
+      completion: {
+        kind: "command",
+        command: "node verify.mjs",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-runtime-command-verifier-provider",
@@ -1033,7 +1065,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -1048,8 +1080,10 @@ describe("Task Progress", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "command",
-          completionCriterion: "node verify.mjs",
+          completion: {
+            kind: "command",
+            command: "node verify.mjs",
+          },
           completionEvidence: {
             kind: "command",
             command: "node verify.mjs",
@@ -1097,8 +1131,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "node verify.mjs",
+      completion: {
+        kind: "command",
+        command: "node verify.mjs",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-stale-command-evidence-provider",
@@ -1139,7 +1175,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -1204,8 +1240,10 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "node verify.mjs",
+      completion: {
+        kind: "command",
+        command: "node verify.mjs",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-non-terminal-command-completion-provider",
@@ -1244,7 +1282,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -1305,22 +1343,25 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The release notes explain every changed command.",
+      completion: {
+        kind: "assertion",
+        assertion: "The release notes explain every changed command.",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-assertion-approved-provider",
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
-          ...(options.allowBash !== undefined
-            ? { allowBash: options.allowBash }
+          ...(options.toolExposure?.kind === "auto" &&
+          options.toolExposure.bash === true
+            ? { allowBash: true }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({
@@ -1415,7 +1456,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -1430,9 +1471,10 @@ describe("Task Progress", () => {
           status: "completed",
           budget: {},
           usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-          criterionKind: "assertion",
-          completionCriterion:
-            "The release notes explain every changed command.",
+          completion: {
+            kind: "assertion",
+            assertion: "The release notes explain every changed command.",
+          },
           completionEvidence: {
             kind: "assertion_evaluator",
             reason:
@@ -1518,14 +1560,16 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion:
-        "The current contents of state.txt begin with status=READY followed by a newline.",
+      completion: {
+        kind: "assertion",
+        assertion:
+          "The current contents of state.txt begin with status=READY followed by a newline.",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-same-turn-read-completion-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const prompt = options.messages[0]?.content ?? "";
           const hasFreshRead =
             prompt.includes("status=READY") &&
@@ -1574,7 +1618,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
           toolOutputArtifacts: {
@@ -1645,14 +1689,16 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion:
-        "The current complete contents of state.txt are status=READY followed by a newline.",
+      completion: {
+        kind: "assertion",
+        assertion:
+          "The current complete contents of state.txt are status=READY followed by a newline.",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-non-terminal-assertion-completion-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           evaluatorRequests++;
           yield {
             type: "text",
@@ -1698,7 +1744,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -1749,20 +1795,22 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion:
-        "The current complete contents of state.txt are status=READY followed by a newline.",
+      completion: {
+        kind: "assertion",
+        assertion:
+          "The current complete contents of state.txt are status=READY followed by a newline.",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-external-read-change-provider",
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const prompt = options.messages[0]?.content ?? "";
           const changed =
             prompt.includes('"resourceFreshness"') &&
@@ -1818,7 +1866,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -1874,19 +1922,21 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The release notes explain every changed command.",
+      completion: {
+        kind: "assertion",
+        assertion: "The release notes explain every changed command.",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-assertion-rejected-provider",
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({
@@ -1927,7 +1977,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -2002,19 +2052,21 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The release notes explain every changed command.",
+      completion: {
+        kind: "assertion",
+        assertion: "The release notes explain every changed command.",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-assertion-user-claim-provider",
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({
@@ -2056,7 +2108,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),
@@ -2128,19 +2180,21 @@ describe("Task Progress", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The release notes explain command-a and command-b.",
+      completion: {
+        kind: "assertion",
+        assertion: "The release notes explain command-a and command-b.",
+      },
     };
     const provider: LLMProvider = {
       id: "goal-assertion-forged-assistant-provider",
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const evaluatorText = options.messages
             .map((message) => message.content)
             .join("\n");
@@ -2202,7 +2256,7 @@ describe("Task Progress", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
         }),

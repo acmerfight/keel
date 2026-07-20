@@ -167,7 +167,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -247,7 +247,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -324,7 +324,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -386,7 +386,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -458,7 +458,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -541,7 +541,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: true,
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store,
@@ -619,7 +619,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -703,7 +703,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -786,7 +786,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -853,7 +853,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -930,7 +930,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -1039,7 +1039,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store,
@@ -1130,7 +1130,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -1209,7 +1209,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -1294,7 +1294,7 @@ describe("Agent Tool Output Artifacts", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store,

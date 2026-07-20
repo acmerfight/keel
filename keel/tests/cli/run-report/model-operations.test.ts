@@ -3,10 +3,13 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import { ZERO_COST_MODEL } from "../../../src/core/cost.ts";
 import type { LLMProvider } from "../../../src/llm/types.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
+import {
+  EPHEMERAL_INTERACTIVE_SESSION,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+} from "../../../src/testing/interactive-session-fixtures.ts";
 import { sseTextReplyWithUsage } from "../../../src/testing/provider-sse-fixtures.ts";
 import {
   close,
@@ -70,7 +73,6 @@ const modelOperationBase = {
       agentRunOrdinal: z.number().int().positive(),
     }),
     z.object({ type: z.literal("session") }),
-    z.object({ type: z.literal("invocation") }),
   ]),
   purpose: z.enum([
     "agent_turn",
@@ -98,7 +100,7 @@ const modelOperationSchema = z.object(modelOperationBase);
 
 const modelOperationReportSchema = z
   .object({
-    schemaVersion: z.literal(14),
+    schemaVersion: z.literal(17),
     modelOperations: z.array(modelOperationSchema),
     modelOperationCount: z.number().int().nonnegative(),
     providerRequestAttemptCount: z.number().int().nonnegative(),
@@ -380,7 +382,7 @@ describe("CLI Run Report - Model Operations", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         const attempt = options.providerRequestAttempts?.begin();
         yield { type: "text", text: "Manual checkpoint summary." };
         const usage = {
@@ -406,6 +408,7 @@ describe("CLI Run Report - Model Operations", () => {
       cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       initialMessages: [
         { role: "user", content: "remember prior context" },
@@ -458,7 +461,7 @@ describe("CLI Run Report - Model Operations", () => {
     expect(stderr).toContain("Context compacted: manual");
     expect(result.report).toBeDefined();
     const rawReport = {
-      schemaVersion: 14,
+      schemaVersion: 17,
       tasks: result.report?.tasks ?? [],
       modelOperations: result.report?.modelOperations ?? [],
       modelOperationCount: result.report?.modelOperationCount ?? 0,

@@ -29,8 +29,6 @@ const sessionGoalRuntimeOutcomeKinds = [
 ] as const;
 
 type SessionGoalStatus = (typeof sessionGoalStatuses)[number];
-export type SessionGoalCriterionKind =
-  (typeof sessionGoalCriterionKinds)[number];
 export type SessionGoalBlockedAuditCount = 1 | 2;
 
 export interface SessionGoalBlockedAudit {
@@ -59,6 +57,17 @@ export interface SessionGoalUsage {
   readonly activeTimeMs: number;
 }
 
+export type SessionGoalCompletion =
+  | {
+      readonly kind: "command";
+      readonly command: string;
+      readonly verificationTimeoutMs?: number;
+    }
+  | {
+      readonly kind: "assertion";
+      readonly assertion: string;
+    };
+
 interface CommandSessionGoalCompletionEvidence {
   readonly kind: "command";
   readonly command: string;
@@ -85,16 +94,8 @@ interface SessionGoalContract {
   readonly objective: string;
   readonly budget: SessionGoalBudget;
   readonly usage: SessionGoalUsage;
-  readonly criterionKind?: SessionGoalCriterionKind;
-  readonly completionCriterion?: string;
-  readonly verificationTimeoutMs?: number;
+  readonly completion?: SessionGoalCompletion;
   readonly latestRuntimeOutcome?: SessionGoalRuntimeOutcome;
-}
-
-interface SessionGoalCompletionContractSource {
-  readonly criterionKind?: SessionGoalCriterionKind;
-  readonly completionCriterion?: string;
-  readonly verificationTimeoutMs?: number;
 }
 
 interface ActiveSessionGoal extends SessionGoalContract {
@@ -321,6 +322,8 @@ const sessionGoalBaseSchema = z
     }
   });
 
+export type SessionGoalRecord = z.input<typeof sessionGoalBaseSchema>;
+
 function sessionGoalStatusRequiresReason(
   status: SessionGoalStatus,
 ): status is "blocked" | "budget_limited" | "usage_limited" {
@@ -352,17 +355,22 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
       },
       usage: copySessionGoalUsage(goal.usage),
     };
-    const criterion =
+    const completion: SessionGoalCompletion | undefined =
       goal.criterionKind !== undefined && goal.completionCriterion !== undefined
-        ? {
-            criterionKind: goal.criterionKind,
-            completionCriterion: goal.completionCriterion,
-            ...(goal.criterionKind === "command" &&
-            goal.verificationTimeoutMs !== undefined
-              ? { verificationTimeoutMs: goal.verificationTimeoutMs }
-              : {}),
-          }
-        : {};
+        ? goal.criterionKind === "command"
+          ? {
+              kind: "command",
+              command: goal.completionCriterion,
+              ...(goal.verificationTimeoutMs !== undefined
+                ? { verificationTimeoutMs: goal.verificationTimeoutMs }
+                : {}),
+            }
+          : {
+              kind: "assertion",
+              assertion: goal.completionCriterion,
+            }
+        : undefined;
+    const completionContract = completion === undefined ? {} : { completion };
     const runtimeOutcome =
       goal.latestRuntimeOutcome === undefined
         ? {}
@@ -385,7 +393,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
           objective: goal.objective,
           status: "active",
           ...accounting,
-          ...criterion,
+          ...completionContract,
           ...runtimeOutcome,
           ...(goal.blockedAudit !== undefined
             ? {
@@ -406,7 +414,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
           statusReason: normalizeSessionGoalStatusReason(
             z.string().parse(goal.statusReason),
           ),
-          ...criterion,
+          ...completionContract,
           ...runtimeOutcome,
         };
       case "budget_limited":
@@ -417,7 +425,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
           statusReason: normalizeSessionGoalStatusReason(
             z.string().parse(goal.statusReason),
           ),
-          ...criterion,
+          ...completionContract,
           ...runtimeOutcome,
         };
       case "usage_limited":
@@ -428,7 +436,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
           statusReason: normalizeSessionGoalStatusReason(
             z.string().parse(goal.statusReason),
           ),
-          ...criterion,
+          ...completionContract,
           ...runtimeOutcome,
         };
       case "paused":
@@ -436,7 +444,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
           objective: goal.objective,
           status: "paused",
           ...accounting,
-          ...criterion,
+          ...completionContract,
           ...runtimeOutcome,
         };
       case "completed":
@@ -444,7 +452,7 @@ export const sessionGoalSchema: z.ZodType<SessionGoal> =
           objective: goal.objective,
           status: "completed",
           ...accounting,
-          ...criterion,
+          ...completionContract,
           ...runtimeOutcome,
           completionEvidence: normalizeSessionGoalCompletionEvidence(
             sessionGoalCompletionEvidenceSchema.parse(goal.completionEvidence),
@@ -467,27 +475,32 @@ export function normalizeSessionGoalCompletionCommand(command: string): string {
   return command.trim();
 }
 
-export function sessionGoalCompletionContract(
-  source: SessionGoalCompletionContractSource,
-): {
-  readonly criterionKind?: SessionGoalCriterionKind;
-  readonly completionCriterion?: string;
-  readonly verificationTimeoutMs?: number;
-} {
-  if (
-    source.criterionKind === undefined ||
-    source.completionCriterion === undefined
-  ) {
-    return {};
+function copySessionGoalCompletion(
+  completion: SessionGoalCompletion,
+): SessionGoalCompletion {
+  switch (completion.kind) {
+    case "command":
+      return {
+        kind: "command",
+        command: completion.command,
+        ...(completion.verificationTimeoutMs === undefined
+          ? {}
+          : { verificationTimeoutMs: completion.verificationTimeoutMs }),
+      };
+    case "assertion":
+      return {
+        kind: "assertion",
+        assertion: completion.assertion,
+      };
   }
-  return {
-    criterionKind: source.criterionKind,
-    completionCriterion: source.completionCriterion,
-    ...(source.criterionKind === "command" &&
-    source.verificationTimeoutMs !== undefined
-      ? { verificationTimeoutMs: source.verificationTimeoutMs }
-      : {}),
-  };
+}
+
+export function sessionGoalCompletionContract(source: {
+  readonly completion?: SessionGoalCompletion;
+}): { readonly completion?: SessionGoalCompletion } {
+  return source.completion === undefined
+    ? {}
+    : { completion: copySessionGoalCompletion(source.completion) };
 }
 
 export function normalizeSessionGoalStatusReason(reason: string): string {
@@ -664,10 +677,7 @@ export function assessSessionGoalResume(
         "Error: only paused, blocked, or limited session goals can be resumed.",
     };
   }
-  if (
-    goal.criterionKind === undefined ||
-    goal.completionCriterion === undefined
-  ) {
+  if (goal.completion === undefined) {
     return {
       kind: "not_resumable",
       rejection:
@@ -742,8 +752,8 @@ function sessionGoalRuntimeOutcome(goal: SessionGoal): {
 function sessionGoalCommandCriterion(
   goal: SessionGoal | undefined,
 ): string | undefined {
-  return goal?.criterionKind === "command"
-    ? goal.completionCriterion
+  return goal?.completion?.kind === "command"
+    ? goal.completion.command
     : undefined;
 }
 
@@ -762,14 +772,14 @@ export function sessionGoalCommandMatchesCriterion(
 export function copySessionGoal(goal: SessionGoal): SessionGoal {
   const accounting = sessionGoalAccounting(goal);
   const runtimeOutcome = sessionGoalRuntimeOutcome(goal);
-  const criterion = sessionGoalCompletionContract(goal);
+  const completion = sessionGoalCompletionContract(goal);
   switch (goal.status) {
     case "active":
       return {
         objective: goal.objective,
         status: "active",
         ...accounting,
-        ...criterion,
+        ...completion,
         ...runtimeOutcome,
         ...(goal.blockedAudit !== undefined
           ? {
@@ -786,7 +796,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         status: "blocked",
         ...accounting,
         statusReason: goal.statusReason,
-        ...criterion,
+        ...completion,
         ...runtimeOutcome,
       };
     case "budget_limited":
@@ -795,7 +805,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         status: "budget_limited",
         ...accounting,
         statusReason: goal.statusReason,
-        ...criterion,
+        ...completion,
         ...runtimeOutcome,
       };
     case "usage_limited":
@@ -804,7 +814,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         status: "usage_limited",
         ...accounting,
         statusReason: goal.statusReason,
-        ...criterion,
+        ...completion,
         ...runtimeOutcome,
       };
     case "paused":
@@ -812,7 +822,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         objective: goal.objective,
         status: "paused",
         ...accounting,
-        ...criterion,
+        ...completion,
         ...runtimeOutcome,
       };
     case "completed":
@@ -820,7 +830,7 @@ export function copySessionGoal(goal: SessionGoal): SessionGoal {
         objective: goal.objective,
         status: "completed",
         ...accounting,
-        ...criterion,
+        ...completion,
         ...runtimeOutcome,
         completionEvidence: copySessionGoalCompletionEvidence(
           goal.completionEvidence,
@@ -881,12 +891,11 @@ export function clearSessionGoalBlockedAudit(
   if (goal.status !== "active" || goal.blockedAudit === undefined) {
     return null;
   }
-  const criterion = sessionGoalCompletionContract(goal);
   const clearedGoal: Extract<SessionGoal, { readonly status: "active" }> = {
     objective: goal.objective,
     status: "active",
     ...sessionGoalAccounting(goal),
-    ...criterion,
+    ...sessionGoalCompletionContract(goal),
   };
   return withSessionGoalRuntimeOutcome(clearedGoal, {
     kind: "progress_observed",
@@ -972,17 +981,19 @@ export function formatSessionGoalSummary(
         [...budgetParts].join(", ") || "none"
       }`
     : "";
-  const verificationTimeout =
-    goal.criterionKind === "command" && goal.verificationTimeoutMs !== undefined
-      ? `; verifier timeout: ${formatSessionGoalDuration(goal.verificationTimeoutMs)}`
-      : "";
-  if (
-    goal.criterionKind === undefined ||
-    goal.completionCriterion === undefined
-  ) {
-    return `${goal.status} - ${goal.objective}; criterion: missing${reason}${blockedAudit}${completionEvidence}${accounting}`;
+  switch (goal.completion?.kind) {
+    case undefined:
+      return `${goal.status} - ${goal.objective}; criterion: missing${reason}${blockedAudit}${completionEvidence}${accounting}`;
+    case "assertion":
+      return `${goal.status} - ${goal.objective}; criterion(assertion): ${goal.completion.assertion}${reason}${blockedAudit}${completionEvidence}${accounting}`;
+    case "command": {
+      const verificationTimeout =
+        goal.completion.verificationTimeoutMs === undefined
+          ? ""
+          : `; verifier timeout: ${formatSessionGoalDuration(goal.completion.verificationTimeoutMs)}`;
+      return `${goal.status} - ${goal.objective}; criterion(command): ${goal.completion.command}${verificationTimeout}${reason}${blockedAudit}${completionEvidence}${accounting}`;
+    }
   }
-  return `${goal.status} - ${goal.objective}; criterion(${goal.criterionKind}): ${goal.completionCriterion}${verificationTimeout}${reason}${blockedAudit}${completionEvidence}${accounting}`;
 }
 
 function withSentencePeriod(text: string): string {
@@ -1072,16 +1083,15 @@ export function activeSessionGoalSystemPrompt(
   const lines = [
     "Session goal:",
     `- Objective: ${goal.objective}`,
-    ...(goal.criterionKind !== undefined &&
-    goal.completionCriterion !== undefined
+    ...(goal.completion?.kind === "command"
+      ? [`- Completion criterion (command): ${goal.completion.command}`]
+      : goal.completion?.kind === "assertion"
+        ? [`- Completion criterion (assertion): ${goal.completion.assertion}`]
+        : ["- Completion criterion: missing"]),
+    ...(goal.completion?.kind === "command" &&
+    goal.completion.verificationTimeoutMs !== undefined
       ? [
-          `- Completion criterion (${goal.criterionKind}): ${goal.completionCriterion}`,
-        ]
-      : ["- Completion criterion: missing"]),
-    ...(goal.criterionKind === "command" &&
-    goal.verificationTimeoutMs !== undefined
-      ? [
-          `- Completion command timeout: ${formatSessionGoalDuration(goal.verificationTimeoutMs)}.`,
+          `- Completion command timeout: ${formatSessionGoalDuration(goal.completion.verificationTimeoutMs)}.`,
         ]
       : []),
     ...(goal.latestRuntimeOutcome === undefined
@@ -1118,14 +1128,11 @@ export function activeSessionGoalSystemPrompt(
           ].join(", ")}. The runtime enforces this at goal turn boundaries.`,
         ]),
   ];
-  if (
-    goal.criterionKind === undefined ||
-    goal.completionCriterion === undefined
-  ) {
+  if (goal.completion === undefined) {
     lines.push(
       "- No completion criterion is set. Do not call update_goal with status completed; ask the user to add /goal verify <command>, add /goal done-when <criterion>, or use /goal complete as an explicit user override.",
     );
-  } else if (goal.criterionKind === "assertion") {
+  } else if (goal.completion.kind === "assertion") {
     lines.push(
       "- Assertion criteria cannot be self-certified by the acting model. Before proposing completion, surface concrete evidence in the conversation.",
       "- When the objective is achieved and visible evidence satisfies the assertion criterion, call update_goal with status completed. Runtime will complete the goal only if a fresh-context evaluator approves the evidence.",

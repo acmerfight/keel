@@ -10,7 +10,7 @@ import {
   type ContextCompactionAccountingSnapshot,
   type ContextCompactionOptions,
   type ContextCompactionRequestMetadata,
-  type CurrentToolOutputCompactionReason,
+  type CurrentToolOutputCompaction,
   captureContextCompactionAccountingSnapshot,
   compactMessages,
   contextCompactionStatsForCurrentMessages,
@@ -76,44 +76,68 @@ export interface LedgerTurnOptions extends StreamTurnOptions {
   >;
 }
 
-interface AttemptContextCompactionOptions {
-  readonly allowCurrentToolOutputCompaction?: boolean;
-  readonly currentToolOutputCompactionReason?: CurrentToolOutputCompactionReason;
-  readonly onlyCurrentToolOutputCompaction?: boolean;
-  readonly currentToolOutputMaxCharsOverride?: number;
-  readonly allowPreflightCurrentToolOutputRecompaction?: boolean;
-  readonly requireShrinkingHistoryCompaction?: boolean;
-  readonly restoreAfterCompaction?: boolean;
-  readonly modelOperationRecoveryFor: ModelOperationRecoveryTarget | null;
-}
+type ContextCompactionAttempt =
+  | {
+      readonly kind: "proactive_history";
+      readonly recoveryFor?: never;
+      readonly preflightRecompaction?: never;
+    }
+  | {
+      readonly kind: "preflight_current";
+      readonly recoveryFor?: never;
+      readonly preflightRecompaction?: never;
+    }
+  | {
+      readonly kind: "overflow_recovery";
+      readonly recoveryFor: ModelOperationRecoveryTarget | null;
+      readonly preflightRecompaction?: {
+        readonly maxChars: number;
+      };
+    };
 
 function requestMetadataForStream(
   options: StreamTurnOptions,
 ): ContextCompactionRequestMetadata {
-  return {
-    allowBash: options.allowBash,
-    ...(options.allowSkill !== undefined
-      ? { allowSkill: options.allowSkill }
-      : {}),
-    ...(options.allowMemory !== undefined
-      ? { allowMemory: options.allowMemory }
-      : {}),
-    ...(options.toolChoice !== undefined
-      ? { toolChoice: options.toolChoice }
-      : {}),
-  };
+  return options.toolExposure;
+}
+
+function currentToolOutputPolicy(
+  attempt: ContextCompactionAttempt,
+): CurrentToolOutputCompaction | undefined {
+  switch (attempt.kind) {
+    case "proactive_history":
+      return undefined;
+    case "preflight_current":
+      return {
+        mode: "current_only",
+        reason: "preflight",
+      };
+    case "overflow_recovery":
+      return {
+        mode: "combined",
+        reason: "overflow_recovery",
+        preflightCompactedOutputs:
+          attempt.preflightRecompaction === undefined
+            ? "preserve"
+            : "recompact",
+        ...(attempt.preflightRecompaction !== undefined
+          ? { maxChars: attempt.preflightRecompaction.maxChars }
+          : {}),
+      };
+  }
 }
 
 async function attemptContextCompaction(
   config: CompactionConfig,
   state: CompactionState,
   streamOptions: LedgerTurnOptions,
-  options: AttemptContextCompactionOptions,
+  attempt: ContextCompactionAttempt,
 ): Promise<CompactMessagesResult> {
   const sourceMessages = sessionLedgerMessages(streamOptions.getLedger());
   const targetMessages = [...sourceMessages];
   const requestMetadata = requestMetadataForStream(streamOptions);
   const taskProgress = config.taskProgress?.();
+  const currentToolOutputCompaction = currentToolOutputPolicy(attempt);
   const result = await compactMessages({
     provider: config.provider,
     systemPrompt: config.systemPrompt,
@@ -133,33 +157,16 @@ async function attemptContextCompaction(
       : {}),
     requestMetadata,
     ...(taskProgress !== undefined ? { taskProgress } : {}),
-    ...(options.allowCurrentToolOutputCompaction === true
-      ? { allowCurrentToolOutputCompaction: true }
-      : {}),
-    ...(options.currentToolOutputCompactionReason !== undefined
-      ? {
-          currentToolOutputCompactionReason:
-            options.currentToolOutputCompactionReason,
-        }
-      : {}),
-    ...(options.onlyCurrentToolOutputCompaction === true
-      ? { onlyCurrentToolOutputCompaction: true }
-      : {}),
-    ...(options.currentToolOutputMaxCharsOverride !== undefined
-      ? {
-          currentToolOutputMaxCharsOverride:
-            options.currentToolOutputMaxCharsOverride,
-        }
-      : {}),
-    ...(options.allowPreflightCurrentToolOutputRecompaction === true
-      ? { allowPreflightCurrentToolOutputRecompaction: true }
+    ...(currentToolOutputCompaction !== undefined
+      ? { currentToolOutputCompaction }
       : {}),
     ...(config.modelOperations !== null
       ? {
           modelOperation: {
             instrumentation: config.modelOperations,
             purpose: "context_compaction" as const,
-            recoveryFor: options.modelOperationRecoveryFor,
+            recoveryFor:
+              attempt.kind === "overflow_recovery" ? attempt.recoveryFor : null,
           },
         }
       : {}),
@@ -167,7 +174,7 @@ async function attemptContextCompaction(
   let finalResult = result;
   if (result.compacted) {
     let finalization = NO_CONTEXT_COMPACTION_FINALIZATION;
-    if (options.restoreAfterCompaction !== false) {
+    if (attempt.kind !== "preflight_current") {
       finalization = await config.onContextCompacted(targetMessages);
     }
 
@@ -178,7 +185,7 @@ async function attemptContextCompaction(
       requestMetadata,
     });
     const rejectsGrowingHistoryCompaction =
-      options.requireShrinkingHistoryCompaction === true &&
+      attempt.kind === "proactive_history" &&
       result.historyCompacted &&
       finalStats.afterEstimatedTokens >= finalStats.beforeEstimatedTokens;
     if (rejectsGrowingHistoryCompaction) {
@@ -217,11 +224,7 @@ async function* attemptPreflightCurrentOutputCompaction(
     state,
     streamOptions,
     {
-      allowCurrentToolOutputCompaction: true,
-      currentToolOutputCompactionReason: "preflight",
-      onlyCurrentToolOutputCompaction: true,
-      restoreAfterCompaction: false,
-      modelOperationRecoveryFor: null,
+      kind: "preflight_current",
     },
   );
   if (!compaction.compacted) {
@@ -320,8 +323,7 @@ export async function* streamTurnWithOverflowRecovery(
           state,
           streamOptions,
           {
-            requireShrinkingHistoryCompaction: true,
-            modelOperationRecoveryFor: null,
+            kind: "proactive_history",
           },
         );
         if (compaction.compacted) {
@@ -386,16 +388,7 @@ export async function* streamTurnWithOverflowRecovery(
           ...(requestSystemPrompt !== undefined ? { requestSystemPrompt } : {}),
           messages: currentRequestMessages,
           signal: streamOptions.signal,
-          allowBash: streamOptions.allowBash,
-          ...(streamOptions.allowSkill !== undefined
-            ? { allowSkill: streamOptions.allowSkill }
-            : {}),
-          ...(streamOptions.allowMemory !== undefined
-            ? { allowMemory: streamOptions.allowMemory }
-            : {}),
-          ...(streamOptions.toolChoice !== undefined
-            ? { toolChoice: streamOptions.toolChoice }
-            : {}),
+          toolExposure: streamOptions.toolExposure,
           ...(streamOptions.textPrefix !== undefined
             ? { textPrefix: streamOptions.textPrefix }
             : {}),
@@ -433,12 +426,11 @@ export async function* streamTurnWithOverflowRecovery(
                 state,
                 streamOptions,
                 {
-                  allowCurrentToolOutputCompaction: true,
-                  modelOperationRecoveryFor: recoveryFor,
+                  kind: "overflow_recovery",
+                  recoveryFor,
                   ...(preflightCurrentOutputCompactionAttempted
                     ? {
-                        currentToolOutputMaxCharsOverride: 1,
-                        allowPreflightCurrentToolOutputRecompaction: true,
+                        preflightRecompaction: { maxChars: 1 },
                       }
                     : {}),
                 },

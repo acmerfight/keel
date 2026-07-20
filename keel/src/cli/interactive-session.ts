@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createInterface } from "node:readline/promises";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
@@ -56,8 +57,10 @@ import type { Message, Usage, UserMessageOrigin } from "../llm/types.ts";
 import {
   type BashApprovalGrant,
   type BashProjectApprovalGrant,
+  type BashRuntime,
   bashApprovalGrantKey,
-  bashModeExposesTool,
+  bashRuntimeExposesTool,
+  type SessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import {
   exposeSkillCatalog,
@@ -80,6 +83,7 @@ import {
 } from "../skills/model.ts";
 import { executeGitDiff } from "../tools/git-diff.ts";
 import { executeGitStatus } from "../tools/git-status.ts";
+import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
@@ -120,6 +124,7 @@ import {
   buildSessionCostBudgetLimitedReport,
   buildSessionCostReport,
   EMPTY_USAGE,
+  type InteractiveCompactionCost,
   shouldTrackInteractiveCost,
 } from "./interactive-session/cost.ts";
 import { readForkPointPickerSelection } from "./interactive-session/fork-picker.ts";
@@ -136,6 +141,7 @@ import {
   trimQueuedLine,
 } from "./interactive-session/line-reader.ts";
 import { executeManualCompaction } from "./interactive-session/manual-compact.ts";
+import { createInteractiveMemoryProposalReview } from "./interactive-session/memory-proposal-approval.ts";
 import {
   executeModelSwitchCompaction,
   modelSwitchRequiresCompaction,
@@ -145,9 +151,12 @@ import type {
   EndEventWithCost,
   InteractiveComposerMode,
   InteractiveResolvedProvider,
+  InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
   ProviderSelection,
+  ReviewedInteractiveSessionMemoryBinding,
+  SavedInteractiveSession,
 } from "./interactive-session/types.ts";
 import {
   formatLiveSessionGoalStatus,
@@ -171,9 +180,10 @@ import type { SessionModelSelection } from "./session-store.ts";
 export type {
   InteractiveForkSessionRequest,
   InteractiveResolvedProvider,
+  InteractiveSession,
+  InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
-  SessionPersistenceReason,
 } from "./interactive-session/types.ts";
 
 function formatActiveModel(resolved: InteractiveResolvedProvider): string {
@@ -433,10 +443,18 @@ function resolveSelectedProvider(
   return next;
 }
 
+function isReviewedInteractiveMemoryBinding(
+  binding: InteractiveSessionMemoryBinding,
+): binding is ReviewedInteractiveSessionMemoryBinding {
+  return binding.memory.kind === "reviewed";
+}
+
 export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
   const now = options.now ?? Date.now;
+  const savedSession =
+    options.session.kind === "saved" ? options.session : null;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const undoProtection = createUndoProtectionTracker();
   const activeWorkflowSkills: WorkflowSkill[] =
@@ -510,7 +528,7 @@ export async function runInteractiveSession(
     systemPromptWithSessionGoal(
       systemPrompt,
       sessionGoal,
-      bashModeExposesTool(options.cliArgs.bashMode),
+      bashRuntimeExposesTool(bash),
     );
   const currentSystemPrompt = (): string =>
     appendWorkflowSkillsToSystemPrompt(
@@ -528,11 +546,9 @@ export async function runInteractiveSession(
   };
   options.setGoalStatus?.(formatLiveSessionGoalStatus(sessionGoal));
   const persistSessionGoalUpdate = (
-    request: Parameters<
-      NonNullable<InteractiveSessionOptions["persistSessionGoal"]>
-    >[0],
+    request: Parameters<SavedInteractiveSession["persistGoal"]>[0],
   ): SessionGoal | undefined => {
-    const persisted = options.persistSessionGoal?.(request);
+    const persisted = savedSession?.persistGoal(request);
     updateSessionGoal(persisted);
     return persisted;
   };
@@ -604,8 +620,8 @@ export async function runInteractiveSession(
     ...(options.initialInputLines !== undefined
       ? { initialInputLines: options.initialInputLines }
       : {}),
-    ...(options.persistQueuedInput !== undefined
-      ? { persistQueuedInput: options.persistQueuedInput }
+    ...(savedSession !== null
+      ? { persistQueuedInput: savedSession.persistQueuedInput }
       : {}),
     ...(options.renderSubmittedInput !== undefined
       ? {
@@ -618,35 +634,81 @@ export async function runInteractiveSession(
         }
       : {}),
   });
-  const bashPermission =
-    options.bashPermission ??
-    interactiveBashPermissionPolicy(
-      options.cliArgs.bashMode,
-      lineReader,
-      options.writeStderr,
-      {
-        ...(options.initialBashApprovalGrants !== undefined
-          ? { initialGrants: options.initialBashApprovalGrants }
-          : {}),
-        onGrant: (grant) => {
-          options.persistBashApprovalGrant?.(grant);
-        },
-        ...(options.projectRoot !== undefined
-          ? { projectRoot: options.projectRoot }
-          : {}),
-        initialProjectGrants: activeProjectBashApprovalGrants,
-        onProjectGrant: (grant) => {
-          appendProjectBashApprovalGrant(grant);
-          options.persistProjectBashApprovalGrant?.(grant);
-        },
-        onPromptStart: () => {
-          setComposerMode("approval");
-        },
-        onPromptEnd: () => {
-          setComposerMode("steer");
-        },
-      },
-    );
+  const memoryBinding: InteractiveSessionMemoryBinding = options;
+  const reviewedMemory = isReviewedInteractiveMemoryBinding(memoryBinding)
+    ? {
+        ...memoryBinding,
+        review: createInteractiveMemoryProposalReview(
+          lineReader,
+          options.writeStderr,
+          {
+            onPromptStart: () => {
+              setComposerMode("approval");
+            },
+            onPromptEnd: () => {
+              setComposerMode("steer");
+            },
+          },
+        ),
+      }
+    : null;
+  const memoryProposalSources = new WeakMap<
+    Extract<Message, { readonly role: "user" }>,
+    AgentMemoryProposalSource
+  >();
+  const reservedSessionMessageIds: {
+    readonly message: Message;
+    readonly id: string;
+  }[] = [];
+  const reserveMemoryProposalSource = (
+    message: Extract<Message, { readonly role: "user" }>,
+    provider: InteractiveResolvedProvider,
+  ): void => {
+    if (reviewedMemory === null) {
+      return;
+    }
+    const messageId = reviewedMemory.session.reserveMessageId();
+    reservedSessionMessageIds.push({ message, id: messageId });
+    memoryProposalSources.set(message, {
+      sessionId: reviewedMemory.session.id,
+      messageId,
+      providerId: provider.providerId,
+      model: provider.model,
+    });
+  };
+  const bash: BashRuntime<SessionBashPermissionPolicy> =
+    options.cliArgs.bashMode === "disabled"
+      ? { kind: "disabled" }
+      : options.cliArgs.bashMode === "trusted"
+        ? { kind: "trusted" }
+        : {
+            kind: "reviewed",
+            permission:
+              options.bashPermission ??
+              interactiveBashPermissionPolicy(lineReader, options.writeStderr, {
+                ...(options.initialBashApprovalGrants !== undefined
+                  ? { initialGrants: options.initialBashApprovalGrants }
+                  : {}),
+                onGrant: (grant) => {
+                  savedSession?.persistBashApprovalGrant(grant);
+                },
+                ...(options.projectRoot !== undefined
+                  ? { projectRoot: options.projectRoot }
+                  : {}),
+                initialProjectGrants: activeProjectBashApprovalGrants,
+                onProjectGrant: (grant) => {
+                  appendProjectBashApprovalGrant(grant);
+                  options.persistProjectBashApprovalGrant?.(grant);
+                },
+                onPromptStart: () => {
+                  setComposerMode("approval");
+                },
+                onPromptEnd: () => {
+                  setComposerMode("steer");
+                },
+              }),
+          };
+  const bashPermission = bash.kind === "reviewed" ? bash.permission : undefined;
   const activeBashApprovalGrants = (): readonly BashApprovalGrant[] =>
     bashPermission?.grants() ?? inactiveBashApprovalGrants;
   const revokeBashApprovalGrant = (grant: BashApprovalGrant): void => {
@@ -709,7 +771,7 @@ export async function runInteractiveSession(
     if (inputIds.length === 0) {
       return;
     }
-    options.consumeQueuedInputs?.(inputIds);
+    savedSession?.consumeQueuedInputs(inputIds);
   };
   const userMessageOriginForPromptInput = (
     lines: readonly QueuedLine[],
@@ -754,16 +816,27 @@ export async function runInteractiveSession(
         )
       : cost;
   };
-  const currentSessionCostBudgetLimitedReport = (): CostReport => {
-    /* v8 ignore next 3 -- admission can call this only when --max-cost created the budget wrapper. */
-    if (options.cliArgs.maxCostUsd === undefined) {
-      return currentSessionCostReport();
+  const currentCompactionCost = (
+    operationResolved: InteractiveResolvedProvider,
+  ): InteractiveCompactionCost => {
+    if (!shouldTrackInteractiveCost(options.cliArgs)) {
+      return { kind: "untracked" };
     }
-    sessionCostBudgetLimited = true;
-    return buildSessionCostBudgetLimitedReport(
-      sessionCostUsd,
-      options.cliArgs.maxCostUsd,
-    );
+    const model = options.requireKnownCostModel(operationResolved);
+    const maxCostUsd = options.cliArgs.maxCostUsd;
+    if (maxCostUsd === undefined) {
+      return { kind: "tracked", model };
+    }
+    return {
+      kind: "budgeted",
+      model,
+      maxCostUsd,
+      remainingCostUsd: Math.max(0, maxCostUsd - sessionCostUsd),
+      budgetLimitedReport: () => {
+        sessionCostBudgetLimited = true;
+        return buildSessionCostBudgetLimitedReport(sessionCostUsd, maxCostUsd);
+      },
+    };
   };
   const currentReportEnd = (): EndEventWithCost | undefined => {
     if (sessionPromptTurnAttempted && !sessionEndObserved) {
@@ -797,16 +870,15 @@ export async function runInteractiveSession(
         : formatModelSelection(options.initialModelSelection)
       : formatActiveModel(resolved);
   const statusRecoveryActions = () => [
-    ...(options.sessionId === undefined ||
-    options.sessionResumeAvailable?.() === false
+    ...(savedSession === null || savedSession.resumeAvailable() === false
       ? []
       : [
           {
             label: "resume",
-            command: `keel --resume ${options.sessionId}`,
+            command: `keel --resume ${savedSession.id}`,
           },
         ]),
-    ...(options.listForkPoints === undefined
+    ...(savedSession === null
       ? []
       : [
           {
@@ -836,7 +908,7 @@ export async function runInteractiveSession(
     sessionUsage = addUsage(sessionUsage, end.usage);
     sessionAgentLoopTurns += end.turns;
     sessionStopReason = end.stopReason;
-    if (end.cost?.budgetLimited === true) {
+    if (end.cost?.budget.kind === "budget_limited") {
       sessionCostBudgetLimited = true;
     }
     const turnCostUsd = end.cost?.spentUsd ?? 0;
@@ -859,7 +931,6 @@ export async function runInteractiveSession(
     if (activeGoal?.status !== "active") {
       return;
     }
-    const criterion = sessionGoalCompletionContract(activeGoal);
     const limitedGoalWithoutOutcome: SessionGoal =
       status === "budget_limited"
         ? {
@@ -867,21 +938,21 @@ export async function runInteractiveSession(
             status: "budget_limited",
             statusReason: reason,
             ...sessionGoalAccounting(activeGoal),
-            ...criterion,
+            ...sessionGoalCompletionContract(activeGoal),
           }
         : {
             objective: activeGoal.objective,
             status: "usage_limited",
             statusReason: reason,
             ...sessionGoalAccounting(activeGoal),
-            ...criterion,
+            ...sessionGoalCompletionContract(activeGoal),
           };
     const limitedGoal = withSessionGoalRuntimeOutcome(
       limitedGoalWithoutOutcome,
       { kind: "limit_reached", reason },
     );
     updateSessionGoal(limitedGoal);
-    const persistedGoal = options.persistSessionGoal?.({
+    const persistedGoal = savedSession?.persistGoal({
       goal: limitedGoal,
       consumedInputIds: [],
     });
@@ -922,6 +993,7 @@ export async function runInteractiveSession(
     options.skillActivation?.beginTurn();
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
+    const turnProvider = resolved;
     const turnModelOperations = reportModelOperations(resolved, {
       type: "current_agent_run",
     });
@@ -966,15 +1038,106 @@ export async function runInteractiveSession(
     const deferredInputLines: QueuedLine[] = [];
     const turnAbortController = new AbortController();
     activeAbortController = turnAbortController;
-    messages.push({
+    const currentUserMessage = {
       role: "user",
       content: request.userMessage,
       origin: request.userMessageOrigin,
-    });
+    } as const;
+    messages.push(currentUserMessage);
+    reserveMemoryProposalSource(currentUserMessage, turnProvider);
+    let persistedMemorySourceMessages: readonly Message[] | null = null;
+    let persistedDrainedInputCount = 0;
+    const persistedInputIds = new Set<string>();
+    const memoryProposal =
+      reviewedMemory === null
+        ? null
+        : {
+            capability: reviewedMemory.memory.proposal,
+            sourceFor: (message: Extract<Message, { readonly role: "user" }>) =>
+              memoryProposalSources.get(message),
+            persistSource: (
+              sourceMessage: Extract<Message, { readonly role: "user" }>,
+            ): void => {
+              const sourceIndex = messages.indexOf(sourceMessage);
+              assert(
+                sourceIndex >= 0,
+                "reviewed project-memory source is no longer present in the interactive session",
+              );
+              const sourceMessages = messages.slice(0, sourceIndex + 1);
+              const sourceReservations = reservedSessionMessageIds.filter(
+                (reservation) => sourceMessages.includes(reservation.message),
+              );
+              const sourceInputIds = queuedInputIds([
+                ...request.consumedInputLines,
+                ...drainedInjectedLines,
+              ]);
+              reviewedMemory.session.persistMessages({
+                messages: sourceMessages,
+                reason: "turn",
+                consumedInputIds: sourceInputIds,
+                skillState: null,
+                reservedMessageIds: sourceReservations,
+              });
+              persistedMemorySourceMessages = sourceMessages;
+              persistedDrainedInputCount = drainedInjectedLines.length;
+              for (const inputId of sourceInputIds) {
+                persistedInputIds.add(inputId);
+              }
+              reservedSessionMessageIds.splice(
+                0,
+                reservedSessionMessageIds.length,
+              );
+            },
+            review: reviewedMemory.review,
+          };
+    const agentMemory =
+      options.memory.kind === "disabled"
+        ? undefined
+        : memoryProposal === null
+          ? {
+              kind: "direct" as const,
+              prompt: options.memory.prompt,
+              mutation: options.memory.mutation,
+            }
+          : {
+              kind: "reviewed" as const,
+              prompt: options.memory.prompt,
+              mutation: options.memory.mutation,
+              proposal: memoryProposal,
+            };
     let deferRemainingInjectedInput = false;
     let taskProgressChanged = false;
     let sessionGoalStateChanged = false;
     let sessionGoalUpdateReportedDuringTurn = false;
+    const restoreInterruptedTurnState = (): void => {
+      if (skillStateBeforeTurn !== undefined) {
+        options.skillActivation?.restore(skillStateBeforeTurn);
+        syncActiveWorkflowSkills();
+        systemPrompt = rebuildSystemPrompt();
+      }
+      messages.splice(
+        0,
+        messages.length,
+        ...(persistedMemorySourceMessages ?? messagesBeforeTurn),
+      );
+      reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
+      updateTaskProgress(taskProgressBeforeTurn);
+      updateSessionGoal(sessionGoalBeforeTurn);
+      projectInstructionVisibility.clear();
+      projectInstructionVisibility.markInstructionPathsVisible(
+        projectInstructionPathsBeforeTurnOldestFirst,
+      );
+      restoreDrainedInput([
+        ...drainedInjectedLines.slice(persistedDrainedInputCount),
+        ...deferredInputLines,
+      ]);
+      consumeQueuedInputLines(
+        request.consumedInputLines.filter(
+          (line) =>
+            line.inputId === undefined || !persistedInputIds.has(line.inputId),
+        ),
+      );
+    };
     setComposerMode("steer");
 
     try {
@@ -988,14 +1151,9 @@ export async function runInteractiveSession(
           provider: resolved.provider,
           messages,
           systemPrompt: baseSystemPromptWithGoal(),
-          ...(options.memoryPrompt !== undefined
-            ? { memoryPrompt: options.memoryPrompt }
-            : {}),
-          ...(options.memoryMutation !== undefined
-            ? { memoryMutation: options.memoryMutation }
-            : {}),
+          ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
-          allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+          bash,
           hiddenWorkspacePaths,
           ...(options.skillActivation !== undefined
             ? { skillActivation: options.skillActivation }
@@ -1003,7 +1161,6 @@ export async function runInteractiveSession(
           stopPolicy: defaultStopPolicy(),
           taskProgress,
           ...(sessionGoal !== undefined ? { sessionGoal } : {}),
-          ...(bashPermission !== undefined ? { bashPermission } : {}),
           ...(shouldTrackInteractiveCost(options.cliArgs)
             ? {
                 costTracking: {
@@ -1057,11 +1214,13 @@ export async function runInteractiveSession(
             }
             return injectableLines.map((content) => {
               reportRecorder.recordHumanIntervention();
-              return {
+              const injectedMessage = {
                 role: "user",
                 content: content.line,
                 origin: STEER_ORIGIN,
-              };
+              } as const;
+              reserveMemoryProposalSource(injectedMessage, turnProvider);
+              return injectedMessage;
             });
           },
         }),
@@ -1096,21 +1255,7 @@ export async function runInteractiveSession(
       );
       if (turnAbortController.signal.aborted) {
         abortReportedAgentRun(finalEnd);
-        if (skillStateBeforeTurn !== undefined) {
-          options.skillActivation?.restore(skillStateBeforeTurn);
-          syncActiveWorkflowSkills();
-          systemPrompt = rebuildSystemPrompt();
-        }
-        messages.splice(0, messages.length, ...messagesBeforeTurn);
-        updateTaskProgress(taskProgressBeforeTurn);
-        updateSessionGoal(sessionGoalBeforeTurn);
-        projectInstructionVisibility.clear();
-        projectInstructionVisibility.markInstructionPathsVisible(
-          projectInstructionPathsBeforeTurnOldestFirst,
-        );
-        const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
-        restoreDrainedInput(restoredLines);
-        consumeQueuedInputLines(request.consumedInputLines);
+        restoreInterruptedTurnState();
         options.writeStdout("\n");
         return {
           aborted: true,
@@ -1125,24 +1270,28 @@ export async function runInteractiveSession(
       }
       restoreDrainedInput(deferredInputLines);
       const completedSkillState = options.skillActivation?.state();
-      const skillStateChanged =
+      const changedSkillState =
         skillStateBeforeTurn !== undefined &&
         completedSkillState !== undefined &&
-        !skillLifecycleStatesEqual(skillStateBeforeTurn, completedSkillState);
-      options.persistSessionMessages?.(
+        !skillLifecycleStatesEqual(skillStateBeforeTurn, completedSkillState)
+          ? completedSkillState
+          : null;
+      savedSession?.persistMessages({
         messages,
-        "turn",
-        [
+        reason: "turn",
+        consumedInputIds: [
           ...queuedInputIds(request.consumedInputLines),
           ...queuedInputIds(drainedInjectedLines),
-        ],
-        skillStateChanged ? completedSkillState : undefined,
-      );
-      if (skillStateChanged) {
+        ].filter((inputId) => !persistedInputIds.has(inputId)),
+        skillState: changedSkillState,
+        reservedMessageIds: reservedSessionMessageIds,
+      });
+      reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
+      if (changedSkillState !== null) {
         syncActiveWorkflowSkills();
         systemPrompt = rebuildSystemPrompt();
       }
-      if (options.persistTaskProgress !== undefined) {
+      if (savedSession !== null) {
         let lastPersistedTurnProgress = taskProgressBeforeTurn;
         for (const update of taskProgressUpdatesDuringTurn) {
           if (
@@ -1153,13 +1302,13 @@ export async function runInteractiveSession(
           ) {
             continue;
           }
-          options.persistTaskProgress(update);
+          savedSession.persistTaskProgress(update);
           lastPersistedTurnProgress = copySessionTaskProgress(
             update.taskProgress,
           );
         }
       }
-      if (options.persistSessionGoal !== undefined) {
+      if (savedSession !== null) {
         for (const goal of sessionGoalUpdatesDuringTurn) {
           sessionGoal = persistSessionGoalUpdate({
             goal,
@@ -1255,7 +1404,7 @@ export async function runInteractiveSession(
         if (budgetLimitReason !== null) {
           limitActiveGoal("budget_limited", budgetLimitReason);
         } else {
-          const persistedAccountedGoal = options.persistSessionGoal?.({
+          const persistedAccountedGoal = savedSession?.persistGoal({
             goal: accountedGoal,
             consumedInputIds: [],
           });
@@ -1270,13 +1419,11 @@ export async function runInteractiveSession(
         options.cliArgs.maxCostUsd !== undefined &&
         cumulativeCost !== undefined
       ) {
-        options.writeStderr(
-          options.formatCostReport(cumulativeCost, options.cliArgs.maxCostUsd),
-        );
+        options.writeStderr(options.formatCostReport(cumulativeCost));
       }
       if (
         finalEnd?.stopReason === "cost_budget" ||
-        cumulativeCost?.budgetLimited === true
+        cumulativeCost?.budget.kind === "budget_limited"
       ) {
         sessionStopReason = "cost_budget";
         limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
@@ -1296,21 +1443,7 @@ export async function runInteractiveSession(
         throw error;
       }
       abortReportedAgentRun();
-      if (skillStateBeforeTurn !== undefined) {
-        options.skillActivation?.restore(skillStateBeforeTurn);
-        syncActiveWorkflowSkills();
-        systemPrompt = rebuildSystemPrompt();
-      }
-      messages.splice(0, messages.length, ...messagesBeforeTurn);
-      updateTaskProgress(taskProgressBeforeTurn);
-      updateSessionGoal(sessionGoalBeforeTurn);
-      projectInstructionVisibility.clear();
-      projectInstructionVisibility.markInstructionPathsVisible(
-        projectInstructionPathsBeforeTurnOldestFirst,
-      );
-      const restoredLines = [...drainedInjectedLines, ...deferredInputLines];
-      restoreDrainedInput(restoredLines);
-      consumeQueuedInputLines(request.consumedInputLines);
+      restoreInterruptedTurnState();
       options.writeStdout("\n");
       return {
         aborted: true,
@@ -1519,7 +1652,7 @@ export async function runInteractiveSession(
               options.skillActivation.state(),
             )
           ) {
-            options.persistSkillState?.(options.skillActivation.state());
+            savedSession?.persistSkillState(options.skillActivation.state());
           }
           if (activation.record !== undefined) {
             explicitSkillActivations.push(activation.record);
@@ -1554,7 +1687,10 @@ export async function runInteractiveSession(
       if (interactiveCommand?.kind === "status") {
         options.writeStdout(
           formatSessionStatusSnapshot({
-            session: options.sessionId ?? "(ephemeral, not persisted)",
+            session:
+              savedSession === null
+                ? "(ephemeral, not persisted)"
+                : savedSession.id,
             ...(sessionTitle !== undefined ? { title: sessionTitle } : {}),
             workspace: options.workspace,
             activeModel: activeModelStatus(),
@@ -1576,9 +1712,7 @@ export async function runInteractiveSession(
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
             undoProtection: undoProtection.summary(),
-            ...(options.memoryStatus !== undefined
-              ? { memory: options.memoryStatus() }
-              : {}),
+            memory: options.memory.status(),
             recoveryActions: statusRecoveryActions(),
           }),
         );
@@ -1591,13 +1725,13 @@ export async function runInteractiveSession(
           consumeQueuedInputLines([rawInput]);
           continue;
         }
-        if (options.persistSessionTitle === undefined) {
+        if (savedSession === null) {
           options.writeStderr(formatTitleRequiresSavedSession());
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         try {
-          sessionTitle = options.persistSessionTitle({
+          sessionTitle = savedSession.persistTitle({
             title: interactiveCommand.title,
             consumedInputIds: queuedInputIds([rawInput]),
           });
@@ -1624,7 +1758,7 @@ export async function runInteractiveSession(
             break;
           case "set":
           case "launch": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1638,31 +1772,37 @@ export async function runInteractiveSession(
                         status: "active",
                         budget: goalCommand.budget,
                         usage: emptySessionGoalUsage(),
-                        criterionKind: "command",
-                        completionCriterion: goalCommand.criterion.command,
-                        ...(goalCommand.criterion.verificationTimeoutMs !==
-                        undefined
-                          ? {
-                              verificationTimeoutMs:
-                                goalCommand.criterion.verificationTimeoutMs,
-                            }
-                          : {}),
+                        completion: {
+                          kind: "command",
+                          command: goalCommand.criterion.command,
+                          ...(goalCommand.criterion.verificationTimeoutMs !==
+                          undefined
+                            ? {
+                                verificationTimeoutMs:
+                                  goalCommand.criterion.verificationTimeoutMs,
+                              }
+                            : {}),
+                        },
                       }
                     : {
                         objective: goalCommand.objective,
                         status: "active",
                         budget: goalCommand.budget,
                         usage: emptySessionGoalUsage(),
-                        criterionKind: "assertion",
-                        completionCriterion: goalCommand.criterion.assertion,
+                        completion: {
+                          kind: "assertion",
+                          assertion: goalCommand.criterion.assertion,
+                        },
                       }
                   : {
                       objective: goalCommand.objective,
                       status: "active",
                       budget: emptySessionGoalBudget(),
                       usage: emptySessionGoalUsage(),
-                      criterionKind: "assertion",
-                      completionCriterion: goalCommand.objective,
+                      completion: {
+                        kind: "assertion",
+                        assertion: goalCommand.objective,
+                      },
                     };
               sessionGoal = persistSessionGoalUpdate({
                 goal: nextGoal,
@@ -1684,7 +1824,7 @@ export async function runInteractiveSession(
             break;
           }
           case "pause": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1714,7 +1854,7 @@ export async function runInteractiveSession(
             break;
           }
           case "resume": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1760,7 +1900,7 @@ export async function runInteractiveSession(
             break;
           }
           case "budget": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1813,7 +1953,7 @@ export async function runInteractiveSession(
             break;
           }
           case "clear_budget": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1848,7 +1988,7 @@ export async function runInteractiveSession(
             break;
           }
           case "complete": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1887,7 +2027,7 @@ export async function runInteractiveSession(
             break;
           }
           case "verify": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1909,16 +2049,22 @@ export async function runInteractiveSession(
                 objective: sessionGoal.objective,
                 status: "active",
                 ...sessionGoalAccounting(sessionGoal),
-                criterionKind: "command",
-                completionCriterion: goalCommand.command,
-                ...(goalCommand.verificationTimeoutMs !== undefined
-                  ? {
-                      verificationTimeoutMs: goalCommand.verificationTimeoutMs,
-                    }
-                  : {}),
+                completion: {
+                  kind: "command",
+                  command: goalCommand.command,
+                  ...(goalCommand.verificationTimeoutMs !== undefined
+                    ? {
+                        verificationTimeoutMs:
+                          goalCommand.verificationTimeoutMs,
+                      }
+                    : {}),
+                },
               } satisfies SessionGoal & {
-                readonly criterionKind: "command";
-                readonly completionCriterion: string;
+                readonly completion: {
+                  readonly kind: "command";
+                  readonly command: string;
+                  readonly verificationTimeoutMs?: number;
+                };
               };
               const verifiedGoal = preserveLatestSessionGoalRuntimeOutcome(
                 sessionGoal,
@@ -1930,9 +2076,7 @@ export async function runInteractiveSession(
               });
               options.writeStdout(
                 formatInteractiveGoalVerificationSet(verifiedGoal, {
-                  bashToolVisible: bashModeExposesTool(
-                    options.cliArgs.bashMode,
-                  ),
+                  bashToolVisible: bashRuntimeExposesTool(bash),
                 }),
               );
             } catch (error) {
@@ -1941,7 +2085,7 @@ export async function runInteractiveSession(
             break;
           }
           case "criterion": {
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -1963,8 +2107,10 @@ export async function runInteractiveSession(
                 objective: sessionGoal.objective,
                 status: "active",
                 ...sessionGoalAccounting(sessionGoal),
-                criterionKind: goalCommand.criterionKind,
-                completionCriterion: goalCommand.criterion,
+                completion: {
+                  kind: "assertion",
+                  assertion: goalCommand.criterion,
+                },
               } satisfies SessionGoal;
               const goalWithCriterion = preserveLatestSessionGoalRuntimeOutcome(
                 sessionGoal,
@@ -1983,7 +2129,7 @@ export async function runInteractiveSession(
             break;
           }
           case "clear":
-            if (options.persistSessionGoal === undefined) {
+            if (savedSession === null) {
               options.writeStderr(formatGoalRequiresSavedSession());
               consumeQueuedInputLines([rawInput]);
               break;
@@ -2039,8 +2185,8 @@ export async function runInteractiveSession(
             break;
           case "clear": {
             const cleared = clearBashApprovalGrants();
-            if (options.persistBashApprovalsCleared !== undefined) {
-              options.persistBashApprovalsCleared({
+            if (savedSession !== null) {
+              savedSession.persistBashApprovalsCleared({
                 consumedInputIds: queuedInputIds([rawInput]),
               });
             } else {
@@ -2060,8 +2206,8 @@ export async function runInteractiveSession(
               break;
             }
             revokeBashApprovalGrant(grant);
-            if (options.persistBashApprovalRevoked !== undefined) {
-              options.persistBashApprovalRevoked({
+            if (savedSession !== null) {
+              savedSession.persistBashApprovalRevoked({
                 grant,
                 consumedInputIds: queuedInputIds([rawInput]),
               });
@@ -2109,12 +2255,14 @@ export async function runInteractiveSession(
               content: undoRestoredContextMessage(result.restoredLabel),
               origin: RUNTIME_UNDO_RESTORATION_ORIGIN,
             });
-            if (options.persistSessionMessages !== undefined) {
-              options.persistSessionMessages(
+            if (savedSession !== null) {
+              savedSession.persistMessages({
                 messages,
-                "turn",
-                queuedInputIds([rawInput]),
-              );
+                reason: "turn",
+                consumedInputIds: queuedInputIds([rawInput]),
+                skillState: null,
+                reservedMessageIds: [],
+              });
             } else {
               consumeQueuedInputLines([rawInput]);
             }
@@ -2180,7 +2328,7 @@ export async function runInteractiveSession(
               systemPrompt: currentSystemPrompt(),
               messages,
               target: nextResolved,
-              cliArgs: options.cliArgs,
+              bashToolVisible: bashRuntimeExposesTool(bash),
             })
           ) {
             const currentResolved: InteractiveResolvedProvider =
@@ -2191,7 +2339,6 @@ export async function runInteractiveSession(
             activeAbortController = compactAbortController;
             setComposerMode("queue");
             try {
-              const remainingCostUsd = remainingMaxCostUsd();
               const modelOperations = reportModelOperations(currentResolved, {
                 type: "session",
               });
@@ -2209,13 +2356,13 @@ export async function runInteractiveSession(
                   postCompactionReadToolCallId(postCompactionReadSequence++),
                 taskProgress,
                 options,
+                bashToolVisible: bashRuntimeExposesTool(bash),
                 recordCompactionCost,
-                ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
-                costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
+                compactionCost: currentCompactionCost(currentResolved),
                 modelOperations,
               });
               if (compaction.status === "rejected") {
-                if (compaction.cost?.budgetLimited === true) {
+                if (compaction.cost?.budget.kind === "budget_limited") {
                   sessionStopReason = "cost_budget";
                   break;
                 }
@@ -2227,17 +2374,18 @@ export async function runInteractiveSession(
               activeAbortController = null;
               setComposerMode("ready");
             }
-            options.persistSessionMessages?.(
+            savedSession?.persistMessages({
               messages,
-              "compaction",
-              queuedInputIds([rawInput]),
-            );
-            consumedByPersistence =
-              options.persistSessionMessages !== undefined;
+              reason: "compaction",
+              consumedInputIds: queuedInputIds([rawInput]),
+              skillState: null,
+              reservedMessageIds: [],
+            });
+            consumedByPersistence = savedSession !== null;
           }
           resolved = nextResolved;
-          if (options.persistModelSwitch !== undefined) {
-            options.persistModelSwitch({
+          if (savedSession !== null) {
+            savedSession.persistModelSwitch({
               from:
                 previousResolved === null
                   ? null
@@ -2253,7 +2401,7 @@ export async function runInteractiveSession(
           options.writeStdout(
             `Model switched to ${formatActiveModel(resolved)}\n`,
           );
-          if (modelSwitchCost?.budgetLimited === true) {
+          if (modelSwitchCost?.budget.kind === "budget_limited") {
             if (!consumedByPersistence) {
               consumeQueuedInputLines([rawInput]);
             }
@@ -2325,7 +2473,7 @@ export async function runInteractiveSession(
               options.skillActivation.state(),
             )
           ) {
-            options.persistSkillState?.(options.skillActivation.state());
+            savedSession?.persistSkillState(options.skillActivation.state());
           }
           if (activationRecord !== undefined) {
             explicitSkillActivations.push(activationRecord);
@@ -2350,13 +2498,13 @@ export async function runInteractiveSession(
         }
       }
       if (interactiveCommand?.kind === "fork-points") {
-        if (options.listForkPoints === undefined) {
+        if (savedSession === null) {
           options.writeStderr(formatForkRequiresNamedSession("/fork-points"));
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         options.writeStdout(
-          formatInteractiveSessionForkPoints(options.listForkPoints()),
+          formatInteractiveSessionForkPoints(savedSession.listForkPoints()),
         );
         consumeQueuedInputLines([rawInput]);
         continue;
@@ -2376,7 +2524,6 @@ export async function runInteractiveSession(
         let compactCost: CostReport | undefined;
         let compactCommitted = false;
         try {
-          const remainingCostUsd = remainingMaxCostUsd();
           const modelOperations = reportModelOperations(compactResolved, {
             type: "session",
           });
@@ -2395,8 +2542,7 @@ export async function runInteractiveSession(
             taskProgress,
             options,
             recordCompactionCost,
-            ...(remainingCostUsd !== undefined ? { remainingCostUsd } : {}),
-            costBudgetLimitedReport: currentSessionCostBudgetLimitedReport,
+            compactionCost: currentCompactionCost(compactResolved),
             modelOperations,
           });
           compactCost = compaction.cost;
@@ -2408,31 +2554,28 @@ export async function runInteractiveSession(
         if (compactAbortController.signal.aborted || !compactCommitted) {
           consumeQueuedInputLines([rawInput]);
         } else {
-          options.persistSessionMessages?.(
+          savedSession?.persistMessages({
             messages,
-            "compaction",
-            queuedInputIds([rawInput]),
-          );
+            reason: "compaction",
+            consumedInputIds: queuedInputIds([rawInput]),
+            skillState: null,
+            reservedMessageIds: [],
+          });
         }
-        if (compactCost?.budgetLimited === true) {
+        if (compactCost?.budget.kind === "budget_limited") {
           sessionStopReason = "cost_budget";
           break;
         }
         continue;
       }
       if (interactiveCommand?.kind === "fork") {
-        if (options.forkSession === undefined) {
+        if (savedSession === null) {
           options.writeStderr(formatForkRequiresNamedSession("/fork"));
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         if (interactiveCommand.pick === true) {
-          if (options.listForkPoints === undefined) {
-            options.writeStderr(formatForkRequiresNamedSession("/fork"));
-            consumeQueuedInputLines([rawInput]);
-            continue;
-          }
-          const forkPoints = options.listForkPoints();
+          const forkPoints = savedSession.listForkPoints();
           options.writeStdout(formatInteractiveForkPicker(forkPoints));
           const pickerResult = await readForkPointPickerSelection({
             maxChoice: forkPoints.points.length,
@@ -2454,7 +2597,7 @@ export async function runInteractiveSession(
                 ? undefined
                 : forkPoints.points[pickerResult.selection.choice - 1];
             options.writeStdout(
-              options.forkSession({
+              savedSession.fork({
                 targetSessionId: interactiveCommand.targetSessionId,
                 ...(selectedPoint !== undefined
                   ? { beforeMessageId: selectedPoint.messageId }
@@ -2468,7 +2611,7 @@ export async function runInteractiveSession(
           continue;
         }
         try {
-          options.writeStdout(options.forkSession(interactiveCommand));
+          options.writeStdout(savedSession.fork(interactiveCommand));
         } catch (error) {
           options.writeStderr(formatInteractiveCommandFailure(error));
         }

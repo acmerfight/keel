@@ -86,7 +86,7 @@ describe("Cost Budget", () => {
           userMessage: "do not overspend",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: budgetModel, maxCostUsd: 0.5 },
         }),
@@ -106,9 +106,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 0,
-          maxUsd: 0.5,
-          budgetLimited: true,
-          overshootUsd: 0,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.5,
+            overshootUsd: 0,
+          },
         },
       });
     } finally {
@@ -140,7 +142,7 @@ describe("Cost Budget", () => {
           userMessage: "do not send",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: budgetModel, maxCostUsd: 1 },
         }),
@@ -195,7 +197,7 @@ describe("Cost Budget", () => {
           userMessage: "retry conservatively",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: budgetModel, maxCostUsd: 0.001 },
         }),
@@ -226,8 +228,10 @@ describe("Cost Budget", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "The work is demonstrably complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "The work is demonstrably complete.",
+      },
     };
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -266,7 +270,7 @@ describe("Cost Budget", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal,
           costTracking: { model: budgetModel, maxCostUsd: 0.5 },
@@ -291,7 +295,10 @@ describe("Cost Budget", () => {
         type: "end",
         turns: 1,
         stopReason: "cost_budget",
-        cost: { spentUsd: 0.4998, overshootUsd: 0 },
+        cost: {
+          spentUsd: 0.4998,
+          budget: { kind: "budget_limited", overshootUsd: 0 },
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -332,7 +339,7 @@ describe("Cost Budget", () => {
           userMessage: "stay bounded",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: budgetModel,
@@ -388,7 +395,7 @@ describe("Cost Budget", () => {
           userMessage: "read note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: budgetModel, maxCostUsd: 0.5 },
         }),
@@ -400,7 +407,10 @@ describe("Cost Budget", () => {
         type: "end",
         turns: 1,
         stopReason: "cost_budget",
-        cost: { spentUsd: 0.5, overshootUsd: 0 },
+        cost: {
+          spentUsd: 0.5,
+          budget: { kind: "budget_limited", overshootUsd: 0 },
+        },
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -449,7 +459,7 @@ describe("Cost Budget", () => {
           userMessage: "read note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: maxTurnFallbackPolicy(1),
           costTracking: { model: budgetModel, maxCostUsd: 0.5 },
         }),
@@ -463,7 +473,7 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 0.4998,
-          overshootUsd: 0,
+          budget: { kind: "budget_limited", overshootUsd: 0 },
         },
       });
     } finally {
@@ -514,7 +524,7 @@ describe("Cost Budget", () => {
             userMessage: "read note",
             systemPrompt: "You are helpful.",
             signal: freshSignal(),
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: maxTurnFallbackPolicy(1),
             costTracking: { model: budgetModel, maxCostUsd: 0.5 },
           }),
@@ -565,7 +575,7 @@ describe("Cost Budget", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: budgetModel,
@@ -590,9 +600,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
-          maxUsd: 0.5,
-          budgetLimited: true,
-          overshootUsd: 0.5,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.5,
+            overshootUsd: 0.5,
+          },
         },
       });
     } finally {
@@ -675,7 +687,7 @@ describe("Cost Budget", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -729,7 +741,7 @@ describe("Cost Budget", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: tieredBudgetModel,
@@ -754,9 +766,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 0.36,
-          maxUsd: 0.2,
-          budgetLimited: true,
-          overshootUsd: 0.15999999999999998,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.2,
+            overshootUsd: 0.15999999999999998,
+          },
         },
       });
     } finally {
@@ -810,7 +824,7 @@ describe("Cost Budget", () => {
           userMessage: "edit note twice",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: budgetModel,
@@ -835,9 +849,11 @@ describe("Cost Budget", () => {
         stopReason: "cost_budget",
         cost: {
           spentUsd: 1,
-          maxUsd: 0.5,
-          budgetLimited: true,
-          overshootUsd: 0.5,
+          budget: {
+            kind: "budget_limited",
+            maxUsd: 0.5,
+            overshootUsd: 0.5,
+          },
         },
       });
     } finally {

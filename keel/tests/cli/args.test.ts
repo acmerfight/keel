@@ -246,6 +246,7 @@ describe("CLI Args", () => {
       ok: true,
       value: {
         command: "run",
+        mode: "one-shot",
         skillsEnabled: false,
         userMessage: "review without skills",
       },
@@ -1030,16 +1031,219 @@ describe("CLI Args", () => {
   test.each([
     [
       ["memory", "add", "Use pnpm."],
-      { command: "memory", mode: "add", text: "Use pnpm." },
+      {
+        command: "memory",
+        mode: "add",
+        text: "Use pnpm.",
+        reviewAfter: null,
+        expiresAt: null,
+      },
     ],
-    [["memory", "list"], { command: "memory", mode: "list" }],
+    [
+      [
+        "memory",
+        "add",
+        "Review the release owner.",
+        "--review-after",
+        "2026-08-01T00:00:00Z",
+        "--expires-at",
+        "2026-09-01T00:00:00Z",
+      ],
+      {
+        command: "memory",
+        mode: "add",
+        text: "Review the release owner.",
+        reviewAfter: "2026-08-01T00:00:00Z",
+        expiresAt: "2026-09-01T00:00:00Z",
+      },
+    ],
+    [["memory", "list"], { command: "memory", mode: "list", all: false }],
+    [
+      ["memory", "list", "--all"],
+      { command: "memory", mode: "list", all: true },
+    ],
+    [
+      ["memory", "show", "mem_1234"],
+      { command: "memory", mode: "show", id: "mem_1234" },
+    ],
+    [
+      [
+        "memory",
+        "update",
+        "mem_1234",
+        "The platform team owns staging.",
+        "--review-after",
+        "2026-08-01T00:00:00Z",
+      ],
+      {
+        command: "memory",
+        mode: "update",
+        id: "mem_1234",
+        text: "The platform team owns staging.",
+        reviewAfter: "2026-08-01T00:00:00Z",
+        expiresAt: null,
+      },
+    ],
+    [["memory", "review"], { command: "memory", mode: "review", due: false }],
+    [
+      ["memory", "review", "--due"],
+      { command: "memory", mode: "review", due: true },
+    ],
+    [
+      ["memory", "verify", "mem_1234"],
+      { command: "memory", mode: "verify", id: "mem_1234" },
+    ],
     [
       ["memory", "forget", "mem_1234"],
       { command: "memory", mode: "forget", id: "mem_1234" },
     ],
     [
+      ["memory", "purge", "mem_1234"],
+      { command: "memory", mode: "purge", id: "mem_1234" },
+    ],
+    [
       ["memory", "clear", "--yes"],
-      { command: "memory", mode: "clear", confirmed: true },
+      { command: "memory", mode: "clear", confirmed: true, purge: false },
+    ],
+    [
+      ["memory", "clear", "--purge", "--yes"],
+      { command: "memory", mode: "clear", confirmed: true, purge: true },
+    ],
+    [
+      ["memory", "candidates", "purge", "cand_1234"],
+      {
+        command: "memory",
+        mode: "candidates-purge",
+        id: "cand_1234",
+        purgeMemoryId: null,
+      },
+    ],
+    [
+      ["memory", "candidates", "extract", "session_1234", "--max-cost", "0.05"],
+      {
+        command: "memory",
+        mode: "candidates-extract",
+        sessionId: "session_1234",
+        maxCostUsd: 0.05,
+        providerId: null,
+        model: null,
+        retry: false,
+      },
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--provider",
+        "kimi",
+        "--model",
+        "kimi-k2",
+        "--retry",
+        "--max-cost",
+        "0.05",
+      ],
+      {
+        command: "memory",
+        mode: "candidates-extract",
+        sessionId: "session_1234",
+        maxCostUsd: 0.05,
+        providerId: "kimi",
+        model: "kimi-k2",
+        retry: true,
+      },
+    ],
+    [
+      ["memory", "candidates", "list"],
+      { command: "memory", mode: "candidates-list" },
+    ],
+    [
+      ["memory", "candidates", "show", "cand_1234"],
+      { command: "memory", mode: "candidates-show", id: "cand_1234" },
+    ],
+    [
+      ["memory", "candidates", "edit", "cand_1234", "Use release trains."],
+      {
+        command: "memory",
+        mode: "candidates-edit",
+        id: "cand_1234",
+        text: "Use release trains.",
+      },
+    ],
+    [
+      ["memory", "candidates", "approve", "cand_1234"],
+      {
+        command: "memory",
+        mode: "candidates-approve",
+        id: "cand_1234",
+        conflictResolution: { type: "none" },
+      },
+    ],
+    [
+      ["memory", "candidates", "approve", "cand_1234", "--keep"],
+      {
+        command: "memory",
+        mode: "candidates-approve",
+        id: "cand_1234",
+        conflictResolution: { type: "keep" },
+      },
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "approve",
+        "cand_1234",
+        "--supersede",
+        "mem_5678",
+      ],
+      {
+        command: "memory",
+        mode: "candidates-approve",
+        id: "cand_1234",
+        conflictResolution: { type: "supersede", memoryId: "mem_5678" },
+      },
+    ],
+    [
+      ["memory", "candidates", "reject", "cand_1234"],
+      { command: "memory", mode: "candidates-reject", id: "cand_1234" },
+    ],
+    [
+      ["memory", "candidates", "clear"],
+      {
+        command: "memory",
+        mode: "candidates-clear",
+        confirmed: false,
+        purge: false,
+        purgeLinkedMemories: false,
+      },
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "purge",
+        "cand_1234",
+        "--purge-memory",
+        "mem_5678",
+      ],
+      {
+        command: "memory",
+        mode: "candidates-purge",
+        id: "cand_1234",
+        purgeMemoryId: "mem_5678",
+      },
+    ],
+    [
+      ["memory", "candidates", "clear", "--purge", "--purge-memories", "--yes"],
+      {
+        command: "memory",
+        mode: "candidates-clear",
+        confirmed: true,
+        purge: true,
+        purgeLinkedMemories: true,
+      },
     ],
     [["memory", "--help"], { command: "memory", mode: "help" }],
   ])(`Given explicit project-memory arguments %j,
@@ -1055,7 +1259,8 @@ describe("CLI Args", () => {
       ok: true,
       value: {
         command: "run",
-        ephemeral: true,
+        mode: "interactive",
+        session: { kind: "ephemeral" },
         memoryEnabled: true,
       },
     });
@@ -1063,31 +1268,328 @@ describe("CLI Args", () => {
       ok: true,
       value: {
         command: "run",
+        mode: "one-shot",
         userMessage: "inspect",
         memoryEnabled: false,
       },
     });
   });
 
+  test(`Given the user passes an empty positional message,
+    When the CLI parses the run,
+    Then it preserves the automatic interactive-session entrypoint`, () => {
+    expect(parseCliArgs([""])).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        mode: "interactive",
+        session: { kind: "automatic" },
+      },
+    });
+  });
+
+  test.each([
+    [
+      ["--session", "demo", ""],
+      "Error: --session and --resume are only supported for interactive sessions.",
+    ],
+    [
+      ["--ephemeral", ""],
+      "Error: --ephemeral is only supported for interactive sessions.",
+    ],
+    [
+      ["--resume", "--pick", ""],
+      "Error: --resume --pick cannot be combined with a message.",
+    ],
+    [
+      ["--resume", "source", "--fork-points", ""],
+      "Error: --fork-points cannot be combined with a message.",
+    ],
+  ])(`Given session-only options and an explicit empty message %j,
+    When the CLI parses the run,
+    Then it preserves the existing message-conflict error`, (args, message) => {
+    expect(parseCliArgs(args)).toEqual({
+      ok: false,
+      message,
+    });
+  });
+
   test.each([
     [
       ["memory"],
-      "Error: memory requires a subcommand: add, list, forget, or clear.",
+      "Error: memory requires a subcommand: add, list, show, update, review, verify, forget, purge, clear, or candidates.",
     ],
     [["memory", "add"], "Error: memory add requires <durable-fact>."],
     [
       ["memory", "add", "Use pnpm.", "extra"],
       'Error: unknown memory add option "extra"',
     ],
-    [["memory", "list", "--all"], 'Error: unknown memory list option "--all"'],
+    [
+      ["memory", "add", "Use pnpm.", "--review-after"],
+      "Error: memory add --review-after requires <timestamp>.",
+    ],
+    [
+      [
+        "memory",
+        "add",
+        "Use pnpm.",
+        "--review-after",
+        "2027-01-01T00:00:00Z",
+        "--review-after",
+        "2028-01-01T00:00:00Z",
+      ],
+      'Error: memory add option "--review-after" was provided more than once.',
+    ],
+    [
+      [
+        "memory",
+        "add",
+        "Use pnpm.",
+        "--expires-at",
+        "2027-01-01T00:00:00Z",
+        "--expires-at",
+        "2028-01-01T00:00:00Z",
+      ],
+      'Error: memory add option "--expires-at" was provided more than once.',
+    ],
+    [["memory", "list", "extra"], 'Error: unknown memory list option "extra"'],
+    [["memory", "show"], "Error: memory show requires <id>."],
+    [["memory", "update"], "Error: memory update requires <id> <replacement>."],
+    [
+      ["memory", "update", "mem_1234"],
+      "Error: memory update requires <id> <replacement>.",
+    ],
+    [
+      ["memory", "update", "mem_1234", "Use npm.", "--expires-at"],
+      "Error: memory update --expires-at requires <timestamp>.",
+    ],
+    [
+      ["memory", "review", "--all"],
+      'Error: unknown memory review option "--all"',
+    ],
+    [["memory", "verify"], "Error: memory verify requires <id>."],
     [["memory", "forget"], "Error: memory forget requires <id>."],
     [
       ["memory", "forget", "mem_1234", "extra"],
       'Error: unknown memory forget option "extra"',
     ],
+    [["memory", "purge"], "Error: memory purge requires <id>."],
     [
       ["memory", "clear", "--force"],
       'Error: unknown memory clear option "--force"',
+    ],
+    [
+      ["memory", "candidates", "purge", "cand_1234", "--purge-memory"],
+      "Error: memory candidates purge --purge-memory requires <memory-id>.",
+    ],
+    [
+      ["memory", "candidates", "purge"],
+      "Error: memory candidates purge requires <candidate-id>.",
+    ],
+    [
+      ["memory", "candidates", "purge", "cand_1234", "--unknown"],
+      'Error: unknown memory candidates purge option "--unknown"',
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "purge",
+        "cand_1234",
+        "--purge-memory",
+        "mem_1234",
+        "extra",
+      ],
+      'Error: unknown memory candidates purge option "extra"',
+    ],
+    [
+      ["memory", "candidates", "clear", "--purge-memories"],
+      'Error: memory candidates clear --purge-memories requires "--purge".',
+    ],
+    [
+      ["memory", "candidates"],
+      "Error: memory candidates requires a subcommand: extract, list, show, edit, approve, reject, purge, or clear.",
+    ],
+    [
+      ["memory", "candidates", "extract", "session_1234"],
+      "Error: memory candidates extract requires --max-cost <usd>.",
+    ],
+    [
+      ["memory", "candidates", "extract"],
+      "Error: memory candidates extract requires <session-id> --max-cost <usd>.",
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--retry",
+        "--retry",
+        "--max-cost",
+        "0.05",
+      ],
+      'Error: memory candidates extract option "--retry" was provided more than once.',
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--max-cost",
+        "0.05",
+        "--max-cost",
+        "0.06",
+      ],
+      'Error: memory candidates extract option "--max-cost" was provided more than once.',
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--provider",
+        "kimi",
+        "--provider",
+        "qwen",
+        "--max-cost",
+        "0.05",
+      ],
+      'Error: memory candidates extract option "--provider" was provided more than once.',
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--model",
+        "first",
+        "--model",
+        "second",
+        "--max-cost",
+        "0.05",
+      ],
+      'Error: memory candidates extract option "--model" was provided more than once.',
+    ],
+    [
+      ["memory", "candidates", "extract", "session_1234", "--max-cost", "0"],
+      "Error: --max-cost must be a positive number.",
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--provider",
+        "unknown",
+        "--max-cost",
+        "0.05",
+      ],
+      "Error: --provider must be one of: fake, deepseek, kimi, qwen.",
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--model",
+        "",
+        "--max-cost",
+        "0.05",
+      ],
+      "Error: --model requires a value.",
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "extract",
+        "session_1234",
+        "--unknown",
+        "--max-cost",
+        "0.05",
+      ],
+      'Error: unknown memory candidates extract option "--unknown"',
+    ],
+    [
+      ["memory", "candidates", "list", "extra"],
+      'Error: unknown memory candidates list option "extra"',
+    ],
+    [
+      ["memory", "candidates", "show"],
+      "Error: memory candidates show requires <candidate-id>.",
+    ],
+    [
+      ["memory", "candidates", "show", "cand_1234", "extra"],
+      'Error: unknown memory candidates show option "extra"',
+    ],
+    [
+      ["memory", "candidates", "reject"],
+      "Error: memory candidates reject requires <candidate-id>.",
+    ],
+    [
+      ["memory", "candidates", "reject", "cand_1234", "extra"],
+      'Error: unknown memory candidates reject option "extra"',
+    ],
+    [
+      ["memory", "candidates", "edit", "cand_1234"],
+      "Error: memory candidates edit requires <candidate-id> <replacement>.",
+    ],
+    [
+      ["memory", "candidates", "edit", "cand_1234", "replacement", "extra"],
+      'Error: unknown memory candidates edit option "extra"',
+    ],
+    [
+      ["memory", "candidates", "approve"],
+      "Error: memory candidates approve requires <candidate-id>.",
+    ],
+    [
+      ["memory", "candidates", "approve", "cand_1234", "--supersede"],
+      'Error: unknown memory candidates approve option "--supersede"',
+    ],
+    [
+      ["memory", "candidates", "approve", "cand_1234", "--unknown"],
+      'Error: unknown memory candidates approve option "--unknown"',
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "approve",
+        "cand_1234",
+        "--keep",
+        "--supersede",
+        "mem_5678",
+      ],
+      "Error: memory candidates approve accepts only one conflict resolution: --keep or --supersede <memory-id>.",
+    ],
+    [
+      ["memory", "candidates", "clear", "--yes", "--yes"],
+      'Error: unknown memory candidates clear option "--yes"',
+    ],
+    [
+      ["memory", "candidates", "clear", "--purge", "--purge"],
+      'Error: unknown memory candidates clear option "--purge"',
+    ],
+    [
+      [
+        "memory",
+        "candidates",
+        "clear",
+        "--purge",
+        "--purge-memories",
+        "--purge-memories",
+      ],
+      'Error: unknown memory candidates clear option "--purge-memories"',
+    ],
+    [
+      ["memory", "candidates", "unknown"],
+      'Error: unknown memory candidates subcommand "unknown"',
     ],
     [["memory", "remember"], 'Error: unknown memory subcommand "remember"'],
   ])(`Given invalid project-memory arguments %j,

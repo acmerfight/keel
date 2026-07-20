@@ -17,17 +17,25 @@ import type {
   AssistantProviderMetadata,
   LLMProvider,
   Message,
+  ModelToolExposure,
   ToolCall,
 } from "../llm/types.ts";
-import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import {
+  type BashRuntime,
+  bashRuntimeExposesTool,
+} from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
-import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+  toolExecutionEffects,
+} from "../tools/execution.ts";
 import type {
-  AgentMemoryMutationCapability,
+  AgentMemoryRuntime,
   AgentMemoryToolContext,
 } from "../tools/memory.ts";
-import { hasExplicitAgentMemoryIntent } from "../tools/memory.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -101,20 +109,23 @@ const DUPLICATE_BLOCKED_GOAL_PROPOSAL_TOOL_RESULT =
   "Tool failed: update_goal blocked proposal already recorded for this agent turn.\nRecovery: Continue working, or wait until the next agent turn before proposing the blocked goal state again.";
 const COST_BUDGET_ADMISSION_TOOL_RESULT =
   "Goal completion was not evaluated because the remaining session cost budget could not admit the assertion evaluator request.";
+const REVIEWED_MEMORY_TOOL_CHOICE_SYSTEM_PROMPT = `
+Reviewed project-memory tool choice for the latest current-user message:
+- Use memory_add only when the user explicitly makes storing a claim in memory the requested action, such as “remember X”, “save X to memory”, or “请记住 X”.
+- A durable, future-facing, repeated, emphatic, or useful ordinary statement is not direct memory authorization. For such a statement, use memory_propose so the user reviews the exact candidate; never substitute memory_add.
+- Make this semantic distinction from the current user request. Do not infer direct authorization merely because a fact would help later.`;
 
 export interface RunAgentOptions {
   readonly workspace: string;
   readonly provider: LLMProvider;
   readonly userMessage: string;
   readonly systemPrompt: string;
-  readonly memoryPrompt?: () => string;
-  readonly memoryMutation?: AgentMemoryMutationCapability;
+  readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
   readonly signal: AbortSignal;
-  readonly allowBash: boolean;
+  readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
-  readonly bashPermission?: BashPermissionPolicy;
   readonly skillActivation?: SkillActivationCapability;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
@@ -132,14 +143,12 @@ export interface RunAgentTurnOptions {
   // agent turns append assistant/tool messages so later turns share context.
   readonly messages: Message[];
   readonly systemPrompt: string;
-  readonly memoryPrompt?: () => string;
-  readonly memoryMutation?: AgentMemoryMutationCapability;
+  readonly memory?: AgentMemoryRuntime;
   readonly signal: AbortSignal;
-  readonly allowBash: boolean;
+  readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
-  readonly bashPermission?: BashPermissionPolicy;
   readonly skillActivation?: SkillActivationCapability;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
@@ -168,29 +177,33 @@ function mutatedTargetPathsFromExecution(
   if (!execution.ok) {
     return [];
   }
-  const targetPaths: string[] = [];
-  if (execution.mutatedTargetPath !== undefined) {
-    targetPaths.push(execution.mutatedTargetPath);
-  }
-  if (execution.mutatedTargetPaths !== undefined) {
-    targetPaths.push(...execution.mutatedTargetPaths);
-  }
-  return targetPaths;
+  return toolExecutionEffects(execution, "mutation").flatMap(
+    (mutation) => mutation.targetPaths,
+  );
 }
 
 function toolEndEvent(
   toolCall: ToolCall,
   execution: ToolExecution,
 ): Extract<AgentEvent, { readonly type: "tool_end" }> {
+  if (!execution.ok) {
+    return {
+      type: "tool_end",
+      toolCall,
+      ok: false,
+    };
+  }
+  const bashCommand = toolExecutionEffect(execution, "bash_command");
+  const memoryOperation = toolExecutionEffect(execution, "memory_operation");
   return {
     type: "tool_end",
     toolCall,
-    ok: execution.ok,
-    ...(execution.bashCommandEvidence !== undefined
-      ? { bashExitCode: execution.bashCommandEvidence.exitCode }
+    ok: true,
+    ...(bashCommand !== undefined
+      ? { bashExitCode: bashCommand.evidence.exitCode }
       : {}),
-    ...(execution.memoryOperation !== undefined
-      ? { memoryOperation: execution.memoryOperation }
+    ...(memoryOperation !== undefined
+      ? { memoryOperation: memoryOperation.operation }
       : {}),
   };
 }
@@ -220,10 +233,14 @@ function publishVisibleProjectInstructions(
   executions: readonly ToolExecution[],
 ): void {
   for (const execution of executions) {
-    if (execution.visibleProjectInstructionPaths === undefined) {
+    const visibleInstructions = toolExecutionEffect(
+      execution,
+      "visible_project_instructions",
+    );
+    if (visibleInstructions === undefined) {
       continue;
     }
-    state.markInstructionPathsVisible(execution.visibleProjectInstructionPaths);
+    state.markInstructionPathsVisible(visibleInstructions.instructionPaths);
   }
 }
 
@@ -351,7 +368,7 @@ function settlementPlanByExecutionIndex(
 
   executions.forEach(({ execution }, index) => {
     const inlineLength =
-      execution.artifactContent?.length ?? execution.content.length;
+      execution.artifact?.content.length ?? execution.content.length;
     if (
       inlineLength - maxInlineChars >=
       MIN_TOOL_OUTPUT_ARTIFACT_OMITTED_CHARS
@@ -370,7 +387,7 @@ function settlementPlanByExecutionIndex(
   const candidates = executions
     .map(({ execution }, index) => ({
       index,
-      length: execution.artifactContent?.length ?? execution.content.length,
+      length: execution.artifact?.content.length ?? execution.content.length,
     }))
     .filter(
       ({ length }) =>
@@ -398,19 +415,19 @@ function settlementPlanByExecutionIndex(
 function artifactSourceStatus(
   execution: ToolExecution,
 ): ToolOutputArtifactSourceStatus {
-  return execution.artifactSourceTruncated === true
+  return execution.artifact?.sourceTruncated === true
     ? "source-truncated"
     : "complete";
 }
 
 function inlineSettledContent(execution: ToolExecution): string {
-  return execution.artifactContent ?? execution.content;
+  return execution.artifact?.content ?? execution.content;
 }
 
 function inlineSourceTruncated(execution: ToolExecution): boolean {
-  return execution.artifactContent === undefined
+  return execution.artifact === undefined
     ? execution.sourceTruncated === true
-    : execution.artifactSourceTruncated === true;
+    : execution.artifact.sourceTruncated;
 }
 
 async function settleToolExecutionContents(options: {
@@ -443,18 +460,18 @@ async function settleToolExecutionContents(options: {
       });
       continue;
     }
-    if (execution.artifactContent !== undefined) {
+    if (execution.artifact !== undefined) {
       const projection = projectCompactedToolOutput({
-        text: execution.artifactContent,
+        text: execution.artifact.content,
         maxChars: maxInlineChars,
-        context: { toolName: toolCall.tool, toolCall },
+        context: { toolCall },
       });
       const settled = await settleProjectedToolOutput({
         store: options.artifacts.store,
         toolCallId: toolCall.id,
         toolName: toolCall.tool,
         previewContent: projection.preview,
-        artifactContent: execution.artifactContent,
+        artifactContent: execution.artifact.content,
         sourceStatus: artifactSourceStatus(execution),
         purpose: "settlement",
       });
@@ -503,7 +520,7 @@ interface WrapUpSummarizeOptions {
   readonly state: CompactionState;
   readonly streamOptions: Omit<
     LedgerTurnOptions,
-    "getLedger" | "setLedger" | "modelOperationPurpose"
+    "getLedger" | "setLedger" | "modelOperationPurpose" | "toolExposure"
   >;
   readonly turnText: string;
   readonly turnReasoningContent: string | null;
@@ -534,7 +551,7 @@ async function* streamWrapUpSummary(
     getLedger: () => wrapUpLedger,
     setLedger: setWrapUpLedger,
     modelOperationPurpose: "turn_limit_summary",
-    toolChoice: "none",
+    toolExposure: { kind: "none" },
     textPrefix: turnText === "" || turnText.endsWith("\n") ? "" : "\n",
   });
 }
@@ -549,14 +566,14 @@ export async function* runAgentTurn(
     systemPrompt,
     signal,
     costTracking,
-    allowBash,
-    bashPermission,
+    bash,
     stopPolicy,
     drainInjectedUserMessages,
   } = options;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
   const claimedMemorySourceMessages = new WeakSet<InjectedUserMessage>();
+  const memoryToolsExposedForMessages = new WeakSet<InjectedUserMessage>();
   const currentMemoryUserMessage = (): InjectedUserMessage | null => {
     const current = messages.findLast(
       (message): message is InjectedUserMessage => message.role === "user",
@@ -572,10 +589,12 @@ export async function* runAgentTurn(
     }
   };
   const memoryToolContext: AgentMemoryToolContext | undefined =
-    options.memoryMutation === undefined
+    options.memory === undefined
       ? undefined
       : {
-          capability: options.memoryMutation,
+          capability: options.memory.mutation,
+          proposal:
+            options.memory.kind === "reviewed" ? options.memory.proposal : null,
           currentUserMessage: currentMemoryUserMessage,
           claimSourceMutation: (message) => {
             if (claimedMemorySourceMessages.has(message)) return false;
@@ -684,17 +703,36 @@ export async function* runAgentTurn(
 
   for (let completedTurns = 1; ; completedTurns++) {
     const currentMemorySource = currentMemoryUserMessage();
-    const allowMemory =
-      options.memoryMutation !== undefined &&
+    const exposeMemoryTools =
+      options.memory !== undefined &&
       currentMemorySource !== null &&
-      hasExplicitAgentMemoryIntent(currentMemorySource.content);
-    const baseTurnSystemPrompt = appendWorkflowSkillsToSystemPrompt(
+      !memoryToolsExposedForMessages.has(currentMemorySource);
+    const exposeReviewedMemory =
+      exposeMemoryTools &&
+      options.memory?.kind === "reviewed" &&
+      currentMemorySource !== null &&
+      options.memory.proposal.sourceFor(currentMemorySource) !== undefined;
+    const memoryToolExposure: Extract<
+      ModelToolExposure,
+      { readonly kind: "auto" }
+    >["memory"] = exposeMemoryTools
+      ? exposeReviewedMemory
+        ? "reviewed"
+        : "direct"
+      : undefined;
+    if (exposeMemoryTools) {
+      memoryToolsExposedForMessages.add(currentMemorySource);
+    }
+    const workflowSystemPrompt = appendWorkflowSkillsToSystemPrompt(
       systemPrompt,
       options.skillActivation === undefined
         ? []
         : options.skillActivation.active().map(workflowSkillFromActivation),
     );
-    const memoryPrompt = options.memoryPrompt;
+    const baseTurnSystemPrompt = exposeReviewedMemory
+      ? `${workflowSystemPrompt}\n${REVIEWED_MEMORY_TOOL_CHOICE_SYSTEM_PROMPT}`
+      : workflowSystemPrompt;
+    const memoryPrompt = options.memory?.prompt;
     const requestSystemPrompt =
       memoryPrompt === undefined
         ? undefined
@@ -717,9 +755,14 @@ export async function* runAgentTurn(
         getLedger: () => sessionLedger,
         setLedger: applySessionLedger,
         signal,
-        allowBash,
-        allowSkill,
-        allowMemory,
+        toolExposure: {
+          kind: "auto",
+          ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
+          ...(allowSkill ? { skill: true } : {}),
+          ...(memoryToolExposure !== undefined
+            ? { memory: memoryToolExposure }
+            : {}),
+        },
         modelOperationPurpose: "agent_turn",
       });
     } catch (error) {
@@ -796,9 +839,6 @@ export async function* runAgentTurn(
             provider: requestProvider,
             systemPrompt: baseTurnSystemPrompt,
             signal,
-            allowBash,
-            allowSkill,
-            allowMemory,
           },
           turnText: turnResult.text,
           turnReasoningContent: turnResult.reasoningContent,
@@ -903,6 +943,7 @@ export async function* runAgentTurn(
           return {
             content: DUPLICATE_BLOCKED_GOAL_PROPOSAL_TOOL_RESULT,
             ok: false,
+            effects: [],
           };
         }
         if (sessionGoal?.status === "active") {
@@ -914,7 +955,7 @@ export async function* runAgentTurn(
         workspace,
         toolCall,
         signal,
-        allowBash,
+        bash,
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: {
@@ -963,23 +1004,21 @@ export async function* runAgentTurn(
           "status" in toolCall &&
           toolCall.status === "completed" &&
           toolCall !== turnResult.toolCalls.at(-1),
-        ...(bashPermission !== undefined ? { bashPermission } : {}),
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),
-        ...(memoryToolContext !== undefined
+        ...(memoryToolContext !== undefined && memoryToolExposure !== undefined
           ? { memory: memoryToolContext }
           : {}),
       });
     };
 
     const recordCheckpointOperations = (execution: ToolExecution): void => {
-      if (
-        execution.ok &&
-        execution.checkpointOperations !== undefined &&
-        execution.checkpointOperations.length > 0
-      ) {
-        options.recordCheckpointOperations?.(execution.checkpointOperations);
+      if (!execution.ok) {
+        return;
+      }
+      for (const mutation of toolExecutionEffects(execution, "mutation")) {
+        options.recordCheckpointOperations?.(mutation.checkpointOperations);
       }
     };
 
@@ -1000,6 +1039,9 @@ export async function* runAgentTurn(
       });
       const artifactNotices: ToolOutputArtifactNotice[] = [];
       for (const settled of settledToolExecutions) {
+        const read = settled.execution.ok
+          ? toolExecutionEffect(settled.execution, "read")
+          : undefined;
         applySessionLedger(
           appendSessionLedgerMessage(sessionLedger, {
             role: "tool",
@@ -1009,9 +1051,9 @@ export async function* runAgentTurn(
               content: settled.content,
               sourceTruncated: settled.sourceTruncated,
             }),
-            ...(settled.execution.resourceObservation !== undefined
+            ...(read !== undefined
               ? {
-                  resourceObservation: settled.execution.resourceObservation,
+                  resourceObservation: read.resourceObservation,
                 }
               : {}),
           }),
@@ -1039,10 +1081,14 @@ export async function* runAgentTurn(
       AgentEvent,
       { readonly type: "task_progress_updated" }
     > | null => {
-      if (execution.taskProgressUpdate === undefined) {
+      if (!execution.ok) {
         return null;
       }
-      taskProgress = copySessionTaskProgress(execution.taskProgressUpdate);
+      const progress = toolExecutionEffect(execution, "task_progress");
+      if (progress === undefined) {
+        return null;
+      }
+      taskProgress = copySessionTaskProgress(progress.taskProgress);
       return {
         type: "task_progress_updated",
         taskProgress,
@@ -1056,10 +1102,11 @@ export async function* runAgentTurn(
       AgentEvent,
       { readonly type: "session_goal_updated" }
     > | null => {
-      if (execution.sessionGoalUpdate === undefined) {
+      const goalUpdate = toolExecutionEffect(execution, "session_goal");
+      if (goalUpdate === undefined) {
         return null;
       }
-      sessionGoal = copySessionGoal(execution.sessionGoalUpdate);
+      sessionGoal = copySessionGoal(goalUpdate.goal);
       return {
         type: "session_goal_updated",
         goal: sessionGoal,
@@ -1086,9 +1133,15 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield toolEndEvent(toolCall, execution);
-          /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
-          if (execution.skillActivation !== undefined) {
-            yield { type: "skill_activated", ...execution.skillActivation };
+          if (execution.ok) {
+            const skillActivation = toolExecutionEffect(
+              execution,
+              "skill_activation",
+            );
+            /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
+            if (skillActivation !== undefined) {
+              yield { type: "skill_activated", ...skillActivation.activation };
+            }
           }
           const taskProgressEvent = taskProgressEventFromExecution(execution);
           /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
@@ -1128,6 +1181,7 @@ export async function* runAgentTurn(
             execution: {
               content: COST_BUDGET_ADMISSION_TOOL_RESULT,
               ok: false,
+              effects: [],
             },
           });
           /* v8 ignore next 3 -- the fixed short budget message cannot cross the artifact threshold. */
@@ -1147,8 +1201,14 @@ export async function* runAgentTurn(
           return;
         }
         yield toolEndEvent(toolCall, execution);
-        if (execution.skillActivation !== undefined) {
-          yield { type: "skill_activated", ...execution.skillActivation };
+        if (execution.ok) {
+          const skillActivation = toolExecutionEffect(
+            execution,
+            "skill_activation",
+          );
+          if (skillActivation !== undefined) {
+            yield { type: "skill_activated", ...skillActivation.activation };
+          }
         }
         const taskProgressEvent = taskProgressEventFromExecution(execution);
         if (taskProgressEvent !== null) {
@@ -1227,14 +1287,9 @@ export async function* runAgent(
         provider: options.provider,
         messages,
         systemPrompt: options.systemPrompt,
-        ...(options.memoryPrompt !== undefined
-          ? { memoryPrompt: options.memoryPrompt }
-          : {}),
-        ...(options.memoryMutation !== undefined
-          ? { memoryMutation: options.memoryMutation }
-          : {}),
+        ...(options.memory !== undefined ? { memory: options.memory } : {}),
         signal: options.signal,
-        allowBash: options.allowBash,
+        bash: options.bash,
         hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
@@ -1247,9 +1302,6 @@ export async function* runAgent(
         },
         ...(options.costTracking !== undefined
           ? { costTracking: options.costTracking }
-          : {}),
-        ...(options.bashPermission !== undefined
-          ? { bashPermission: options.bashPermission }
           : {}),
         ...(options.contextCompaction !== undefined
           ? { contextCompaction: options.contextCompaction }

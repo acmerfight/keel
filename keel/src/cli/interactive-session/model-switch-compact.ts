@@ -15,14 +15,13 @@ import type { CostModel } from "../../core/cost.ts";
 import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { Message, Usage } from "../../llm/types.ts";
-import { bashModeExposesTool } from "../../permissions/bash.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
   formatContextCompactionReport,
   formatToolOutputArtifactNotice,
 } from "../output.ts";
 import { formatManualCompactionFailure } from "./commands.ts";
-import { shouldTrackInteractiveCost } from "./cost.ts";
+import type { InteractiveCompactionCost } from "./cost.ts";
 import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
@@ -41,12 +40,12 @@ export interface ModelSwitchCompactionContext {
   readonly nextPostCompactionReadToolCallId: () => string;
   readonly taskProgress: SessionTaskProgress;
   readonly options: InteractiveSessionOptions;
+  readonly bashToolVisible: boolean;
   readonly recordCompactionCost: (
     usage: Usage,
     costModel: CostModel,
   ) => CostReport;
-  readonly remainingCostUsd?: number;
-  readonly costBudgetLimitedReport: () => CostReport;
+  readonly compactionCost: InteractiveCompactionCost;
   readonly modelOperations: ModelOperationInstrumentation | null;
 }
 
@@ -68,24 +67,7 @@ function restoreReadVisibility(
   state: ReadVisibilityState,
   snapshots: readonly VisibleReadSnapshot[],
 ): void {
-  state.clear();
-  state.applyVisibleToolExecutions(
-    snapshots
-      .slice()
-      .reverse()
-      .map((snapshot) => ({
-        // applyVisibleToolExecutions uses only read metadata for read visibility.
-        content: "",
-        ok: true,
-        readTargetPath: snapshot.targetPath,
-        ...(snapshot.offset !== undefined
-          ? { readTargetOffset: snapshot.offset }
-          : {}),
-        ...(snapshot.limit !== undefined
-          ? { readTargetLimit: snapshot.limit }
-          : {}),
-      })),
-  );
+  state.restoreSnapshot(snapshots.slice().reverse());
 }
 
 function restoreProjectInstructionVisibility(
@@ -138,7 +120,10 @@ function switchWouldOverflowTargetContext(options: {
     options.messages,
     options.target.contextCompaction,
     undefined,
-    { allowBash: options.bashToolVisible },
+    {
+      kind: "auto",
+      ...(options.bashToolVisible ? { bash: true } : {}),
+    },
   );
 }
 
@@ -146,13 +131,13 @@ export function modelSwitchRequiresCompaction(options: {
   readonly systemPrompt: string;
   readonly messages: readonly Message[];
   readonly target: InteractiveResolvedProvider;
-  readonly cliArgs: InteractiveSessionOptions["cliArgs"];
+  readonly bashToolVisible: boolean;
 }): boolean {
   return switchWouldOverflowTargetContext({
     systemPrompt: options.systemPrompt,
     messages: options.messages,
     target: options.target,
-    bashToolVisible: bashModeExposesTool(options.cliArgs.bashMode),
+    bashToolVisible: options.bashToolVisible,
   });
 }
 
@@ -172,14 +157,13 @@ export async function executeModelSwitchCompaction(
     nextPostCompactionReadToolCallId,
     taskProgress,
     options,
+    bashToolVisible,
     recordCompactionCost,
-    remainingCostUsd,
-    costBudgetLimitedReport,
+    compactionCost,
     modelOperations,
   } = ctx;
-  const compactionCostModel = !shouldTrackInteractiveCost(options.cliArgs)
-    ? undefined
-    : options.requireKnownCostModel(current);
+  const compactionCostModel =
+    compactionCost.kind === "untracked" ? undefined : compactionCost.model;
   const messagesBeforeCompact = messages.slice();
   const readVisibilityBeforeCompact =
     readVisibility.visibleReadsMostRecentFirst();
@@ -199,13 +183,12 @@ export async function executeModelSwitchCompaction(
     current.modelMetadata,
   );
   const provider =
-    compactionCostModel === undefined || remainingCostUsd === undefined
+    compactionCost.kind !== "budgeted"
       ? current.provider
       : createCostBudgetedProvider({
           provider: current.provider,
-          model: compactionCostModel,
-          maxCostUsd: remainingCostUsd,
-          /* v8 ignore next 3 -- metadata normalization is covered at the model-metadata boundary. */
+          model: compactionCost.model,
+          maxCostUsd: compactionCost.remainingCostUsd,
           ...(modelMaxOutputTokens !== undefined
             ? { modelMaxOutputTokens }
             : {}),
@@ -256,15 +239,11 @@ export async function executeModelSwitchCompaction(
             : recordCompactionCost(result.usage, compactionCostModel);
         if (
           result.failure.code === "summary_error" &&
+          compactionCost.kind === "budgeted" &&
           result.failure.error instanceof CostBudgetAdmissionError
         ) {
-          const cost = costBudgetLimitedReport();
-          /* v8 ignore else -- CostBudgetAdmissionError is created only by --max-cost's budget wrapper. */
-          if (options.cliArgs.maxCostUsd !== undefined) {
-            options.writeStderr(
-              options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-            );
-          }
+          const cost = compactionCost.budgetLimitedReport();
+          options.writeStderr(options.formatCostReport(cost));
           return { status: "rejected", cost };
         }
         options.writeStderr(
@@ -273,9 +252,7 @@ export async function executeModelSwitchCompaction(
         if (failedCost !== undefined) {
           const cost = failedCost;
           if (options.cliArgs.maxCostUsd !== undefined) {
-            options.writeStderr(
-              options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-            );
+            options.writeStderr(options.formatCostReport(cost));
           }
           return { status: "rejected", cost };
         }
@@ -305,7 +282,7 @@ export async function executeModelSwitchCompaction(
         systemPrompt,
         messages,
         target,
-        bashToolVisible: bashModeExposesTool(options.cliArgs.bashMode),
+        bashToolVisible,
       })
     ) {
       rollback();
@@ -320,7 +297,8 @@ export async function executeModelSwitchCompaction(
       systemPrompt,
       messages,
       requestMetadata: {
-        allowBash: bashModeExposesTool(options.cliArgs.bashMode),
+        kind: "auto",
+        ...(bashToolVisible ? { bash: true } : {}),
       },
     });
     options.writeStderr(
@@ -337,9 +315,7 @@ export async function executeModelSwitchCompaction(
     }
     const cost = recordCompactionCost(result.usage, compactionCostModel);
     if (options.cliArgs.maxCostUsd !== undefined) {
-      options.writeStderr(
-        options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-      );
+      options.writeStderr(options.formatCostReport(cost));
     }
     return { status: "accepted", cost };
   } catch (error) {
@@ -348,14 +324,12 @@ export async function executeModelSwitchCompaction(
       options.writeStdout("\n");
       return { status: "rejected" };
     }
-    if (error instanceof CostBudgetAdmissionError) {
-      const cost = costBudgetLimitedReport();
-      /* v8 ignore next 3 -- the wrapper exists only when --max-cost supplied the remaining budget. */
-      if (options.cliArgs.maxCostUsd !== undefined) {
-        options.writeStderr(
-          options.formatCostReport(cost, options.cliArgs.maxCostUsd),
-        );
-      }
+    if (
+      compactionCost.kind === "budgeted" &&
+      error instanceof CostBudgetAdmissionError
+    ) {
+      const cost = compactionCost.budgetLimitedReport();
+      options.writeStderr(options.formatCostReport(cost));
       return { status: "rejected", cost };
     }
     options.writeStderr(formatManualCompactionFailure(error));

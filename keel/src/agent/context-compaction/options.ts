@@ -1,3 +1,9 @@
+import {
+  type ModelToolExposure,
+  type ResolvedModelToolExposure,
+  resolveModelToolExposure,
+} from "../../tools/registry.ts";
+
 const DEFAULT_RESERVE_TOKENS = 16_384;
 const DEFAULT_KEEP_RECENT_TOKENS = 20_000;
 const DEFAULT_TOOL_OUTPUT_MAX_CHARS = 2_000;
@@ -21,19 +27,10 @@ export interface ResolvedContextCompactionOptions {
   readonly summaryInputMaxChars: number;
 }
 
-export interface ContextCompactionRequestMetadata {
-  readonly toolChoice?: "none";
-  readonly allowBash?: boolean;
-  readonly allowSkill?: boolean;
-  readonly allowMemory?: boolean;
-}
+export type ContextCompactionRequestMetadata = ModelToolExposure;
 
-export interface ResolvedContextCompactionRequestMetadata {
-  readonly toolChoice: "auto" | "none";
-  readonly allowBash: boolean;
-  readonly allowSkill: boolean;
-  readonly allowMemory: boolean;
-}
+export type ResolvedContextCompactionRequestMetadata =
+  ResolvedModelToolExposure;
 
 export function resolveContextCompactionOptions(
   options: ContextCompactionOptions | undefined,
@@ -74,11 +71,5 @@ export function contextCompactionRequestTargetTokens(options: {
 export function resolvedRequestMetadata(
   metadata: ContextCompactionRequestMetadata | undefined,
 ): ResolvedContextCompactionRequestMetadata {
-  const toolChoice = metadata?.toolChoice ?? "auto";
-  return {
-    toolChoice,
-    allowBash: toolChoice === "none" ? false : metadata?.allowBash === true,
-    allowSkill: toolChoice === "none" ? false : metadata?.allowSkill === true,
-    allowMemory: toolChoice === "none" ? false : metadata?.allowMemory === true,
-  };
+  return resolveModelToolExposure(metadata);
 }

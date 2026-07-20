@@ -4,7 +4,10 @@ import type {
   ToolCall,
   Usage,
 } from "../../llm/types.ts";
-import { toolCallCanonicalArguments } from "../../tools/registry.ts";
+import {
+  modelToolExposuresEqual,
+  toolCallCanonicalArguments,
+} from "../../tools/registry.ts";
 import type {
   ContextCompactionOptions,
   ContextCompactionRequestMetadata,
@@ -380,10 +383,7 @@ function estimateRequestTokensFromAccounting(
   if (
     accounting === undefined ||
     accounting.systemPrompt !== systemPrompt ||
-    accounting.requestMetadata.toolChoice !== currentMetadata.toolChoice ||
-    accounting.requestMetadata.allowBash !== currentMetadata.allowBash ||
-    accounting.requestMetadata.allowSkill !== currentMetadata.allowSkill ||
-    accounting.requestMetadata.allowMemory !== currentMetadata.allowMemory ||
+    !modelToolExposuresEqual(accounting.requestMetadata, currentMetadata) ||
     accounting.messageFingerprintCache.length > messages.length
   ) {
     return null;

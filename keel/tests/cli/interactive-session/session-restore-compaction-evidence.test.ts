@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   persistSessionMessages,
@@ -13,7 +12,9 @@ import {
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import { CHECKPOINT_INSTRUCTION } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
@@ -87,7 +88,7 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
       const provider: LLMProvider = {
         id: "restored-metadata-evidence-provider",
         async *stream(options) {
-          if (options.toolChoice === "none") {
+          if (options.toolExposure?.kind === "none") {
             yield {
               type: "text",
               text: "Restored metadata summary that omits evidence handles.",
@@ -115,6 +116,7 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
         cliArgs: { bashMode: "disabled" },
         workspace,
         platform: process.platform,
+        session: EPHEMERAL_INTERACTIVE_SESSION,
         initialMessages: resumed.messages,
         input,
         writeStdout: (text) => {

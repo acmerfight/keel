@@ -3,6 +3,7 @@ import type {
   LLMProvider,
   LLMStopReason,
   Message,
+  ModelToolExposure,
   ProviderRequestAttemptObserver,
   ToolCall,
   Usage,
@@ -37,10 +38,7 @@ export interface StreamTurnOptions {
   readonly systemPrompt: string;
   readonly requestSystemPrompt?: () => string;
   readonly signal: AbortSignal;
-  readonly allowBash: boolean;
-  readonly allowSkill?: boolean;
-  readonly allowMemory?: boolean;
-  readonly toolChoice?: "none";
+  readonly toolExposure: ModelToolExposure;
   readonly textPrefix?: string;
   readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
 }
@@ -87,15 +85,7 @@ function finishAgentTurn(
 export async function* streamAgentTurn(
   options: ProviderTurnOptions,
 ): AsyncGenerator<AgentEvent, AgentTurn> {
-  const {
-    provider,
-    systemPrompt,
-    messages,
-    signal,
-    allowBash,
-    allowSkill,
-    allowMemory,
-  } = options;
+  const { provider, systemPrompt, messages, signal, toolExposure } = options;
   let textPrefix = options.textPrefix ?? "";
   const stream = provider.stream({
     systemPrompt,
@@ -104,12 +94,7 @@ export async function* streamAgentTurn(
       : {}),
     messages,
     signal,
-    ...(allowBash ? { allowBash: true } : {}),
-    ...(allowSkill === true ? { allowSkill: true } : {}),
-    ...(allowMemory === true ? { allowMemory: true } : {}),
-    ...(options.toolChoice !== undefined
-      ? { toolChoice: options.toolChoice }
-      : {}),
+    toolExposure,
     ...(options.providerRequestAttempts !== undefined
       ? { providerRequestAttempts: options.providerRequestAttempts }
       : {}),

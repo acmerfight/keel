@@ -26,7 +26,7 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressFromPlan,
 } from "../core/task-progress.ts";
-import type { BashPermissionPolicy } from "../permissions/bash.ts";
+import type { BashRuntime } from "../permissions/bash.ts";
 import type {
   SkillActivationCapability,
   SkillActivationRecord,
@@ -45,6 +45,7 @@ import {
   type AgentMemoryToolContext,
   validateAgentMemoryAdd,
   validateAgentMemoryForget,
+  validateAgentMemoryProposal,
 } from "./memory.ts";
 import { executeRead } from "./read.ts";
 import { observeReadResource } from "./read-resource-observation.ts";
@@ -58,7 +59,7 @@ import {
   type ValidToolCall,
 } from "./tool-call.ts";
 import { invalidBuiltinToolCallError } from "./tool-error.ts";
-import type { ToolResult } from "./types.ts";
+import type { ToolOutputArtifact, ToolResult } from "./types.ts";
 import {
   resolveWorkspaceCreateTarget,
   resolveWorkspaceTarget,
@@ -83,6 +84,10 @@ type MemoryAddToolCall = Extract<
 type MemoryForgetToolCall = Extract<
   ValidToolCall,
   { readonly tool: "memory_forget" }
+>;
+type MemoryProposeToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "memory_propose" }
 >;
 type GlobToolCall = Extract<ValidToolCall, { readonly tool: "glob" }>;
 type GrepToolCall = Extract<ValidToolCall, { readonly tool: "grep" }>;
@@ -110,7 +115,7 @@ type UpdateGoalToolCall = Extract<
 interface BuiltinToolExecutionContext {
   readonly workspace: string;
   readonly signal: AbortSignal;
-  readonly allowBash: boolean;
+  readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly skillActivation?: Pick<
     SkillActivationCapability,
@@ -118,7 +123,6 @@ interface BuiltinToolExecutionContext {
   >;
   readonly memory?: AgentMemoryToolContext;
   readonly recordCheckpoints?: boolean;
-  readonly bashPermission?: BashPermissionPolicy;
   readonly readBeforeEdit?: {
     readonly hasRead: (targetPath: string) => boolean;
   };
@@ -136,6 +140,128 @@ interface BashCommandEvidence {
   readonly exitCode: number | null;
 }
 
+interface ReadToolExecutionEffect {
+  readonly kind: "read";
+  readonly targetPath: string;
+  readonly offset?: number;
+  readonly limit?: number;
+  readonly resourceObservation: ReadResourceObservation;
+}
+
+interface MutationToolExecutionEffect {
+  readonly kind: "mutation";
+  readonly targetPaths: readonly string[];
+  readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
+}
+
+interface VisibleProjectInstructionsToolExecutionEffect {
+  readonly kind: "visible_project_instructions";
+  readonly instructionPaths: readonly string[];
+}
+
+interface TaskProgressToolExecutionEffect {
+  readonly kind: "task_progress";
+  readonly taskProgress: SessionTaskProgress;
+}
+
+interface SessionGoalToolExecutionEffect {
+  readonly kind: "session_goal";
+  readonly goal: SessionGoal;
+}
+
+interface BashCommandToolExecutionEffect {
+  readonly kind: "bash_command";
+  readonly evidence: BashCommandEvidence;
+}
+
+interface SkillActivationToolExecutionEffect {
+  readonly kind: "skill_activation";
+  readonly activation: SkillActivationRecord;
+}
+
+interface MemoryOperationToolExecutionEffect {
+  readonly kind: "memory_operation";
+  readonly operation: AgentMemoryOperation;
+}
+
+type ToolExecutionEffect =
+  | ReadToolExecutionEffect
+  | MutationToolExecutionEffect
+  | VisibleProjectInstructionsToolExecutionEffect
+  | TaskProgressToolExecutionEffect
+  | SessionGoalToolExecutionEffect
+  | BashCommandToolExecutionEffect
+  | SkillActivationToolExecutionEffect
+  | MemoryOperationToolExecutionEffect;
+
+type FailedToolExecutionEffect =
+  | VisibleProjectInstructionsToolExecutionEffect
+  | SessionGoalToolExecutionEffect;
+
+interface ToolExecutionBase {
+  readonly content: string;
+  readonly sourceTruncated?: boolean;
+  readonly artifact?: ToolOutputArtifact;
+}
+
+interface SuccessfulToolExecution extends ToolExecutionBase {
+  readonly ok: true;
+  readonly effects: readonly ToolExecutionEffect[];
+}
+
+interface FailedToolExecution extends ToolExecutionBase {
+  readonly ok: false;
+  readonly effects: readonly FailedToolExecutionEffect[];
+}
+
+const NO_TOOL_EXECUTION_EFFECTS = [] as const;
+
+export function toolExecutionEffect<K extends ToolExecutionEffect["kind"]>(
+  execution: SuccessfulToolExecution,
+  kind: K,
+): Extract<ToolExecutionEffect, { readonly kind: K }> | undefined;
+export function toolExecutionEffect<
+  K extends FailedToolExecutionEffect["kind"],
+>(
+  execution: FailedToolExecution,
+  kind: K,
+): Extract<FailedToolExecutionEffect, { readonly kind: K }> | undefined;
+export function toolExecutionEffect<
+  K extends FailedToolExecutionEffect["kind"],
+>(
+  execution: ToolExecution,
+  kind: K,
+): Extract<FailedToolExecutionEffect, { readonly kind: K }> | undefined;
+export function toolExecutionEffect(
+  execution: ToolExecution,
+  kind: ToolExecutionEffect["kind"],
+): ToolExecutionEffect | undefined {
+  return execution.effects.find((effect) => effect.kind === kind);
+}
+
+export function toolExecutionEffects<K extends ToolExecutionEffect["kind"]>(
+  execution: SuccessfulToolExecution,
+  kind: K,
+): readonly Extract<ToolExecutionEffect, { readonly kind: K }>[];
+export function toolExecutionEffects<
+  K extends FailedToolExecutionEffect["kind"],
+>(
+  execution: FailedToolExecution,
+  kind: K,
+): readonly Extract<FailedToolExecutionEffect, { readonly kind: K }>[];
+export function toolExecutionEffects<
+  K extends FailedToolExecutionEffect["kind"],
+>(
+  execution: ToolExecution,
+  kind: K,
+): readonly Extract<FailedToolExecutionEffect, { readonly kind: K }>[];
+export function toolExecutionEffects(
+  execution: ToolExecution,
+  kind: ToolExecutionEffect["kind"],
+): readonly ToolExecutionEffect[] {
+  return execution.effects.filter((effect) => effect.kind === kind);
+}
+
 interface AssertionGoalCompletionContract {
   readonly objective: string;
   readonly completionCriterion: string;
@@ -146,26 +272,7 @@ interface AssertionGoalCompletionEvaluation {
   readonly reason: string;
 }
 
-export interface ToolExecution {
-  readonly content: string;
-  readonly ok: boolean;
-  readonly sourceTruncated?: boolean;
-  readonly artifactContent?: string;
-  readonly artifactSourceTruncated?: boolean;
-  readonly readTargetPath?: string;
-  readonly readTargetOffset?: number;
-  readonly readTargetLimit?: number;
-  readonly resourceObservation?: ReadResourceObservation;
-  readonly mutatedTargetPath?: string;
-  readonly mutatedTargetPaths?: readonly string[];
-  readonly visibleProjectInstructionPaths?: readonly string[];
-  readonly checkpointOperations?: readonly RecordLastBatchCheckpointOperation[];
-  readonly taskProgressUpdate?: SessionTaskProgress;
-  readonly sessionGoalUpdate?: SessionGoal;
-  readonly bashCommandEvidence?: BashCommandEvidence;
-  readonly skillActivation?: SkillActivationRecord;
-  readonly memoryOperation?: AgentMemoryOperation;
-}
+export type ToolExecution = SuccessfulToolExecution | FailedToolExecution;
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
   readonly toolCall: ToolCall;
@@ -173,17 +280,11 @@ export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
 
 function sourceTruncation(result: ToolResult): {
   readonly sourceTruncated?: true;
-  readonly artifactContent?: string;
-  readonly artifactSourceTruncated?: boolean;
+  readonly artifact?: ToolOutputArtifact;
 } {
   return {
     ...(result.sourceTruncated === true ? { sourceTruncated: true } : {}),
-    ...(result.artifactContent !== undefined
-      ? { artifactContent: result.artifactContent }
-      : {}),
-    ...(result.artifactSourceTruncated !== undefined
-      ? { artifactSourceTruncated: result.artifactSourceTruncated }
-      : {}),
+    ...(result.artifact !== undefined ? { artifact: result.artifact } : {}),
   };
 }
 
@@ -205,6 +306,7 @@ function executeSkillTool(
       content:
         "Tool failed: skill activation is unavailable because no valid workflow skill catalog was exposed.\nRecovery: Continue without a skill.",
       ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
   try {
@@ -214,9 +316,15 @@ function executeSkillTool(
         ? `Workflow skill ${activation.activation.qualifiedName} activated. Its instructions and resource index are now active in the system context.`
         : `Workflow skill ${activation.activation.qualifiedName} is already active; no instructions were duplicated.`,
       ok: true,
-      ...(activation.record === undefined
-        ? {}
-        : { skillActivation: activation.record }),
+      effects:
+        activation.record === undefined
+          ? NO_TOOL_EXECUTION_EFFECTS
+          : [
+              {
+                kind: "skill_activation",
+                activation: activation.record,
+              },
+            ],
     };
   } catch (error) {
     if (!(error instanceof WorkflowSkillError)) {
@@ -225,17 +333,96 @@ function executeSkillTool(
     return {
       content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: Use an exact qualified name from the current scoped catalog, search omitted entries first, or continue without a skill.`,
       ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
 }
 
 function memoryToolFailure(
-  tool: "memory_add" | "memory_forget",
+  tool: "memory_add" | "memory_forget" | "memory_propose",
   reason: string,
-): ToolExecution {
+): FailedToolExecution {
+  const recovery = (() => {
+    if (tool === "memory_add") {
+      return "Use one exact contiguous durable-claim span from the latest current-user message only when that user directly asked Keel to remember it; never paraphrase, broaden, or infer.";
+    }
+    if (tool === "memory_forget") {
+      return "Use one exact active project-memory ID only when the latest current-user message directly and unambiguously asked Keel to forget it; ask when the target is ambiguous.";
+    }
+    return "Use one exact source quote from the latest current-user message in a saved interactive session; do not invent evidence or retry a rejected proposal.";
+  })();
   return {
-    content: `Tool failed: ${tool} failed: ${reason}.\nRecovery: Ask the user for one direct, unambiguous current-message memory request; never invent or broaden source evidence.`,
+    content: `Tool failed: ${tool} failed: ${reason}.\nRecovery: ${recovery}`,
     ok: false,
+    effects: NO_TOOL_EXECUTION_EFFECTS,
+  };
+}
+
+async function executeMemoryProposeTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: MemoryProposeToolCall,
+): Promise<ToolExecution> {
+  const memory = context.memory;
+  if (memory?.proposal === null || memory === undefined) {
+    return memoryToolFailure(
+      "memory_propose",
+      "reviewed memory is unavailable for this model step",
+    );
+  }
+  const currentUserMessage = memory.currentUserMessage();
+  const source =
+    currentUserMessage === null
+      ? undefined
+      : memory.proposal.sourceFor(currentUserMessage);
+  const validation = validateAgentMemoryProposal({
+    currentUserMessage,
+    sourceQuote: toolCall.sourceQuote,
+    source,
+  });
+  if (!validation.ok) {
+    return memoryToolFailure("memory_propose", validation.reason);
+  }
+  if (
+    currentUserMessage === null ||
+    source === undefined ||
+    !memory.claimSourceMutation(currentUserMessage)
+  ) {
+    return memoryToolFailure(
+      "memory_propose",
+      "this current-user source already authorized one memory mutation",
+    );
+  }
+  memory.proposal.persistSource(currentUserMessage);
+  const result = await memory.proposal.capability.propose(
+    {
+      kind: toolCall.kind,
+      statement: toolCall.statement,
+      why: toolCall.why,
+      sourceQuote: toolCall.sourceQuote,
+      conflictMemoryIds: toolCall.conflictMemoryIds,
+    },
+    source,
+    memory.proposal.review,
+    context.signal,
+  );
+  const content =
+    result.outcome === "approved"
+      ? `Approved project-memory candidate ${result.candidateId} as ${result.memoryId} for ${result.scope.id}.`
+      : result.outcome === "rejected"
+        ? `Rejected project-memory candidate ${result.candidateId} for ${result.scope.id}.`
+        : `Project-memory candidate ${result.candidateId} remains pending for ${result.scope.id}. Review it with: keel memory candidates show ${result.candidateId}; approve with: keel memory candidates approve ${result.candidateId} (add --keep or --supersede <memory-id> when required).`;
+  return {
+    content,
+    ok: true,
+    effects: [
+      {
+        kind: "memory_operation",
+        operation: {
+          operation: "propose",
+          ...result,
+        },
+      },
+    ],
   };
 }
 
@@ -245,12 +432,14 @@ function executeMemoryAddTool(
 ): ToolExecution {
   const memory = context.memory;
   if (memory === undefined) {
-    return memoryToolFailure("memory_add", "memory is disabled for this run");
+    return memoryToolFailure(
+      "memory_add",
+      "memory mutation is unavailable for this model step",
+    );
   }
   const currentUserMessage = memory.currentUserMessage();
   const validation = validateAgentMemoryAdd({
     currentUserMessage,
-    sourceText: toolCall.sourceText,
     text: toolCall.text,
   });
   if (!validation.ok) return memoryToolFailure("memory_add", validation.reason);
@@ -263,16 +452,24 @@ function executeMemoryAddTool(
       "this current-user source already authorized one memory mutation",
     );
   }
-  const saved = memory.capability.add(toolCall.text, toolCall.sourceText);
+  const saved = memory.capability.add(
+    toolCall.text,
+    currentUserMessage.content,
+  );
   return {
     content: `Saved project memory ${saved.id} for ${saved.scope.id}.`,
     ok: true,
-    memoryOperation: {
-      operation: "add",
-      id: saved.id,
-      scope: saved.scope,
-      outcome: "saved",
-    },
+    effects: [
+      {
+        kind: "memory_operation",
+        operation: {
+          operation: "add",
+          id: saved.id,
+          scope: saved.scope,
+          outcome: "saved",
+        },
+      },
+    ],
   };
 }
 
@@ -284,13 +481,12 @@ function executeMemoryForgetTool(
   if (memory === undefined) {
     return memoryToolFailure(
       "memory_forget",
-      "memory is disabled for this run",
+      "memory mutation is unavailable for this model step",
     );
   }
   const currentUserMessage = memory.currentUserMessage();
   const validation = validateAgentMemoryForget({
     currentUserMessage,
-    sourceText: toolCall.sourceText,
     id: toolCall.memoryId,
     entries: memory.capability.list(),
   });
@@ -307,17 +503,22 @@ function executeMemoryForgetTool(
   }
   const forgotten = memory.capability.forget(
     toolCall.memoryId,
-    toolCall.sourceText,
+    currentUserMessage.content,
   );
   return {
     content: `Forgot project memory ${forgotten.id} for ${forgotten.scope.id}.`,
     ok: true,
-    memoryOperation: {
-      operation: "forget",
-      id: forgotten.id,
-      scope: forgotten.scope,
-      outcome: "forgotten",
-    },
+    effects: [
+      {
+        kind: "memory_operation",
+        operation: {
+          operation: "forget",
+          id: forgotten.id,
+          scope: forgotten.scope,
+          outcome: "forgotten",
+        },
+      },
+    ],
   };
 }
 
@@ -330,6 +531,7 @@ function executeSkillSearchTool(
       content:
         "Tool failed: skill catalog search is unavailable.\nRecovery: Continue without a skill.",
       ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
   const matches = context.skillActivation.search(toolCall.query);
@@ -345,6 +547,7 @@ function executeSkillSearchTool(
             ),
           ].join("\n"),
     ok: true,
+    effects: NO_TOOL_EXECUTION_EFFECTS,
   };
 }
 
@@ -357,6 +560,7 @@ function executeSkillResourceTool(
       content:
         "Tool failed: skill resource access is unavailable.\nRecovery: Continue without the resource.",
       ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
   try {
@@ -366,12 +570,14 @@ function executeSkillResourceTool(
         toolCall.path,
       ),
       ok: true,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   } catch (error) {
     if (!(error instanceof WorkflowSkillError)) throw error;
     return {
       content: `Tool failed: ${error.message.replace(/^Error: /u, "")}\nRecovery: For text, use an exact active qualified skill name and advertised resource path; for a binary asset, use its Skill-relative path with an approved binary-capable tool.`,
       ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
 }
@@ -419,7 +625,7 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
   return {
     content: formatSessionTaskProgressToolResult(taskProgress),
     ok: true,
-    taskProgressUpdate: taskProgress,
+    effects: [{ kind: "task_progress", taskProgress }],
   };
 }
 
@@ -427,14 +633,19 @@ function rejectedGoalCompletion(
   sessionGoal: Extract<SessionGoal, { readonly status: "active" }>,
   content: string,
   reason: string,
-): ToolExecution {
+): FailedToolExecution {
   return {
     content,
     ok: false,
-    sessionGoalUpdate: withSessionGoalRuntimeOutcome(sessionGoal, {
-      kind: "completion_rejected",
-      reason,
-    }),
+    effects: [
+      {
+        kind: "session_goal",
+        goal: withSessionGoalRuntimeOutcome(sessionGoal, {
+          kind: "completion_rejected",
+          reason,
+        }),
+      },
+    ],
   };
 }
 
@@ -449,9 +660,8 @@ function commandVerificationFailureContent(
 async function executeUpdateGoalTool(
   {
     workspace,
-    allowBash,
+    bash,
     signal,
-    bashPermission,
     sessionGoal,
     completionProposalHasFollowingToolCalls,
     evaluateAssertionGoalCompletion,
@@ -463,6 +673,7 @@ async function executeUpdateGoalTool(
       content:
         "Tool failed: update_goal failed: no active session goal is set.\nRecovery: Continue without updating the goal, or ask the user to set a saved session goal first.",
       ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
   if (toolCall.status === "blocked") {
@@ -485,7 +696,7 @@ async function executeUpdateGoalTool(
       return {
         content: formatSessionGoalBlockedToolResult(blockedGoal),
         ok: true,
-        sessionGoalUpdate: copySessionGoal(blockedGoal),
+        effects: [{ kind: "session_goal", goal: copySessionGoal(blockedGoal) }],
       };
     }
     const consecutiveCount: SessionGoalBlockedAuditCount =
@@ -514,13 +725,12 @@ async function executeUpdateGoalTool(
     return {
       content: formatSessionGoalBlockedProposalToolResult(blockedProposalGoal),
       ok: true,
-      sessionGoalUpdate: copySessionGoal(blockedProposalGoal),
+      effects: [
+        { kind: "session_goal", goal: copySessionGoal(blockedProposalGoal) },
+      ],
     };
   }
-  if (
-    sessionGoal.criterionKind === undefined ||
-    sessionGoal.completionCriterion === undefined
-  ) {
+  if (sessionGoal.completion === undefined) {
     return rejectedGoalCompletion(
       sessionGoal,
       "Tool failed: update_goal failed: no completion criterion is set for the active session goal.\nRecovery: Ask the user to add one with /goal verify <command> or /goal done-when <criterion>, continue working, or ask the user to use /goal complete for an explicit override.",
@@ -534,7 +744,7 @@ async function executeUpdateGoalTool(
       "Completion was rejected because update_goal(completed) was not the final tool call in its agent turn.",
     );
   }
-  if (sessionGoal.criterionKind === "assertion") {
+  if (sessionGoal.completion.kind === "assertion") {
     if (evaluateAssertionGoalCompletion === undefined) {
       return rejectedGoalCompletion(
         sessionGoal,
@@ -544,7 +754,7 @@ async function executeUpdateGoalTool(
     }
     const evaluation = await evaluateAssertionGoalCompletion({
       objective: sessionGoal.objective,
-      completionCriterion: sessionGoal.completionCriterion,
+      completionCriterion: sessionGoal.completion.assertion,
     });
     if (!evaluation.completed) {
       return rejectedGoalCompletion(
@@ -575,21 +785,21 @@ async function executeUpdateGoalTool(
     return {
       content: formatSessionGoalCompletedToolResult(completedGoal),
       ok: true,
-      sessionGoalUpdate: copySessionGoal(completedGoal),
+      effects: [{ kind: "session_goal", goal: copySessionGoal(completedGoal) }],
     };
   }
   const expectedCommand = normalizeSessionGoalCompletionCommand(
-    sessionGoal.completionCriterion,
+    sessionGoal.completion.command,
   );
-  if (!allowBash) {
+  if (bash.kind === "disabled") {
     return rejectedGoalCompletion(
       sessionGoal,
       `Tool failed: update_goal failed: Runtime cannot run command completion criterion ${JSON.stringify(expectedCommand)} because Bash is disabled.\nRecovery: Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`,
       `Completion was rejected because Runtime could not run command criterion ${JSON.stringify(expectedCommand)} while Bash was disabled.`,
     );
   }
-  if (bashPermission !== undefined) {
-    const decision = await bashPermission.review({
+  if (bash.kind === "reviewed") {
+    const decision = await bash.permission.review({
       command: expectedCommand,
       cwd: workspace,
       signal,
@@ -604,8 +814,8 @@ async function executeUpdateGoalTool(
   }
   const verification = await executeBash(workspace, expectedCommand, {
     signal,
-    ...(sessionGoal.verificationTimeoutMs !== undefined
-      ? { timeoutMs: sessionGoal.verificationTimeoutMs }
+    ...(sessionGoal.completion.verificationTimeoutMs !== undefined
+      ? { timeoutMs: sessionGoal.completion.verificationTimeoutMs }
       : {}),
   });
   if (verification.exitCode !== 0) {
@@ -622,13 +832,16 @@ async function executeUpdateGoalTool(
     return {
       ...rejection,
       ...truncation,
-      ...(truncation.artifactContent !== undefined
+      ...(truncation.artifact !== undefined
         ? {
-            artifactContent: commandVerificationFailureContent(
-              expectedCommand,
-              verification.exitCode,
-              truncation.artifactContent,
-            ),
+            artifact: {
+              content: commandVerificationFailureContent(
+                expectedCommand,
+                verification.exitCode,
+                truncation.artifact.content,
+              ),
+              sourceTruncated: truncation.artifact.sourceTruncated,
+            },
           }
         : {}),
     };
@@ -656,7 +869,7 @@ async function executeUpdateGoalTool(
   return {
     content: formatSessionGoalCompletedToolResult(completedGoal),
     ok: true,
-    sessionGoalUpdate: copySessionGoal(completedGoal),
+    effects: [{ kind: "session_goal", goal: copySessionGoal(completedGoal) }],
   };
 }
 
@@ -679,25 +892,30 @@ function executeReadTool(
     result.targetPath,
     result.content,
   );
+  const effects: ToolExecutionEffect[] = [
+    {
+      kind: "read",
+      targetPath: result.targetPath,
+      resourceObservation: observeReadResource({
+        workspace,
+        targetPath: result.targetPath,
+        content: result.content,
+      }),
+      ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
+      ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+    },
+  ];
+  if (scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0) {
+    effects.push({
+      kind: "visible_project_instructions",
+      instructionPaths: scopedOutput.instructionPaths,
+    });
+  }
   return {
     content: scopedOutput?.content ?? result.content,
     ok: true,
     ...sourceTruncation(result),
-    readTargetPath: result.targetPath,
-    resourceObservation: observeReadResource({
-      workspace,
-      targetPath: result.targetPath,
-      content: result.content,
-    }),
-    ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
-      ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
-      : {}),
-    ...(toolCall.offset !== undefined
-      ? { readTargetOffset: toolCall.offset }
-      : {}),
-    ...(toolCall.limit !== undefined
-      ? { readTargetLimit: toolCall.limit }
-      : {}),
+    effects,
   };
 }
 
@@ -716,6 +934,7 @@ function executeLsTool(
     content: result.content,
     ok: true,
     ...sourceTruncation(result),
+    effects: NO_TOOL_EXECUTION_EFFECTS,
   };
 }
 
@@ -734,6 +953,7 @@ async function executeGlobTool(
     content: result.content,
     ok: true,
     ...sourceTruncation(result),
+    effects: NO_TOOL_EXECUTION_EFFECTS,
   };
 }
 
@@ -761,9 +981,15 @@ async function executeGrepTool(
     content: scopedOutput?.content ?? result.content,
     ok: true,
     ...sourceTruncation(result),
-    ...(scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
-      ? { visibleProjectInstructionPaths: scopedOutput.instructionPaths }
-      : {}),
+    effects:
+      scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
+        ? [
+            {
+              kind: "visible_project_instructions",
+              instructionPaths: scopedOutput.instructionPaths,
+            },
+          ]
+        : NO_TOOL_EXECUTION_EFFECTS,
   };
 }
 
@@ -786,6 +1012,7 @@ async function executeGitDiffTool(
     content: result.content,
     ok: true,
     ...sourceTruncation(result),
+    effects: NO_TOOL_EXECUTION_EFFECTS,
   };
 }
 
@@ -802,6 +1029,7 @@ async function executeGitStatusTool(
     content: result.content,
     ok: true,
     ...sourceTruncation(result),
+    effects: NO_TOOL_EXECUTION_EFFECTS,
   };
 }
 
@@ -830,8 +1058,13 @@ function executeEditTool(
   return {
     content: result.content,
     ok: true,
-    mutatedTargetPath: result.targetPath,
-    checkpointOperations: [result.checkpointOperation],
+    effects: [
+      {
+        kind: "mutation",
+        targetPaths: [result.targetPath],
+        checkpointOperations: [result.checkpointOperation],
+      },
+    ],
   };
 }
 
@@ -861,8 +1094,13 @@ function executeWriteTool(
   return {
     content: result.content,
     ok: true,
-    mutatedTargetPath: result.targetPath,
-    checkpointOperations: [result.checkpointOperation],
+    effects: [
+      {
+        kind: "mutation",
+        targetPaths: [result.targetPath],
+        checkpointOperations: [result.checkpointOperation],
+      },
+    ],
   };
 }
 
@@ -883,21 +1121,30 @@ function executeApplyPatchTool(
   return {
     content: result.content,
     ok: true,
-    mutatedTargetPaths: result.targetPaths,
-    checkpointOperations: result.checkpointOperations,
+    effects: [
+      {
+        kind: "mutation",
+        targetPaths: result.targetPaths,
+        checkpointOperations: result.checkpointOperations,
+      },
+    ],
   };
 }
 
 async function executeBashTool(
-  { workspace, signal, allowBash, bashPermission }: BuiltinToolExecutionContext,
+  { workspace, signal, bash }: BuiltinToolExecutionContext,
   toolCall: BashToolCall,
 ): Promise<ToolExecution> {
-  if (!allowBash) {
-    return { content: disabledBashMessage(), ok: false };
+  if (bash.kind === "disabled") {
+    return {
+      content: disabledBashMessage(),
+      ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
+    };
   }
 
-  if (bashPermission !== undefined) {
-    const decision = await bashPermission.review({
+  if (bash.kind === "reviewed") {
+    const decision = await bash.permission.review({
       command: toolCall.command,
       cwd: workspace,
       signal,
@@ -906,6 +1153,7 @@ async function executeBashTool(
       return {
         content: deniedBashMessage(decision.message),
         ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
       };
     }
   }
@@ -919,12 +1167,17 @@ async function executeBashTool(
   return {
     content: result.content,
     ok: true,
-    bashCommandEvidence: {
-      command: toolCall.command,
-      cwd: workspace,
-      exitCode: result.exitCode,
-    },
     ...sourceTruncation(result),
+    effects: [
+      {
+        kind: "bash_command",
+        evidence: {
+          command: toolCall.command,
+          cwd: workspace,
+          exitCode: result.exitCode,
+        },
+      },
+    ],
   };
 }
 
@@ -946,6 +1199,8 @@ function executeBuiltinToolCall(
       return executeMemoryAddTool(context, parsed.data);
     case "memory_forget":
       return executeMemoryForgetTool(context, parsed.data);
+    case "memory_propose":
+      return executeMemoryProposeTool(context, parsed.data);
     case "skill_resource":
       return executeSkillResourceTool(context, parsed.data);
     case "skill_search":
@@ -983,6 +1238,7 @@ export async function executeToolCall(
     return {
       content: invalidToolCallFailureMessage(toolCall),
       ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
   try {
@@ -995,15 +1251,25 @@ export async function executeToolCall(
       return {
         content: scopedProjectInstructionsFailureMessage(error),
         ok: false,
-        visibleProjectInstructionPaths: error.instructionPaths,
+        effects: [
+          {
+            kind: "visible_project_instructions",
+            instructionPaths: error.instructionPaths,
+          },
+        ],
       };
     }
     if (!isRecoverableToolError(error)) {
       return {
         content: unhandledToolFailureMessage(toolCall.tool, error),
         ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
       };
     }
-    return { content: toolFailureMessage(error), ok: false };
+    return {
+      content: toolFailureMessage(error),
+      ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
+    };
   }
 }

@@ -16,6 +16,7 @@ import {
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 
 describe("Context Compaction Agent Recovery", () => {
   test(`Given overflow recovery only produces length-truncated summaries,
@@ -44,7 +45,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "truncated-overflow-recovery-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Partial recovery checkpoint" };
           yield { type: "stop", reason: "length", usage: ZERO_USAGE };
@@ -67,7 +68,7 @@ describe("Context Compaction Agent Recovery", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: { keepRecentTokens: 1 },
           modelOperations: {
@@ -114,7 +115,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "summary-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           if (summaryRequests === 1) {
             throw new KeelError(
@@ -147,7 +148,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 6,
@@ -182,7 +183,7 @@ describe("Context Compaction Agent Recovery", () => {
       id: "compacting-provider",
       async *stream(options) {
         mutableProviderRequests.push([...options.messages]);
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Alpha summary." };
           yield {
             type: "stop",
@@ -218,7 +219,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 120,
@@ -319,7 +320,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "source-backed-checkpoint-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield {
             type: "text",
@@ -351,7 +352,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 160,
@@ -430,7 +431,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "forged-source-backed-checkpoint-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield {
             type: "text",
@@ -462,7 +463,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 160,
@@ -548,7 +549,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "lossy-source-backed-checkpoint-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield {
             type: "text",
@@ -581,7 +582,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 160,
@@ -636,17 +637,12 @@ describe("Context Compaction Agent Recovery", () => {
     ];
     const readVisibility = createReadVisibilityState();
     readVisibility.applyVisibleToolExecutions([
-      {
-        ok: true,
-        content: "",
-        readTargetPath: "package.json",
-        readTargetOffset: 0,
-      },
+      successfulReadToolExecution({ targetPath: "package.json", offset: 0 }),
     ]);
     const provider: LLMProvider = {
       id: "compacting-provider-restore-throws",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Alpha summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -667,7 +663,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         readVisibility,
         contextCompaction: {
@@ -779,7 +775,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "large-summary-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           if (summaryRequests > 1) {
             throw new Error("context compacted more than once");
@@ -802,7 +798,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 80,
@@ -831,7 +827,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "usage-accounted-proactive-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Unexpected proactive summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -882,7 +878,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: true,
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 280,
@@ -930,7 +926,7 @@ describe("Context Compaction Agent Recovery", () => {
     const provider: LLMProvider = {
       id: "usage-accounted-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Earlier usage summary." };
           yield {
@@ -996,7 +992,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: true,
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 260,
@@ -1072,7 +1068,7 @@ describe("Context Compaction Agent Recovery", () => {
             "DeepSeek API error (400): context_length_exceeded",
           );
         }
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier task summary." };
           yield {
             type: "stop",
@@ -1109,7 +1105,7 @@ describe("Context Compaction Agent Recovery", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 6,

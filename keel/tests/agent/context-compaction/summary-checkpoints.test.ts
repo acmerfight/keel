@@ -194,7 +194,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     const provider: LLMProvider = {
       id: "manual-focus-provider",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("only summary requests are expected");
         }
         summaryPrompt = options.messages[0]?.content ?? "";
@@ -237,7 +237,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     const provider: LLMProvider = {
       id: "manual-blank-focus-provider",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("only summary requests are expected");
         }
         summaryPrompt = options.messages[0]?.content ?? "";
@@ -617,7 +617,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     const provider: LLMProvider = {
       id: "repeated-checkpoint-provider",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("only summary requests are expected");
         }
         summaryPrompts.push(options.messages[0]?.content ?? "");
@@ -714,7 +714,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     const provider: LLMProvider = {
       id: "checkpoint-tag-escaping-provider",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("only summary requests are expected");
         }
         summaryPrompts.push(options.messages[0]?.content ?? "");
@@ -1341,7 +1341,7 @@ describe("Context Compaction Summary Checkpoints", () => {
     const provider: LLMProvider = {
       id: "summary-serializer-provider",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("provider should only be used for summarization");
         }
         summaryPrompt = options.messages[0]?.content ?? "";

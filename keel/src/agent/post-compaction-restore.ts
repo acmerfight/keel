@@ -1,7 +1,11 @@
 import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
 import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { Message, ToolCall } from "../llm/types.ts";
-import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+} from "../tools/execution.ts";
 import type { ProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
 import {
@@ -136,10 +140,14 @@ function publishVisibleProjectInstructions(
   executions: readonly ToolExecution[],
 ): void {
   for (const execution of executions) {
-    if (execution.visibleProjectInstructionPaths === undefined) {
+    const visibleInstructions = toolExecutionEffect(
+      execution,
+      "visible_project_instructions",
+    );
+    if (visibleInstructions === undefined) {
       continue;
     }
-    state.markInstructionPathsVisible(execution.visibleProjectInstructionPaths);
+    state.markInstructionPathsVisible(visibleInstructions.instructionPaths);
   }
 }
 
@@ -187,7 +195,6 @@ export async function restorePostCompactionReads(options: {
       output =
         options.projectInstructionVisibility.formatRestoreOutput(snapshot);
     } catch (error) {
-      /* v8 ignore next 3: recoverable AGENTS.md reload failures are covered; unexpected restore failures must still abort the turn. */
       if (!shouldSkipProjectInstructionRestore(error)) {
         throw error;
       }
@@ -236,15 +243,16 @@ export async function restorePostCompactionReads(options: {
       workspace: options.workspace,
       toolCall,
       signal: options.signal,
-      allowBash: false,
+      bash: { kind: "disabled" },
       hiddenWorkspacePaths,
       projectInstructions: options.projectInstructionVisibility,
     });
-    if (
-      !execution.ok ||
-      execution.readTargetPath === undefined ||
-      execution.resourceObservation === undefined
-    ) {
+    if (!execution.ok) {
+      continue;
+    }
+    const readEffect = toolExecutionEffect(execution, "read");
+    /* v8 ignore next 3: executeReadTool records a read effect on every successful read execution. */
+    if (readEffect === undefined) {
       continue;
     }
     const fittedContent = fitPostCompactionReadContent(
@@ -255,7 +263,7 @@ export async function restorePostCompactionReads(options: {
     restored.push({
       toolCall,
       execution,
-      resourceObservation: execution.resourceObservation,
+      resourceObservation: readEffect.resourceObservation,
       content: fittedContent.content,
       complete: fittedContent.complete,
     });

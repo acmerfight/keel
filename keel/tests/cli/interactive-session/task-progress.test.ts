@@ -5,7 +5,6 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   forkSessionStore,
@@ -15,7 +14,10 @@ import {
 } from "../../../src/cli/session-store.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -73,6 +75,7 @@ describe("Interactive Session - Task Progress", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -147,7 +150,7 @@ describe("Interactive Session - Task Progress", () => {
     const provider: LLMProvider = {
       id: "task-compact-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Manual checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -182,6 +185,7 @@ describe("Interactive Session - Task Progress", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -310,7 +314,28 @@ describe("Interactive Session - Task Progress", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
-      sessionId: source.id,
+      session: savedInteractiveSession({
+        id: source.id,
+        persistMessages: ({ messages, reason, consumedInputIds }) => {
+          persistedMessages = persistSessionMessages({
+            session: source,
+            previousMessages: persistedMessages,
+            currentMessages: messages,
+            reason,
+            consumedInputIds,
+            runtime: nextRuntime(),
+          });
+        },
+        persistTaskProgress: (update) => {
+          persistSessionTaskProgress({
+            session: source,
+            taskProgress: update.taskProgress,
+            messageOrdinal: update.messageOrdinal,
+            runtime: nextRuntime(),
+          });
+        },
+      }),
+
       initialMessages: source.messages,
       initialTaskProgress: source.taskProgress,
       input,
@@ -333,24 +358,7 @@ describe("Interactive Session - Task Progress", () => {
         costModel: ZERO_COST_MODEL,
       }),
       requireKnownCostModel: () => ZERO_COST_MODEL,
-      persistSessionMessages: (messages, reason, consumedInputIds) => {
-        persistedMessages = persistSessionMessages({
-          session: source,
-          previousMessages: persistedMessages,
-          currentMessages: messages,
-          reason,
-          consumedInputIds,
-          runtime: nextRuntime(),
-        });
-      },
-      persistTaskProgress: (update) => {
-        persistSessionTaskProgress({
-          session: source,
-          taskProgress: update.taskProgress,
-          messageOrdinal: update.messageOrdinal,
-          runtime: nextRuntime(),
-        });
-      },
+
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {
@@ -485,6 +493,13 @@ describe("Interactive Session - Task Progress", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: () => {},
+        persistTaskProgress: (update) => {
+          persistedUpdates.push(update);
+        },
+      }),
       input,
       writeStdout: () => {},
       writeStderr: () => {},
@@ -501,10 +516,7 @@ describe("Interactive Session - Task Progress", () => {
         costModel: ZERO_COST_MODEL,
       }),
       requireKnownCostModel: () => ZERO_COST_MODEL,
-      persistSessionMessages: () => {},
-      persistTaskProgress: (update) => {
-        persistedUpdates.push(update);
-      },
+
       printAgentEvents: async (stream) => {
         let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
         for await (const event of stream) {

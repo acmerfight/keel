@@ -79,7 +79,7 @@ describe("Model Operations", () => {
           userMessage: "Update and inspect note.txt",
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: maxTurnFallbackPolicy(2),
           modelOperations: {
             recorder,
@@ -116,15 +116,17 @@ describe("Model Operations", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "Trusted evidence proves the work is complete.",
+      completion: {
+        kind: "assertion",
+        assertion: "Trusted evidence proves the work is complete.",
+      },
     };
     let agentRequests = 0;
     const provider: LLMProvider = {
       id: "assertion-operation-provider",
       async *stream(options) {
         const attempt = options.providerRequestAttempts?.begin();
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const text = JSON.stringify({
             completed: false,
             reason: "No trusted evidence was surfaced.",
@@ -160,7 +162,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           sessionGoal: goal,
           modelOperations: {
@@ -216,7 +218,7 @@ describe("Model Operations", () => {
           userMessage: "Do not send this request",
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: { model: costModel, maxCostUsd: 0.01 },
           modelOperations: {
@@ -296,7 +298,7 @@ describe("Model Operations", () => {
           userMessage: "Retry only while the request remains affordable.",
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           costTracking: {
             model: costModel,
@@ -386,7 +388,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 120,
@@ -464,7 +466,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 1_000,
@@ -533,7 +535,7 @@ describe("Model Operations", () => {
             userMessage: "Stop the request.",
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             modelOperations: {
               recorder,
@@ -550,6 +552,55 @@ describe("Model Operations", () => {
           purpose: "agent_turn",
           outcome: "aborted",
           providerRequestAttempts: [{ outcome: "aborted" }],
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an Agent provider throws an unexpected runtime error,
+    When the model operation fails before a physical request is reported,
+    Then the report records a terminal failure and preserves the original error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-model-operation-"));
+    const unexpectedError = new Error("unexpected provider implementation bug");
+    const provider: LLMProvider = {
+      id: "unexpected-error-provider",
+      async *stream() {
+        yield* [];
+        throw unexpectedError;
+      },
+    };
+    const recorder = reportRecorderWithAgentRun();
+
+    try {
+      // When / Then
+      await expect(
+        collect(
+          runAgent({
+            workspace,
+            provider,
+            userMessage: "Run the model request.",
+            systemPrompt: "You are helpful.",
+            signal: new AbortController().signal,
+            bash: { kind: "disabled" },
+            stopPolicy: defaultStopPolicy(),
+            modelOperations: {
+              recorder,
+              owner: { type: "current_agent_run" },
+              provider: provider.id,
+              model: "test-model",
+              costModel: ZERO_COST_MODEL,
+            },
+          }),
+        ),
+      ).rejects.toBe(unexpectedError);
+      expect(recorder.modelOperations()).toMatchObject([
+        {
+          purpose: "agent_turn",
+          outcome: "terminal_error",
+          providerRequestAttempts: [],
         },
       ]);
     } finally {
@@ -586,7 +637,7 @@ describe("Model Operations", () => {
             messages,
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             contextCompaction: {
               contextWindowTokens: 120,
@@ -715,7 +766,7 @@ describe("Model Operations", () => {
             messages,
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             contextCompaction: {
               contextWindowTokens: 120,
@@ -803,7 +854,7 @@ describe("Model Operations", () => {
           messages,
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             contextWindowTokens: 100_000,

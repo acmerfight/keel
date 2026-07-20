@@ -31,6 +31,9 @@ DASHSCOPE_API_KEY=... keel eval --provider qwen --model qwen3.7-max --trials 3 -
 # Iterate on one task.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl
 
+# Compare the same memory-dependent task with memory disabled and enabled.
+keel eval --task memory-release-validation-command --trials 3 --out /tmp/memory.jsonl
+
 # Keep provider-visible messages for every trial.
 keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl --transcript-dir /tmp/keel-transcripts
 
@@ -43,7 +46,10 @@ Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
 run creates a unique subdirectory under `<dir>` and writes one
 schema-versioned JSONL transcript per trial.
 
-Exit code is non-zero when any trial fails to verify, times out, or crashes.
+For a standard task, the exit code is non-zero when any trial fails to verify,
+times out, or crashes. For a `memory_pair` task, the disabled arm may fail
+verification because it intentionally lacks the required fact; it must still
+complete without timing out or crashing, and the enabled arm must verify.
 `keel eval compare` is report-only: it exits non-zero for unreadable or
 invalid inputs, but regressions are printed rather than used as a failure
 gate.
@@ -84,21 +90,23 @@ when tasks run near their per-task time limits:
 
 ## Reading results
 
-Each trial appends one JSON line:
+Each standard trial appends one JSON line:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "timestamp": "2026-06-13T02:11:09.123Z",
   "keelVersion": "0.0.1",
   "taskId": "fix-typo",
   "trial": 1,
+  "condition": "standard",
+  "requiredToPass": true,
   "pass": true,
   "outcome": "verified",
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 14,
+    "schemaVersion": 15,
     "tasks": [
       {
         "ordinal": 1,
@@ -163,7 +171,7 @@ Each trial appends one JSON line:
     "skillCatalog": { "exposed": 0, "omitted": 0, "total": 0, "budgetChars": 8000, "usedChars": 0 },
     "skillPolicy": { "mode": "enabled", "disabledPackages": 0 },
     "undoProtection": { "status": "available", "checkpointsWritten": 1, "failures": [], "latestCheckpoint": { "written": true } },
-    "memory": { "enabled": false, "scope": null, "loadedIds": [], "renderedBytes": 0, "estimatedTokens": 0, "operations": [] }
+    "memory": { "enabled": false, "scope": null, "loadedIds": [], "loadedEntries": [], "renderedBytes": 0, "estimatedTokens": 0, "operations": [] }
   }
 }
 ```
@@ -172,6 +180,11 @@ Each trial appends one JSON line:
   `verify_failed` are the agent's score; `timeout` / `crashed` mean the
   environment or harness broke and the trial must not be read as agent
   quality.
+- `condition` is `standard`, `memory_disabled`, or `memory_enabled`.
+  `requiredToPass` states whether verification is part of the task gate. A
+  memory-paired trial appends two lines in disabled/enabled order. Each line
+  carries the ordinary report, so memory IDs, bytes, model usage, cost, and
+  timing remain inspectable without a second result format.
 - `report.tasks` attributes each admitted user Task to one or more Agent Runs.
   `humanInterventionCount` counts user messages actually injected as steering
   into an active Agent Run, while later Task prompts and runtime messages stay
@@ -204,7 +217,7 @@ A task is a directory under `evals/tasks/`:
 
 ```
 evals/tasks/<task-id>/
-  task.json       # { "prompt", "timeoutMs"?, "scriptTimeoutMs"?, "allowBash"?, "maxCostUsd"? }
+  task.json       # strict standard or memory_pair configuration
   workspace/      # fixture files copied into a fresh temp dir per trial
   verify.sh       # runs in the workspace after the agent; exit 0 = pass
   solution.sh     # reference solution applied without an LLM; required
@@ -222,6 +235,36 @@ Execution model (mirrors Terminal-Bench/Harbor):
   child CLI and records that path only after the file exists.
 - `verify.sh` grades only the final workspace state, never the agent's
   path to it. Any approach that produces the right outcome passes.
+
+Standard tasks declare `"kind": "standard"`; their existing timeout, bash,
+and cost options retain their ordinary defaults. The runner always passes
+`--no-memory` for these tasks so ambient developer memory cannot contaminate a
+baseline.
+
+Memory-dependent tasks use a strict, explicit configuration:
+
+```json
+{
+  "kind": "memory_pair",
+  "prompt": "Create release-command.txt from the current project memory.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.03,
+  "memory": "The current release validation command is `pnpm test:coverage`."
+}
+```
+
+The runner creates an isolated `KEEL_HOME` for memory and copies a private,
+fixed snapshot of the user's provider config/auth files into it. It initializes
+the copied workspace as a Git project and seeds the configured entry through
+the public `keel memory add` command. It then runs the same provider, model,
+prompt, budgets, and absolute workspace path first with `--no-memory` and then
+with memory enabled, restoring the pristine workspace between arms. Both result
+lines are written in one append operation. This first paired slice deliberately
+supports one explicit project-memory entry; poisoning, forget/purge, distractor
+scaling, and broader lifecycle corpora remain later parts of issue #462 rather
+than hidden modes in this task shape.
 
 ## Writing good tasks
 

@@ -11,6 +11,7 @@ import {
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -66,7 +67,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const provider: LLMProvider = {
       id: "compacted-scoped-agents-read-before-edit",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "The API server was read earlier." };
           yield {
             type: "stop",
@@ -166,7 +167,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           projectInstructionVisibility,
@@ -185,7 +186,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           projectInstructionVisibility,
@@ -292,7 +293,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const provider: LLMProvider = {
       id: "scoped-restore-failure-rolls-back",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier API server read." };
           yield { type: "stop", reason: "stop", usage };
           return;
@@ -349,7 +350,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           projectInstructionVisibility,
@@ -366,7 +367,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
             messages,
             systemPrompt: "You are a helpful assistant.",
             signal: freshSignal(),
-            allowBash: false,
+            bash: { kind: "disabled" },
             stopPolicy: defaultStopPolicy(),
             readVisibility,
             projectInstructionVisibility,
@@ -386,7 +387,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           projectInstructionVisibility,
@@ -443,7 +444,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const provider: LLMProvider = {
       id: "compacted-failed-write-scoped-agents",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: "The failed write exposed scoped project instructions.",
@@ -550,7 +551,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           projectInstructionVisibility,
@@ -564,7 +565,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
           messages,
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           readVisibility,
           projectInstructionVisibility,
@@ -626,7 +627,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
     readVisibility.applyVisibleToolExecutions([
-      { ok: true, content: "", readTargetPath: serverTargetPath },
+      successfulReadToolExecution({ targetPath: serverTargetPath }),
     ]);
     let sequence = 0;
 
@@ -722,6 +723,44 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       expect(
         projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
       ).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a visible read target disappears before post-compaction restoration,
+    When recent reads are restored,
+    Then failed read restoration is skipped without replaying a tool message`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const serverPath = join(workspace, "server.ts");
+    await writeFile(serverPath, "export const route = 'current';\n", "utf8");
+    const serverTargetPath = await realpath(serverPath);
+    const messages: Message[] = [];
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(workspace);
+    readVisibility.applyVisibleToolExecutions([
+      successfulReadToolExecution({ targetPath: serverTargetPath }),
+    ]);
+    await rm(serverPath);
+    let sequence = 0;
+
+    try {
+      // When
+      await restorePostCompactionReads({
+        workspace,
+        signal: freshSignal(),
+        readVisibility,
+        projectInstructionVisibility,
+        messages,
+        nextToolCallId: () => `post_compaction_read_${sequence++}`,
+      });
+
+      // Then
+      expect(messages).toEqual([]);
+      expect(sequence).toBe(1);
+      expect(readVisibility.visibleReadsMostRecentFirst()).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

@@ -1078,7 +1078,7 @@ describe("Kimi Provider", () => {
         systemPrompt: "Wrap up.",
         messages: [{ role: "user", content: "summarize" }],
         signal: freshSignal(),
-        toolChoice: "none",
+        toolExposure: { kind: "none" },
       }),
     );
 
@@ -1099,7 +1099,7 @@ describe("Kimi Provider", () => {
         systemPrompt: "You are Keel.",
         messages: [{ role: "user", content: "hello" }],
         signal: freshSignal(),
-        allowBash: true,
+        toolExposure: { kind: "auto", bash: true },
       }),
     );
 

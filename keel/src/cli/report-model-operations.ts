@@ -23,8 +23,7 @@ type RunReportModelOperationOwner =
       readonly taskOrdinal: number;
       readonly agentRunOrdinal: number;
     }
-  | { readonly type: "session" }
-  | { readonly type: "invocation" };
+  | { readonly type: "session" };
 
 interface RunReportProviderRequestAttemptBase {
   readonly ordinal: number;
@@ -106,7 +105,9 @@ type MutableProviderRequestAttemptResult =
     }
   | {
       readonly state: "context_overflow";
-      readonly recoveryOperationOrdinal: number | null;
+      readonly recovery: {
+        operationOrdinal: number | null;
+      };
     }
   | { readonly state: "terminal_error" | "aborted" };
 
@@ -116,27 +117,27 @@ type FinishedProviderRequestAttemptResult = Exclude<
 >;
 
 interface MutableProviderRequestAttempt {
-  readonly token: symbol;
   readonly ordinal: number;
   result: MutableProviderRequestAttemptResult;
 }
 
-function finishedProviderRequestAttemptResult(
-  result: MutableProviderRequestAttemptResult,
-): FinishedProviderRequestAttemptResult {
-  /* v8 ignore next 3 -- model operations reject unfinished attempts before report materialization. */
-  if (result.state === "pending") {
-    throw new Error("internal: provider request attempt never finished");
-  }
-  return result;
+interface FinishedProviderRequestAttempt {
+  readonly ordinal: number;
+  readonly result: FinishedProviderRequestAttemptResult;
 }
 
 type MutableModelOperationResult =
   | { readonly state: "pending" }
-  | { readonly state: "finished"; readonly outcome: ModelOperationOutcome };
+  | {
+      readonly state: "finished";
+      readonly outcome: ModelOperationOutcome;
+      readonly providerRequestAttempts: readonly FinishedProviderRequestAttempt[];
+      readonly hasCompletedAttempt: boolean;
+      readonly usage: Usage;
+      readonly costUsd: number;
+    };
 
 interface MutableModelOperation {
-  readonly token: symbol;
   readonly ordinal: number;
   readonly owner: RunReportModelOperationOwner;
   readonly purpose: ModelOperationPurpose;
@@ -145,7 +146,7 @@ interface MutableModelOperation {
   readonly costModel: CostModel;
   readonly providerRequestAttempts: MutableProviderRequestAttempt[];
   result: MutableModelOperationResult;
-  latestContextOverflowAttempt: MutableProviderRequestAttempt | null;
+  latestContextOverflowRecoveryTarget: ModelOperationRecoveryTarget | null;
 }
 
 const ZERO_USAGE: Usage = {
@@ -168,10 +169,8 @@ function resolveOperationOwner(
   owner: ModelOperationOwner,
   currentAgentRun: CurrentAgentRunReportOwner | null,
 ): RunReportModelOperationOwner {
-  /* v8 ignore next -- current behavior covers Agent Run and session ownership; invocation is the remaining explicit non-Agent owner variant. */
   switch (owner.type) {
     case "current_agent_run":
-      /* v8 ignore next 5 -- CLI report lifecycle starts an Agent Run before current-agent operations; keep the fail-fast guard at the recorder boundary. */
       if (currentAgentRun === null) {
         throw new Error(
           "internal: report model operation requires an active Agent Run owner",
@@ -180,9 +179,6 @@ function resolveOperationOwner(
       return { type: "agent_run", ...currentAgentRun };
     case "session":
       return { type: "session" };
-    case "invocation":
-      /* v8 ignore next -- current provider work outside Agent Runs is session-owned; retain the explicit invocation owner contract. */
-      return { type: "invocation" };
   }
 }
 
@@ -190,8 +186,7 @@ function finishProviderRequestAttempt(
   attempt: MutableProviderRequestAttempt,
   result: ProviderRequestAttemptFinish,
   costModel: CostModel,
-): void {
-  /* v8 ignore next 3 -- supported-provider conformance requires each physical attempt handle to finish exactly once. */
+): ModelOperationRecoveryTarget | null {
   if (attempt.result.state !== "pending") {
     throw new Error("internal: provider request attempt finished twice");
   }
@@ -202,31 +197,42 @@ function finishProviderRequestAttempt(
         usage: { ...result.usage },
         costUsd: requestCostUsd(result.usage, costModel),
       };
-      return;
+      return null;
     case "retryable_error":
       attempt.result = {
         state: "retryable_error",
         retryDecision: { ...result.retryDecision },
       };
-      return;
-    case "context_overflow":
+      return null;
+    case "context_overflow": {
+      const recovery: { operationOrdinal: number | null } = {
+        operationOrdinal: null,
+      };
       attempt.result = {
         state: "context_overflow",
-        recoveryOperationOrdinal: null,
+        recovery,
       };
-      return;
+      return (recoveryOperationOrdinal) => {
+        if (recovery.operationOrdinal !== null) {
+          throw new Error(
+            "internal: provider request attempt already has a recovery operation",
+          );
+        }
+        recovery.operationOrdinal = recoveryOperationOrdinal;
+      };
+    }
     case "terminal_error":
     case "aborted":
       attempt.result = { state: result.outcome };
-      return;
+      return null;
   }
 }
 
 function providerRequestAttemptReport(
-  attempt: MutableProviderRequestAttempt,
+  attempt: FinishedProviderRequestAttempt,
 ): RunReportProviderRequestAttempt {
   const base = { ordinal: attempt.ordinal };
-  const result = finishedProviderRequestAttemptResult(attempt.result);
+  const result = attempt.result;
   switch (result.state) {
     case "completed":
       return {
@@ -245,7 +251,7 @@ function providerRequestAttemptReport(
       return {
         ...base,
         outcome: "context_overflow",
-        recoveryOperationOrdinal: result.recoveryOperationOrdinal,
+        recoveryOperationOrdinal: result.recovery.operationOrdinal,
       };
     case "terminal_error":
     case "aborted":
@@ -253,100 +259,61 @@ function providerRequestAttemptReport(
   }
 }
 
-function operationUsage(operation: MutableModelOperation): Usage | null {
-  let usage: Usage | null = null;
-  for (const attempt of operation.providerRequestAttempts) {
-    if (attempt.result.state !== "completed") {
-      continue;
-    }
-    usage = addUsage(usage ?? ZERO_USAGE, attempt.result.usage);
+function modelOperationAttemptAccounting(
+  attempts: readonly FinishedProviderRequestAttempt[],
+): {
+  readonly hasCompletedAttempt: boolean;
+  readonly usage: Usage;
+  readonly costUsd: number;
+} {
+  let hasCompletedAttempt = false;
+  let usage = { ...ZERO_USAGE };
+  let costUsd = 0;
+  for (const attempt of attempts) {
+    if (attempt.result.state !== "completed") continue;
+    hasCompletedAttempt = true;
+    usage = addUsage(usage, attempt.result.usage);
+    costUsd += attempt.result.costUsd;
   }
-  return usage;
-}
-
-function operationCostUsd(operation: MutableModelOperation): number | null {
-  let costUsd: number | null = null;
-  for (const attempt of operation.providerRequestAttempts) {
-    if (attempt.result.state !== "completed") {
-      continue;
-    }
-    costUsd = (costUsd ?? 0) + attempt.result.costUsd;
-  }
-  return costUsd;
+  return { hasCompletedAttempt, usage, costUsd };
 }
 
 function modelOperationReport(
   operation: MutableModelOperation,
 ): RunReportModelOperation {
-  /* v8 ignore next 3 -- report lifecycle finishes every operation before requesting its immutable report projection. */
   if (operation.result.state === "pending") {
     throw new Error("internal: model operation never finished");
   }
-  const base = {
-    ordinal: operation.ordinal,
-    owner: { ...operation.owner },
-    purpose: operation.purpose,
-    provider: operation.provider,
-    model: operation.model,
-    providerRequestAttempts: operation.providerRequestAttempts.map(
-      providerRequestAttemptReport,
-    ),
-  };
-  const usage = operationUsage(operation);
-  const costUsd = operationCostUsd(operation);
-  /* v8 ignore next 8 -- a completed operation can only follow a conforming provider's completed attempt with usage. */
   if (
     operation.result.outcome === "completed" &&
-    (usage === null || costUsd === null)
+    !operation.result.hasCompletedAttempt
   ) {
     throw new Error(
       "internal: completed model operation requires a completed provider request attempt",
     );
   }
   return {
-    ...base,
+    ordinal: operation.ordinal,
+    owner: { ...operation.owner },
+    purpose: operation.purpose,
+    provider: operation.provider,
+    model: operation.model,
+    providerRequestAttempts: operation.result.providerRequestAttempts.map(
+      providerRequestAttemptReport,
+    ),
     outcome: operation.result.outcome,
-    usage: usage ?? { ...ZERO_USAGE },
-    costUsd: costUsd ?? 0,
-  };
-}
-
-function linkRecoveryOperation(
-  operations: readonly MutableModelOperation[],
-  recoveryFor: ModelOperationRecoveryTarget,
-  recoveryOperationOrdinal: number,
-): void {
-  const operation = operations.find(
-    (candidate) => candidate.token === recoveryFor.operationToken,
-  );
-  const attempt = operation?.providerRequestAttempts.find(
-    (candidate) => candidate.token === recoveryFor.attemptToken,
-  );
-  /* v8 ignore next 5 -- recovery targets are opaque handles created only from a recorded context-overflow attempt. */
-  if (attempt?.result.state !== "context_overflow") {
-    throw new Error(
-      "internal: report model operation recovery target is not a context overflow attempt",
-    );
-  }
-  /* v8 ignore next 5 -- one overflow attempt starts at most one recovery compaction operation. */
-  if (attempt.result.recoveryOperationOrdinal !== null) {
-    throw new Error(
-      "internal: provider request attempt already has a recovery operation",
-    );
-  }
-  attempt.result = {
-    state: "context_overflow",
-    recoveryOperationOrdinal,
+    usage: { ...operation.result.usage },
+    costUsd: operation.result.costUsd,
   };
 }
 
 function beginModelOperation(
   operations: MutableModelOperation[],
+  recoveryTargets: WeakSet<ModelOperationRecoveryTarget>,
   currentAgentRun: CurrentAgentRunReportOwner | null,
   options: BeginModelOperationOptions,
 ): ModelOperationHandle {
   const operation: MutableModelOperation = {
-    token: Symbol("model operation"),
     ordinal: operations.length + 1,
     owner: resolveOperationOwner(options.owner, currentAgentRun),
     purpose: options.purpose,
@@ -355,38 +322,48 @@ function beginModelOperation(
     costModel: options.costModel,
     providerRequestAttempts: [],
     result: { state: "pending" },
-    latestContextOverflowAttempt: null,
+    latestContextOverflowRecoveryTarget: null,
   };
   if (options.recoveryFor !== null) {
-    linkRecoveryOperation(operations, options.recoveryFor, operation.ordinal);
+    if (!recoveryTargets.has(options.recoveryFor)) {
+      throw new Error(
+        "internal: model operation recovery target belongs to another report ledger",
+      );
+    }
+    options.recoveryFor(operation.ordinal);
   }
   operations.push(operation);
 
   const finishOperation = (outcome: ModelOperationOutcome): void => {
-    /* v8 ignore next 3 -- each operation-owning control path has one terminal finish site. */
     if (operation.result.state !== "pending") {
       throw new Error("internal: model operation finished twice");
     }
-    /* v8 ignore next 9 -- supported-provider conformance finishes the physical attempt before its logical operation. */
-    if (
-      operation.providerRequestAttempts.some(
-        (attempt) => attempt.result.state === "pending",
-      )
-    ) {
-      throw new Error(
-        "internal: model operation finished with an unfinished provider request attempt",
-      );
+    const finishedAttempts: FinishedProviderRequestAttempt[] = [];
+    for (const attempt of operation.providerRequestAttempts) {
+      if (attempt.result.state === "pending") {
+        throw new Error(
+          "internal: model operation finished with an unfinished provider request attempt",
+        );
+      }
+      finishedAttempts.push({
+        ordinal: attempt.ordinal,
+        result: attempt.result,
+      });
     }
-    /* v8 ignore next 8 -- admission rejection occurs before the provider attempt hook; post-attempt rejections are normalized below. */
-    if (
-      outcome === "admission_rejected" &&
-      operation.providerRequestAttempts.length > 0
-    ) {
+    if (outcome === "admission_rejected" && finishedAttempts.length > 0) {
       throw new Error(
         "internal: admission-rejected model operation cannot have provider request attempts",
       );
     }
-    operation.result = { state: "finished", outcome };
+    const accounting = modelOperationAttemptAccounting(finishedAttempts);
+    operation.result = {
+      state: "finished",
+      outcome,
+      providerRequestAttempts: finishedAttempts,
+      hasCompletedAttempt: accounting.hasCompletedAttempt,
+      usage: accounting.usage,
+      costUsd: accounting.costUsd,
+    };
   };
   const failureOutcome = (error: unknown): ModelOperationOutcome => {
     const errorOutcome = modelOperationOutcomeFromError(error);
@@ -405,23 +382,26 @@ function beginModelOperation(
   return {
     providerRequestAttempts: {
       begin: (): ProviderRequestAttemptHandle => {
-        /* v8 ignore next 5 -- provider conformance cannot begin a physical attempt after its owning operation finishes. */
         if (operation.result.state !== "pending") {
           throw new Error(
             "internal: provider request attempt started after model operation finished",
           );
         }
         const attempt: MutableProviderRequestAttempt = {
-          token: Symbol("provider request attempt"),
           ordinal: operation.providerRequestAttempts.length + 1,
           result: { state: "pending" },
         };
         operation.providerRequestAttempts.push(attempt);
         return {
           finish: (result): void => {
-            finishProviderRequestAttempt(attempt, result, operation.costModel);
-            if (result.outcome === "context_overflow") {
-              operation.latestContextOverflowAttempt = attempt;
+            const recoveryTarget = finishProviderRequestAttempt(
+              attempt,
+              result,
+              operation.costModel,
+            );
+            if (recoveryTarget !== null) {
+              recoveryTargets.add(recoveryTarget);
+              operation.latestContextOverflowRecoveryTarget = recoveryTarget;
             }
           },
         };
@@ -429,17 +409,8 @@ function beginModelOperation(
     },
     finish: (result) => finishOperation(result.outcome),
     finishFromError: (error) => finishOperation(failureOutcome(error)),
-    latestContextOverflowRecoveryTarget: () => {
-      const attempt = operation.latestContextOverflowAttempt;
-      /* v8 ignore next 3 -- recovery lookup is called only after a conforming provider records context overflow. */
-      if (attempt === null) {
-        return null;
-      }
-      return {
-        operationToken: operation.token,
-        attemptToken: attempt.token,
-      };
-    },
+    latestContextOverflowRecoveryTarget: () =>
+      operation.latestContextOverflowRecoveryTarget,
   };
 }
 
@@ -447,9 +418,15 @@ export function createModelOperationReportLedger(
   currentAgentRun: () => CurrentAgentRunReportOwner | null,
 ): ModelOperationReportLedger {
   const operations: MutableModelOperation[] = [];
+  const recoveryTargets = new WeakSet<ModelOperationRecoveryTarget>();
   return {
     beginModelOperation: (options) =>
-      beginModelOperation(operations, currentAgentRun(), options),
+      beginModelOperation(
+        operations,
+        recoveryTargets,
+        currentAgentRun(),
+        options,
+      ),
     modelOperations: () => operations.map(modelOperationReport),
   };
 }

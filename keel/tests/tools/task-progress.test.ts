@@ -4,9 +4,14 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   formatSessionTaskProgressToolResult,
+  type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../../src/core/task-progress.ts";
-import { executeToolCall } from "../../src/tools/execution.ts";
+import {
+  executeToolCall,
+  type ToolExecution,
+  toolExecutionEffect,
+} from "../../src/tools/execution.ts";
 import {
   openAICompatibleTools,
   toolCallFromParsedArguments,
@@ -16,12 +21,21 @@ function freshSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
+function taskProgressUpdate(
+  execution: ToolExecution,
+): SessionTaskProgress | undefined {
+  if (!execution.ok) {
+    return undefined;
+  }
+  return toolExecutionEffect(execution, "task_progress")?.taskProgress;
+}
+
 describe("Task Progress Tool", () => {
   test(`Given provider tools are listed,
     When bash is disabled,
     Then update_plan is exposed as an agent-state tool with deterministic statuses`, () => {
     // Given / When
-    const tools = openAICompatibleTools(false, false, false);
+    const tools = openAICompatibleTools({ kind: "auto" });
     const updatePlan = tools.find(
       (tool) => tool.function.name === "update_plan",
     );
@@ -74,7 +88,7 @@ describe("Task Progress Tool", () => {
         workspace,
         toolCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
@@ -82,13 +96,13 @@ describe("Task Progress Tool", () => {
         ok: true,
         content:
           "Task progress updated: 1/3 completed; current: Patch implementation.",
-        taskProgressUpdate: {
-          tasks: [
-            { step: "Inspect failing test", status: "completed" },
-            { step: "Patch implementation", status: "in_progress" },
-            { step: "Run verification", status: "pending" },
-          ],
-        },
+      });
+      expect(taskProgressUpdate(execution)).toEqual({
+        tasks: [
+          { step: "Inspect failing test", status: "completed" },
+          { step: "Patch implementation", status: "in_progress" },
+          { step: "Run verification", status: "pending" },
+        ],
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -127,7 +141,7 @@ describe("Task Progress Tool", () => {
         const result = await executeToolCall({
           workspace,
           signal: freshSignal(),
-          allowBash: false,
+          bash: { kind: "disabled" },
           toolCall,
         });
 
@@ -143,7 +157,7 @@ describe("Task Progress Tool", () => {
             "Tool failed: update_plan failed: invalid arguments",
           ),
         });
-        expect(result.taskProgressUpdate).toBeUndefined();
+        expect(taskProgressUpdate(result)).toBeUndefined();
       }
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -168,7 +182,7 @@ describe("Task Progress Tool", () => {
       const result = await executeToolCall({
         workspace,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         toolCall,
       });
 
@@ -186,7 +200,7 @@ describe("Task Progress Tool", () => {
           "Tool failed: update_plan failed: invalid arguments",
         ),
       });
-      expect(result.taskProgressUpdate).toBeUndefined();
+      expect(taskProgressUpdate(result)).toBeUndefined();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -217,15 +231,15 @@ describe("Task Progress Tool", () => {
         workspace,
         toolCall: clearCall,
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
       });
 
       // Then
       expect(clearExecution).toMatchObject({
         ok: true,
         content: "Task progress cleared.",
-        taskProgressUpdate: { tasks: [] },
       });
+      expect(taskProgressUpdate(clearExecution)).toEqual({ tasks: [] });
       expect(formatSessionTaskProgressToolResult(doneProgress)).toBe(
         "Task progress updated: 2/2 completed.",
       );

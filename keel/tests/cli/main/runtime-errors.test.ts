@@ -336,6 +336,134 @@ describe("CLI Main - Runtime Errors", () => {
     expectNoCrashOutput(fixture.stderr());
   });
 
+  test.each([
+    {
+      command: "auth status",
+      args: ["auth", "status"],
+      inputText: undefined,
+    },
+    {
+      command: "config show",
+      args: ["config", "show"],
+      inputText: undefined,
+    },
+    {
+      command: "provider setup",
+      args: ["setup", "deepseek", "--with-api-key"],
+      inputText: "provider-setup-secret\n",
+    },
+  ])(`Given provider storage environment lookup fails during $command,
+    When the user runs the command,
+    Then the shared CLI boundary reports the unexpected failure without leaking input`, async ({
+    args,
+    inputText,
+  }) => {
+    // Given
+    const input = new PassThrough();
+    if (inputText !== undefined) {
+      input.end(inputText);
+    }
+    const fixture = createRuntime(args, { input });
+    const runtime = {
+      ...fixture.runtime,
+      env: () => {
+        throw new Error(
+          "provider storage environment failed\n    at raw-stack.ts:1:1",
+        );
+      },
+    };
+
+    // When
+    const exitCode = await runCliMain(runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe(
+      "Error: unexpected runtime failure: provider storage environment failed\n",
+    );
+    expect(fixture.stderr()).not.toContain("provider-setup-secret");
+    expectNoCrashOutput(fixture.stderr());
+  });
+
+  test.each([
+    {
+      command: "workflow skill listing",
+      args: ["skills"],
+    },
+    {
+      command: "project approval listing",
+      args: ["approvals"],
+    },
+    {
+      command: "project memory listing",
+      args: ["memory", "list"],
+    },
+    {
+      command: "session listing",
+      args: ["sessions"],
+    },
+    {
+      command: "session detail",
+      args: ["sessions", "show", "demo"],
+    },
+    {
+      command: "session fork",
+      args: ["sessions", "fork", "source", "target"],
+    },
+    {
+      command: "external session fork-point listing",
+      args: ["--resume", "demo", "--fork-points"],
+    },
+    {
+      command: "headless Goal approval preflight",
+      args: [
+        "goal",
+        "--objective",
+        "verify the workspace",
+        "--verify",
+        "pnpm test",
+        "--bash-policy",
+        "ask",
+      ],
+    },
+  ])(`Given workspace lookup fails during $command,
+    When the user runs the command,
+    Then the shared CLI boundary reports the unexpected failure without a stack trace`, async ({
+    args,
+  }) => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-command-error-home-"));
+    const fixture = createRuntime(args, {
+      env: {
+        KEEL_HOME: home,
+      },
+    });
+    const runtime = {
+      ...fixture.runtime,
+      cwd: () => {
+        throw new Error(
+          "command workspace lookup failed\n    at raw-stack.ts:1:1",
+        );
+      },
+    };
+
+    try {
+      // When
+      const exitCode = await runCliMain(runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        "Error: unexpected runtime failure: command workspace lookup failed\n",
+      );
+      expectNoCrashOutput(fixture.stderr());
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given startup is aborted before command dispatch,
     When the user starts an interactive session,
     Then the CLI exits as interrupted without crash output`, async () => {

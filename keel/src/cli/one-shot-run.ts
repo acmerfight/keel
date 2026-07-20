@@ -12,8 +12,7 @@ import type { Message } from "../llm/types.ts";
 import {
   type BashMode,
   type BashPermissionDecision,
-  type BashPermissionPolicy,
-  bashModeExposesTool,
+  type BashRuntime,
   createSessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import {
@@ -57,7 +56,9 @@ import {
 } from "./provider-config.ts";
 import {
   assertEndEventHasCost,
+  projectMemoryReportEntry,
   type RunReportMemory,
+  type RunReportMemoryEntry,
   reportActiveSkills,
   writeRunReport,
 } from "./report.ts";
@@ -83,7 +84,10 @@ import {
   WorkflowSkillError,
 } from "./workflow-skills.ts";
 
-type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+type OneShotRunCliArgs = Extract<
+  CliArgs,
+  { readonly command: "run"; readonly mode: "one-shot" }
+>;
 
 function denyOneShotBashPermissionDecision(): BashPermissionDecision {
   return {
@@ -93,16 +97,19 @@ function denyOneShotBashPermissionDecision(): BashPermissionDecision {
   };
 }
 
-function oneShotBashPermissionPolicy(
+function oneShotBashRuntime(
   bashMode: BashMode,
   runtime: CliRuntime,
   workspace: string,
 ): {
-  readonly policy?: BashPermissionPolicy;
+  readonly bash: BashRuntime;
   readonly close?: () => void;
 } {
-  if (bashMode !== "ask") {
-    return {};
+  if (bashMode === "disabled") {
+    return { bash: { kind: "disabled" } };
+  }
+  if (bashMode === "trusted") {
+    return { bash: { kind: "trusted" } };
   }
   const projectRoot = bashApprovalProjectRoot(workspace);
   const initialProjectGrants = listBashProjectApprovalGrants(
@@ -111,11 +118,14 @@ function oneShotBashPermissionPolicy(
   );
   if (runtime.input.isTTY !== true) {
     return {
-      policy: createSessionBashPermissionPolicy({
-        projectRoot,
-        initialProjectGrants,
-        prompt: () => denyOneShotBashPermissionDecision(),
-      }),
+      bash: {
+        kind: "reviewed",
+        permission: createSessionBashPermissionPolicy({
+          projectRoot,
+          initialProjectGrants,
+          prompt: () => denyOneShotBashPermissionDecision(),
+        }),
+      },
     };
   }
 
@@ -136,14 +146,17 @@ function oneShotBashPermissionPolicy(
       },
     },
   );
-  return { policy, close: () => input.close() };
+  return {
+    bash: { kind: "reviewed", permission: policy },
+    close: () => input.close(),
+  };
 }
 
 export async function runOneShotCli(
-  cliArgs: RunCliArgs,
+  cliArgs: OneShotRunCliArgs,
   runtime: CliRuntime,
-  originalUserMessage: string,
 ): Promise<number> {
+  const originalUserMessage = cliArgs.userMessage;
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
@@ -228,12 +241,12 @@ export async function runOneShotCli(
     runtime.onSigint(abort);
 
     const startedAt = runtime.now();
-    const bashPermission = oneShotBashPermissionPolicy(
+    const bashRuntime = oneShotBashRuntime(
       cliArgs.bashMode,
       runtime,
       workspace,
     );
-    closeBashApprovalInput = bashPermission.close;
+    closeBashApprovalInput = bashRuntime.close;
     await cleanupExpiredToolOutputArtifacts({ runtime });
     const toolOutputArtifacts = {
       store: createToolOutputArtifactStore({
@@ -249,7 +262,7 @@ export async function runOneShotCli(
         ? { skillCatalog: catalogExposure.skills }
         : {}),
     });
-    const exposedMemoryIds = new Set<string>();
+    const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
     let exposedMemoryBytes = 0;
     let exposedMemoryTokens = 0;
     let transcriptMemoryPrompt = "";
@@ -260,8 +273,9 @@ export async function runOneShotCli(
       let loadedMemory = loadRenderedProjectMemory(runtime, workspace);
       memoryPrompt = () => {
         loadedMemory = loadRenderedProjectMemory(runtime, workspace);
-        for (const entry of loadedMemory.entries)
-          exposedMemoryIds.add(entry.id);
+        for (const entry of loadedMemory.entries) {
+          exposedMemoryEntries.set(entry.id, projectMemoryReportEntry(entry));
+        }
         exposedMemoryBytes = Math.max(
           exposedMemoryBytes,
           loadedMemory.renderedBytes,
@@ -277,7 +291,8 @@ export async function runOneShotCli(
       memoryReport = () => ({
         enabled: true,
         scope: loadedMemory.scope,
-        loadedIds: [...exposedMemoryIds],
+        loadedIds: [...exposedMemoryEntries.keys()],
+        loadedEntries: [...exposedMemoryEntries.values()],
         renderedBytes: exposedMemoryBytes,
         estimatedTokens: exposedMemoryTokens,
         operations: agentMemory.operations(),
@@ -287,6 +302,7 @@ export async function runOneShotCli(
         enabled: false,
         scope: null,
         loadedIds: [],
+        loadedEntries: [],
         renderedBytes: 0,
         estimatedTokens: 0,
         operations: [],
@@ -308,19 +324,21 @@ export async function runOneShotCli(
       provider: resolved.provider,
       userMessage,
       systemPrompt,
-      ...(memoryPrompt !== undefined ? { memoryPrompt } : {}),
-      ...(cliArgs.memoryEnabled
-        ? { memoryMutation: agentMemory.capability }
+      ...(memoryPrompt !== undefined
+        ? {
+            memory: {
+              kind: "direct",
+              prompt: memoryPrompt,
+              mutation: agentMemory.capability,
+            },
+          }
         : {}),
       signal: abortController.signal,
-      allowBash: bashModeExposesTool(cliArgs.bashMode),
+      bash: bashRuntime.bash,
       ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
       ...(skillActivation !== undefined ? { skillActivation } : {}),
       stopPolicy: defaultStopPolicy(),
       toolOutputArtifacts,
-      ...(bashPermission.policy !== undefined
-        ? { bashPermission: bashPermission.policy }
-        : {}),
       ...(trackedCostModel !== undefined
         ? {
             costTracking: {
@@ -348,7 +366,7 @@ export async function runOneShotCli(
       ...(resolved.contextCompaction !== undefined
         ? { contextCompaction: resolved.contextCompaction }
         : {}),
-      ...(cliArgs.transcriptFile !== undefined
+      ...(cliArgs.transcriptFile !== null
         ? {
             onTranscriptReady: (messages) => {
               transcriptMessages = messages;
@@ -381,7 +399,7 @@ export async function runOneShotCli(
     const undoProtection = reportRecorder.undoProtection();
     writeUndoProtectionWarning();
     if (cliArgs.maxCostUsd !== undefined && finalEnd?.cost !== undefined) {
-      runtime.writeStderr(formatCostReport(finalEnd.cost, cliArgs.maxCostUsd));
+      runtime.writeStderr(formatCostReport(finalEnd.cost));
     }
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
       assertEndEventHasCost(finalEnd);
@@ -410,10 +428,7 @@ export async function runOneShotCli(
         memory: memoryReport(),
       });
     }
-    if (
-      cliArgs.transcriptFile !== undefined &&
-      transcriptMessages !== undefined
-    ) {
+    if (cliArgs.transcriptFile !== null && transcriptMessages !== undefined) {
       writeRunTranscript(cliArgs.transcriptFile, {
         provider: resolved.provider.id,
         model: resolved.model,

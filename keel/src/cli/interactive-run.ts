@@ -34,9 +34,10 @@ import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
 import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
 import {
   type InteractiveForkSessionRequest,
+  type InteractiveSession,
+  type InteractiveSessionMemoryBinding,
   type InteractiveSessionOptions,
   runInteractiveSession,
-  type SessionPersistenceReason,
 } from "./interactive-session.ts";
 import {
   formatCostReport,
@@ -58,8 +59,10 @@ import {
   resolveInteractiveProvider,
 } from "./provider-config.ts";
 import {
+  projectMemoryReportEntry,
   type RunReportGoalOutcome,
   type RunReportMemory,
+  type RunReportMemoryEntry,
   reportActiveSkills,
   writeRunReport,
 } from "./report.ts";
@@ -80,6 +83,7 @@ import {
 import {
   acquireSessionLock,
   consumeSessionQueuedInputs,
+  createSessionMessageId,
   createSessionStore,
   ensureSessionCanBeCreated,
   forkSessionStore,
@@ -99,7 +103,6 @@ import {
   type SessionCatalogEntry,
   type SessionLock,
   type SessionModelSelection,
-  type SessionQueuedInput,
   type SessionState,
   SessionStoreError,
   sessionStoredMessages,
@@ -128,7 +131,10 @@ import {
   WorkflowSkillError,
 } from "./workflow-skills.ts";
 
-type RunCliArgs = Extract<CliArgs, { readonly command: "run" }>;
+type InteractiveRunCliArgs = Extract<
+  CliArgs,
+  { readonly command: "run"; readonly mode: "interactive" }
+>;
 
 function activeSkillPackageIdsByDescriptor(
   state: SkillLifecycleState,
@@ -197,10 +203,17 @@ async function runInteractiveSessionWithTerminalDisplay(
     terminalDisplay?.stop();
   }
 }
-type DirectResumeSessionCliArg = Exclude<
-  NonNullable<RunCliArgs["resumeSession"]>,
-  { readonly kind: "pick" }
+type DirectInteractiveSessionCliIntent = Exclude<
+  InteractiveRunCliArgs["session"],
+  { readonly kind: "resume-pick" }
 >;
+type HeadlessSessionCliIntent = Extract<
+  InteractiveRunCliArgs["session"],
+  { readonly kind: "create" | "resume" | "resume-latest" }
+>;
+export type HeadlessSessionCliArgs = Omit<InteractiveRunCliArgs, "session"> & {
+  readonly session: HeadlessSessionCliIntent;
+};
 
 const RESUME_PICK_REQUIRES_TTY_ERROR =
   "Error: --resume --pick requires a real TTY so the session choice cannot be read from piped input. Use keel --resume for the latest session or keel --resume <id> for automation.";
@@ -245,7 +258,7 @@ type InteractiveSessionStart =
       readonly kind: "fork";
       readonly sourceSessionId: string;
       readonly targetSessionId: string;
-      readonly beforeMessageId?: string;
+      readonly beforeMessageId: string | null;
     };
 
 type PromptedInteractiveSessionStart =
@@ -263,14 +276,8 @@ interface BareKeelPromptCatalog {
   readonly latestSession: SessionCatalogEntry;
 }
 
-function interactiveSessionStartFromCliArgs(
-  cliArgs: {
-    readonly ephemeral: boolean;
-    readonly sessionId?: string;
-    readonly resumeSession?: DirectResumeSessionCliArg;
-    readonly forkSessionId?: string;
-    readonly forkBeforeMessage?: string;
-  },
+function interactiveSessionStartFromIntent(
+  intent: DirectInteractiveSessionCliIntent,
   options: {
     readonly workspace: string;
     readonly runtime: CliRuntime;
@@ -279,34 +286,28 @@ function interactiveSessionStartFromCliArgs(
     ) => SessionGoalResumeAssessment;
   },
 ): InteractiveSessionStart {
-  if (cliArgs.ephemeral) {
-    return { kind: "ephemeral" };
+  switch (intent.kind) {
+    case "automatic":
+      return { kind: "create", sessionId: createAutomaticSessionId() };
+    case "ephemeral":
+      return { kind: "ephemeral" };
+    case "create":
+      return { kind: "create", sessionId: intent.sessionId };
+    case "resume":
+      return { kind: "resume", sessionId: intent.sessionId };
+    case "resume-latest": {
+      const sessionId = latestSessionIdForWorkspace(options);
+      options.runtime.writeStderr(`Resuming latest session: ${sessionId}\n`);
+      return { kind: "resume", sessionId };
+    }
+    case "fork":
+      return {
+        kind: "fork",
+        sourceSessionId: intent.sourceSessionId,
+        targetSessionId: intent.targetSessionId,
+        beforeMessageId: intent.beforeMessageId,
+      };
   }
-  if (cliArgs.sessionId !== undefined) {
-    return { kind: "create", sessionId: cliArgs.sessionId };
-  }
-  if (
-    cliArgs.resumeSession?.kind === "id" &&
-    cliArgs.forkSessionId !== undefined
-  ) {
-    return {
-      kind: "fork",
-      sourceSessionId: cliArgs.resumeSession.sessionId,
-      targetSessionId: cliArgs.forkSessionId,
-      ...(cliArgs.forkBeforeMessage !== undefined
-        ? { beforeMessageId: cliArgs.forkBeforeMessage }
-        : {}),
-    };
-  }
-  if (cliArgs.resumeSession?.kind === "id") {
-    return { kind: "resume", sessionId: cliArgs.resumeSession.sessionId };
-  }
-  if (cliArgs.resumeSession?.kind === "latest") {
-    const sessionId = latestSessionIdForWorkspace(options);
-    options.runtime.writeStderr(`Resuming latest session: ${sessionId}\n`);
-    return { kind: "resume", sessionId };
-  }
-  return { kind: "create", sessionId: createAutomaticSessionId() };
 }
 
 function latestSessionIdForWorkspace(options: {
@@ -346,18 +347,13 @@ function latestSessionIdForWorkspace(options: {
 }
 
 function shouldPromptForSavedSessionOnBareKeel(
-  cliArgs: RunCliArgs,
+  cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
 ): boolean {
   return (
     runtime.args.length === 0 &&
     runtime.input.isTTY === true &&
-    !cliArgs.ephemeral &&
-    cliArgs.sessionId === undefined &&
-    cliArgs.resumeSession === undefined &&
-    cliArgs.forkSessionId === undefined &&
-    cliArgs.forkBeforeMessage === undefined &&
-    cliArgs.forkPoints !== true
+    cliArgs.session.kind === "automatic"
   );
 }
 
@@ -493,7 +489,7 @@ function activeSessionIdForStart(
 }
 
 async function runSessionCli(
-  cliArgs: RunCliArgs,
+  cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
   mode: SessionCliMode,
 ): Promise<number> {
@@ -501,7 +497,7 @@ async function runSessionCli(
 
   if (
     mode.kind === "interactive" &&
-    cliArgs.resumeSession?.kind === "pick" &&
+    cliArgs.session.kind === "resume-pick" &&
     runtime.input.isTTY !== true
   ) {
     runtime.writeStderr(`${RESUME_PICK_REQUIRES_TTY_ERROR}\n`);
@@ -550,7 +546,7 @@ async function runSessionCli(
     let sessionStart: InteractiveSessionStart;
     let initialInputLines: readonly string[] =
       mode.kind === "headless-goal" ? [mode.initialCommand] : [];
-    if (cliArgs.resumeSession?.kind === "pick") {
+    if (cliArgs.session.kind === "resume-pick") {
       const pickedSession = await pickedSessionIdForWorkspace({
         workspace,
         runtime,
@@ -571,10 +567,8 @@ async function runSessionCli(
         runtime,
       });
       if (promptCatalog === null) {
-        sessionStart = interactiveSessionStartFromCliArgs(
-          {
-            ephemeral: cliArgs.ephemeral,
-          },
+        sessionStart = interactiveSessionStartFromIntent(
+          { kind: "automatic" },
           {
             workspace,
             runtime,
@@ -592,36 +586,16 @@ async function runSessionCli(
         initialInputLines = promptedSessionStart.initialInputLines;
       }
     } else {
-      const directResumeSession: DirectResumeSessionCliArg | undefined =
-        cliArgs.resumeSession;
-      sessionStart = interactiveSessionStartFromCliArgs(
-        {
-          ephemeral: cliArgs.ephemeral,
-          ...(cliArgs.sessionId !== undefined
-            ? { sessionId: cliArgs.sessionId }
-            : {}),
-          ...(directResumeSession !== undefined
-            ? { resumeSession: directResumeSession }
-            : {}),
-          ...(cliArgs.forkSessionId !== undefined
-            ? { forkSessionId: cliArgs.forkSessionId }
-            : {}),
-          ...(cliArgs.forkBeforeMessage !== undefined
-            ? { forkBeforeMessage: cliArgs.forkBeforeMessage }
-            : {}),
-        },
-        {
-          workspace,
-          runtime,
-          ...(latestGoalResumeAssessment !== undefined
-            ? {
-                latestSessionAssessment: (
-                  catalogSession: SessionCatalogEntry,
-                ) => latestGoalResumeAssessment(catalogSession.goal),
-              }
-            : {}),
-        },
-      );
+      sessionStart = interactiveSessionStartFromIntent(cliArgs.session, {
+        workspace,
+        runtime,
+        ...(latestGoalResumeAssessment !== undefined
+          ? {
+              latestSessionAssessment: (catalogSession: SessionCatalogEntry) =>
+                latestGoalResumeAssessment(catalogSession.goal),
+            }
+          : {}),
+      });
     }
     try {
       if (sessionStart.kind === "fork") {
@@ -683,7 +657,7 @@ async function runSessionCli(
           session = forkSessionStore({
             source: resumedSession,
             targetSessionId: sessionStart.targetSessionId,
-            ...(sessionStart.beforeMessageId !== undefined
+            ...(sessionStart.beforeMessageId !== null
               ? {
                   forkPoint: {
                     beforeMessageId: sessionStart.beforeMessageId,
@@ -816,28 +790,30 @@ async function runSessionCli(
         skillActivations: [],
         activeSkillIds: [],
       };
-      let ensureActiveSession: (() => SessionState) | undefined;
-      if (activeSessionId !== undefined) {
-        const sessionId = activeSessionId;
-        ensureActiveSession = (): SessionState => {
-          let activeSession = session;
-          if (activeSession === undefined) {
-            activeSession = createSessionStore({
-              sessionId,
-              workspace,
-              runtime,
-              skillState: lazySessionInitialSkillState,
-            });
-            session = activeSession;
-            persistedMessages = activeSession.messages;
-          }
-          return activeSession;
-        };
-      }
-      const persistSkillLifecycleState = (state: SkillLifecycleState): void => {
-        /* v8 ignore next -- this callback is exposed only through named-session persistence below. */
-        if (ensureActiveSession === undefined) return;
-        const activeSession = ensureActiveSession();
+      const savedSessionOwner =
+        activeSessionId === undefined
+          ? null
+          : {
+              id: activeSessionId,
+              ensure: (): SessionState => {
+                let activeSession = session;
+                if (activeSession === undefined) {
+                  activeSession = createSessionStore({
+                    sessionId: activeSessionId,
+                    workspace,
+                    runtime,
+                    skillState: lazySessionInitialSkillState,
+                  });
+                  session = activeSession;
+                  persistedMessages = activeSession.messages;
+                }
+                return activeSession;
+              },
+            };
+      const persistSkillLifecycleState = (
+        activeSession: SessionState,
+        state: SkillLifecycleState,
+      ): void => {
         persistSessionSkillState({
           session: activeSession,
           state: restorePolicyHiddenActiveSkillIds(
@@ -871,7 +847,7 @@ async function runSessionCli(
             skillActivation.state(),
           )
         ) {
-          persistSkillLifecycleState(skillActivation.state());
+          persistSkillLifecycleState(session, skillActivation.state());
         }
         if (session === undefined) {
           lazySessionInitialSkillState = skillActivation.state();
@@ -885,71 +861,24 @@ async function runSessionCli(
           `Warning: workflow skill ${status.activation.qualifiedName} ${status.diskStatus}; continuing with session snapshot sha256:${status.activation.digest}.\n`,
         );
       }
-      let sessionPersistence:
-        | {
-            readonly initialMessages: readonly Message[];
-            readonly initialSessionTitle?: string;
-            readonly initialSessionGoal?: SessionGoal;
-            readonly initialTaskProgress: SessionState["taskProgress"];
-            readonly initialModelSelection?: SessionModelSelection;
-            readonly initialModelSwitchCount: number;
-            readonly initialQueuedInputs: readonly SessionQueuedInput[];
-            readonly persistQueuedInput: (input: {
-              readonly sequence: number;
-              readonly line: string;
-            }) => SessionQueuedInput;
-            readonly consumeQueuedInputs: (inputIds: readonly string[]) => void;
-            readonly persistSessionMessages: (
-              messages: readonly Message[],
-              reason: SessionPersistenceReason,
-              consumedInputIds: readonly string[],
-              skillState?: SkillLifecycleState,
-            ) => void;
-            readonly persistSessionTitle: (titleRecord: {
-              readonly title: string;
-              readonly consumedInputIds: readonly string[];
-            }) => string;
-            readonly persistSessionGoal: (update: {
-              readonly goal: SessionGoal | null;
-              readonly consumedInputIds: readonly string[];
-            }) => SessionGoal | undefined;
-            readonly persistTaskProgress: (update: {
-              readonly taskProgress: SessionState["taskProgress"];
-              readonly messageOrdinal: number;
-            }) => void;
-            readonly persistModelSwitch: (switchRecord: {
-              readonly from: SessionModelSelection | null;
-              readonly to: SessionModelSelection;
-              readonly consumedInputIds: readonly string[];
-            }) => void;
-            readonly persistSkillState: (state: SkillLifecycleState) => void;
-            readonly forkSession: (
-              request: InteractiveForkSessionRequest,
-            ) => string;
-            readonly listForkPoints: () => ReturnType<
-              typeof sessionForkPointsFromStoredMessages
-            >;
-            readonly initialBashApprovalGrants: readonly BashApprovalGrant[];
-            readonly persistBashApprovalGrant: (
-              grant: BashApprovalGrant,
-            ) => void;
-            readonly persistBashApprovalRevoked: (revocation: {
-              readonly grant: BashApprovalGrant;
-              readonly consumedInputIds: readonly string[];
-            }) => void;
-            readonly persistBashApprovalsCleared: (clear: {
-              readonly consumedInputIds: readonly string[];
-            }) => void;
-          }
+      let interactiveSession: InteractiveSession = { kind: "ephemeral" };
+      let restoredSessionOptions:
+        | Pick<
+            InteractiveSessionOptions,
+            | "initialMessages"
+            | "initialSessionTitle"
+            | "initialSessionGoal"
+            | "initialTaskProgress"
+            | "initialModelSelection"
+            | "initialModelSwitchCount"
+            | "initialQueuedInputs"
+            | "initialBashApprovalGrants"
+          >
         | undefined;
       let headlessGoalActivated = false;
-      if (activeSessionId !== undefined) {
-        const sessionId = activeSessionId;
-        const activeSessionForPersistence = ensureActiveSession;
-        /* v8 ignore next 3 -- activeSessionId installs this closure immediately above. */
-        if (activeSessionForPersistence === undefined) {
-          throw new Error("saved session persistence is unavailable");
-        }
+      if (savedSessionOwner !== null) {
+        const sessionId = savedSessionOwner.id;
+        const activeSessionForPersistence = savedSessionOwner.ensure;
         const forkActiveSession = (
           request: InteractiveForkSessionRequest,
         ): string => {
@@ -1022,7 +951,7 @@ async function runSessionCli(
           );
           return pausedGoal;
         })();
-        sessionPersistence = {
+        restoredSessionOptions = {
           initialMessages: initialSession?.messages ?? [],
           ...(initialSession?.title !== undefined
             ? { initialSessionTitle: initialSession.title }
@@ -1037,6 +966,12 @@ async function runSessionCli(
           initialModelSwitchCount: initialSession?.modelSwitches.length ?? 0,
           initialQueuedInputs: initialSession?.pendingInputs ?? [],
           initialBashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
+        };
+        interactiveSession = {
+          kind: "saved",
+          id: sessionId,
+          resumeAvailable: () => session !== undefined,
+          reserveMessageId: createSessionMessageId,
           persistQueuedInput: (input: {
             readonly sequence: number;
             readonly line: string;
@@ -1054,34 +989,30 @@ async function runSessionCli(
               runtime,
             });
           },
-          persistSessionMessages: (
-            messages: readonly Message[],
-            reason: SessionPersistenceReason,
-            consumedInputIds: readonly string[],
-            skillState?: SkillLifecycleState,
-          ) => {
+          persistMessages: (request) => {
             const activeSession = activeSessionForPersistence();
             const persistedSkillState =
-              skillState === undefined
+              request.skillState === null
                 ? undefined
                 : restorePolicyHiddenActiveSkillIds(
-                    skillState,
+                    request.skillState,
                     activeSession,
                     skillPolicy.disabledPackageIds,
                   );
             persistedMessages = persistSessionMessages({
               session: activeSession,
               previousMessages: persistedMessages,
-              currentMessages: messages,
+              currentMessages: request.messages,
               runtime,
-              reason,
+              reason: request.reason,
               ...(persistedSkillState !== undefined
                 ? { skillState: persistedSkillState }
                 : {}),
-              consumedInputIds,
+              consumedInputIds: request.consumedInputIds,
+              reservedMessageIds: request.reservedMessageIds,
             });
           },
-          persistSessionTitle: (titleRecord: {
+          persistTitle: (titleRecord: {
             readonly title: string;
             readonly consumedInputIds: readonly string[];
           }) =>
@@ -1091,7 +1022,7 @@ async function runSessionCli(
               runtime,
               consumedInputIds: titleRecord.consumedInputIds,
             }),
-          persistSessionGoal: (update: {
+          persistGoal: (update: {
             readonly goal: SessionGoal | null;
             readonly consumedInputIds: readonly string[];
           }) => {
@@ -1135,8 +1066,10 @@ async function runSessionCli(
               consumedInputIds: switchRecord.consumedInputIds,
             });
           },
-          persistSkillState: persistSkillLifecycleState,
-          forkSession: forkActiveSession,
+          persistSkillState: (state) => {
+            persistSkillLifecycleState(activeSessionForPersistence(), state);
+          },
+          fork: forkActiveSession,
           listForkPoints: listActiveForkPoints,
           persistBashApprovalGrant: (grant: BashApprovalGrant) => {
             persistSessionBashApprovalGrant({
@@ -1219,7 +1152,7 @@ async function runSessionCli(
       const reportRecorder = createAgentEventReportRecorder();
       let loadedMemory: RenderedProjectMemory | undefined;
       let memoryLoadError: string | undefined;
-      const exposedMemoryIds = new Set<string>();
+      const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
       let exposedMemoryBytes = 0;
       let exposedMemoryTokens = 0;
       const agentMemory = createAgentProjectMemory({ runtime, workspace });
@@ -1227,6 +1160,7 @@ async function runSessionCli(
         enabled: false,
         scope: null,
         loadedIds: [],
+        loadedEntries: [],
         renderedBytes: 0,
         estimatedTokens: 0,
         operations: [],
@@ -1237,6 +1171,7 @@ async function runSessionCli(
         enabled: true,
         scope: memory.scope,
         loadedIds: memory.entries.map((entry) => entry.id),
+        loadedEntries: memory.entries.map(projectMemoryReportEntry),
         renderedBytes: memory.renderedBytes,
         estimatedTokens: memory.estimatedTokens,
         operations: agentMemory.operations(),
@@ -1254,7 +1189,9 @@ async function runSessionCli(
       };
       const loadMemoryPrompt = (): string => {
         const memory = readMemory();
-        for (const entry of memory.entries) exposedMemoryIds.add(entry.id);
+        for (const entry of memory.entries) {
+          exposedMemoryEntries.set(entry.id, projectMemoryReportEntry(entry));
+        }
         exposedMemoryBytes = Math.max(exposedMemoryBytes, memory.renderedBytes);
         exposedMemoryTokens = Math.max(
           exposedMemoryTokens,
@@ -1268,7 +1205,8 @@ async function runSessionCli(
           return {
             enabled: true,
             scope: lastLoadedMemoryScope(),
-            loadedIds: [...exposedMemoryIds],
+            loadedIds: [...exposedMemoryEntries.keys()],
+            loadedEntries: [...exposedMemoryEntries.values()],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
             operations: agentMemory.operations(),
@@ -1282,7 +1220,8 @@ async function runSessionCli(
           return {
             enabled: true,
             scope: lastLoadedMemoryScope(),
-            loadedIds: [...exposedMemoryIds],
+            loadedIds: [...exposedMemoryEntries.keys()],
+            loadedEntries: [...exposedMemoryEntries.values()],
             renderedBytes: exposedMemoryBytes,
             estimatedTokens: exposedMemoryTokens,
             operations: agentMemory.operations(),
@@ -1292,7 +1231,8 @@ async function runSessionCli(
         return {
           enabled: true,
           scope: currentMemory.scope,
-          loadedIds: [...exposedMemoryIds],
+          loadedIds: [...exposedMemoryEntries.keys()],
+          loadedEntries: [...exposedMemoryEntries.values()],
           renderedBytes: exposedMemoryBytes,
           estimatedTokens: exposedMemoryTokens,
           operations: agentMemory.operations(),
@@ -1307,6 +1247,7 @@ async function runSessionCli(
             enabled: true,
             scope: lastLoadedMemoryScope(),
             loadedIds: [],
+            loadedEntries: [],
             renderedBytes: 0,
             operations: agentMemory.operations(),
             error: errorMessage(error),
@@ -1315,27 +1256,43 @@ async function runSessionCli(
       };
       interactiveDisplay?.writeIntro();
       interactiveTerminalDisplay?.start();
+      const sessionMemory: InteractiveSessionMemoryBinding =
+        cliArgs.memoryEnabled &&
+        mode.kind === "interactive" &&
+        interactiveSession.kind === "saved" &&
+        runtime.input.isTTY === true
+          ? {
+              session: interactiveSession,
+              memory: {
+                kind: "reviewed",
+                prompt: loadMemoryPrompt,
+                mutation: agentMemory.capability,
+                proposal: agentMemory.proposalCapability,
+                status: inspectMemoryStatus,
+              },
+            }
+          : {
+              session: interactiveSession,
+              memory: !cliArgs.memoryEnabled
+                ? { kind: "disabled", status: inspectMemoryStatus }
+                : {
+                    kind: "direct",
+                    prompt: loadMemoryPrompt,
+                    mutation: agentMemory.capability,
+                    status: inspectMemoryStatus,
+                  },
+            };
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
         reportRecorder,
-        ...(cliArgs.memoryEnabled ? { memoryPrompt: loadMemoryPrompt } : {}),
-        ...(cliArgs.memoryEnabled
-          ? { memoryMutation: agentMemory.capability }
-          : {}),
-        memoryStatus: inspectMemoryStatus,
+        ...sessionMemory,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
         ...(mode.kind === "headless-goal" &&
         headlessGoalBashPermission !== undefined
           ? { bashPermission: headlessGoalBashPermission }
-          : {}),
-        ...(activeSessionId !== undefined
-          ? {
-              sessionId: activeSessionId,
-              sessionResumeAvailable: () => session !== undefined,
-            }
           : {}),
         ...(cliArgs.providerId !== undefined || cliArgs.model !== undefined
           ? {
@@ -1371,7 +1328,7 @@ async function runSessionCli(
                 skillCatalog.load(lookup),
             }
           : {}),
-        ...(sessionPersistence !== undefined ? sessionPersistence : {}),
+        ...(restoredSessionOptions !== undefined ? restoredSessionOptions : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
           ? {
@@ -1592,7 +1549,7 @@ export interface HeadlessSessionCliResult {
 }
 
 export async function runHeadlessSessionCli(
-  cliArgs: RunCliArgs,
+  cliArgs: HeadlessSessionCliArgs,
   runtime: CliRuntime,
   initialCommand: string,
   bashPermission: SessionBashPermissionPolicy | undefined,
@@ -1638,7 +1595,7 @@ export async function runHeadlessSessionCli(
 }
 
 export async function runInteractiveCli(
-  cliArgs: RunCliArgs,
+  cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
 ): Promise<number> {
   return await runSessionCli(cliArgs, runtime, { kind: "interactive" });

@@ -53,7 +53,7 @@ describe("Context Compaction Current Tool Suffix", () => {
     const provider: LLMProvider = {
       id: "current-tool-output-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -100,7 +100,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -181,7 +181,7 @@ describe("Context Compaction Current Tool Suffix", () => {
     const provider: LLMProvider = {
       id: "split-turn-unconsumed-tool-overflow-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield {
             type: "text",
@@ -232,7 +232,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
@@ -327,7 +327,7 @@ describe("Context Compaction Current Tool Suffix", () => {
     const provider: LLMProvider = {
       id: "split-turn-multiple-steering-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: "Summary before the queued steering tool result.",
@@ -376,7 +376,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
@@ -464,7 +464,7 @@ describe("Context Compaction Current Tool Suffix", () => {
     const provider: LLMProvider = {
       id: "split-turn-multi-tool-round-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: "Summary before the current multi-tool round.",
@@ -523,7 +523,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
@@ -610,7 +610,7 @@ describe("Context Compaction Current Tool Suffix", () => {
     const provider: LLMProvider = {
       id: "split-turn-sequential-tool-round-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: "Summary before the sequential current tool suffix.",
@@ -644,7 +644,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         messages,
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        allowBash: false,
+        bash: { kind: "disabled" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,

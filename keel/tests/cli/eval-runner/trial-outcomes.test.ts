@@ -2,15 +2,274 @@ import { describe, expect, test } from "vitest";
 import {
   CLI_ENTRY,
   createEvalDir,
+  createMemoryPairTask,
   createTask,
   FIX_NOTE_TASK,
+  join,
   KEEL_PROVIDER_ENV,
+  mkdir,
+  readFile,
   readResultLines,
   rm,
   runEvalCommand,
+  VALID_REPORT,
+  writeFile,
 } from "./fixtures.ts";
 
+const DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY";
+const KEEL_HOME_ENV = "KEEL_HOME";
+
 describe("Eval Runner", () => {
+  test(`Given provider selection is stored in the user's Keel home,
+    When a memory pair isolates its memory store,
+    Then both arms preserve the configured provider`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "configured-provider";
+    const configuredHome = join(root, "configured-home");
+    const configPath = join(configuredHome, "config.json");
+    const mutateConfigScript = join(root, "mutate-provider-config.mjs");
+    await mkdir(configuredHome, { recursive: true });
+    await writeFile(
+      configPath,
+      JSON.stringify({ schemaVersion: 1, provider: { id: "fake" } }),
+      "utf8",
+    );
+    await writeFile(
+      mutateConfigScript,
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(configPath)}, ${JSON.stringify(
+        JSON.stringify({ schemaVersion: 1, provider: { id: "qwen" } }),
+      )});
+`,
+      "utf8",
+    );
+    await createMemoryPairTask(suiteDir, taskId, {
+      prompt: "create result.json",
+      verify: `test -f result.json\nnode ${JSON.stringify(mutateConfigScript)}\n`,
+      solution: "printf '{\"created\":true}\\n' > result.json\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs: 10_000,
+      allowBash: false,
+      maxCostUsd: 0.01,
+      memory: "A project fact.",
+    });
+    await writeFile(
+      join(configuredHome, "auth.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        providers: { deepseek: { apiKey: "persisted-test-key" } },
+      }),
+      "utf8",
+    );
+    const previousProvider = process.env[KEEL_PROVIDER_ENV];
+    const previousHome = process.env[KEEL_HOME_ENV];
+    const previousDeepseekKey = process.env[DEEPSEEK_API_KEY_ENV];
+    delete process.env[KEEL_PROVIDER_ENV];
+    process.env[KEEL_HOME_ENV] = configuredHome;
+    process.env[DEEPSEEK_API_KEY_ENV] = "";
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry: CLI_ENTRY,
+      });
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readResultLines(outFile)).toMatchObject([
+        { report: { modelsUsed: [{ provider: "fake", model: "fake" }] } },
+        { report: { modelsUsed: [{ provider: "fake", model: "fake" }] } },
+      ]);
+      await expect(readFile(configPath, "utf8")).resolves.toContain("qwen");
+    } finally {
+      if (previousProvider === undefined) delete process.env[KEEL_PROVIDER_ENV];
+      else process.env[KEEL_PROVIDER_ENV] = previousProvider;
+      if (previousHome === undefined) delete process.env[KEEL_HOME_ENV];
+      else process.env[KEEL_HOME_ENV] = previousHome;
+      if (previousDeepseekKey === undefined)
+        delete process.env[DEEPSEEK_API_KEY_ENV];
+      else process.env[DEEPSEEK_API_KEY_ENV] = previousDeepseekKey;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a memory-paired task needs the seeded memory,
+    When the disabled arm fails verification and the enabled arm passes,
+    Then the paired trial passes and records both conditions`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "memory-dependent";
+    await createMemoryPairTask(suiteDir, taskId, {
+      prompt: "write the remembered release command",
+      verify: "test -f release-command.txt\n",
+      solution: "printf 'pnpm test:coverage\\n' > release-command.txt\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs: 10_000,
+      allowBash: false,
+      maxCostUsd: 0.01,
+      memory: "The release command is pnpm test:coverage.",
+    });
+    const cliEntry = join(root, "memory-pair-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "memory" && args[1] === "add") process.exit(0);
+const reportIndex = args.indexOf("--report");
+writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPORT)}));
+const transcriptIndex = args.indexOf("--transcript");
+mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });
+writeFileSync(args[transcriptIndex + 1], '{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n');
+if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm test:coverage\\n");
+`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+        transcriptDir: join(root, "transcripts"),
+      });
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          condition: "memory_disabled",
+          requiredToPass: false,
+          outcome: "verify_failed",
+          transcriptPath: expect.stringContaining("memory-disabled.jsonl"),
+        },
+        {
+          condition: "memory_enabled",
+          requiredToPass: true,
+          outcome: "verified",
+          transcriptPath: expect.stringContaining("memory-enabled.jsonl"),
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      name: "disabled arm crashes",
+      scriptTimeoutMs: 10_000,
+      verify: "if test -f release-command.txt; then exit 0; else exit 1; fi\n",
+      action:
+        'if (disabled) process.exit(1); writeFileSync("release-command.txt", "pnpm test:coverage\\n");',
+      disabledOutcome: "crashed",
+      enabledOutcome: "verified",
+      expectedExitCode: 1,
+    },
+    {
+      name: "disabled verifier times out",
+      scriptTimeoutMs: 500,
+      verify:
+        "if test -f disabled-arm; then sleep 5; fi\ntest -f release-command.txt\n",
+      action:
+        'writeFileSync(disabled ? "disabled-arm" : "release-command.txt", "pnpm test:coverage\\n");',
+      disabledOutcome: "timeout",
+      enabledOutcome: "verified",
+      expectedExitCode: 1,
+    },
+    {
+      name: "enabled arm fails verification",
+      scriptTimeoutMs: 10_000,
+      verify: "test -f release-command.txt\n",
+      action: "",
+      disabledOutcome: "verify_failed",
+      enabledOutcome: "verify_failed",
+      expectedExitCode: 1,
+    },
+    {
+      name: "both arms verify independently",
+      scriptTimeoutMs: 10_000,
+      verify: "test -f release-command.txt\n",
+      action: 'writeFileSync("release-command.txt", "pnpm test:coverage\\n");',
+      disabledOutcome: "verified",
+      enabledOutcome: "verified",
+      expectedExitCode: 0,
+    },
+    {
+      name: "verifier is terminated by a signal",
+      scriptTimeoutMs: 10_000,
+      verify: "kill -TERM $$\n",
+      action: "",
+      disabledOutcome: "crashed",
+      enabledOutcome: "crashed",
+      expectedExitCode: 1,
+    },
+  ] as const)(`Given a memory pair whose $name,
+    When the eval runner applies the pair gate,
+    Then it returns the expected gate result with explicit arm outcomes`, async ({
+    scriptTimeoutMs,
+    verify,
+    action,
+    disabledOutcome,
+    enabledOutcome,
+    expectedExitCode,
+  }) => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "invalid-memory-pair";
+    await createMemoryPairTask(suiteDir, taskId, {
+      prompt: "write the remembered release command",
+      verify,
+      solution: "printf 'pnpm test:coverage\\n' > release-command.txt\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs,
+      allowBash: false,
+      maxCostUsd: 0.01,
+      memory: "The release command is pnpm test:coverage.",
+    });
+    const cliEntry = join(root, "invalid-memory-pair-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "memory" && args[1] === "add") process.exit(0);
+const disabled = args.includes("--no-memory");
+${action}
+const reportIndex = args.indexOf("--report");
+writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPORT)}));
+`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(expectedExitCode);
+      expect(await readResultLines(outFile)).toMatchObject([
+        { condition: "memory_disabled", outcome: disabledOutcome },
+        { condition: "memory_enabled", outcome: enabledOutcome },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a solvable task,
     When the eval runner executes one trial,
     Then it records a verified result line`, async () => {

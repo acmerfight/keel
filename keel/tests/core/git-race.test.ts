@@ -97,6 +97,7 @@ describe("Git Checkpoint Race Handling", () => {
           filePath,
           beforeContent: "old\n",
           afterContent: "new\n",
+          modeOwnership: { kind: "unowned" },
         }),
     },
     {
@@ -325,6 +326,7 @@ describe("Git Checkpoint Race Handling", () => {
             filePath: firstRealPath,
             beforeContent: "first old\n",
             afterContent: "first new\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "delete",
@@ -401,6 +403,7 @@ describe("Git Checkpoint Race Handling", () => {
             filePath: editedRealPath,
             beforeContent: "edited old\n",
             afterContent: "edited new\n",
+            modeOwnership: { kind: "unowned" },
           },
         ],
       });
@@ -459,6 +462,7 @@ describe("Git Checkpoint Race Handling", () => {
             filePath: editedRealPath,
             beforeContent: "edited old\n",
             afterContent: "edited new\n",
+            modeOwnership: { kind: "unowned" },
           },
         ],
       });

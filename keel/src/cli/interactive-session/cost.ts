@@ -1,6 +1,23 @@
 import type { CostReport } from "../../agent/events.ts";
+import type { CostModel } from "../../core/cost.ts";
 import type { Usage } from "../../llm/types.ts";
 import type { InteractiveSessionArgs } from "./types.ts";
+
+export type InteractiveCompactionCost =
+  | {
+      readonly kind: "untracked";
+    }
+  | {
+      readonly kind: "tracked";
+      readonly model: CostModel;
+    }
+  | {
+      readonly kind: "budgeted";
+      readonly model: CostModel;
+      readonly maxCostUsd: number;
+      readonly remainingCostUsd: number;
+      readonly budgetLimitedReport: () => CostReport;
+    };
 
 export const EMPTY_USAGE: Usage = {
   inputTokens: 0,
@@ -28,12 +45,25 @@ export function buildSessionCostReport(
   spentUsd: number,
   maxCostUsd: number | undefined,
 ): CostReport {
+  if (maxCostUsd === undefined) {
+    return {
+      spentUsd,
+      budget: { kind: "unbounded" },
+    };
+  }
+  if (spentUsd >= maxCostUsd) {
+    return {
+      spentUsd,
+      budget: {
+        kind: "budget_limited",
+        maxUsd: maxCostUsd,
+        overshootUsd: Math.max(0, spentUsd - maxCostUsd),
+      },
+    };
+  }
   return {
     spentUsd,
-    ...(maxCostUsd !== undefined ? { maxUsd: maxCostUsd } : {}),
-    budgetLimited: maxCostUsd !== undefined && spentUsd >= maxCostUsd,
-    overshootUsd:
-      maxCostUsd === undefined ? 0 : Math.max(0, spentUsd - maxCostUsd),
+    budget: { kind: "within_budget", maxUsd: maxCostUsd },
   };
 }
 
@@ -43,8 +73,10 @@ export function buildSessionCostBudgetLimitedReport(
 ): CostReport {
   return {
     spentUsd,
-    maxUsd: maxCostUsd,
-    budgetLimited: true,
-    overshootUsd: Math.max(0, spentUsd - maxCostUsd),
+    budget: {
+      kind: "budget_limited",
+      maxUsd: maxCostUsd,
+      overshootUsd: Math.max(0, spentUsd - maxCostUsd),
+    },
   };
 }

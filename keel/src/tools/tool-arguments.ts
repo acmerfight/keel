@@ -44,15 +44,7 @@ export const memoryAddToolArgumentsSchema = z
       .trim()
       .min(1)
       .describe(
-        "Exact durable claim copied from the current user's explicit remember request. Do not paraphrase, broaden, or infer it.",
-      ),
-    sourceText: z
-      .string()
-      .trim()
-      .min(1)
-      .max(8192)
-      .describe(
-        "Exact current-user sentence or standalone line that explicitly asks Keel to remember this claim.",
+        "One exact contiguous durable-claim span copied from the latest current-user message. Preserve meaningful punctuation; do not paraphrase, broaden, or infer it.",
       ),
   })
   .strict();
@@ -64,13 +56,41 @@ export const memoryForgetToolArgumentsSchema = z
       .describe(
         "Exact active project-memory ID selected from the current project memory block.",
       ),
-    sourceText: z
+  })
+  .strict();
+
+export const memoryProposeToolArgumentsSchema = z
+  .object({
+    kind: z.enum([
+      "user_preference",
+      "feedback",
+      "project_context",
+      "reference",
+    ]),
+    statement: z
       .string()
       .trim()
       .min(1)
-      .max(8192)
+      .max(1_000)
+      .describe("One concise durable project-memory statement to review."),
+    why: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1_000)
+      .describe("Why this statement is likely to help in a later session."),
+    sourceQuote: z
+      .string()
+      .min(1)
+      .max(2_000)
       .describe(
-        "Exact current-user sentence or standalone line that explicitly asks Keel to forget this one memory.",
+        "One exact contiguous quote copied from the latest current-user message that supports the proposed statement.",
+      ),
+    conflictMemoryIds: z
+      .array(z.string())
+      .max(8)
+      .describe(
+        "Every active project-memory ID that conflicts with this proposal; use an empty array when none conflict.",
       ),
   })
   .strict();

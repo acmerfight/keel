@@ -80,6 +80,87 @@ describe("OpenAI-Compatible Retry", () => {
     }
   });
 
+  test(`Given the physical-attempt observer throws while recording completion,
+    When the OpenAI-compatible provider handles that unexpected runtime error,
+    Then it preserves the error without retrying or invoking the observer twice`, async () => {
+    // Given
+    let requests = 0;
+    const server = createServer((req, res) => {
+      requests++;
+      req.resume();
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.end(
+        [
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+      );
+    });
+    await listen(server);
+    const unexpectedError = new Error("unexpected attempt observer bug");
+    let attemptFinishes = 0;
+
+    try {
+      const provider = createOpenAICompatibleProvider({
+        id: "test-provider",
+        providerName: "TestProvider",
+        config: {
+          apiKey: "test-key",
+          baseUrl: `http://127.0.0.1:${getPort(server)}`,
+          model: "test-model",
+          retry: {
+            maxRetries: 1,
+            initialDelayMs: 0,
+            maxDelayMs: 0,
+            jitterRatio: 0,
+          },
+        },
+        parseChunk: () => ({
+          choices: [{ delta: {}, finish_reason: "stop" }],
+        }),
+        captureUsage: (state) => {
+          state.usage = {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          };
+        },
+      });
+
+      // When / Then
+      await expect(
+        (async () => {
+          for await (const _event of provider.stream({
+            systemPrompt: "You are helpful.",
+            messages: [{ role: "user", content: "hi" }],
+            signal: new AbortController().signal,
+            providerRequestAttempts: {
+              begin: () => ({
+                finish: () => {
+                  attemptFinishes++;
+                  throw unexpectedError;
+                },
+              }),
+            },
+          })) {
+            // Completion accounting fails before the provider emits stop.
+          }
+        })(),
+      ).rejects.toBe(unexpectedError);
+      expect(requests).toBe(1);
+      expect(attemptFinishes).toBe(1);
+    } finally {
+      await close(server);
+    }
+  });
+
   test(`Given a transport throw carries the Node abort error code,
     When the provider retry layer classifies the failure,
     Then it reports an aborted provider request`, () => {

@@ -6,13 +6,19 @@ import type {
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  Message,
+  ModelToolExposure,
+} from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
   ONE_DOLLAR_PER_MILLION_INPUT,
   resolvedProvider,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   withProviderRequestAttemptAccounting,
   withTimeout,
   ZERO_COST_MODEL,
@@ -33,11 +39,12 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     let targetProviderTurns = 0;
     let targetProviderSummaryRequests = 0;
     const targetRequestContexts: Message[][] = [];
+    const targetRequestToolExposures: Array<ModelToolExposure | undefined> = [];
     const largePrompt = "large history ".repeat(3_000).trim();
     const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Downshift checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -51,7 +58,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           targetProviderSummaryRequests++;
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -59,14 +66,16 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         }
         targetProviderTurns++;
         targetRequestContexts.push(structuredClone([...options.messages]));
+        targetRequestToolExposures.push(options.toolExposure);
         yield { type: "text", text: `target provider ${targetProviderTurns}` };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { bashMode: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -139,6 +148,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     expect(targetRequestContexts[0]?.[0]?.content).toContain(
       "Downshift checkpoint summary.",
     );
+    expect(targetRequestToolExposures).toEqual([{ kind: "auto", bash: true }]);
     expect(JSON.stringify(targetRequestContexts[0])).not.toContain("/model");
     expect(sigintHandlers.size).toBe(0);
   });
@@ -148,22 +158,41 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       mode: "max-cost metered",
       cliArgs: { bashMode: "disabled" as const, maxCostUsd: 1 },
       expectsCostOutput: true,
+      summaryFailure: "truncated" as const,
+      expectedFailure:
+        "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
     },
     {
       mode: "report-only metered",
       cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
       expectsCostOutput: false,
+      summaryFailure: "truncated" as const,
+      expectedFailure:
+        "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
     },
     {
       mode: "unmetered",
       cliArgs: { bashMode: "disabled" as const },
       expectsCostOutput: false,
+      summaryFailure: "truncated" as const,
+      expectedFailure:
+        "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
+    },
+    {
+      mode: "unmetered provider-error",
+      cliArgs: { bashMode: "disabled" as const },
+      expectsCostOutput: false,
+      summaryFailure: "thrown" as const,
+      expectedFailure:
+        "Context compaction failed: model-switch summary unavailable",
     },
   ])(`Given $mode model-switch compaction fails,
     When user enters /model for a smaller target,
     Then the old provider remains active and the transcript is unchanged`, async ({
     cliArgs,
     expectsCostOutput,
+    summaryFailure,
+    expectedFailure,
   }) => {
     // Given
     const input = new PassThrough();
@@ -179,8 +208,11 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
+          if (summaryFailure === "thrown") {
+            throw new Error("model-switch summary unavailable");
+          }
           yield {
             type: "text",
             text: "Partial model-switch checkpoint that must not commit",
@@ -206,6 +238,15 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs,
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages: _messages, reason }) => {
+          persistedReasons.push(reason);
+        },
+        persistModelSwitch: () => {
+          throw new Error("rejected model switch must not persist");
+        },
+      }),
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -252,12 +293,6 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         return finalEnd;
       },
       formatCostReport: () => "Rejected compaction cost recorded.\n",
-      persistSessionMessages: (_messages, reason) => {
-        persistedReasons.push(reason);
-      },
-      persistModelSwitch: () => {
-        throw new Error("rejected model switch must not persist");
-      },
     });
 
     // When
@@ -265,9 +300,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
 
     // Then
     await session;
-    expect(stderr).toContain(
-      "Context compaction failed: fake returned length-truncated context compaction summaries after 1 attempt.",
-    );
+    expect(stderr).toContain(expectedFailure);
     expect(stderr.includes("Rejected compaction cost recorded.")).toBe(
       expectsCostOutput,
     );
@@ -361,6 +394,15 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs,
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistMessages: ({ messages: _messages, reason }) => {
+          persistedReasons.push(reason);
+        },
+        persistModelSwitch: () => {
+          throw new Error("interrupted model switch must not persist");
+        },
+      }),
       initialMessages,
       input,
       writeStdout: () => {},
@@ -396,12 +438,6 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
         );
       },
       formatCostReport: () => "",
-      persistSessionMessages: (_messages, reason) => {
-        persistedReasons.push(reason);
-      },
-      persistModelSwitch: () => {
-        throw new Error("interrupted model switch must not persist");
-      },
     });
 
     // When
@@ -470,6 +506,12 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
       workspace: process.cwd(),
       platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistModelSwitch: () => {
+          throw new Error("budget-limited switch must not persist");
+        },
+      }),
       initialMessages,
       input,
       writeStdout: () => {},
@@ -496,11 +538,12 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       printAgentEvents: async () => {
         throw new Error("budget-limited switch must not start an agent turn");
       },
-      formatCostReport: (cost, maxUsd) =>
-        `Cost: ${cost.spentUsd.toFixed(3)} / ${maxUsd.toFixed(3)} limited=${cost.budgetLimited}\n`,
-      persistModelSwitch: () => {
-        throw new Error("budget-limited switch must not persist");
-      },
+      formatCostReport: (cost) =>
+        `Cost: ${cost.spentUsd.toFixed(3)} / ${
+          cost.budget.kind === "unbounded"
+            ? "unbounded"
+            : cost.budget.maxUsd.toFixed(3)
+        } limited=${cost.budget.kind === "budget_limited"}\n`,
     });
 
     // When
@@ -531,7 +574,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Still too large summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -555,6 +598,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -679,7 +723,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const currentProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         currentSummaryRequests++;
         yield { type: "text", text: "Model switch artifact summary." };
         yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -688,7 +732,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -712,6 +756,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store },
       input,
@@ -833,7 +878,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const currentProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         currentSummaryRequests++;
         yield {
           type: "text",
@@ -845,7 +890,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const targetProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -870,6 +915,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       initialMessages,
       toolOutputArtifacts: { store: artifact.store },
       input,

@@ -9,7 +9,6 @@ import {
   formatInteractiveHelp,
   parseInteractiveCommand,
 } from "../../../src/cli/interactive-session/commands.ts";
-import { runInteractiveSession } from "../../../src/cli/interactive-session.ts";
 import {
   createSessionStore,
   persistSessionGoal,
@@ -20,7 +19,10 @@ import {
 } from "../../../src/core/session-goal.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
 import {
+  EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
+  runInteractiveSessionWithoutMemory as runInteractiveSession,
+  savedInteractiveSession,
   withTimeout,
   ZERO_COST_MODEL,
   ZERO_USAGE,
@@ -57,6 +59,20 @@ async function runLocalGoalCommandScenario(options: {
     cliArgs: { bashMode: "disabled" },
     workspace: process.cwd(),
     platform: process.platform,
+    session:
+      options.persistence === "missing"
+        ? EPHEMERAL_INTERACTIVE_SESSION
+        : savedInteractiveSession({
+            id: "local-goal-command",
+            persistGoal: ({ goal }) => {
+              if (options.persistence === "throw") {
+                throw new Error("goal persistence failed");
+              }
+              if (goal === null) return undefined;
+              persistedGoals.push(goal);
+              return goal;
+            },
+          }),
     ...(options.initialGoal !== undefined
       ? { initialSessionGoal: options.initialGoal }
       : {}),
@@ -73,22 +89,6 @@ async function runLocalGoalCommandScenario(options: {
     forceExit: (code) => {
       throw new ForcedExit(code);
     },
-    ...(options.persistence === "missing"
-      ? {}
-      : {
-          persistSessionGoal: ({
-            goal,
-          }: {
-            readonly goal: SessionGoal | null;
-          }) => {
-            if (options.persistence === "throw") {
-              throw new Error("goal persistence failed");
-            }
-            if (goal === null) return undefined;
-            persistedGoals.push(goal);
-            return goal;
-          },
-        }),
     resolveProvider: () => ({
       provider: unusedProvider(""),
       providerId: "fake",
@@ -135,8 +135,10 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       }),
     ).toBe(
       "Session goal: active - Continue checkout; criterion(command): pnpm test\n",
@@ -169,8 +171,10 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 2, tokens: 30, activeTimeMs: 40 },
-        criterionKind: "assertion",
-        completionCriterion: "Checkout passes.",
+        completion: {
+          kind: "assertion",
+          assertion: "Checkout passes.",
+        },
         latestRuntimeOutcome: {
           kind: "recovery_requested",
           reason: "The last three continuations repeated.",
@@ -482,7 +486,6 @@ describe("Interactive Session - Goals", () => {
     ).toEqual({
       kind: "goal",
       action: "criterion",
-      criterionKind: "assertion",
       criterion: "release notes cover every flag",
     });
     expect(parseInteractiveCommand("/goal verify")).toEqual({
@@ -522,16 +525,20 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
       {
         objective: "Ship the default atomic goal",
         status: "paused",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     ]);
     expect(result.stdout).toContain(
@@ -620,9 +627,11 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
       },
       persistence: "normal",
     });
@@ -633,9 +642,11 @@ describe("Interactive Session - Goals", () => {
         statusReason: "Session goal budget reached: turns 1/1.",
         budget: { turns: 1 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -647,9 +658,11 @@ describe("Interactive Session - Goals", () => {
         statusReason: "Session goal budget reached: turns 1/1.",
         budget: { turns: 2 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -660,9 +673,11 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: { turns: 2 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -673,9 +688,11 @@ describe("Interactive Session - Goals", () => {
         status: "paused",
         budget: { turns: 2 },
         usage: { turns: 1, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
-        verificationTimeoutMs: 45_000,
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+          verificationTimeoutMs: 45_000,
+        },
         latestRuntimeOutcome: {
           kind: "limit_reached",
           reason: "Session goal budget reached: turns 1/1.",
@@ -714,15 +731,25 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-budget-lifecycle",
+      session: savedInteractiveSession({
+        id: "goal-budget-lifecycle",
+        persistGoal: ({ goal }) => {
+          if (goal === null) return undefined;
+          persistedGoals.push(goal);
+          return goal;
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Finish the budgeted checkout goal",
         status: "budget_limited",
         statusReason: "Session goal budget reached: turns 2/2.",
         budget: { turns: 2 },
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       input,
       writeStdout: (text) => {
@@ -737,11 +764,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        if (goal === null) return undefined;
-        persistedGoals.push(goal);
-        return goal;
-      },
+
       resolveProvider: () => ({
         provider: unusedProvider(""),
         providerId: "fake",
@@ -778,32 +801,40 @@ describe("Interactive Session - Goals", () => {
         statusReason: "Session goal budget reached: turns 2/2.",
         budget: { turns: 3, tokens: 1_000, activeTimeMs: 5_000 },
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       {
         objective: "Finish the budgeted checkout goal",
         status: "active",
         budget: { turns: 3, tokens: 1_000, activeTimeMs: 5_000 },
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       {
         objective: "Finish the budgeted checkout goal",
         status: "active",
         budget: {},
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
       {
         objective: "Finish the budgeted checkout goal",
         status: "paused",
         budget: {},
         usage: { turns: 2, tokens: 200, activeTimeMs: 1_000 },
-        criterionKind: "assertion",
-        completionCriterion: "The budgeted checkout goal is finished",
+        completion: {
+          kind: "assertion",
+          assertion: "The budgeted checkout goal is finished",
+        },
       },
     ]);
     expect(stdout).toContain("Goal budget updated.\n");
@@ -843,7 +874,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-session",
+      session: savedInteractiveSession({
+        id: "goal-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -857,10 +895,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -900,8 +935,10 @@ describe("Interactive Session - Goals", () => {
         status: "active",
         budget: {},
         usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       });
       expect(stdout).toContain("Goal set: active\n");
       expect(stdout).toContain("Goal verification command set: pnpm test\n");
@@ -960,7 +997,18 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-activation-session",
+      session: savedInteractiveSession({
+        id: "goal-activation-session",
+        persistGoal: ({ goal }) => {
+          if (goal === null) return undefined;
+          persistedGoals.push(goal);
+          return goal;
+        },
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       input,
       writeStdout: (text) => {
@@ -975,14 +1023,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        if (goal === null) return undefined;
-        persistedGoals.push(goal);
-        return goal;
-      },
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1014,8 +1055,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
     });
     expect(providerPrompts).toHaveLength(1);
     expect(providerPrompts[0]).toContain(`Objective: ${condition}`);
@@ -1060,7 +1103,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "queued-goal-activation-session",
+      session: savedInteractiveSession({
+        id: "queued-goal-activation-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -1072,10 +1122,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1113,8 +1160,10 @@ describe("Interactive Session - Goals", () => {
     expect(persistedGoal).toMatchObject({
       objective: condition,
       status: "budget_limited",
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
       budget: { turns: 1 },
       usage: { turns: 1 },
     });
@@ -1142,7 +1191,18 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "failed-pending-goal-budget-session",
+      session: savedInteractiveSession({
+        id: "failed-pending-goal-budget-session",
+        persistGoal: ({ goal }) => {
+          persistenceCalls++;
+          if (persistenceCalls === 2) {
+            throw new Error("goal budget store unavailable");
+          }
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       input,
       writeStdout: () => {},
@@ -1155,14 +1215,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistenceCalls++;
-        if (persistenceCalls === 2) {
-          throw new Error("goal budget store unavailable");
-        }
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1195,8 +1248,10 @@ describe("Interactive Session - Goals", () => {
       objective: condition,
       status: "active",
       budget: {},
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
     });
     expect(stderr).toBe("goal budget store unavailable\n");
   });
@@ -1241,7 +1296,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "invalid-pending-goal-budget-session",
+      session: savedInteractiveSession({
+        id: "invalid-pending-goal-budget-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       input,
       writeStdout: () => {},
@@ -1254,10 +1316,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1289,8 +1348,10 @@ describe("Interactive Session - Goals", () => {
       objective: condition,
       status: expectedStatus,
       budget: {},
-      criterionKind: "assertion",
-      completionCriterion: condition,
+      completion: {
+        kind: "assertion",
+        assertion: condition,
+      },
     });
     expect(stderr).toContain(`${expectedError}\n`);
   });
@@ -1307,9 +1368,11 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
-      verificationTimeoutMs: 45_000,
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+        verificationTimeoutMs: 45_000,
+      },
     };
     const providerPrompts: string[] = [];
     const providerMessages: (readonly Message[])[] = [];
@@ -1329,7 +1392,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-pause-session",
+      session: savedInteractiveSession({
+        id: "goal-pause-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1344,10 +1414,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1386,9 +1453,11 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
-      verificationTimeoutMs: 45_000,
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+        verificationTimeoutMs: 45_000,
+      },
     });
     expect(stdout).toContain("Goal paused: Finish lifecycle states\n");
     expect(stdout).toContain(
@@ -1435,7 +1504,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-lifecycle-guards-session",
+      session: savedInteractiveSession({
+        id: "goal-lifecycle-guards-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1450,10 +1526,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1484,8 +1557,10 @@ describe("Interactive Session - Goals", () => {
       status: "paused",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "Blocked objective",
+      completion: {
+        kind: "assertion",
+        assertion: "Blocked objective",
+      },
     });
     expect(stderr).toBe(
       "Error: only active session goals can be paused.\n" +
@@ -1510,8 +1585,10 @@ describe("Interactive Session - Goals", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Need credentials.",
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     },
     {
@@ -1522,8 +1599,10 @@ describe("Interactive Session - Goals", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Automatic continuation stopped.",
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     },
     {
@@ -1534,8 +1613,10 @@ describe("Interactive Session - Goals", () => {
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
         statusReason: "Session budget stopped continuation.",
-        criterionKind: "command",
-        completionCriterion: "pnpm test",
+        completion: {
+          kind: "command",
+          command: "pnpm test",
+        },
       },
     },
   ];
@@ -1566,7 +1647,17 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-resume-session",
+      session: savedInteractiveSession({
+        id: "goal-resume-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+        persistMessages: ({ messages }) => {
+          persistedMessages = [...messages];
+        },
+      }),
+
       goalAutomaticContinuationTurnLimit: 1,
       initialSessionGoal: persistedGoal,
       input,
@@ -1582,13 +1673,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
-      persistSessionMessages: (messages) => {
-        persistedMessages = [...messages];
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1623,8 +1708,10 @@ describe("Interactive Session - Goals", () => {
       },
       budget: {},
       usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
     });
     expect(stdout).toContain(`Goal resumed: ${initialGoal.objective}\n`);
     expect(providerMessages).toHaveLength(1);
@@ -1659,7 +1746,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "incomplete-goal-resume-session",
+      session: savedInteractiveSession({
+        id: "incomplete-goal-resume-session",
+        persistGoal: ({ goal }) => {
+          persistenceCalls++;
+          return goal ?? undefined;
+        },
+      }),
+
       initialSessionGoal: initialGoal,
       input,
       writeStdout: () => {},
@@ -1672,10 +1766,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistenceCalls++;
-        return goal ?? undefined;
-      },
+
       resolveProvider: () => ({
         provider: unusedProvider("incomplete-goal-resume-provider"),
         providerId: "fake",
@@ -1716,7 +1807,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-assertion-criterion-session",
+      session: savedInteractiveSession({
+        id: "goal-assertion-criterion-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1731,10 +1829,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1757,8 +1852,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "release notes cover every changed command",
+      completion: {
+        kind: "assertion",
+        assertion: "release notes cover every changed command",
+      },
     });
     expect(stdout).toContain(
       "Goal assertion criterion set: release notes cover every changed command\n",
@@ -1787,7 +1884,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-subcommand-typo-session",
+      session: savedInteractiveSession({
+        id: "goal-subcommand-typo-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1802,10 +1906,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1862,7 +1963,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-enabled-bash-session",
+      session: savedInteractiveSession({
+        id: "goal-enabled-bash-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1877,10 +1985,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1903,8 +2008,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: 'node  -e "process.exit(0)"',
+      completion: {
+        kind: "command",
+        command: 'node  -e "process.exit(0)"',
+      },
     });
     expect(stdout).toContain(
       'Goal verification command set: node  -e "process.exit(0)"\n',
@@ -1932,7 +2039,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "goal-clear-session",
+      session: savedInteractiveSession({
+        id: "goal-clear-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -1947,10 +2061,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -1988,6 +2099,7 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      session: EPHEMERAL_INTERACTIVE_SESSION,
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -2039,7 +2151,11 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "no-goal-session",
+      session: savedInteractiveSession({
+        id: "no-goal-session",
+        persistGoal: () => undefined,
+      }),
+
       input,
       writeStdout: () => {},
       writeStderr: (text) => {
@@ -2051,7 +2167,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => undefined,
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2086,7 +2202,13 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "failing-goal-session",
+      session: savedInteractiveSession({
+        id: "failing-goal-session",
+        persistGoal: () => {
+          throw new Error("goal store unavailable");
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Persist every goal state",
         status: "active",
@@ -2104,9 +2226,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => {
-        throw new Error("goal store unavailable");
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2142,14 +2262,22 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "failing-goal-resume-session",
+      session: savedInteractiveSession({
+        id: "failing-goal-resume-session",
+        persistGoal: () => {
+          throw new Error("goal resume store unavailable");
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Resume persistence failure",
         status: "paused",
         budget: {},
         usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-        criterionKind: "assertion",
-        completionCriterion: "Resume persistence succeeds",
+        completion: {
+          kind: "assertion",
+          assertion: "Resume persistence succeeds",
+        },
       },
       input,
       writeStdout: () => {},
@@ -2162,9 +2290,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => {
-        throw new Error("goal resume store unavailable");
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2196,8 +2322,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
     };
     const providerPrompts: string[] = [];
     const provider: LLMProvider = {
@@ -2212,7 +2340,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
-      sessionId: "completed-goal-session",
+      session: savedInteractiveSession({
+        id: "completed-goal-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -2227,10 +2362,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2267,8 +2399,10 @@ describe("Interactive Session - Goals", () => {
       status: "completed",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: "pnpm test",
+      completion: {
+        kind: "command",
+        command: "pnpm test",
+      },
       completionEvidence: { kind: "user_override" },
       latestRuntimeOutcome: {
         kind: "completed",
@@ -2311,8 +2445,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: 'node -e "process.exit(0)"',
+      completion: {
+        kind: "command",
+        command: 'node -e "process.exit(0)"',
+      },
     };
     let providerRequestCount = 0;
     const provider: LLMProvider = {
@@ -2347,7 +2483,14 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "trusted" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-tool-session",
+      session: savedInteractiveSession({
+        id: "goal-tool-session",
+        persistGoal: ({ goal }) => {
+          persistedGoal = goal ?? undefined;
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: persistedGoal,
       input,
       writeStdout: (text) => {
@@ -2362,10 +2505,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        persistedGoal = goal ?? undefined;
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2402,8 +2542,10 @@ describe("Interactive Session - Goals", () => {
         status: "completed",
         budget: {},
         usage: { turns: 1, tokens: 0, activeTimeMs: expect.any(Number) },
-        criterionKind: "command",
-        completionCriterion: 'node -e "process.exit(0)"',
+        completion: {
+          kind: "command",
+          command: 'node -e "process.exit(0)"',
+        },
         completionEvidence: {
           kind: "command",
           command: 'node -e "process.exit(0)"',
@@ -2459,8 +2601,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "assertion",
-      completionCriterion: "release notes explain every changed command",
+      completion: {
+        kind: "assertion",
+        assertion: "release notes explain every changed command",
+      },
     };
     const persistedGoals: SessionGoal[] = [];
     const expandingReason = redactionExpandingText(
@@ -2470,7 +2614,7 @@ describe("Interactive Session - Goals", () => {
     const provider: LLMProvider = {
       id: "goal-assertion-redaction-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: JSON.stringify({
@@ -2500,7 +2644,22 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-assertion-redaction-session",
+      session: savedInteractiveSession({
+        id: "goal-assertion-redaction-session",
+        persistGoal: ({ goal, consumedInputIds }) => {
+          const persistedGoal = persistSessionGoal({
+            session: store,
+            goal,
+            runtime: runtime(home, timestamp++),
+            ...(consumedInputIds !== undefined ? { consumedInputIds } : {}),
+          });
+          if (persistedGoal !== undefined) {
+            persistedGoals.push(persistedGoal);
+          }
+          return persistedGoal;
+        },
+      }),
+
       initialSessionGoal: initialGoal,
       input,
       writeStdout: (text) => {
@@ -2515,18 +2674,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal, consumedInputIds }) => {
-        const persistedGoal = persistSessionGoal({
-          session: store,
-          goal,
-          runtime: runtime(home, timestamp++),
-          ...(consumedInputIds !== undefined ? { consumedInputIds } : {}),
-        });
-        if (persistedGoal !== undefined) {
-          persistedGoals.push(persistedGoal);
-        }
-        return persistedGoal;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2604,8 +2752,10 @@ describe("Interactive Session - Goals", () => {
       status: "active",
       budget: {},
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
-      criterionKind: "command",
-      completionCriterion: 'node -e "process.exit(0)"',
+      completion: {
+        kind: "command",
+        command: 'node -e "process.exit(0)"',
+      },
     };
     let providerRequestCount = 0;
     const provider: LLMProvider = {
@@ -2647,7 +2797,16 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "trusted" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-abort-session",
+      session: savedInteractiveSession({
+        id: "goal-abort-session",
+        persistGoal: ({ goal }) => {
+          if (goal !== null) {
+            persistedGoalUpdates.push(goal);
+          }
+          return goal ?? undefined;
+        },
+      }),
+
       initialSessionGoal: initialGoal,
       input,
       writeStdout: (text) => {
@@ -2666,12 +2825,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: ({ goal }) => {
-        if (goal !== null) {
-          persistedGoalUpdates.push(goal);
-        }
-        return goal ?? undefined;
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
@@ -2756,7 +2910,13 @@ describe("Interactive Session - Goals", () => {
       cliArgs: { bashMode: "disabled" },
       workspace,
       platform: process.platform,
-      sessionId: "goal-throw-abort-session",
+      session: savedInteractiveSession({
+        id: "goal-throw-abort-session",
+        persistGoal: () => {
+          throw new Error("interrupted turn should not persist a goal");
+        },
+      }),
+
       initialSessionGoal: {
         objective: "Keep the goal after abort errors",
         status: "active",
@@ -2780,9 +2940,7 @@ describe("Interactive Session - Goals", () => {
       forceExit: (code) => {
         throw new ForcedExit(code);
       },
-      persistSessionGoal: () => {
-        throw new Error("interrupted turn should not persist a goal");
-      },
+
       resolveProvider: () => ({
         provider,
         providerId: "fake",
