@@ -721,7 +721,7 @@ describe("Session Goal Tool", () => {
     When bash is disabled,
     Then update_goal is exposed as a narrow lifecycle-proposal agent-state tool`, () => {
     // Given / When
-    const tools = openAICompatibleTools(false, false, false, false);
+    const tools = openAICompatibleTools({ kind: "auto" });
     const updateGoal = tools.find(
       (tool) => tool.function.name === "update_goal",
     );

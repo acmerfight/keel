@@ -861,7 +861,7 @@ describe("Interactive Session - Interrupts", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Summary before retry." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -1023,7 +1023,7 @@ describe("Interactive Session - Interrupts", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const [prompt] = options.messages;
           if (prompt?.role === "user") {
             compactionPrompts.push(prompt.content);

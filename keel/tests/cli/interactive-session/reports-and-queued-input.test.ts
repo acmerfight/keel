@@ -1233,7 +1233,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       const provider: LLMProvider = {
         id: "fake",
         async *stream(options) {
-          if (options.toolChoice === "none") {
+          if (options.toolExposure?.kind === "none") {
             summaryRequests++;
             yield {
               type: "text",

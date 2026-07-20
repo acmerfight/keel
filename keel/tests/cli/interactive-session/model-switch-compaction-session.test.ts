@@ -224,7 +224,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Costly checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
@@ -338,7 +338,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Persisted costly checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: EXPENSIVE_USAGE };
@@ -479,7 +479,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const attempt = options.providerRequestAttempts?.begin();
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Report checkpoint summary." };
@@ -635,7 +635,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Persisted checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -784,7 +784,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const oldProvider: LLMProvider = {
       id: "model-switch-read-restore-old",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           oldProviderSummaryRequests++;
           yield { type: "text", text: "Read checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -811,7 +811,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     const targetProvider: LLMProvider = {
       id: "model-switch-read-restore-target",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "unexpected target summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;

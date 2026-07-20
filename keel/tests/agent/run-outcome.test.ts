@@ -472,7 +472,7 @@ describe("Run Outcome Reporting", () => {
           };
           return;
         }
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         yield { type: "text", text: "Need to stop before reading note.txt." };
         yield {
           type: "stop",

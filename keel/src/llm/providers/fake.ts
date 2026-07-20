@@ -1,5 +1,6 @@
-import type { ToolName } from "../../tools/tool-call.ts";
 import {
+  modelToolExposureAccounting,
+  type ToolName,
   toolCallArguments,
   toolCallFromParsedArguments,
 } from "../../tools/tool-call.ts";
@@ -73,11 +74,7 @@ export function createFakeProvider(
         JSON.stringify({
           systemPrompt: options.systemPrompt,
           messages: options.messages,
-          allowBash: options.allowBash === true,
-          allowSkill: options.allowSkill === true,
-          allowMemory: options.allowMemory === true,
-          allowMemoryProposal: options.allowMemoryProposal === true,
-          toolChoice: options.toolChoice ?? "auto",
+          ...modelToolExposureAccounting(options.toolExposure),
         }),
       ).length;
     },

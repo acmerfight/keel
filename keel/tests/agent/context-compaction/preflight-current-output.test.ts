@@ -167,7 +167,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "preflight-current-output-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           throw new Error("Current-output preflight should not summarize");
         }
@@ -282,7 +282,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "preflight-current-output-over-local-budget-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           throw new Error("Current-output preflight should not summarize");
         }
@@ -361,7 +361,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "preflight-accounting-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           throw new Error("Current-output preflight must not summarize");
         }
 
@@ -490,7 +490,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "aggregate-current-output-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           throw new Error("Aggregate current preflight should not summarize");
         }
 
@@ -681,7 +681,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "historical-compaction-sufficient-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Earlier background summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -763,7 +763,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "preflight-before-restore-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Earlier read summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -928,7 +928,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "preflight-current-output-no-second-summary-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           if (summaryRequests > 1) {
             throw new Error(
@@ -1059,7 +1059,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "no-current-output-preflight-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           throw new Error("Current-output preflight must not summarize");
         }
 
@@ -1134,7 +1134,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "preflight-restored-read-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           throw new Error("Preflight must not summarize restored reads");
         }
 
@@ -1205,7 +1205,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "preflight-overflow-fallback-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           throw new Error("Current-output fallback should not summarize");
         }
 
@@ -1294,7 +1294,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "artifact-preflight-overflow-fallback-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           throw new Error(
             "Artifact-backed current-output fallback should not summarize",
           );
@@ -1660,7 +1660,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "mixed-tool-output-cli-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Earlier setup summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -2104,7 +2104,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const provider: LLMProvider = {
       id: "no-current-round-after-summary-provider",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("Only a summary request is expected");
         }
         summaryRequests++;

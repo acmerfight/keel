@@ -31,7 +31,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Focused checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -127,7 +127,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Whitespace checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -383,7 +383,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           throw new Error("summary\n\u001b[31m exploded");
         }
 
@@ -484,7 +484,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield {
             type: "text",
@@ -793,7 +793,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           compactionPrompts.push(options.messages[0]?.content ?? "");
           receiveSummaryRequest();
           if (!options.signal.aborted) {
@@ -923,7 +923,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("queued manual compaction should not start a turn");
         }
         receiveSummaryRequest();
@@ -1020,7 +1020,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           receiveSummaryRequest();
           if (!options.signal.aborted) {
             await new Promise<void>((resolve) => {

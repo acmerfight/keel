@@ -209,7 +209,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const provider: LLMProvider = {
       id: "compacted-read-before-edit",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "The note was read earlier." };
           yield {
             type: "stop",
@@ -418,7 +418,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const provider: LLMProvider = {
       id: "compacted-windowed-read-before-edit",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "The later window was read earlier." };
           yield {
             type: "stop",
@@ -617,7 +617,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const provider: LLMProvider = {
       id: "truncated-post-compaction-read-before-edit",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "The large note was read earlier." };
           yield {
             type: "stop",

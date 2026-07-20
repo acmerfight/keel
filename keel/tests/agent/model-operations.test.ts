@@ -124,7 +124,7 @@ describe("Model Operations", () => {
       id: "assertion-operation-provider",
       async *stream(options) {
         const attempt = options.providerRequestAttempts?.begin();
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           const text = JSON.stringify({
             completed: false,
             reason: "No trusted evidence was surfaced.",

@@ -119,11 +119,12 @@ describe("Assertion Goal Evaluator", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
-          ...(options.allowBash !== undefined
-            ? { allowBash: options.allowBash }
+          ...(options.toolExposure?.kind === "auto" &&
+          options.toolExposure.bash === true
+            ? { allowBash: true }
             : {}),
         });
         yield { type: "text", text: output };
@@ -276,8 +277,8 @@ describe("Assertion Goal Evaluator", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
         yield {
@@ -368,8 +369,8 @@ describe("Assertion Goal Evaluator", () => {
       async *stream(options) {
         providerRequests.push({
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
         yield {
@@ -454,8 +455,8 @@ describe("Assertion Goal Evaluator", () => {
         providerRequests.push({
           systemPrompt: options.systemPrompt,
           messages: structuredClone([...options.messages]),
-          ...(options.toolChoice !== undefined
-            ? { toolChoice: options.toolChoice }
+          ...(options.toolExposure?.kind === "none"
+            ? { toolChoice: "none" as const }
             : {}),
         });
         yield {

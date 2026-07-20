@@ -1934,7 +1934,7 @@ describe("DeepSeek Provider", () => {
           },
         ],
         signal: freshSignal(),
-        allowBash: true,
+        toolExposure: { kind: "auto", bash: true },
       }),
     );
 
@@ -3545,7 +3545,7 @@ describe("DeepSeek Provider", () => {
         systemPrompt: "You are helpful.",
         messages: [{ role: "user", content: "bash-tool-call" }],
         signal: freshSignal(),
-        allowBash: true,
+        toolExposure: { kind: "auto", bash: true },
       }),
     );
 
@@ -4004,7 +4004,7 @@ describe("DeepSeek Provider", () => {
           systemPrompt: "You are helpful.",
           messages: [{ role: "user", content: "invalid-bash-arguments" }],
           signal: freshSignal(),
-          allowBash: true,
+          toolExposure: { kind: "auto", bash: true },
         }),
       ),
     ).rejects.toMatchObject({
@@ -4538,7 +4538,7 @@ describe("DeepSeek Provider", () => {
           systemPrompt: "sys",
           messages: [{ role: "user", content: "hi" }],
           signal: freshSignal(),
-          toolChoice: "none",
+          toolExposure: { kind: "none" },
         }),
       );
 
@@ -4585,7 +4585,7 @@ describe("DeepSeek Provider", () => {
           systemPrompt: "sys",
           messages: [{ role: "user", content: "hi" }],
           signal: freshSignal(),
-          allowBash: true,
+          toolExposure: { kind: "auto", bash: true },
         }),
       );
 
@@ -4778,7 +4778,7 @@ describe("DeepSeek Provider", () => {
           systemPrompt: "sys",
           messages: [{ role: "user", content: "hi" }],
           signal: freshSignal(),
-          allowBash: true,
+          toolExposure: { kind: "auto", bash: true },
         }),
       );
 

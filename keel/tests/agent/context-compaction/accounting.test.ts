@@ -31,7 +31,7 @@ describe("Context Compaction Accounting", () => {
     const provider: LLMProvider = {
       id: "no-window-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequested = true;
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -230,7 +230,77 @@ describe("Context Compaction Accounting", () => {
         reserveTokens: 0,
       },
       accounting,
-      { toolChoice: "none" },
+      { kind: "none" },
+    );
+
+    // Then
+    expect(shouldCompact).toBe(true);
+  });
+
+  test(`Given provider usage was captured for a text-only request,
+    When another text-only request checks proactive compaction,
+    Then it reuses the provider accounting`, () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Previously completed request ".repeat(80) },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+      requestMetadata: { kind: "none" },
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+      { kind: "none" },
+    );
+
+    // Then
+    expect(shouldCompact).toBe(false);
+  });
+
+  test(`Given provider usage was captured for a text-only request,
+    When a tool-enabled request checks proactive compaction,
+    Then it treats the usage as ambiguous and falls back to the estimate`, () => {
+    // Given
+    const messages: Message[] = [
+      { role: "user", content: "Previously completed request ".repeat(80) },
+    ];
+    const accounting = captureContextCompactionAccountingSnapshot({
+      systemPrompt: "You are helpful.",
+      messages,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+      requestMetadata: { kind: "none" },
+    });
+
+    // When
+    const shouldCompact = shouldCompactBeforeRequest(
+      "You are helpful.",
+      messages,
+      {
+        contextWindowTokens: 100,
+        reserveTokens: 0,
+      },
+      accounting,
+      { kind: "auto" },
     );
 
     // Then
@@ -253,7 +323,7 @@ describe("Context Compaction Accounting", () => {
         uncachedInputTokens: 1,
         outputTokens: 1,
       },
-      requestMetadata: { allowBash: true },
+      requestMetadata: { kind: "auto", bash: true },
     });
 
     // When
@@ -265,16 +335,16 @@ describe("Context Compaction Accounting", () => {
         reserveTokens: 0,
       },
       accounting,
-      { allowBash: false },
+      { kind: "auto" },
     );
 
     // Then
     expect(shouldCompact).toBe(true);
   });
 
-  test(`Given provider usage was captured for a text-only request with bash enabled,
-    When another text-only request checks proactive compaction without bash enabled,
-    Then it reuses accounting because no tools are exposed`, () => {
+  test(`Given provider usage was captured with direct memory tools,
+    When proactive compaction checks a request with reviewed memory tools,
+    Then it treats the request shape as ambiguous and falls back to the estimate`, () => {
     // Given
     const messages: Message[] = [
       { role: "user", content: "Previously completed request ".repeat(80) },
@@ -288,7 +358,7 @@ describe("Context Compaction Accounting", () => {
         uncachedInputTokens: 1,
         outputTokens: 1,
       },
-      requestMetadata: { allowBash: true, toolChoice: "none" },
+      requestMetadata: { kind: "auto", memory: "direct" },
     });
 
     // When
@@ -300,11 +370,11 @@ describe("Context Compaction Accounting", () => {
         reserveTokens: 0,
       },
       accounting,
-      { allowBash: false, toolChoice: "none" },
+      { kind: "auto", memory: "reviewed" },
     );
 
     // Then
-    expect(shouldCompact).toBe(false);
+    expect(shouldCompact).toBe(true);
   });
 
   test.each([

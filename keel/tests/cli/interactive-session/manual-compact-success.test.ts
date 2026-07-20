@@ -180,7 +180,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Manual checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -342,7 +342,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("manual compaction should not start an agent turn");
         }
         yield { type: "text", text: "Manual artifact summary." };
@@ -473,7 +473,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("manual compaction should not start an agent turn");
         }
         yield { type: "text", text: "Manual failure summary." };
@@ -585,7 +585,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: "Manual summary that omits the artifact ref.",
@@ -682,7 +682,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice !== "none") {
+        if (options.toolExposure?.kind !== "none") {
           throw new Error("manual compaction should not start an agent turn");
         }
         summaryPrompt = options.messages[0]?.content ?? "";
@@ -782,7 +782,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "manual-compact-read-restore",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Manual checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;
@@ -1080,7 +1080,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Costed checkpoint summary." };
           yield {
             type: "stop",
@@ -1181,7 +1181,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Report checkpoint summary." };
           yield {
             type: "stop",
@@ -1288,7 +1288,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Costed checkpoint summary." };
           yield {
             type: "stop",
@@ -1396,7 +1396,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       id: "fake",
       estimateInputTokens: () => 1,
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "unexpected summary" };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -1501,7 +1501,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryRequests++;
           yield { type: "text", text: "Unexpected checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };

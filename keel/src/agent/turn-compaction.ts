@@ -90,21 +90,7 @@ interface AttemptContextCompactionOptions {
 function requestMetadataForStream(
   options: StreamTurnOptions,
 ): ContextCompactionRequestMetadata {
-  return {
-    allowBash: options.allowBash,
-    ...(options.allowSkill !== undefined
-      ? { allowSkill: options.allowSkill }
-      : {}),
-    ...(options.allowMemory !== undefined
-      ? { allowMemory: options.allowMemory }
-      : {}),
-    ...(options.allowMemoryProposal !== undefined
-      ? { allowMemoryProposal: options.allowMemoryProposal }
-      : {}),
-    ...(options.toolChoice !== undefined
-      ? { toolChoice: options.toolChoice }
-      : {}),
-  };
+  return options.toolExposure;
 }
 
 async function attemptContextCompaction(
@@ -389,19 +375,7 @@ export async function* streamTurnWithOverflowRecovery(
           ...(requestSystemPrompt !== undefined ? { requestSystemPrompt } : {}),
           messages: currentRequestMessages,
           signal: streamOptions.signal,
-          allowBash: streamOptions.allowBash,
-          ...(streamOptions.allowSkill !== undefined
-            ? { allowSkill: streamOptions.allowSkill }
-            : {}),
-          ...(streamOptions.allowMemory !== undefined
-            ? { allowMemory: streamOptions.allowMemory }
-            : {}),
-          ...(streamOptions.allowMemoryProposal !== undefined
-            ? { allowMemoryProposal: streamOptions.allowMemoryProposal }
-            : {}),
-          ...(streamOptions.toolChoice !== undefined
-            ? { toolChoice: streamOptions.toolChoice }
-            : {}),
+          toolExposure: streamOptions.toolExposure,
           ...(streamOptions.textPrefix !== undefined
             ? { textPrefix: streamOptions.textPrefix }
             : {}),

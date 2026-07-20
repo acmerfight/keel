@@ -382,7 +382,7 @@ describe("CLI Run Report - Model Operations", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        expect(options.toolChoice).toBe("none");
+        expect(options.toolExposure?.kind).toBe("none");
         const attempt = options.providerRequestAttempts?.begin();
         yield { type: "text", text: "Manual checkpoint summary." };
         const usage = {

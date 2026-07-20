@@ -143,7 +143,7 @@ describe("Interactive Session - Queued Input", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Deferred compact summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
@@ -646,7 +646,7 @@ describe("Interactive Session - Queued Input", () => {
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           summaryPrompt = options.messages[0]?.content ?? "";
           yield { type: "text", text: "Ordered deferred compact summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };

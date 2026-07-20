@@ -66,7 +66,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const provider: LLMProvider = {
       id: "compacted-scoped-agents-read-before-edit",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "The API server was read earlier." };
           yield {
             type: "stop",
@@ -292,7 +292,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const provider: LLMProvider = {
       id: "scoped-restore-failure-rolls-back",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Earlier API server read." };
           yield { type: "stop", reason: "stop", usage };
           return;
@@ -443,7 +443,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const provider: LLMProvider = {
       id: "compacted-failed-write-scoped-agents",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield {
             type: "text",
             text: "The failed write exposed scoped project instructions.",

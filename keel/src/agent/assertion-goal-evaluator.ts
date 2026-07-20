@@ -363,8 +363,7 @@ export async function evaluateAssertionGoalCompletionWithProvider(
           ),
         ],
         signal: options.signal,
-        allowBash: false,
-        toolChoice: "none",
+        toolExposure: { kind: "none" },
         ...(operation !== null
           ? { providerRequestAttempts: operation.providerRequestAttempts }
           : {}),

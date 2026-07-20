@@ -150,7 +150,7 @@ describe("Interactive Session - Task Progress", () => {
     const provider: LLMProvider = {
       id: "task-compact-provider",
       async *stream(options) {
-        if (options.toolChoice === "none") {
+        if (options.toolExposure?.kind === "none") {
           yield { type: "text", text: "Manual checkpoint summary." };
           yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
           return;

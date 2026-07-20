@@ -17,6 +17,7 @@ import type {
   AssistantProviderMetadata,
   LLMProvider,
   Message,
+  ModelToolExposure,
   ToolCall,
 } from "../llm/types.ts";
 import type { BashPermissionPolicy } from "../permissions/bash.ts";
@@ -24,8 +25,7 @@ import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
 import { executeToolCall, type ToolExecution } from "../tools/execution.ts";
 import type {
-  AgentMemoryMutationCapability,
-  AgentMemoryProposalToolCapability,
+  AgentMemoryRuntime,
   AgentMemoryToolContext,
 } from "../tools/memory.ts";
 import {
@@ -112,8 +112,7 @@ export interface RunAgentOptions {
   readonly provider: LLMProvider;
   readonly userMessage: string;
   readonly systemPrompt: string;
-  readonly memoryPrompt?: () => string;
-  readonly memoryMutation?: AgentMemoryMutationCapability;
+  readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -137,9 +136,7 @@ export interface RunAgentTurnOptions {
   // agent turns append assistant/tool messages so later turns share context.
   readonly messages: Message[];
   readonly systemPrompt: string;
-  readonly memoryPrompt?: () => string;
-  readonly memoryMutation?: AgentMemoryMutationCapability;
-  readonly memoryProposal?: AgentMemoryProposalToolCapability;
+  readonly memory?: AgentMemoryRuntime;
   readonly signal: AbortSignal;
   readonly allowBash: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -509,7 +506,7 @@ interface WrapUpSummarizeOptions {
   readonly state: CompactionState;
   readonly streamOptions: Omit<
     LedgerTurnOptions,
-    "getLedger" | "setLedger" | "modelOperationPurpose"
+    "getLedger" | "setLedger" | "modelOperationPurpose" | "toolExposure"
   >;
   readonly turnText: string;
   readonly turnReasoningContent: string | null;
@@ -540,7 +537,7 @@ async function* streamWrapUpSummary(
     getLedger: () => wrapUpLedger,
     setLedger: setWrapUpLedger,
     modelOperationPurpose: "turn_limit_summary",
-    toolChoice: "none",
+    toolExposure: { kind: "none" },
     textPrefix: turnText === "" || turnText.endsWith("\n") ? "" : "\n",
   });
 }
@@ -579,11 +576,12 @@ export async function* runAgentTurn(
     }
   };
   const memoryToolContext: AgentMemoryToolContext | undefined =
-    options.memoryMutation === undefined
+    options.memory === undefined
       ? undefined
       : {
-          capability: options.memoryMutation,
-          proposal: options.memoryProposal ?? null,
+          capability: options.memory.mutation,
+          proposal:
+            options.memory.kind === "reviewed" ? options.memory.proposal : null,
           currentUserMessage: currentMemoryUserMessage,
           claimSourceMutation: (message) => {
             if (claimedMemorySourceMessages.has(message)) return false;
@@ -693,15 +691,22 @@ export async function* runAgentTurn(
   for (let completedTurns = 1; ; completedTurns++) {
     const currentMemorySource = currentMemoryUserMessage();
     const exposeMemoryTools =
-      options.memoryMutation !== undefined &&
+      options.memory !== undefined &&
       currentMemorySource !== null &&
       !memoryToolsExposedForMessages.has(currentMemorySource);
-    const allowMemory = exposeMemoryTools;
-    const allowMemoryProposal =
+    const exposeReviewedMemory =
       exposeMemoryTools &&
-      options.memoryProposal !== undefined &&
+      options.memory?.kind === "reviewed" &&
       currentMemorySource !== null &&
-      options.memoryProposal.sourceFor(currentMemorySource) !== undefined;
+      options.memory.proposal.sourceFor(currentMemorySource) !== undefined;
+    const memoryToolExposure: Extract<
+      ModelToolExposure,
+      { readonly kind: "auto" }
+    >["memory"] = exposeMemoryTools
+      ? exposeReviewedMemory
+        ? "reviewed"
+        : "direct"
+      : undefined;
     if (exposeMemoryTools) {
       memoryToolsExposedForMessages.add(currentMemorySource);
     }
@@ -711,10 +716,10 @@ export async function* runAgentTurn(
         ? []
         : options.skillActivation.active().map(workflowSkillFromActivation),
     );
-    const baseTurnSystemPrompt = allowMemoryProposal
+    const baseTurnSystemPrompt = exposeReviewedMemory
       ? `${workflowSystemPrompt}\n${REVIEWED_MEMORY_TOOL_CHOICE_SYSTEM_PROMPT}`
       : workflowSystemPrompt;
-    const memoryPrompt = options.memoryPrompt;
+    const memoryPrompt = options.memory?.prompt;
     const requestSystemPrompt =
       memoryPrompt === undefined
         ? undefined
@@ -737,10 +742,14 @@ export async function* runAgentTurn(
         getLedger: () => sessionLedger,
         setLedger: applySessionLedger,
         signal,
-        allowBash,
-        allowSkill,
-        allowMemory,
-        allowMemoryProposal,
+        toolExposure: {
+          kind: "auto",
+          ...(allowBash ? { bash: true } : {}),
+          ...(allowSkill ? { skill: true } : {}),
+          ...(memoryToolExposure !== undefined
+            ? { memory: memoryToolExposure }
+            : {}),
+        },
         modelOperationPurpose: "agent_turn",
       });
     } catch (error) {
@@ -817,10 +826,6 @@ export async function* runAgentTurn(
             provider: requestProvider,
             systemPrompt: baseTurnSystemPrompt,
             signal,
-            allowBash,
-            allowSkill,
-            allowMemory: false,
-            allowMemoryProposal: false,
           },
           turnText: turnResult.text,
           turnReasoningContent: turnResult.reasoningContent,
@@ -989,8 +994,7 @@ export async function* runAgentTurn(
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
           : {}),
-        ...(memoryToolContext !== undefined &&
-        (allowMemory || allowMemoryProposal)
+        ...(memoryToolContext !== undefined && memoryToolExposure !== undefined
           ? { memory: memoryToolContext }
           : {}),
       });
@@ -1250,12 +1254,7 @@ export async function* runAgent(
         provider: options.provider,
         messages,
         systemPrompt: options.systemPrompt,
-        ...(options.memoryPrompt !== undefined
-          ? { memoryPrompt: options.memoryPrompt }
-          : {}),
-        ...(options.memoryMutation !== undefined
-          ? { memoryMutation: options.memoryMutation }
-          : {}),
+        ...(options.memory !== undefined ? { memory: options.memory } : {}),
         signal: options.signal,
         allowBash: options.allowBash,
         hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],
