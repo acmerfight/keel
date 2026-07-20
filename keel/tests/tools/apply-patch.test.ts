@@ -336,8 +336,11 @@ describe("Apply Patch Tool", () => {
           filePath: targetPath,
           beforeContent: "#!/bin/sh\necho hi\n",
           afterContent: "#!/bin/sh\necho hi\n",
-          beforeMode: 0o644,
-          afterMode: 0o755,
+          modeOwnership: {
+            kind: "owned",
+            beforeMode: 0o644,
+            afterMode: 0o755,
+          },
         },
       ]);
       expect(restoreLastEditCheckpoint(workspace)).toEqual({

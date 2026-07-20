@@ -36,8 +36,34 @@ export interface RecordLastEditCheckpointOptions {
   readonly filePath: string;
   readonly beforeContent: string;
   readonly afterContent: string;
-  readonly beforeMode?: number;
-  readonly afterMode?: number;
+  readonly modeOwnership: EditCheckpointModeOwnership;
+}
+
+export type EditCheckpointModeOwnership =
+  | { readonly kind: "unowned" }
+  | {
+      readonly kind: "owned";
+      readonly beforeMode: number;
+      readonly afterMode: number;
+    };
+
+interface PersistedEditCheckpoint {
+  readonly version: 1;
+  readonly operation: "edit";
+  readonly gitRoot: string;
+  readonly relativePath: string;
+  readonly beforeContent: string;
+  readonly afterContent: string;
+  readonly modeOwnership: EditCheckpointModeOwnership;
+  readonly createdAt: string;
+}
+
+interface PersistedBatchEditCheckpointOperation {
+  readonly operation: "edit";
+  readonly relativePath: string;
+  readonly beforeContent: string;
+  readonly afterContent: string;
+  readonly modeOwnership: EditCheckpointModeOwnership;
 }
 
 export interface RecordLastCreateCheckpointOptions {
@@ -60,8 +86,7 @@ export type RecordLastBatchCheckpointOperation =
       readonly filePath: string;
       readonly beforeContent: string;
       readonly afterContent: string;
-      readonly beforeMode?: number;
-      readonly afterMode?: number;
+      readonly modeOwnership: EditCheckpointModeOwnership;
     }
   | {
       readonly operation: "create";
@@ -117,19 +142,43 @@ const gitOutputSchema = z
   .transform((value) => value.trim())
   .pipe(z.string().min(1));
 
-const editCheckpointSchema = z
-  .object({
-    version: z.literal(1),
-    operation: z.literal("edit"),
-    gitRoot: z.string().min(1),
-    relativePath: z.string().min(1),
-    beforeContent: z.string(),
-    afterContent: z.string(),
-    beforeMode: checkpointModeSchema.optional(),
-    afterMode: checkpointModeSchema.optional(),
-    createdAt: z.string().min(1),
-  })
-  .strict();
+const editCheckpointFields = {
+  version: z.literal(1),
+  operation: z.literal("edit"),
+  gitRoot: z.string().min(1),
+  relativePath: z.string().min(1),
+  beforeContent: z.string(),
+  afterContent: z.string(),
+  createdAt: z.string().min(1),
+};
+const editCheckpointSchema = z.union([
+  z
+    .object(editCheckpointFields)
+    .strict()
+    .transform(
+      (checkpoint): PersistedEditCheckpoint => ({
+        ...checkpoint,
+        modeOwnership: { kind: "unowned" },
+      }),
+    ),
+  z
+    .object({
+      ...editCheckpointFields,
+      beforeMode: checkpointModeSchema,
+      afterMode: checkpointModeSchema,
+    })
+    .strict()
+    .transform(
+      ({ beforeMode, afterMode, ...checkpoint }): PersistedEditCheckpoint => ({
+        ...checkpoint,
+        modeOwnership: {
+          kind: "owned",
+          beforeMode,
+          afterMode,
+        },
+      }),
+    ),
+]);
 
 const createCheckpointSchema = z
   .object({
@@ -155,17 +204,47 @@ const deleteCheckpointSchema = z
   })
   .strict();
 
-const batchCheckpointOperationSchema = z.union([
+const batchEditCheckpointOperationFields = {
+  operation: z.literal("edit"),
+  relativePath: z.string().min(1),
+  beforeContent: z.string(),
+  afterContent: z.string(),
+};
+const batchEditCheckpointOperationSchema = z.union([
+  z
+    .object(batchEditCheckpointOperationFields)
+    .strict()
+    .transform(
+      (operation): PersistedBatchEditCheckpointOperation => ({
+        ...operation,
+        modeOwnership: { kind: "unowned" },
+      }),
+    ),
   z
     .object({
-      operation: z.literal("edit"),
-      relativePath: z.string().min(1),
-      beforeContent: z.string(),
-      afterContent: z.string(),
-      beforeMode: checkpointModeSchema.optional(),
-      afterMode: checkpointModeSchema.optional(),
+      ...batchEditCheckpointOperationFields,
+      beforeMode: checkpointModeSchema,
+      afterMode: checkpointModeSchema,
     })
-    .strict(),
+    .strict()
+    .transform(
+      ({
+        beforeMode,
+        afterMode,
+        ...operation
+      }): PersistedBatchEditCheckpointOperation => ({
+        ...operation,
+        modeOwnership: {
+          kind: "owned",
+          beforeMode,
+          afterMode,
+        },
+      }),
+    ),
+]);
+
+const batchCheckpointOperationSchema = z.union([
+  batchEditCheckpointOperationSchema,
   z
     .object({
       operation: z.literal("create"),
@@ -213,6 +292,10 @@ type PersistedCheckpoint = z.infer<typeof checkpointSchema>;
 type PersistedBatchCheckpointOperation = z.infer<
   typeof batchCheckpointOperationSchema
 >;
+type CheckpointForDisk = z.input<typeof checkpointSchema>;
+type BatchCheckpointOperationForDisk = z.input<
+  typeof batchCheckpointOperationSchema
+>;
 type PersistedNonCreateBatchCheckpointOperation = Exclude<
   PersistedBatchCheckpointOperation,
   { readonly operation: "create" }
@@ -254,6 +337,56 @@ type UndoCheckpointCoalesceResult =
       readonly operations: readonly CoalescedUndoCheckpointOperation[];
     }
   | RestoreLastEditCheckpointResult;
+
+function editModeOwnershipForDisk(
+  ownership: EditCheckpointModeOwnership,
+):
+  | Record<string, never>
+  | { readonly beforeMode: number; readonly afterMode: number } {
+  return ownership.kind === "unowned"
+    ? {}
+    : {
+        beforeMode: ownership.beforeMode,
+        afterMode: ownership.afterMode,
+      };
+}
+
+function batchCheckpointOperationForDisk(
+  operation: PersistedBatchCheckpointOperation,
+): BatchCheckpointOperationForDisk {
+  if (operation.operation !== "edit") {
+    return operation;
+  }
+  return {
+    operation: "edit",
+    relativePath: operation.relativePath,
+    beforeContent: operation.beforeContent,
+    afterContent: operation.afterContent,
+    ...editModeOwnershipForDisk(operation.modeOwnership),
+  };
+}
+
+function checkpointForDisk(checkpoint: PersistedCheckpoint): CheckpointForDisk {
+  if (checkpoint.operation === "edit") {
+    return {
+      version: 1,
+      operation: "edit",
+      gitRoot: checkpoint.gitRoot,
+      relativePath: checkpoint.relativePath,
+      beforeContent: checkpoint.beforeContent,
+      afterContent: checkpoint.afterContent,
+      ...editModeOwnershipForDisk(checkpoint.modeOwnership),
+      createdAt: checkpoint.createdAt,
+    };
+  }
+  if (checkpoint.operation === "batch") {
+    return {
+      ...checkpoint,
+      operations: checkpoint.operations.map(batchCheckpointOperationForDisk),
+    };
+  }
+  return checkpoint;
+}
 
 function gitOutput(workspace: string, args: readonly string[]): string | null {
   try {
@@ -325,7 +458,10 @@ function writeCheckpoint(
   mkdirSync(dirname(checkpointPath), { recursive: true });
   writeFileSync(
     checkpointPath,
-    `${JSON.stringify({ version: 1, checkpoints })}\n`,
+    `${JSON.stringify({
+      version: 1,
+      checkpoints: checkpoints.map(checkpointForDisk),
+    })}\n`,
     "utf8",
   );
 }
@@ -410,30 +546,39 @@ function modeMatches(stat: Stats, expectedMode: number | undefined): boolean {
   return expectedMode === undefined || fileMode(stat) === expectedMode;
 }
 
-function checkpointEditModes(operation: {
-  readonly beforeMode?: number | undefined;
-  readonly afterMode?: number | undefined;
-}): { readonly beforeMode: number; readonly afterMode: number } | null {
-  if (operation.beforeMode === undefined && operation.afterMode === undefined) {
-    return null;
-  }
-  if (operation.beforeMode === undefined || operation.afterMode === undefined) {
-    invalidCheckpointError();
-  }
-  return {
-    beforeMode: operation.beforeMode,
-    afterMode: operation.afterMode,
-  };
+function editModeBefore(
+  ownership: EditCheckpointModeOwnership,
+): number | undefined {
+  return ownership.kind === "owned" ? ownership.beforeMode : undefined;
 }
 
-function checkpointEditModeState(operation: {
-  readonly beforeMode?: number | undefined;
-  readonly afterMode?: number | undefined;
-}): { readonly beforeMode?: number; readonly afterMode?: number } {
-  const modes = checkpointEditModes(operation);
-  return modes === null
-    ? {}
-    : { beforeMode: modes.beforeMode, afterMode: modes.afterMode };
+function editModeAfter(
+  ownership: EditCheckpointModeOwnership,
+): number | undefined {
+  return ownership.kind === "owned" ? ownership.afterMode : undefined;
+}
+
+function editModeOwnershipFromKnownBefore(
+  beforeMode: number,
+  afterMode: number | undefined,
+): EditCheckpointModeOwnership {
+  return afterMode === undefined
+    ? { kind: "unowned" }
+    : { kind: "owned", beforeMode, afterMode };
+}
+
+function advanceEditModeOwnership(
+  ownership: EditCheckpointModeOwnership,
+  afterMode: number | undefined,
+): EditCheckpointModeOwnership {
+  if (ownership.kind === "unowned") {
+    return ownership;
+  }
+  return {
+    kind: "owned",
+    beforeMode: ownership.beforeMode,
+    afterMode: afterMode ?? ownership.afterMode,
+  };
 }
 
 function modeState(mode: number | undefined): { readonly mode?: number } {
@@ -444,15 +589,6 @@ function afterModeState(mode: number | undefined): {
   readonly afterMode?: number;
 } {
   return mode === undefined ? {} : { afterMode: mode };
-}
-
-function editModeState(
-  beforeMode: number | undefined,
-  afterMode: number | undefined,
-): { readonly beforeMode?: number; readonly afterMode?: number } {
-  return beforeMode === undefined || afterMode === undefined
-    ? {}
-    : { beforeMode, afterMode };
 }
 
 function skippedCheckpointRecord(
@@ -509,7 +645,7 @@ export function recordLastEditCheckpoint(
       relativePath,
       beforeContent: options.beforeContent,
       afterContent: options.afterContent,
-      ...checkpointEditModeState(options),
+      modeOwnership: options.modeOwnership,
       createdAt: new Date().toISOString(),
     });
 
@@ -646,7 +782,7 @@ export function recordLastBatchCheckpoint(
           relativePath,
           beforeContent: operation.beforeContent,
           afterContent: operation.afterContent,
-          ...checkpointEditModeState(operation),
+          modeOwnership: operation.modeOwnership,
         });
       } else if (operation.operation === "delete") {
         operations.push({
@@ -703,20 +839,21 @@ function mergeTaskCheckpointOperations(
       filePath: existing.filePath,
       afterContent: next.afterContent,
       ...(next.operation === "edit"
-        ? modeState(next.afterMode ?? existing.mode)
+        ? modeState(editModeAfter(next.modeOwnership) ?? existing.mode)
         : modeState(next.mode ?? existing.mode)),
     };
   }
 
   if (existing.operation === "delete") {
     if (next.operation === "delete") return existing;
-    const nextMode = next.operation === "edit" ? next.afterMode : next.mode;
+    const nextMode =
+      next.operation === "edit" ? editModeAfter(next.modeOwnership) : next.mode;
     return {
       operation: "edit",
       filePath: existing.filePath,
       beforeContent: existing.beforeContent,
       afterContent: next.afterContent,
-      ...editModeState(existing.mode, nextMode),
+      modeOwnership: editModeOwnershipFromKnownBefore(existing.mode, nextMode),
     };
   }
 
@@ -734,9 +871,10 @@ function mergeTaskCheckpointOperations(
     filePath: existing.filePath,
     beforeContent: existing.beforeContent,
     afterContent: next.afterContent,
-    ...(next.operation === "edit"
-      ? editModeState(existing.beforeMode, next.afterMode ?? existing.afterMode)
-      : editModeState(existing.beforeMode, next.mode ?? existing.afterMode)),
+    modeOwnership: advanceEditModeOwnership(
+      existing.modeOwnership,
+      next.operation === "edit" ? editModeAfter(next.modeOwnership) : next.mode,
+    ),
   };
 }
 
@@ -768,11 +906,10 @@ function undoCheckpointOperationBeforeState(
 ): UndoCheckpointFileState {
   if (operation.operation === "create") return { status: "missing" };
   if (operation.operation === "edit") {
-    const modes = checkpointEditModes(operation);
     return {
       status: "file",
       content: operation.beforeContent,
-      ...modeState(modes?.beforeMode),
+      ...modeState(editModeBefore(operation.modeOwnership)),
     };
   }
   return {
@@ -801,11 +938,10 @@ function undoCheckpointOperationAfterState(
     };
   }
   if (operation.operation === "edit") {
-    const modes = checkpointEditModes(operation);
     return {
       status: "file",
       content: operation.afterContent,
-      ...modeState(modes?.afterMode),
+      ...modeState(editModeAfter(operation.modeOwnership)),
     };
   }
   return { status: "missing" };
@@ -883,7 +1019,7 @@ function mergeUndoCheckpointOperations(
       relativePath: existing.relativePath,
       afterContent: next.afterContent,
       ...(next.operation === "edit"
-        ? modeState(next.afterMode ?? existing.mode)
+        ? modeState(editModeAfter(next.modeOwnership) ?? existing.mode)
         : modeState(next.mode ?? existing.mode)),
       currentMissingAllowed: next.operation === "create",
     };
@@ -925,14 +1061,15 @@ function mergeUndoCheckpointOperations(
         currentMissingAllowed: true,
       };
     }
-    const nextModes = checkpointEditModes(next);
     return {
       operation: "delete-create",
       relativePath: existing.relativePath,
       beforeContent: existing.beforeContent,
       afterContent: next.afterContent,
       mode: existing.mode,
-      ...afterModeState(nextModes?.afterMode ?? existing.afterMode),
+      ...afterModeState(
+        editModeAfter(next.modeOwnership) ?? existing.afterMode,
+      ),
       currentMissingAllowed: false,
     };
   }
@@ -950,15 +1087,14 @@ function mergeUndoCheckpointOperations(
   if (next.operation !== "edit") {
     invalidCheckpointError();
   }
-  const existingModes = checkpointEditModes(existing);
   return {
     operation: "edit",
     relativePath: existing.relativePath,
     beforeContent: existing.beforeContent,
     afterContent: next.afterContent,
-    ...editModeState(
-      existingModes?.beforeMode,
-      next.afterMode ?? existingModes?.afterMode,
+    modeOwnership: advanceEditModeOwnership(
+      existing.modeOwnership,
+      editModeAfter(next.modeOwnership),
     ),
   };
 }
@@ -1004,7 +1140,7 @@ function checkpointForwardOperations(
         relativePath: checkpoint.relativePath,
         beforeContent: checkpoint.beforeContent,
         afterContent: checkpoint.afterContent,
-        ...checkpointEditModeState(checkpoint),
+        modeOwnership: checkpoint.modeOwnership,
       },
     ];
   }
@@ -1063,7 +1199,7 @@ export function recordLastTaskCheckpoint(
         filePath: operation.filePath,
         beforeContent: operation.beforeContent,
         afterContent: operation.afterContent,
-        ...checkpointEditModeState(operation),
+        modeOwnership: operation.modeOwnership,
       });
     }
   }
@@ -1099,8 +1235,7 @@ type ResolvedBatchRestoreOperation =
       readonly relativePath: string;
       readonly beforeContent: string;
       readonly afterContent: string;
-      readonly beforeMode?: number;
-      readonly afterMode?: number;
+      readonly modeOwnership: EditCheckpointModeOwnership;
     }
   | {
       readonly operation: "create";
@@ -1194,7 +1329,6 @@ function validateBatchRestoreOperation(
     };
   }
 
-  const modes = checkpointEditModes(operation);
   const targetStat = lstatIfPossible(filePath);
   if (targetStat === null || targetStat.isSymbolicLink()) {
     return blockedRestore(operation);
@@ -1208,7 +1342,7 @@ function validateBatchRestoreOperation(
   if (currentContent !== operation.afterContent) {
     return blockedRestore(operation);
   }
-  if (!modeMatches(targetStat, modes?.afterMode)) {
+  if (!modeMatches(targetStat, editModeAfter(operation.modeOwnership))) {
     return blockedRestore(operation);
   }
   return {
@@ -1217,7 +1351,7 @@ function validateBatchRestoreOperation(
     relativePath: operation.relativePath,
     beforeContent: operation.beforeContent,
     afterContent: operation.afterContent,
-    ...editModeState(modes?.beforeMode, modes?.afterMode),
+    modeOwnership: operation.modeOwnership,
   };
 }
 
@@ -1355,14 +1489,14 @@ function restoreBatchCheckpoint(
     } else {
       try {
         writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
-        if (operation.beforeMode !== undefined) {
-          chmodSync(operation.restorePath, operation.beforeMode);
+        if (operation.modeOwnership.kind === "owned") {
+          chmodSync(operation.restorePath, operation.modeOwnership.beforeMode);
         }
         applied.push({
           operation: "edit",
           restorePath: operation.restorePath,
           afterContent: operation.afterContent,
-          ...modeState(operation.afterMode),
+          ...modeState(editModeAfter(operation.modeOwnership)),
         });
       } catch {
         /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
@@ -1373,7 +1507,7 @@ function restoreBatchCheckpoint(
               operation: "edit",
               restorePath: operation.restorePath,
               afterContent: operation.afterContent,
-              ...modeState(operation.afterMode),
+              ...modeState(editModeAfter(operation.modeOwnership)),
             },
           ],
           operation,
@@ -1592,14 +1726,14 @@ function restoreResolvedCoalescedOperations(
     } else {
       try {
         writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
-        if (operation.beforeMode !== undefined) {
-          chmodSync(operation.restorePath, operation.beforeMode);
+        if (operation.modeOwnership.kind === "owned") {
+          chmodSync(operation.restorePath, operation.modeOwnership.beforeMode);
         }
         applied.push({
           operation: "edit",
           restorePath: operation.restorePath,
           afterContent: operation.afterContent,
-          ...modeState(operation.afterMode),
+          ...modeState(editModeAfter(operation.modeOwnership)),
         });
       } catch {
         /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
@@ -1610,7 +1744,7 @@ function restoreResolvedCoalescedOperations(
               operation: "edit",
               restorePath: operation.restorePath,
               afterContent: operation.afterContent,
-              ...modeState(operation.afterMode),
+              ...modeState(editModeAfter(operation.modeOwnership)),
             },
           ],
           operation,
@@ -1688,7 +1822,6 @@ function restoreCheckpoint(
     };
   }
 
-  const modes = checkpointEditModes(checkpoint);
   const targetStat = lstatIfPossible(filePath);
   if (targetStat === null || targetStat.isSymbolicLink()) {
     return blockedRestore(checkpoint);
@@ -1703,13 +1836,13 @@ function restoreCheckpoint(
   if (currentContent !== checkpoint.afterContent) {
     return blockedRestore(checkpoint);
   }
-  if (!modeMatches(targetStat, modes?.afterMode)) {
+  if (!modeMatches(targetStat, editModeAfter(checkpoint.modeOwnership))) {
     return blockedRestore(checkpoint);
   }
 
   writeFileSync(restorePath, checkpoint.beforeContent, "utf8");
-  if (modes !== null) {
-    chmodSync(restorePath, modes.beforeMode);
+  if (checkpoint.modeOwnership.kind === "owned") {
+    chmodSync(restorePath, checkpoint.modeOwnership.beforeMode);
   }
   return {
     status: "restored",

@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
   listUndoCheckpoints,
+  type RecordLastEditCheckpointOptions,
   recordLastBatchCheckpoint,
   recordLastCreateCheckpoint,
   recordLastDeleteCheckpoint,
@@ -53,6 +54,15 @@ async function writeRawCheckpoint(
   );
 }
 
+function recordUnownedEditCheckpoint(
+  options: Omit<RecordLastEditCheckpointOptions, "modeOwnership">,
+): ReturnType<typeof recordLastEditCheckpoint> {
+  return recordLastEditCheckpoint({
+    ...options,
+    modeOwnership: { kind: "unowned" },
+  });
+}
+
 describe("Git Checkpoints", () => {
   test(`Given a workspace is not a git repository,
     When recording and restoring an edit checkpoint,
@@ -64,7 +74,7 @@ describe("Git Checkpoints", () => {
 
     try {
       // When
-      const record = recordLastEditCheckpoint({
+      const record = recordUnownedEditCheckpoint({
         workspace,
         filePath,
         beforeContent: "old\n",
@@ -126,7 +136,7 @@ describe("Git Checkpoints", () => {
         const fileName = `note-${index}.txt`;
         const filePath = join(workspace, fileName);
         await writeFile(filePath, `after ${index}\n`, "utf8");
-        recordLastEditCheckpoint({
+        recordUnownedEditCheckpoint({
           workspace,
           filePath,
           beforeContent: `before ${index}\n`,
@@ -156,14 +166,14 @@ describe("Git Checkpoints", () => {
     const workspace = await createGitWorkspace("keel-git-undo-through-file-");
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "middle\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "before\n",
       afterContent: "middle\n",
     });
     await writeFile(filePath, "after\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "middle\n",
@@ -203,8 +213,11 @@ describe("Git Checkpoints", () => {
       filePath,
       beforeContent: "before\n",
       afterContent: "middle\n",
-      beforeMode: 0o644,
-      afterMode: 0o755,
+      modeOwnership: {
+        kind: "owned",
+        beforeMode: 0o644,
+        afterMode: 0o755,
+      },
     });
     await writeFile(filePath, "after\n", "utf8");
     if (process.platform !== "win32") {
@@ -215,8 +228,11 @@ describe("Git Checkpoints", () => {
       filePath,
       beforeContent: "middle\n",
       afterContent: "after\n",
-      beforeMode: 0o755,
-      afterMode: 0o755,
+      modeOwnership: {
+        kind: "owned",
+        beforeMode: 0o755,
+        afterMode: 0o755,
+      },
     });
 
     try {
@@ -255,16 +271,22 @@ describe("Git Checkpoints", () => {
       filePath,
       beforeContent: "before\n",
       afterContent: "middle\n",
-      beforeMode: 0o644,
-      afterMode: 0o755,
+      modeOwnership: {
+        kind: "owned",
+        beforeMode: 0o644,
+        afterMode: 0o755,
+      },
     });
     recordLastEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "middle\n",
       afterContent: "after\n",
-      beforeMode: 0o644,
-      afterMode: 0o755,
+      modeOwnership: {
+        kind: "owned",
+        beforeMode: 0o644,
+        afterMode: 0o755,
+      },
     });
 
     try {
@@ -296,13 +318,13 @@ describe("Git Checkpoints", () => {
     );
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "after\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "before\n",
       afterContent: "middle\n",
     });
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "different\n",
@@ -336,7 +358,7 @@ describe("Git Checkpoints", () => {
     const workspace = await createGitWorkspace("keel-git-undo-through-range-");
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "after\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "before\n",
@@ -371,7 +393,7 @@ describe("Git Checkpoints", () => {
     );
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "after\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "before\n",
@@ -531,7 +553,7 @@ describe("Git Checkpoints", () => {
       afterContent: "created\n",
     });
     await writeFile(filePath, "edited\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "created\n",
@@ -576,7 +598,7 @@ describe("Git Checkpoints", () => {
       afterContent: "created\n",
     });
     await writeFile(filePath, "edited\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "created\n",
@@ -622,7 +644,7 @@ describe("Git Checkpoints", () => {
       afterContent: "initial\n",
       mode: 0o755,
     });
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "initial\n",
@@ -665,7 +687,7 @@ describe("Git Checkpoints", () => {
       afterContent: "initial\n",
       mode: 0o755,
     });
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "initial\n",
@@ -710,7 +732,7 @@ describe("Git Checkpoints", () => {
       afterContent: "created\n",
     });
     await writeFile(filePath, "edited\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "created\n",
@@ -837,7 +859,7 @@ describe("Git Checkpoints", () => {
     );
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "new\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "old\n",
@@ -973,7 +995,7 @@ describe("Git Checkpoints", () => {
     );
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "middle\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "before\n",
@@ -1022,6 +1044,7 @@ describe("Git Checkpoints", () => {
           filePath: firstPath,
           beforeContent: "first before\n",
           afterContent: "first after batch\n",
+          modeOwnership: { kind: "unowned" },
         },
         {
           operation: "create",
@@ -1031,7 +1054,7 @@ describe("Git Checkpoints", () => {
       ],
     });
     await writeFile(secondPath, "second after edit\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath: secondPath,
       beforeContent: "second after batch\n",
@@ -1218,7 +1241,7 @@ describe("Git Checkpoints", () => {
       afterContent: "created\n",
     });
     await writeFile(filePath, "edited\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "created\n",
@@ -1398,14 +1421,14 @@ describe("Git Checkpoints", () => {
     const firstPath = join(workspace, "first.txt");
     const secondPath = join(workspace, "second.txt");
     await writeFile(firstPath, "first after\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath: firstPath,
       beforeContent: "first before\n",
       afterContent: "first after\n",
     });
     await writeFile(secondPath, "second after\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath: secondPath,
       beforeContent: "second before\n",
@@ -1446,7 +1469,7 @@ describe("Git Checkpoints", () => {
 
     try {
       // When
-      const result = recordLastEditCheckpoint({
+      const result = recordUnownedEditCheckpoint({
         workspace,
         filePath: join(workspace, "note.txt"),
         beforeContent: "old\n",
@@ -1479,7 +1502,7 @@ describe("Git Checkpoints", () => {
 
     try {
       // When
-      const record = recordLastEditCheckpoint({
+      const record = recordUnownedEditCheckpoint({
         workspace,
         filePath,
         beforeContent: "old\n",
@@ -1522,12 +1545,14 @@ describe("Git Checkpoints", () => {
             filePath: firstPath,
             beforeContent: "first old\n",
             afterContent: "first new\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "edit",
             filePath: secondPath,
             beforeContent: "second old\n",
             afterContent: "second new\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "create",
@@ -1580,8 +1605,11 @@ describe("Git Checkpoints", () => {
             filePath: editedPath,
             beforeContent: "before\n",
             afterContent: "after\n",
-            beforeMode: 0o644,
-            afterMode: 0o755,
+            modeOwnership: {
+              kind: "owned",
+              beforeMode: 0o644,
+              afterMode: 0o755,
+            },
           },
           {
             operation: "create",
@@ -1677,8 +1705,11 @@ describe("Git Checkpoints", () => {
             filePath: editedPath,
             beforeContent: "before\n",
             afterContent: "after\n",
-            beforeMode: 0o644,
-            afterMode: 0o755,
+            modeOwnership: {
+              kind: "owned",
+              beforeMode: 0o644,
+              afterMode: 0o755,
+            },
           },
         ],
       });
@@ -2014,12 +2045,14 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "old\n",
             afterContent: "middle\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "edit",
             filePath,
             beforeContent: "middle\n",
             afterContent: "final\n",
+            modeOwnership: { kind: "unowned" },
           },
         ],
       });
@@ -2058,16 +2091,22 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "old\n",
             afterContent: "middle\n",
-            beforeMode: 0o644,
-            afterMode: 0o755,
+            modeOwnership: {
+              kind: "owned",
+              beforeMode: 0o644,
+              afterMode: 0o755,
+            },
           },
           {
             operation: "edit",
             filePath,
             beforeContent: "middle\n",
             afterContent: "final\n",
-            beforeMode: 0o755,
-            afterMode: 0o755,
+            modeOwnership: {
+              kind: "owned",
+              beforeMode: 0o755,
+              afterMode: 0o755,
+            },
           },
         ],
       });
@@ -2105,6 +2144,7 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "old\n",
             afterContent: "middle\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "delete",
@@ -2276,8 +2316,11 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "recreated\n",
             afterContent: "final\n",
-            beforeMode: 0o644,
-            afterMode: 0o755,
+            modeOwnership: {
+              kind: "owned",
+              beforeMode: 0o644,
+              afterMode: 0o755,
+            },
           },
         ],
       });
@@ -2321,8 +2364,11 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "old\n",
             afterContent: "middle\n",
-            beforeMode: 0o644,
-            afterMode: 0o644,
+            modeOwnership: {
+              kind: "owned",
+              beforeMode: 0o644,
+              afterMode: 0o644,
+            },
           },
           {
             operation: "create",
@@ -2372,8 +2418,11 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "old\n",
             afterContent: "middle\n",
-            beforeMode: 0o644,
-            afterMode: 0o755,
+            modeOwnership: {
+              kind: "owned",
+              beforeMode: 0o644,
+              afterMode: 0o755,
+            },
           },
           {
             operation: "create",
@@ -2422,6 +2471,7 @@ describe("Git Checkpoints", () => {
             filePath,
             beforeContent: "initial\n",
             afterContent: "final\n",
+            modeOwnership: { kind: "unowned" },
           },
         ],
       });
@@ -2555,6 +2605,7 @@ describe("Git Checkpoints", () => {
             filePath: editedPath,
             beforeContent: "old\n",
             afterContent: "new\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "create",
@@ -2601,6 +2652,7 @@ describe("Git Checkpoints", () => {
             filePath: editedPath,
             beforeContent: "old\n",
             afterContent: "new\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "create",
@@ -2699,6 +2751,7 @@ describe("Git Checkpoints", () => {
             filePath: editedPath,
             beforeContent: "old\n",
             afterContent: "new\n",
+            modeOwnership: { kind: "unowned" },
           },
           {
             operation: "create",
@@ -2742,6 +2795,7 @@ describe("Git Checkpoints", () => {
             filePath: editedPath,
             beforeContent: "old\n",
             afterContent: "new\n",
+            modeOwnership: { kind: "unowned" },
           },
         ],
       });
@@ -2811,7 +2865,7 @@ describe("Git Checkpoints", () => {
 
     try {
       // When
-      const result = recordLastEditCheckpoint({
+      const result = recordUnownedEditCheckpoint({
         workspace,
         filePath: outsideFile,
         beforeContent: "old\n",
@@ -2896,7 +2950,7 @@ describe("Git Checkpoints", () => {
 
     try {
       // When
-      const record = recordLastEditCheckpoint({
+      const record = recordUnownedEditCheckpoint({
         workspace,
         filePath: join(workspace, "missing.txt"),
         beforeContent: "old\n",
@@ -2939,7 +2993,7 @@ describe("Git Checkpoints", () => {
 
     try {
       // When
-      const record = recordLastEditCheckpoint({
+      const record = recordUnownedEditCheckpoint({
         workspace,
         filePath,
         beforeContent: "secret old content\n",
@@ -3043,7 +3097,7 @@ describe("Git Checkpoints", () => {
     const workspace = await createGitWorkspace();
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "new\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "old\n",
@@ -3080,8 +3134,11 @@ describe("Git Checkpoints", () => {
       filePath,
       beforeContent: "before\n",
       afterContent: "after\n",
-      beforeMode: 0o644,
-      afterMode: 0o755,
+      modeOwnership: {
+        kind: "owned",
+        beforeMode: 0o644,
+        afterMode: 0o755,
+      },
     });
 
     try {
@@ -3117,8 +3174,11 @@ describe("Git Checkpoints", () => {
       filePath,
       beforeContent: "before\n",
       afterContent: "after\n",
-      beforeMode: 0o644,
-      afterMode: 0o755,
+      modeOwnership: {
+        kind: "owned",
+        beforeMode: 0o644,
+        afterMode: 0o755,
+      },
     });
     if (process.platform !== "win32") {
       await chmod(filePath, 0o644);
@@ -3410,7 +3470,7 @@ describe("Git Checkpoints", () => {
     const workspace = await createGitWorkspace();
     const filePath = join(workspace, "note.txt");
     await writeFile(filePath, "user change\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "old\n",
@@ -3442,7 +3502,7 @@ describe("Git Checkpoints", () => {
     const outsideFile = join(outsideDirectory, "outside.txt");
     await writeFile(filePath, "new\n", "utf8");
     await writeFile(outsideFile, "new\n", "utf8");
-    recordLastEditCheckpoint({
+    recordUnownedEditCheckpoint({
       workspace,
       filePath,
       beforeContent: "old\n",
