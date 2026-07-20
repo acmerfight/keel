@@ -87,7 +87,6 @@ export function modelOperationOutcomeFromError(
   if (error instanceof CostBudgetAdmissionError) {
     return "admission_rejected";
   }
-  /* v8 ignore next -- supported providers normalize request failures to KeelError; the fallback below preserves terminal handling for unexpected runtime failures. */
   if (error instanceof KeelError) {
     switch (error.code) {
       case "provider_aborted":
@@ -98,6 +97,5 @@ export function modelOperationOutcomeFromError(
         return "terminal_error";
     }
   }
-  /* v8 ignore next -- supported providers normalize request failures to KeelError; unexpected runtime failures still remain terminal. */
   return "terminal_error";
 }
