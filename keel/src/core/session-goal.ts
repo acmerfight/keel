@@ -642,6 +642,15 @@ export function formatSessionGoalBudgetLimitReason(
     : `Session goal budget reached: ${reached.join("; ")}.`;
 }
 
+export type ResumableSessionGoal = Extract<
+  SessionGoal,
+  {
+    readonly status: "paused" | "blocked" | "budget_limited" | "usage_limited";
+  }
+> & {
+  readonly completion: SessionGoalCompletion;
+};
+
 export type SessionGoalResumeAssessment =
   | {
       readonly kind: "not_resumable";
@@ -654,6 +663,7 @@ export type SessionGoalResumeAssessment =
   | {
       readonly kind: "ready";
       readonly rejection: null;
+      readonly goal: ResumableSessionGoal;
     };
 
 export function assessSessionGoalResume(
@@ -684,9 +694,13 @@ export function assessSessionGoalResume(
         "Error: the session goal has no completion criterion. Set a new goal before resuming.",
     };
   }
+  const resumableGoal: ResumableSessionGoal = {
+    ...goal,
+    completion: goal.completion,
+  };
   const budgetLimitReason = formatSessionGoalBudgetLimitReason(goal);
   return budgetLimitReason === null
-    ? { kind: "ready", rejection: null }
+    ? { kind: "ready", rejection: null, goal: resumableGoal }
     : {
         kind: "budget_rejected",
         rejection: `Error: ${budgetLimitReason} Raise or clear the goal budget before resuming.`,
