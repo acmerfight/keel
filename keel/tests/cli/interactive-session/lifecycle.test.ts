@@ -11,6 +11,8 @@ import {
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
 import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import { createSkillActivation } from "../../../src/skills/lifecycle.ts";
+import { discoverSkillCatalog } from "../../../src/skills/project.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -276,6 +278,21 @@ describe("Interactive Session - Lifecycle", () => {
     let stdout = "";
     let stderr = "";
     let providerResolved = false;
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(
+      join(skillDirectory, "SKILL.md"),
+      "---\nname: review\ndescription: Review changes\n---\n\nReview workflow instructions.\n",
+      "utf8",
+    );
+    const skillCatalog = discoverSkillCatalog({ workspace });
+    const skillActivation = createSkillActivation(skillCatalog, {
+      now: () => "1970-01-01T00:00:00.000Z",
+    });
+    const activatedSkill = skillActivation.activateExplicit(
+      skillCatalog.load("review"),
+      "",
+    );
     const session = runInteractiveSession({
       cliArgs: { bashMode: "ask" },
       workspace,
@@ -285,19 +302,14 @@ describe("Interactive Session - Lifecycle", () => {
         listForkPoints: () => ({ sessionId: "status-detail", points: [] }),
       }),
 
-      workflowSkills: [
-        {
-          id: "repo:test:review",
-          packageId: "repo:test:review",
-          digest: "digest",
-          qualifiedName: "repo:review",
-          scope: "repo",
-          name: "review",
-          relativePath: ".agents/skills/review/SKILL.md",
-          resourcePaths: ["references/checklist.md"],
-          content: "Review workflow instructions.",
-        },
-      ],
+      skills: {
+        kind: "managed",
+        activation: skillActivation,
+        implicitSkills: skillCatalog.implicitSkills,
+        loadExplicit: (lookup) => skillCatalog.load(lookup),
+        initialActivationRecords:
+          activatedSkill.record === undefined ? [] : [activatedSkill.record],
+      },
       initialMessages: [{ role: "user", content: "remember prior context" }],
       initialModelSelection: {
         providerId: "qwen",

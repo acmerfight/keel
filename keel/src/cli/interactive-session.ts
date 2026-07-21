@@ -154,6 +154,7 @@ import type {
   InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
+  InteractiveSkillRuntime,
   ProviderSelection,
   ReviewedInteractiveSessionMemoryBinding,
   SavedInteractiveSession,
@@ -184,7 +185,18 @@ export type {
   InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
+  InteractiveSkillRuntime,
 } from "./interactive-session/types.ts";
+
+type ManagedInteractiveSkillRuntime = Extract<
+  InteractiveSkillRuntime,
+  { readonly kind: "managed" }
+>;
+
+interface InteractiveSkillCheckpoint {
+  readonly runtime: ManagedInteractiveSkillRuntime;
+  readonly state: SkillLifecycleState;
+}
 
 function formatActiveModel(resolved: InteractiveResolvedProvider): string {
   return `${resolved.providerId}/${resolved.model}`;
@@ -457,35 +469,23 @@ export async function runInteractiveSession(
     options.session.kind === "saved" ? options.session : null;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const undoProtection = createUndoProtectionTracker();
-  const activeWorkflowSkills: WorkflowSkill[] =
-    options.skillActivation === undefined
-      ? [...(options.workflowSkills ?? [])]
-      : options.skillActivation.active().map(workflowSkillFromActivation);
+  const skillRuntime = options.skills;
+  const managedSkills: ManagedInteractiveSkillRuntime | null =
+    skillRuntime.kind === "managed" ? skillRuntime : null;
+  const activeWorkflowSkills = (): readonly WorkflowSkill[] =>
+    managedSkills === null
+      ? []
+      : managedSkills.activation.active().map(workflowSkillFromActivation);
   const explicitSkillActivations: SkillActivationRecord[] =
-    options.skillActivation === undefined
-      ? activeWorkflowSkills.map((skill) => ({
-          name: skill.qualifiedName,
-          relativePath: skill.relativePath,
-          trigger: "user_explicit",
-        }))
-      : [...(options.initialSkillActivationRecords ?? [])];
-  const syncActiveWorkflowSkills = (): void => {
-    /* v8 ignore next -- every call site first establishes lifecycle state or an activation command. */
-    if (options.skillActivation === undefined) return;
-    activeWorkflowSkills.splice(
-      0,
-      activeWorkflowSkills.length,
-      ...options.skillActivation.active().map(workflowSkillFromActivation),
-    );
-  };
+    managedSkills === null ? [] : [...managedSkills.initialActivationRecords];
   const inactiveImplicitSkills = () => {
+    if (managedSkills === null) return [];
     const activePackageIds = new Set(
-      options.skillActivation
-        ?.active()
-        .map((activation) => activation.packageId) ??
-        activeWorkflowSkills.map((skill) => skill.packageId),
+      managedSkills.activation
+        .active()
+        .map((activation) => activation.packageId),
     );
-    return (options.skillCatalog ?? []).filter(
+    return managedSkills.implicitSkills.filter(
       (descriptor) => !activePackageIds.has(descriptor.packageId),
     );
   };
@@ -533,9 +533,7 @@ export async function runInteractiveSession(
   const currentSystemPrompt = (): string =>
     appendWorkflowSkillsToSystemPrompt(
       baseSystemPromptWithGoal(),
-      options.skillActivation === undefined
-        ? activeWorkflowSkills
-        : options.skillActivation.active().map(workflowSkillFromActivation),
+      activeWorkflowSkills(),
     );
   const updateTaskProgress = (next: SessionTaskProgress): void => {
     taskProgress = copySessionTaskProgress(next);
@@ -989,8 +987,14 @@ export async function runInteractiveSession(
         });
       }
     };
-    const skillStateBeforeTurn = options.skillActivation?.state();
-    options.skillActivation?.beginTurn();
+    const skillStateBeforeTurn =
+      managedSkills === null
+        ? null
+        : {
+            runtime: managedSkills,
+            state: managedSkills.activation.state(),
+          };
+    managedSkills?.activation.beginTurn();
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
     const turnProvider = resolved;
@@ -1005,7 +1009,7 @@ export async function runInteractiveSession(
         : {}),
     });
     latestCatalogExposure = exposure;
-    options.skillActivation?.expose(exposure.skills);
+    managedSkills?.activation.expose(exposure.skills);
     visibleSkillCatalog = exposure.skills;
     systemPrompt = rebuildSystemPrompt();
     const diagnostic = formatSkillCatalogDegradation(exposure);
@@ -1110,9 +1114,10 @@ export async function runInteractiveSession(
     let sessionGoalStateChanged = false;
     let sessionGoalUpdateReportedDuringTurn = false;
     const restoreInterruptedTurnState = (): void => {
-      if (skillStateBeforeTurn !== undefined) {
-        options.skillActivation?.restore(skillStateBeforeTurn);
-        syncActiveWorkflowSkills();
+      if (skillStateBeforeTurn !== null) {
+        skillStateBeforeTurn.runtime.activation.restore(
+          skillStateBeforeTurn.state,
+        );
         systemPrompt = rebuildSystemPrompt();
       }
       messages.splice(
@@ -1155,8 +1160,8 @@ export async function runInteractiveSession(
           signal: turnAbortController.signal,
           bash,
           hiddenWorkspacePaths,
-          ...(options.skillActivation !== undefined
-            ? { skillActivation: options.skillActivation }
+          ...(managedSkills !== null
+            ? { skillActivation: managedSkills.activation }
             : {}),
           stopPolicy: defaultStopPolicy(),
           taskProgress,
@@ -1269,11 +1274,17 @@ export async function runInteractiveSession(
         reportRecorder.completeAgentRun(finalEnd.turns, finalEnd.stopReason);
       }
       restoreDrainedInput(deferredInputLines);
-      const completedSkillState = options.skillActivation?.state();
+      const completedSkillState =
+        skillStateBeforeTurn === null
+          ? null
+          : skillStateBeforeTurn.runtime.activation.state();
       const changedSkillState =
-        skillStateBeforeTurn !== undefined &&
-        completedSkillState !== undefined &&
-        !skillLifecycleStatesEqual(skillStateBeforeTurn, completedSkillState)
+        skillStateBeforeTurn !== null &&
+        completedSkillState !== null &&
+        !skillLifecycleStatesEqual(
+          skillStateBeforeTurn.state,
+          completedSkillState,
+        )
           ? completedSkillState
           : null;
       savedSession?.persistMessages({
@@ -1288,7 +1299,6 @@ export async function runInteractiveSession(
       });
       reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
       if (changedSkillState !== null) {
-        syncActiveWorkflowSkills();
         systemPrompt = rebuildSystemPrompt();
       }
       if (savedSession !== null) {
@@ -1623,53 +1633,44 @@ export async function runInteractiveSession(
         continue;
       }
       if (explicitInvocation !== null) {
-        let stateBeforeActivation: SkillLifecycleState | undefined;
+        let activationRollback: InteractiveSkillCheckpoint | null = null;
         try {
-          if (options.skillUnavailableReason !== undefined) {
-            throw new WorkflowSkillError(options.skillUnavailableReason);
+          if (skillRuntime.kind === "unavailable") {
+            throw new WorkflowSkillError(skillRuntime.reason);
           }
-          const skill = options.activateExplicitSkill?.(
-            explicitInvocation.lookup,
-          );
-          if (skill === undefined) {
+          if (skillRuntime.kind === "empty") {
             throw new Error("explicit skill activation is unavailable");
           }
-          /* v8 ignore next 3 -- the CLI installs activation lookup and lifecycle ownership together. */
-          if (options.skillActivation === undefined) {
-            throw new WorkflowSkillError(
-              options.skillUnavailableReason ??
-                "explicit skill activation is unavailable",
-            );
-          }
-          stateBeforeActivation = options.skillActivation.state();
-          const activation = options.skillActivation.activateExplicit(
+          const skill = skillRuntime.loadExplicit(explicitInvocation.lookup);
+          activationRollback = {
+            runtime: skillRuntime,
+            state: skillRuntime.activation.state(),
+          };
+          const activation = skillRuntime.activation.activateExplicit(
             skill,
             explicitInvocation.arguments,
           );
           if (
             !skillLifecycleStatesEqual(
-              stateBeforeActivation,
-              options.skillActivation.state(),
+              activationRollback.state,
+              skillRuntime.activation.state(),
             )
           ) {
-            savedSession?.persistSkillState(options.skillActivation.state());
+            savedSession?.persistSkillState(skillRuntime.activation.state());
           }
           if (activation.record !== undefined) {
             explicitSkillActivations.push(activation.record);
           }
-          syncActiveWorkflowSkills();
           systemPrompt = rebuildSystemPrompt();
           userMessage =
             explicitInvocation.arguments === ""
               ? "Apply the explicitly selected workflow skill."
               : explicitInvocation.arguments;
         } catch (error) {
-          if (
-            stateBeforeActivation !== undefined &&
-            options.skillActivation !== undefined
-          ) {
-            options.skillActivation.restore(stateBeforeActivation);
-            syncActiveWorkflowSkills();
+          if (activationRollback !== null) {
+            activationRollback.runtime.activation.restore(
+              activationRollback.state,
+            );
             systemPrompt = rebuildSystemPrompt();
           }
           options.writeStderr(formatInteractiveCommandFailure(error));
@@ -1695,7 +1696,7 @@ export async function runInteractiveSession(
             workspace: options.workspace,
             activeModel: activeModelStatus(),
             ...(sessionGoal !== undefined ? { goal: sessionGoal } : {}),
-            workflowSkills: activeWorkflowSkills,
+            workflowSkills: activeWorkflowSkills(),
             skillCatalog: {
               exposed: latestCatalogExposure.skills.length,
               omitted: latestCatalogExposure.omitted,
@@ -2419,44 +2420,41 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "skill") {
         if (interactiveCommand.action === "active") {
-          /* v8 ignore next -- the CLI always installs lifecycle ownership before exposing Skill commands. */
-          const statuses = options.skillActivation?.activeStatuses() ?? [];
+          const statuses = managedSkills?.activation.activeStatuses() ?? [];
           options.writeStdout(formatActiveWorkflowSkills(statuses));
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         let skillTaskShouldRun = false;
-        let stateBeforeCommand: SkillLifecycleState | undefined;
+        let commandRollback: InteractiveSkillCheckpoint | null = null;
         try {
-          if (options.skillActivation === undefined) {
+          if (skillRuntime.kind !== "managed") {
             throw new WorkflowSkillError(
-              options.skillUnavailableReason ??
-                "explicit skill activation is unavailable",
+              skillRuntime.kind === "unavailable"
+                ? skillRuntime.reason
+                : "explicit skill activation is unavailable",
             );
           }
-          stateBeforeCommand = options.skillActivation.state();
+          commandRollback = {
+            runtime: skillRuntime,
+            state: skillRuntime.activation.state(),
+          };
           let successMessage: string;
           let activationRecord: SkillActivationRecord | undefined;
           if (interactiveCommand.action === "deactivate") {
-            const deactivated = options.skillActivation.deactivate(
+            const deactivated = skillRuntime.activation.deactivate(
               interactiveCommand.lookup,
             );
             successMessage = `Deactivated workflow skill ${deactivated.qualifiedName}.\n`;
           } else if (interactiveCommand.action === "reload") {
-            const reloaded = options.skillActivation.reload(
+            const reloaded = skillRuntime.activation.reload(
               interactiveCommand.lookup,
             );
             activationRecord = reloaded.record;
             successMessage = `Reloaded workflow skill ${reloaded.activation.qualifiedName}.\n`;
           } else {
-            const skill = options.activateExplicitSkill?.(
-              interactiveCommand.lookup,
-            );
-            /* v8 ignore next 3 -- the CLI installs activation lookup and lifecycle ownership together. */
-            if (skill === undefined) {
-              throw new Error("explicit skill activation is unavailable");
-            }
-            const activated = options.skillActivation.activateExplicit(
+            const skill = skillRuntime.loadExplicit(interactiveCommand.lookup);
+            const activated = skillRuntime.activation.activateExplicit(
               skill,
               interactiveCommand.arguments ?? "",
             );
@@ -2469,25 +2467,20 @@ export async function runInteractiveSession(
           }
           if (
             !skillLifecycleStatesEqual(
-              stateBeforeCommand,
-              options.skillActivation.state(),
+              commandRollback.state,
+              skillRuntime.activation.state(),
             )
           ) {
-            savedSession?.persistSkillState(options.skillActivation.state());
+            savedSession?.persistSkillState(skillRuntime.activation.state());
           }
           if (activationRecord !== undefined) {
             explicitSkillActivations.push(activationRecord);
           }
-          syncActiveWorkflowSkills();
           systemPrompt = rebuildSystemPrompt();
           options.writeStdout(successMessage);
         } catch (error) {
-          if (
-            stateBeforeCommand !== undefined &&
-            options.skillActivation !== undefined
-          ) {
-            options.skillActivation.restore(stateBeforeCommand);
-            syncActiveWorkflowSkills();
+          if (commandRollback !== null) {
+            commandRollback.runtime.activation.restore(commandRollback.state);
             systemPrompt = rebuildSystemPrompt();
           }
           options.writeStderr(formatInteractiveCommandFailure(error));

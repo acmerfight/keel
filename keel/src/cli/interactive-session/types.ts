@@ -170,18 +170,27 @@ export type InteractiveSessionMemoryBinding =
     }
   | ReviewedInteractiveSessionMemoryBinding;
 
+export type InteractiveSkillRuntime =
+  | { readonly kind: "empty" }
+  | {
+      readonly kind: "unavailable";
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "managed";
+      readonly activation: SkillActivationCapability;
+      readonly implicitSkills: readonly SkillDescriptor[];
+      readonly loadExplicit: (lookup: string) => WorkflowSkill;
+      readonly initialActivationRecords: readonly SkillActivationRecord[];
+    };
+
 interface InteractiveSessionOptionsBase {
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;
-  readonly workflowSkills?: readonly WorkflowSkill[];
-  readonly skillCatalog?: readonly SkillDescriptor[];
-  readonly skillActivation?: SkillActivationCapability;
-  readonly skillUnavailableReason?: string;
-  readonly initialSkillActivationRecords?: readonly SkillActivationRecord[];
-  readonly activateExplicitSkill?: (lookup: string) => WorkflowSkill;
+  readonly skills: InteractiveSkillRuntime;
   readonly initialSessionTitle?: string;
   readonly initialSessionGoal?: SessionGoal;
   readonly initialMessages?: readonly Message[];

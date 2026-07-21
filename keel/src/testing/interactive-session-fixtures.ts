@@ -11,6 +11,7 @@ import type {
   InteractiveSession,
   InteractiveSessionOptions,
   InteractiveSessionResult,
+  InteractiveSkillRuntime,
   SavedInteractiveSession,
 } from "../cli/interactive-session/types.ts";
 import { runInteractiveSession as runProductionInteractiveSession } from "../cli/interactive-session.ts";
@@ -51,13 +52,20 @@ const DISABLED_TEST_MEMORY = {
   }),
 } satisfies InteractiveMemoryRuntime;
 
+const EMPTY_TEST_SKILLS = {
+  kind: "empty",
+} satisfies InteractiveSkillRuntime;
+
 export function runInteractiveSessionWithoutMemory(
-  options: Omit<InteractiveSessionOptions, "session" | "memory"> & {
+  options: Omit<InteractiveSessionOptions, "session" | "memory" | "skills"> & {
     readonly session: InteractiveSession;
+    readonly skills?: InteractiveSkillRuntime;
   },
 ): Promise<InteractiveSessionResult> {
+  const { skills = EMPTY_TEST_SKILLS, ...sessionOptions } = options;
   return runProductionInteractiveSession({
-    ...options,
+    ...sessionOptions,
+    skills,
     memory: DISABLED_TEST_MEMORY,
   });
 }
