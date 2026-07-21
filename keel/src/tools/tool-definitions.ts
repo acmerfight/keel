@@ -25,7 +25,6 @@ import { invalidBuiltinToolCallError } from "./tool-error.ts";
 import {
   stripUndefinedProperties,
   toolArgumentKeys,
-  toolRequiredArgumentKeys,
 } from "./tool-schema.ts";
 
 type ToolArgShape = z.ZodRawShape;
@@ -99,9 +98,6 @@ function defineTool<
   const Shape extends ToolArgShape,
 >(tool: BuiltinTool<Name, Shape>) {
   const argumentNames = toolArgumentKeys(tool.args.schema);
-  const requiredArgumentNames = new Set(
-    toolRequiredArgumentKeys(tool.args.schema),
-  );
   const toolCallSchema = tool.args.schema.extend({
     id: z.string(),
     tool: z.literal(tool.name),
@@ -167,24 +163,12 @@ function defineTool<
     for (const name of argumentNames) {
       const value = objectFieldValue(parsedArgs.data, name);
       if (!value.exists || value.value === undefined || value.value === null) {
-        /* v8 ignore next 3: required fields cannot be absent after this tool's Zod schema has parsed successfully. */
-        if (requiredArgumentNames.has(name)) {
-          throw invalidBuiltinToolCallError(tool.name);
-        }
         args[name] = null;
       } else {
         args[name] = value.value;
       }
     }
     return args;
-  }
-
-  function isCallForThisTool(
-    toolCall: BuiltinToolCallInput,
-  ): toolCall is BuiltinToolCallInput & {
-    readonly tool: Name;
-  } & z.infer<ToolArgsSchema<Shape>> {
-    return parseArgumentsFromCall(toolCall).success;
   }
 
   function formatCallLabel(toolCall: BuiltinToolCallInput): string {
@@ -197,7 +181,6 @@ function defineTool<
 
   return Object.assign({}, tool, {
     toolCallSchema,
-    isCall: isCallForThisTool,
     argumentsFromCall,
     canonicalArgumentsFromCall,
     formatCallLabel,
@@ -556,46 +539,35 @@ const updateGoalTool = defineTool({
   risk: { kind: "agent-state" },
 });
 
-export const builtinTools = [
-  updatePlanTool,
-  updateGoalTool,
-  memoryAddTool,
-  memoryForgetTool,
-  memoryProposeTool,
-  skillResourceTool,
-  skillSearchTool,
-  skillTool,
-  readTool,
-  lsTool,
-  globTool,
-  grepTool,
-  gitStatusTool,
-  gitDiffTool,
-  editTool,
-  writeTool,
-  applyPatchTool,
-  bashTool,
-] as const;
+export const builtinToolRegistry = {
+  update_plan: updatePlanTool,
+  update_goal: updateGoalTool,
+  memory_add: memoryAddTool,
+  memory_forget: memoryForgetTool,
+  memory_propose: memoryProposeTool,
+  skill_resource: skillResourceTool,
+  skill_search: skillSearchTool,
+  skill: skillTool,
+  read: readTool,
+  ls: lsTool,
+  glob: globTool,
+  grep: grepTool,
+  git_status: gitStatusTool,
+  git_diff: gitDiffTool,
+  edit: editTool,
+  write: writeTool,
+  apply_patch: applyPatchTool,
+  bash: bashTool,
+} as const;
 
+export const builtinTools = Object.freeze(Object.values(builtinToolRegistry));
+
+const firstBuiltinTool = builtinToolRegistry.update_plan;
 const rawBuiltinToolCallSchema = z.discriminatedUnion("tool", [
-  updatePlanTool.toolCallSchema,
-  updateGoalTool.toolCallSchema,
-  memoryAddTool.toolCallSchema,
-  memoryForgetTool.toolCallSchema,
-  memoryProposeTool.toolCallSchema,
-  skillResourceTool.toolCallSchema,
-  skillSearchTool.toolCallSchema,
-  skillTool.toolCallSchema,
-  readTool.toolCallSchema,
-  lsTool.toolCallSchema,
-  globTool.toolCallSchema,
-  grepTool.toolCallSchema,
-  gitStatusTool.toolCallSchema,
-  gitDiffTool.toolCallSchema,
-  editTool.toolCallSchema,
-  writeTool.toolCallSchema,
-  applyPatchTool.toolCallSchema,
-  bashTool.toolCallSchema,
+  firstBuiltinTool.toolCallSchema,
+  ...builtinTools
+    .filter((tool) => tool !== firstBuiltinTool)
+    .map((tool) => tool.toolCallSchema),
 ]);
 
 export const builtinToolCallSchema = rawBuiltinToolCallSchema

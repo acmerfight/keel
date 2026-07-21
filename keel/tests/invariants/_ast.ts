@@ -340,30 +340,6 @@ export function unwrapExpression(expression: ts.Expression): ts.Expression {
   return expression;
 }
 
-export function arrayIdentifierElements(
-  source: ParsedSource,
-  variableName: string,
-): readonly string[] {
-  const initializer = variableInitializer(source, variableName);
-  /* v8 ignore next -- missing constants are reported below as invariant wiring failures. */
-  const expression =
-    initializer === null ? null : unwrapExpression(initializer);
-  /* v8 ignore next 3: invariant callers pass known array constants; this reports future wiring mistakes. */
-  if (expression === null || !ts.isArrayLiteralExpression(expression)) {
-    throw new Error(`${source.path} missing ${variableName} array literal`);
-  }
-
-  const names: string[] = [];
-  for (const element of expression.elements) {
-    /* v8 ignore next 3: invariant callers use identifier arrays; this reports future wiring mistakes. */
-    if (!ts.isIdentifier(element)) {
-      throw new Error(`${location(source, element)} must be an identifier`);
-    }
-    names.push(element.text);
-  }
-  return names;
-}
-
 export function objectProperty(
   object: ts.ObjectLiteralExpression,
   name: string,

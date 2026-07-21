@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { builtinToolCallSchema, builtinTools } from "./tool-definitions.ts";
+import {
+  builtinToolCallSchema,
+  builtinToolRegistry,
+  builtinTools,
+} from "./tool-definitions.ts";
 import { toolCallValidationError, zodIssuesText } from "./tool-error.ts";
 import {
   type OpenAICompatibleToolParameters,
@@ -41,14 +45,13 @@ export interface ModelToolExposureAccounting {
   readonly toolChoice: "auto" | "none";
 }
 
-type RegisteredBuiltinTool = (typeof builtinTools)[number];
+type RegisteredBuiltinTool =
+  (typeof builtinToolRegistry)[keyof typeof builtinToolRegistry];
 
-export type ToolName = RegisteredBuiltinTool["name"];
+export type ToolName = keyof typeof builtinToolRegistry;
 
-type BuiltinToolForName<Name extends ToolName> = Extract<
-  RegisteredBuiltinTool,
-  { readonly name: Name }
->;
+type BuiltinToolForName<Name extends ToolName> =
+  (typeof builtinToolRegistry)[Name];
 
 export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;
 
@@ -89,7 +92,7 @@ export interface ToolCallInput {
 
 type ParsedToolCall =
   | { readonly success: true; readonly data: ToolCall }
-  | { readonly success: false; readonly error?: z.ZodError };
+  | { readonly success: false; readonly error: z.ZodError };
 
 const INVALID_UPDATE_PLAN_RECOVERY =
   "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.";
@@ -112,49 +115,20 @@ const agentStateRecovery: Readonly<
   memory_propose: INVALID_MEMORY_PROPOSE_RECOVERY,
 };
 
-const builtinToolNames: ReadonlySet<string> = new Set(
-  builtinTools.map((tool) => tool.name),
-);
-
 export function isToolName(name: string): name is ToolName {
-  return builtinToolNames.has(name);
-}
-
-function isBuiltinToolForName<Name extends ToolName>(
-  tool: RegisteredBuiltinTool,
-  name: Name,
-): tool is BuiltinToolForName<Name> {
-  return tool.name === name;
+  return Object.hasOwn(builtinToolRegistry, name);
 }
 
 function isRecoverableAgentStateToolName(
   name: ToolName,
 ): name is RecoverableAgentStateToolName {
-  switch (name) {
-    case "update_plan":
-    case "update_goal":
-    case "memory_add":
-    case "memory_forget":
-    case "memory_propose":
-      return true;
-    /* v8 ignore next 2: current agent-state tools are exactly the recoverable tools above; registry tests pin the set. */
-    default:
-      return false;
-  }
+  return Object.hasOwn(agentStateRecovery, name);
 }
 
 function builtinToolForName<Name extends ToolName>(
   name: Name,
 ): BuiltinToolForName<Name> {
-  const tool = builtinTools.find((candidate) =>
-    isBuiltinToolForName(candidate, name),
-  );
-  /* v8 ignore next 3: ToolName is derived from builtinTools. */
-  if (tool !== undefined) {
-    return tool;
-  }
-  /* v8 ignore next: ToolName is derived from builtinTools. */
-  throw new Error(`Missing builtin tool registration for ${name}`);
+  return builtinToolRegistry[name];
 }
 
 function rawToolCallArguments(
@@ -293,11 +267,7 @@ function parseToolCallFromParsedArguments(
   const tool = builtinToolForName(name);
   const result = tool.args.schema.safeParse(parsedArguments);
   if (!result.success) {
-    if (tool.risk.kind === "agent-state") {
-      /* v8 ignore next 3: current agent-state tools are exactly the recoverable tools above; keep the guard for future registry changes. */
-      if (!isRecoverableAgentStateToolName(name)) {
-        return { success: false, error: result.error };
-      }
+    if (isRecoverableAgentStateToolName(name)) {
       return {
         success: true,
         data: invalidAgentStateToolCall({
@@ -310,20 +280,12 @@ function parseToolCallFromParsedArguments(
     }
     return { success: false, error: result.error };
   }
-  const toolCall = builtinToolCallSchema.safeParse({
+  const toolCall = builtinToolCallSchema.parse({
     ...result.data,
     id,
     tool: name,
   });
-  /* v8 ignore next 3: the call is built from the matching parsed args schema plus contract-owned id/tool fields. */
-  if (!toolCall.success) {
-    return { success: false, error: toolCall.error };
-  }
-  /* v8 ignore next 4: toolCall is built from this tool's strict schema after successful parse; the guard narrows the definition-derived union without `as`. */
-  if (!tool.isCall(toolCall.data)) {
-    return { success: false };
-  }
-  return { success: true, data: toolCall.data };
+  return { success: true, data: toolCall };
 }
 
 function normalizeToolCallResult(toolCall: ToolCallInput): ParsedToolCall {
