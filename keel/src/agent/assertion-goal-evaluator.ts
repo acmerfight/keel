@@ -45,19 +45,41 @@ interface AssertionGoalContract {
   readonly completionCriterion: string;
 }
 
-interface AssertionGoalEvidenceRecord {
+interface AssertionGoalEvidenceRecordBase {
   readonly messageNumber: number;
-  readonly role: Message["role"];
-  readonly trustedEvidence: boolean;
   readonly content: string;
-  readonly toolCallId?: string;
-  readonly sourceTruncated?: boolean;
-  readonly resourceFreshness?: Omit<
-    AssertionEvidenceResourceFreshness,
-    "toolCallId"
-  >;
-  readonly toolCalls?: readonly ToolCall[];
 }
+
+type AssertionGoalEvidenceRecord = AssertionGoalEvidenceRecordBase &
+  (
+    | {
+        readonly role: "user";
+        readonly trustedEvidence: false;
+        readonly toolCallId?: never;
+        readonly sourceTruncated?: never;
+        readonly resourceFreshness?: never;
+        readonly toolCalls?: never;
+      }
+    | {
+        readonly role: "assistant";
+        readonly trustedEvidence: false;
+        readonly toolCallId?: never;
+        readonly sourceTruncated?: never;
+        readonly resourceFreshness?: never;
+        readonly toolCalls?: readonly ToolCall[];
+      }
+    | {
+        readonly role: "tool";
+        readonly trustedEvidence: true;
+        readonly toolCallId: string;
+        readonly sourceTruncated?: true;
+        readonly resourceFreshness?: Omit<
+          AssertionEvidenceResourceFreshness,
+          "toolCallId"
+        >;
+        readonly toolCalls?: never;
+      }
+  );
 
 interface AssertionGoalEvaluatorOptions {
   readonly provider: LLMProvider;
