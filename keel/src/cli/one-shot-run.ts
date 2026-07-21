@@ -89,7 +89,10 @@ type OneShotRunCliArgs = Extract<
   { readonly command: "run"; readonly mode: "one-shot" }
 >;
 
-function denyOneShotBashPermissionDecision(): BashPermissionDecision {
+function denyOneShotBashPermissionDecision(): Extract<
+  BashPermissionDecision,
+  { readonly type: "deny" }
+> {
   return {
     type: "deny",
     message:
