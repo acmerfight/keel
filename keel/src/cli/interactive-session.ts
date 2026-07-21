@@ -365,11 +365,13 @@ interface PendingGoalDrive {
   >;
 }
 
-interface PromptTurnResult {
-  readonly aborted: boolean;
-  readonly budgetExceeded: boolean;
-  readonly stagnationFingerprint: string | null;
-}
+type PromptTurnResult =
+  | { readonly kind: "aborted" }
+  | { readonly kind: "cost_budget" }
+  | {
+      readonly kind: "completed";
+      readonly stagnationFingerprint: string | null;
+    };
 
 type InteractiveDiffInspection =
   | {
@@ -1262,11 +1264,7 @@ export async function runInteractiveSession(
         abortReportedAgentRun(finalEnd);
         restoreInterruptedTurnState();
         options.writeStdout("\n");
-        return {
-          aborted: true,
-          budgetExceeded: false,
-          stagnationFingerprint: null,
-        };
+        return { kind: "aborted" };
       }
       if (finalEnd === undefined) {
         abortReportedAgentRun(undefined, false);
@@ -1437,15 +1435,10 @@ export async function runInteractiveSession(
       ) {
         sessionStopReason = "cost_budget";
         limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
-        return {
-          aborted: false,
-          budgetExceeded: true,
-          stagnationFingerprint: null,
-        };
+        return { kind: "cost_budget" };
       }
       return {
-        aborted: false,
-        budgetExceeded: false,
+        kind: "completed",
         stagnationFingerprint,
       };
     } catch (error) {
@@ -1455,11 +1448,7 @@ export async function runInteractiveSession(
       abortReportedAgentRun();
       restoreInterruptedTurnState();
       options.writeStdout("\n");
-      return {
-        aborted: true,
-        budgetExceeded: false,
-        stagnationFingerprint: null,
-      };
+      return { kind: "aborted" };
     } finally {
       if (checkpointOperations.length > 0) {
         const result = recordLastTaskCheckpoint({
@@ -1516,10 +1505,10 @@ export async function runInteractiveSession(
         ...(runtimeOutcome !== undefined ? { runtimeOutcome } : {}),
       });
       nextRunTrigger = "goal_continuation";
-      if (result.aborted) {
+      if (result.kind === "aborted") {
         return false;
       }
-      if (result.budgetExceeded) {
+      if (result.kind === "cost_budget") {
         return true;
       }
       continuationTurns++;
@@ -2620,11 +2609,11 @@ export async function runInteractiveSession(
         consumedInputLines: [rawInput],
         runTrigger: "user_prompt",
       });
-      if (turnResult.aborted) {
+      if (turnResult.kind === "aborted") {
         reportRecorder.endTask("aborted");
         continue;
       }
-      if (turnResult.budgetExceeded) {
+      if (turnResult.kind === "cost_budget") {
         reportRecorder.endTask(taskOutcomeForGoal(taskStartedWithActiveGoal));
         break;
       }
