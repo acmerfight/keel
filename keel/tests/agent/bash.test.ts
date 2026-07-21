@@ -15,6 +15,7 @@ import {
 import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
 import {
   type BashApprovalGrant,
+  type BashProjectApprovalGrant,
   createSessionBashPermissionPolicy,
 } from "../../src/permissions/bash.ts";
 
@@ -617,17 +618,19 @@ describe("Bash Commands", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     const command = "git status --short";
-    const decisions: Array<
-      (decision: {
-        readonly type: "allow";
-        readonly scope: "session-prefix";
-      }) => void
-    > = [];
+    const decisions: Array<() => void> = [];
     const granted: BashApprovalGrant[] = [];
     const bashPermission = createSessionBashPermissionPolicy({
-      prompt: () =>
+      prompt: (request) =>
         new Promise((resolve) => {
-          decisions.push(resolve);
+          const prefixApproval = request.prefixApproval;
+          if (prefixApproval === undefined) {
+            resolve({ type: "deny", message: "family was not offered" });
+            return;
+          }
+          decisions.push(() => {
+            resolve(prefixApproval);
+          });
         }),
       onGrant: (grant) => {
         granted.push(grant);
@@ -647,7 +650,7 @@ describe("Bash Commands", () => {
         signal: freshSignal(),
       });
       for (const resolve of decisions) {
-        resolve({ type: "allow", scope: "session-prefix" });
+        resolve();
       }
       await Promise.all([first, second]);
 
@@ -741,8 +744,9 @@ describe("Bash Commands", () => {
         promptCount++;
         if (request.prefixApproval !== undefined) {
           offeredFamilies.push(request.prefixApproval.display);
+          return request.prefixApproval;
         }
-        return { type: "allow", scope: "session-prefix" };
+        return { type: "deny", message: "family was not offered" };
       },
     });
 
@@ -859,8 +863,8 @@ describe("Bash Commands", () => {
           risk: request.assessment.risk,
           family: request.prefixApproval?.display ?? null,
         });
-        if (promptCount === 1) {
-          return { type: "allow", scope: "session-prefix" };
+        if (promptCount === 1 && request.prefixApproval !== undefined) {
+          return request.prefixApproval;
         }
         return { type: "deny", message: "do not write" };
       },
@@ -963,9 +967,14 @@ describe("Bash Commands", () => {
     const secondWorkspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     let promptCount = 0;
     const bashPermission = createSessionBashPermissionPolicy({
-      prompt: () => {
+      prompt: (request) => {
         promptCount++;
-        return { type: "allow", scope: "session-prefix" };
+        return (
+          request.prefixApproval ?? {
+            type: "deny",
+            message: "family was not offered",
+          }
+        );
       },
     });
 
@@ -1015,16 +1024,16 @@ describe("Bash Commands", () => {
     }
   });
 
-  test(`Given a shell command family approval is unavailable,
-    When a prompt incorrectly approves a command family,
-    Then the command is denied instead of cached broadly`, async () => {
+  test(`Given a shell command cannot be safely classified,
+    When its approval prompt is prepared,
+    Then no command family approval is offered`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     let offeredFamily = false;
     const bashPermission = createSessionBashPermissionPolicy({
       prompt: (request) => {
         offeredFamily = request.prefixApproval !== undefined;
-        return { type: "allow", scope: "session-prefix" };
+        return { type: "deny", message: "not approved" };
       },
     });
 
@@ -1040,8 +1049,96 @@ describe("Bash Commands", () => {
       expect(offeredFamily).toBe(false);
       expect(decision).toEqual({
         type: "deny",
-        message: "No command family approval is available.",
+        message: "not approved",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a command family approval is offered,
+    When the prompt returns a wrapped capability with substituted grant data,
+    Then the command and substituted family are denied`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        promptCount++;
+        if (request.prefixApproval === undefined) {
+          return { type: "deny", message: "family was not offered" };
+        }
+        return new Proxy(request.prefixApproval, {
+          get: (target, property, receiver) =>
+            property === "argvPrefix"
+              ? ["pnpm", "lint"]
+              : Reflect.get(target, property, receiver),
+        });
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "git status --short",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      await bashPermission.review({
+        command: "git status --porcelain",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(decision).toEqual({
+        type: "deny",
+        message: "Command family approval did not match this request.",
+      });
+      expect(promptCount).toBe(2);
+      expect(bashPermission.grants()).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a command family approval capability is offered,
+    When the prompt tries to mutate that capability in place,
+    Then only the original command family can be approved`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const mutationResults: boolean[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        if (request.prefixApproval === undefined) {
+          return { type: "deny", message: "family was not offered" };
+        }
+        mutationResults.push(
+          Reflect.set(request.prefixApproval, "argvPrefix", ["pnpm", "lint"]),
+          Reflect.set(request.prefixApproval.argvPrefix, 0, "pnpm"),
+        );
+        return request.prefixApproval;
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "git status --short",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(decision).toEqual({ type: "allow", scope: "session-prefix" });
+      expect(mutationResults).toEqual([false, false]);
+      expect(bashPermission.grants()).toEqual([
+        {
+          type: "prefix",
+          cwd: workspace,
+          argvPrefix: ["git", "status"],
+        },
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1086,9 +1183,9 @@ describe("Bash Commands", () => {
     }
   });
 
-  test(`Given project command approval is unavailable,
-    When a prompt incorrectly approves a project command family,
-    Then the command is denied instead of cached for the project`, async () => {
+  test(`Given a command family is offered without a project root,
+    When its approval prompt is prepared,
+    Then session approval is offered without project approval`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     let offeredPrefix = false;
@@ -1097,7 +1194,7 @@ describe("Bash Commands", () => {
       prompt: (request) => {
         offeredPrefix = request.prefixApproval !== undefined;
         offeredProjectApproval = request.projectApproval !== undefined;
-        return { type: "allow", scope: "project-prefix" };
+        return { type: "deny", message: "not approved" };
       },
     });
 
@@ -1114,16 +1211,105 @@ describe("Bash Commands", () => {
       expect(offeredProjectApproval).toBe(false);
       expect(decision).toEqual({
         type: "deny",
-        message: "No project command approval is available.",
+        message: "not approved",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });
 
+  test(`Given a project command approval is offered,
+    When the prompt returns a wrapped project capability,
+    Then no project approval is recorded`, async () => {
+    // Given
+    const projectRoot = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const recordedGrants: BashProjectApprovalGrant[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      projectRoot,
+      onProjectGrant: (grant) => {
+        recordedGrants.push(grant);
+      },
+      prompt: (request) => {
+        if (request.projectApproval === undefined) {
+          return { type: "deny", message: "project approval was not offered" };
+        }
+        return new Proxy(request.projectApproval, {});
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "git status --short",
+        cwd: projectRoot,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(decision).toEqual({
+        type: "deny",
+        message: "Project command approval did not match this request.",
+      });
+      expect(recordedGrants).toEqual([]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project command approval capability is offered,
+    When the prompt tries to mutate its project and family in place,
+    Then only the original project command family can be approved`, async () => {
+    // Given
+    const projectRoot = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const recordedGrants: BashProjectApprovalGrant[] = [];
+    const mutationResults: boolean[] = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      projectRoot,
+      onProjectGrant: (grant) => {
+        recordedGrants.push(grant);
+      },
+      prompt: (request) => {
+        if (request.projectApproval === undefined) {
+          return { type: "deny", message: "project approval was not offered" };
+        }
+        mutationResults.push(
+          Reflect.set(
+            request.projectApproval,
+            "projectRoot",
+            join(projectRoot, "other"),
+          ),
+          Reflect.set(request.projectApproval.argvPrefix, 0, "pnpm"),
+        );
+        return request.projectApproval;
+      },
+    });
+
+    try {
+      // When
+      const decision = await bashPermission.review({
+        command: "git status --short",
+        cwd: projectRoot,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(decision).toEqual({ type: "allow", scope: "project-prefix" });
+      expect(mutationResults).toEqual([false, false]);
+      expect(recordedGrants).toEqual([
+        {
+          projectRoot,
+          cwd: projectRoot,
+          argvPrefix: ["git", "status"],
+        },
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   test(`Given git diff can read absolute paths outside the workspace,
-    When a prompt incorrectly approves it as a command family,
-    Then the command is denied without offering a family`, async () => {
+    When its approval prompt is prepared,
+    Then no command family approval is offered`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     const outsideSecret = join(tmpdir(), "keel-outside-secret.txt");
@@ -1132,7 +1318,7 @@ describe("Bash Commands", () => {
     const bashPermission = createSessionBashPermissionPolicy({
       prompt: (request) => {
         offeredFamily = request.prefixApproval !== undefined;
-        return { type: "allow", scope: "session-prefix" };
+        return { type: "deny", message: "not approved" };
       },
     });
 
@@ -1148,7 +1334,7 @@ describe("Bash Commands", () => {
       expect(offeredFamily).toBe(false);
       expect(decision).toEqual({
         type: "deny",
-        message: "No command family approval is available.",
+        message: "not approved",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1156,15 +1342,15 @@ describe("Bash Commands", () => {
   });
 
   test(`Given a simple shell command has no approved command family,
-    When a prompt incorrectly approves a command family,
-    Then the command is denied without offering a family`, async () => {
+    When its approval prompt is prepared,
+    Then no command family approval is offered`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     let offeredFamily = false;
     const bashPermission = createSessionBashPermissionPolicy({
       prompt: (request) => {
         offeredFamily = request.prefixApproval !== undefined;
-        return { type: "allow", scope: "session-prefix" };
+        return { type: "deny", message: "not approved" };
       },
     });
 
@@ -1180,7 +1366,7 @@ describe("Bash Commands", () => {
       expect(offeredFamily).toBe(false);
       expect(decision).toEqual({
         type: "deny",
-        message: "No command family approval is available.",
+        message: "not approved",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1188,15 +1374,15 @@ describe("Bash Commands", () => {
   });
 
   test(`Given an empty shell command has no approved command family,
-    When a prompt incorrectly approves a command family,
-    Then the command is denied without offering a family`, async () => {
+    When its approval prompt is prepared,
+    Then no command family approval is offered`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
     let offeredFamily = false;
     const bashPermission = createSessionBashPermissionPolicy({
       prompt: (request) => {
         offeredFamily = request.prefixApproval !== undefined;
-        return { type: "allow", scope: "session-prefix" };
+        return { type: "deny", message: "not approved" };
       },
     });
 
@@ -1212,7 +1398,7 @@ describe("Bash Commands", () => {
       expect(offeredFamily).toBe(false);
       expect(decision).toEqual({
         type: "deny",
-        message: "No command family approval is available.",
+        message: "not approved",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

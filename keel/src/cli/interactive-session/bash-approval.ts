@@ -112,10 +112,10 @@ export function createPromptedBashPermissionPolicy(
           return { type: "allow", scope: "session" };
         }
         if (request.prefixApproval !== undefined && answer === "p") {
-          return { type: "allow", scope: "session-prefix" };
+          return request.prefixApproval;
         }
         if (request.projectApproval !== undefined && answer === "r") {
-          return { type: "allow", scope: "project-prefix" };
+          return request.projectApproval;
         }
         return { type: "deny", message: "User did not approve this command." };
       } finally {
