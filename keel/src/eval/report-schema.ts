@@ -258,6 +258,21 @@ const runReportMemorySchema = z
     }
   });
 
+const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({
+    sessionId: z.string(),
+    status: z.literal("completed"),
+    reason: z.string(),
+    evidenceKind: z.enum(["command", "assertion_evaluator", "user_override"]),
+  }),
+  z.object({
+    sessionId: z.string(),
+    status: z.enum(["blocked", "budget_limited", "usage_limited"]),
+    reason: z.string(),
+    evidenceKind: z.never().optional(),
+  }),
+]);
+
 export const runReportSchema = z.object({
   schemaVersion: z.literal(17),
   tasks: z.array(taskSchema),
@@ -342,21 +357,7 @@ export const runReportSchema = z.object({
       .nullable(),
   }),
   memory: runReportMemorySchema,
-  goalOutcome: z
-    .object({
-      sessionId: z.string(),
-      status: z.enum([
-        "blocked",
-        "budget_limited",
-        "usage_limited",
-        "completed",
-      ]),
-      reason: z.string(),
-      evidenceKind: z
-        .enum(["command", "assertion_evaluator", "user_override"])
-        .optional(),
-    })
-    .optional(),
+  goalOutcome: runReportGoalOutcomeSchema.optional(),
 });
 
 export type RunReport = z.infer<typeof runReportSchema>;
