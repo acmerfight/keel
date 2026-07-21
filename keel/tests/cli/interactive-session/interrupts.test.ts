@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import { runInteractiveSession as runInteractiveSessionWithMemory } from "../../../src/cli/interactive-session.ts";
+import {
+  type InteractiveSkillRuntime,
+  runInteractiveSession as runInteractiveSessionWithMemory,
+} from "../../../src/cli/interactive-session.ts";
 import {
   consumeSessionQueuedInputs,
   createSessionStore,
@@ -33,6 +36,17 @@ import {
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
 import type { AgentMemoryProposalCapability } from "../../../src/tools/memory.ts";
+
+function managedSkills(workspace: string): InteractiveSkillRuntime {
+  const catalog = discoverSkillCatalog({ workspace });
+  return {
+    kind: "managed",
+    activation: createSkillActivation(catalog),
+    implicitSkills: catalog.implicitSkills,
+    loadExplicit: (lookup) => catalog.load(lookup),
+    initialActivationRecords: [],
+  };
+}
 
 describe("Interactive Session - Interrupts", () => {
   test(`Given a model-controlled bash command contains terminal controls,
@@ -128,9 +142,6 @@ describe("Interactive Session - Interrupts", () => {
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
-    const skillActivation = createSkillActivation(
-      discoverSkillCatalog({ workspace: process.cwd() }),
-    );
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
@@ -168,7 +179,7 @@ describe("Interactive Session - Interrupts", () => {
         return undefined;
       },
       formatCostReport: () => "",
-      skillActivation,
+      skills: managedSkills(process.cwd()),
     });
 
     // When
@@ -268,6 +279,7 @@ describe("Interactive Session - Interrupts", () => {
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
+      skills: { kind: "empty" },
       session: savedInteractiveSession({
         id: "reviewed-abort",
         reserveMessageId: () => `message_${++reservedMessageOrdinal}`,
@@ -433,9 +445,6 @@ describe("Interactive Session - Interrupts", () => {
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
-    const skillActivation = createSkillActivation(
-      discoverSkillCatalog({ workspace: process.cwd() }),
-    );
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled", reportFile: "report.json" },
       workspace: process.cwd(),
@@ -481,7 +490,7 @@ describe("Interactive Session - Interrupts", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      skillActivation,
+      skills: managedSkills(process.cwd()),
     });
 
     // When

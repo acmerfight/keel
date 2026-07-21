@@ -13,10 +13,8 @@ import type {
 import {
   createSkillActivation,
   skillLifecycleStatesEqual,
-  workflowSkillFromActivation,
 } from "../skills/lifecycle.ts";
 import type {
-  SkillActivationCapability,
   SkillActivationRecord,
   SkillLifecycleState,
 } from "../skills/model.ts";
@@ -37,6 +35,7 @@ import {
   type InteractiveSession,
   type InteractiveSessionMemoryBinding,
   type InteractiveSessionOptions,
+  type InteractiveSkillRuntime,
   runInteractiveSession,
 } from "./interactive-session.ts";
 import {
@@ -725,22 +724,32 @@ async function runSessionCli(
           initialModelSelection = overrideSelection;
         }
       }
-      const rawSkillCatalog = skillPolicy.enabled
-        ? discoverWorkflowSkillCatalog(runtime, workspace)
-        : undefined;
+      const skillDiscovery = skillPolicy.enabled
+        ? (() => {
+            const rawCatalog = discoverWorkflowSkillCatalog(runtime, workspace);
+            return {
+              kind: "available" as const,
+              rawCatalog,
+              catalog: filterWorkflowSkillCatalog(
+                rawCatalog,
+                skillPolicy.disabledPackageIds,
+              ),
+            };
+          })()
+        : {
+            kind: "unavailable" as const,
+            reason: skillPolicy.unavailableReason,
+          };
       const discoveredSkillCatalog =
-        rawSkillCatalog === undefined
-          ? undefined
-          : filterWorkflowSkillCatalog(
-              rawSkillCatalog,
-              skillPolicy.disabledPackageIds,
-            );
+        skillDiscovery.kind === "available"
+          ? skillDiscovery.catalog
+          : undefined;
       const hiddenWorkspacePaths =
-        rawSkillCatalog === undefined
+        skillDiscovery.kind === "unavailable"
           ? repositoryWorkflowSkillRootPaths(workspace)
           : disabledWorkflowSkillWorkspacePaths(
               workspace,
-              rawSkillCatalog,
+              skillDiscovery.rawCatalog,
               skillPolicy.disabledPackageIds,
             );
       if (discoveredSkillCatalog !== undefined) {
@@ -764,9 +773,10 @@ async function runSessionCli(
               skillPolicy.disabledPackageIds,
             );
       const catalogHasDisabledSkill =
-        rawSkillCatalog?.skills.some((skill) =>
+        skillDiscovery.kind === "available" &&
+        skillDiscovery.rawCatalog.skills.some((skill) =>
           disabledPackageIds.has(skill.packageId),
-        ) ?? false;
+        );
       const sessionHasDisabledActiveSkill =
         sessionSkillState !== undefined &&
         (() => {
@@ -785,7 +795,6 @@ async function runSessionCli(
       const skillCatalog = allRelevantSkillsDisabledByUser
         ? undefined
         : discoveredSkillCatalog;
-      let skillActivation: SkillActivationCapability | undefined;
       let lazySessionInitialSkillState: SkillLifecycleState = {
         skillActivations: [],
         activeSkillIds: [],
@@ -825,17 +834,29 @@ async function runSessionCli(
         });
       };
       const initialSkillActivationRecords: SkillActivationRecord[] = [];
-      if (skillCatalog !== undefined) {
-        skillActivation = createSkillActivation(skillCatalog, {
+      let skills: InteractiveSkillRuntime;
+      if (skillDiscovery.kind === "unavailable") {
+        skills = {
+          kind: "unavailable",
+          reason: skillDiscovery.reason,
+        };
+      } else if (allRelevantSkillsDisabledByUser) {
+        skills = {
+          kind: "unavailable",
+          reason:
+            "Error: workflow skills are disabled by user configuration; run keel skills enable <skill> to enable one.",
+        };
+      } else {
+        const activation = createSkillActivation(skillDiscovery.catalog, {
           initialState:
             policyFilteredSessionSkillState === undefined
               ? { skillActivations: [], activeSkillIds: [] }
               : policyFilteredSessionSkillState,
           now: () => new Date(runtime.now()).toISOString(),
         });
-        const skillStateBeforeRequested = skillActivation.state();
+        const skillStateBeforeRequested = activation.state();
         for (const skill of requestedWorkflowSkills) {
-          const activated = skillActivation.activateExplicit(skill, "");
+          const activated = activation.activateExplicit(skill, "");
           if (activated.record !== undefined) {
             initialSkillActivationRecords.push(activated.record);
           }
@@ -844,17 +865,24 @@ async function runSessionCli(
           session !== undefined &&
           !skillLifecycleStatesEqual(
             skillStateBeforeRequested,
-            skillActivation.state(),
+            activation.state(),
           )
         ) {
-          persistSkillLifecycleState(session, skillActivation.state());
+          persistSkillLifecycleState(session, activation.state());
         }
         if (session === undefined) {
-          lazySessionInitialSkillState = skillActivation.state();
+          lazySessionInitialSkillState = activation.state();
         }
+        skills = {
+          kind: "managed",
+          activation,
+          implicitSkills: skillDiscovery.catalog.implicitSkills,
+          loadExplicit: (lookup) => skillDiscovery.catalog.load(lookup),
+          initialActivationRecords: initialSkillActivationRecords,
+        };
       }
-      const workflowSkills =
-        skillActivation?.active().map(workflowSkillFromActivation) ?? [];
+      const skillActivation =
+        skills.kind === "managed" ? skills.activation : undefined;
       for (const status of skillActivation?.activeStatuses() ?? []) {
         if (status.diskStatus === "current") continue;
         runtime.writeStderr(
@@ -1307,27 +1335,7 @@ async function runSessionCli(
             }
           : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
-        ...(workflowSkills.length > 0 ? { workflowSkills } : {}),
-        ...(skillCatalog !== undefined && skillCatalog.implicitSkills.length > 0
-          ? { skillCatalog: skillCatalog.implicitSkills }
-          : {}),
-        ...(skillActivation !== undefined ? { skillActivation } : {}),
-        ...(!skillPolicy.enabled || allRelevantSkillsDisabledByUser
-          ? {
-              skillUnavailableReason: !skillPolicy.enabled
-                ? skillPolicy.unavailableReason
-                : "Error: workflow skills are disabled by user configuration; run keel skills enable <skill> to enable one.",
-            }
-          : {}),
-        ...(initialSkillActivationRecords.length > 0
-          ? { initialSkillActivationRecords }
-          : {}),
-        ...(skillCatalog !== undefined
-          ? {
-              activateExplicitSkill: (lookup: string) =>
-                skillCatalog.load(lookup),
-            }
-          : {}),
+        skills,
         ...(restoredSessionOptions !== undefined ? restoredSessionOptions : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
