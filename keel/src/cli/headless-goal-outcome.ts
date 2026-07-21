@@ -1,3 +1,4 @@
+import { KeelError } from "../core/error.ts";
 import type {
   SessionGoal,
   SessionGoalRuntimeOutcome,
@@ -27,64 +28,51 @@ export interface HeadlessGoalOutcome {
   readonly goal: TerminalSessionGoal;
 }
 
-export type HeadlessGoalOutcomeAssessment =
-  | {
-      readonly kind: "ready";
-      readonly outcome: HeadlessGoalOutcome;
-    }
-  | {
-      readonly kind: "rejected";
-      readonly error: string;
-    };
+function rejectHeadlessGoalOutcome(error: string): never {
+  throw new KeelError("goal_terminal_outcome_invalid", error);
+}
 
-export function assessHeadlessGoalOutcome(
+export function requireHeadlessGoalOutcome(
   sessionId: string | undefined,
   goal: SessionGoal | undefined,
-): HeadlessGoalOutcomeAssessment {
+): HeadlessGoalOutcome {
   if (sessionId === undefined) {
-    return {
-      kind: "rejected",
-      error: "Error: headless Goal ended without an active saved session.",
-    };
+    rejectHeadlessGoalOutcome(
+      "Error: headless Goal ended without an active saved session.",
+    );
   }
   const safeSessionId = sanitizeStatusLineText(sessionId);
   if (goal === undefined) {
-    return {
-      kind: "rejected",
-      error: `Error: headless Goal session ${safeSessionId} ended without durable Goal state.`,
-    };
+    rejectHeadlessGoalOutcome(
+      `Error: headless Goal session ${safeSessionId} ended without durable Goal state.`,
+    );
   }
   if (goal.status === "active" || goal.status === "paused") {
-    return {
-      kind: "rejected",
-      error: `Error: headless Goal ended while session ${safeSessionId} was still ${goal.status}.`,
-    };
+    rejectHeadlessGoalOutcome(
+      `Error: headless Goal ended while session ${safeSessionId} was still ${goal.status}.`,
+    );
   }
   if (goal.status === "completed") {
     const runtimeOutcome = goal.latestRuntimeOutcome;
     if (runtimeOutcome?.kind !== "completed") {
-      return {
-        kind: "rejected",
-        error: `Error: headless Goal session ${safeSessionId} completed without a durable completion outcome.`,
-      };
+      rejectHeadlessGoalOutcome(
+        `Error: headless Goal session ${safeSessionId} completed without a durable completion outcome.`,
+      );
     }
     return {
-      kind: "ready",
-      outcome: {
-        sessionId,
-        goal: {
-          ...goal,
-          latestRuntimeOutcome: {
-            ...runtimeOutcome,
-            kind: "completed",
-          },
+      sessionId,
+      goal: {
+        ...goal,
+        latestRuntimeOutcome: {
+          ...runtimeOutcome,
+          kind: "completed",
         },
       },
     };
   }
   return {
-    kind: "ready",
-    outcome: { sessionId, goal },
+    sessionId,
+    goal,
   };
 }
 

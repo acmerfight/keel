@@ -33,10 +33,10 @@ import {
 } from "./bash-project-approvals.ts";
 import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
 import {
-  assessHeadlessGoalOutcome,
   type HeadlessGoalOutcome,
   headlessGoalRunReportOutcome,
   headlessGoalRunReportStopReason,
+  requireHeadlessGoalOutcome,
 } from "./headless-goal-outcome.ts";
 import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
 import {
@@ -1444,15 +1444,10 @@ async function runSessionCli(
       );
       let headlessGoalOutcome: HeadlessGoalOutcome | undefined;
       if (mode.kind === "headless-goal" && exitCode === 0) {
-        const assessment = assessHeadlessGoalOutcome(
+        headlessGoalOutcome = requireHeadlessGoalOutcome(
           activeSessionId,
           interactiveResult.goal,
         );
-        if (assessment.kind === "rejected") {
-          runtime.writeStderr(`${assessment.error}\n`);
-          return { kind: "failed", exitCode: 1 };
-        }
-        headlessGoalOutcome = assessment.outcome;
       }
       if (
         cliArgs.reportFile !== undefined &&

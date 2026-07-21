@@ -31,6 +31,7 @@ export type RecoverableToolErrorCode =
 
 export type KeelErrorCode =
   | "agent_missing_stop"
+  | "goal_terminal_outcome_invalid"
   | RecoverableToolErrorCode
   | "tool_aborted"
   | "tool_invalid_bash_timeout"
