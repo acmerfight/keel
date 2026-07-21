@@ -1,8 +1,8 @@
 import {
   assessSessionGoalResume,
   copySessionGoal,
-  formatSessionGoalResumeRejection,
   pauseActiveSessionGoal,
+  type ResumableSessionGoal,
   type SessionGoal,
   type SessionGoalBudget,
   type SessionGoalCompletion,
@@ -18,6 +18,7 @@ import {
   bashApprovalProjectRoot,
   listBashProjectApprovalGrants,
 } from "./bash-project-approvals.ts";
+import { writeHeadlessGoalOutcome } from "./headless-goal-outcome.ts";
 import {
   type HeadlessSessionCliArgs,
   type HeadlessSessionCliResult,
@@ -117,26 +118,22 @@ async function prepareHeadlessGoalResume(
 ): Promise<
   | {
       readonly kind: "ready";
-      readonly goal: SessionGoal;
+      readonly goal: ResumableSessionGoal;
       readonly bashPermission?: SessionBashPermissionPolicy;
     }
   | { readonly kind: "rejected" }
 > {
   const preparedGoal = headlessGoalForResume(goal, cliArgs.budget);
-  const resumeRejection = formatSessionGoalResumeRejection(preparedGoal);
-  if (resumeRejection !== null) {
-    runtime.writeStderr(`${resumeRejection}\n`);
+  const assessment = assessSessionGoalResume(preparedGoal);
+  if (assessment.kind !== "ready") {
+    runtime.writeStderr(`${assessment.rejection}\n`);
     return { kind: "rejected" };
   }
-  /* v8 ignore start: the shared resume gate guarantees a durable criterion. */
-  if (preparedGoal === undefined || preparedGoal.completion === undefined) {
-    return { kind: "rejected" };
-  }
-  /* v8 ignore stop */
+  const resumableGoal = assessment.goal;
   const bashPermission = await headlessGoalBashPermission(
     {
       bashMode: cliArgs.bashMode,
-      completion: preparedGoal.completion,
+      completion: resumableGoal.completion,
     },
     runtime,
   );
@@ -144,7 +141,7 @@ async function prepareHeadlessGoalResume(
     ? { kind: "rejected" }
     : {
         kind: "ready",
-        goal: preparedGoal,
+        goal: resumableGoal,
         ...(bashPermission !== undefined ? { bashPermission } : {}),
       };
 }
@@ -170,37 +167,6 @@ function headlessGoalResumeAssessment(
   goal: SessionGoal | undefined,
 ): SessionGoalResumeAssessment {
   return assessSessionGoalResume(headlessGoalForResume(goal, cliArgs.budget));
-}
-
-function writeHeadlessGoalOutcome(
-  runtime: CliRuntime,
-  sessionId: string,
-  goal: Extract<
-    SessionGoal,
-    {
-      readonly status:
-        | "blocked"
-        | "budget_limited"
-        | "usage_limited"
-        | "completed";
-    }
-  >,
-): number {
-  const safeSessionId = sanitizeStatusLineText(sessionId);
-  runtime.writeStdout(
-    `Headless goal outcome: ${goal.status}; session: ${safeSessionId}\n`,
-  );
-  switch (goal.status) {
-    case "completed":
-      return 0;
-    case "blocked":
-      runtime.writeStdout(`Resume with: keel goal resume ${safeSessionId}\n`);
-      return 3;
-    case "budget_limited":
-    case "usage_limited":
-      runtime.writeStdout(`Resume with: keel goal resume ${safeSessionId}\n`);
-      return 4;
-  }
 }
 
 function headlessGoalRunArgs(cliArgs: GoalCliArgs): HeadlessSessionCliArgs {
@@ -296,30 +262,8 @@ export async function runHeadlessGoalCli(
     runtime.writeStderr(`${error.message}\n`);
     return 1;
   }
-  if (result.exitCode !== 0) {
+  if (result.kind === "failed") {
     return result.exitCode;
   }
-  const sessionId = result.sessionId;
-  /* v8 ignore start: a successful headless run always reports the active saved session. */
-  if (sessionId === undefined) {
-    runtime.writeStderr(
-      "Error: headless Goal ended without an active saved session.\n",
-    );
-    return 1;
-  }
-  /* v8 ignore start: exit 0 is produced only after the generated activation command reaches a terminal durable Goal. */
-  if (result.goal === undefined) {
-    runtime.writeStderr(
-      `Error: headless Goal session ${sanitizeStatusLineText(sessionId)} ended without durable Goal state.\n`,
-    );
-    return 1;
-  }
-  if (result.goal.status === "active" || result.goal.status === "paused") {
-    runtime.writeStderr(
-      `Error: headless Goal ended while session ${sanitizeStatusLineText(sessionId)} was still ${result.goal.status}.\n`,
-    );
-    return 1;
-  }
-  /* v8 ignore stop */
-  return writeHeadlessGoalOutcome(runtime, sessionId, result.goal);
+  return writeHeadlessGoalOutcome(runtime, result.outcome);
 }

@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import { errorMessage, isAbortThrow } from "../core/error.ts";
 import {
   pauseActiveSessionGoal,
+  type ResumableSessionGoal,
   type SessionGoal,
   type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
@@ -29,6 +30,12 @@ import {
   saveBashProjectApprovalGrant,
 } from "./bash-project-approvals.ts";
 import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
+import {
+  type HeadlessGoalOutcome,
+  headlessGoalRunReportOutcome,
+  headlessGoalRunReportStopReason,
+  requireHeadlessGoalOutcome,
+} from "./headless-goal-outcome.ts";
 import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
 import {
   type InteractiveForkSessionRequest,
@@ -59,7 +66,6 @@ import {
 } from "./provider-config.ts";
 import {
   projectMemoryReportEntry,
-  type RunReportGoalOutcome,
   type RunReportMemory,
   type RunReportMemoryEntry,
   reportActiveSkills,
@@ -226,7 +232,7 @@ type SessionCliMode =
       readonly prepareResumedGoal?: (goal: SessionGoal | undefined) => Promise<
         | {
             readonly kind: "ready";
-            readonly goal: SessionGoal;
+            readonly goal: ResumableSessionGoal;
             readonly bashPermission?: SessionBashPermissionPolicy;
           }
         | { readonly kind: "rejected" }
@@ -235,11 +241,16 @@ type SessionCliMode =
         goal: SessionGoal | undefined,
       ) => SessionGoalResumeAssessment;
       readonly onActivated: (sessionId: string) => void;
-      readonly onFinished: (result: {
-        readonly sessionId: string;
-        readonly goal: SessionGoal | undefined;
-      }) => void;
     };
+
+type InteractiveSessionCliMode = Extract<
+  SessionCliMode,
+  { readonly kind: "interactive" }
+>;
+type HeadlessGoalSessionCliMode = Extract<
+  SessionCliMode,
+  { readonly kind: "headless-goal" }
+>;
 
 type InteractiveSessionStart =
   | {
@@ -487,11 +498,38 @@ function activeSessionIdForStart(
   }
 }
 
+export type HeadlessSessionCliResult =
+  | {
+      readonly kind: "failed";
+      readonly exitCode: number;
+    }
+  | {
+      readonly kind: "finished";
+      readonly outcome: HeadlessGoalOutcome;
+    };
+
+function sessionCliExit(
+  mode: SessionCliMode,
+  exitCode: number,
+): number | HeadlessSessionCliResult {
+  return mode.kind === "interactive" ? exitCode : { kind: "failed", exitCode };
+}
+
+async function runSessionCli(
+  cliArgs: InteractiveRunCliArgs,
+  runtime: CliRuntime,
+  mode: InteractiveSessionCliMode,
+): Promise<number>;
+async function runSessionCli(
+  cliArgs: InteractiveRunCliArgs,
+  runtime: CliRuntime,
+  mode: HeadlessGoalSessionCliMode,
+): Promise<HeadlessSessionCliResult>;
 async function runSessionCli(
   cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
   mode: SessionCliMode,
-): Promise<number> {
+): Promise<number | HeadlessSessionCliResult> {
   let exitCode = 0;
 
   if (
@@ -500,7 +538,7 @@ async function runSessionCli(
     runtime.input.isTTY !== true
   ) {
     runtime.writeStderr(`${RESUME_PICK_REQUIRES_TTY_ERROR}\n`);
-    return 1;
+    return sessionCliExit(mode, 1);
   }
   if (
     mode.kind === "interactive" &&
@@ -508,7 +546,7 @@ async function runSessionCli(
     runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
   ) {
     runtime.writeStderr(`${USAGE}\n`);
-    return 1;
+    return sessionCliExit(mode, 1);
   }
   if (
     mode.kind === "interactive" &&
@@ -518,7 +556,7 @@ async function runSessionCli(
     runtime.writeStderr(
       "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
     );
-    return 1;
+    return sessionCliExit(mode, 1);
   }
   let sessionLock: SessionLock | undefined;
   let sourceSessionLock: SessionLock | undefined;
@@ -551,7 +589,7 @@ async function runSessionCli(
         runtime,
       });
       if (pickedSession === null) {
-        return 0;
+        return sessionCliExit(mode, 0);
       }
       const sessionId = pickedSession.sessionId;
       initialInputLines = pickedSession.initialInputLines;
@@ -579,7 +617,7 @@ async function runSessionCli(
           runtime,
         });
         if (promptedSessionStart.kind === "cancelled") {
-          return 0;
+          return sessionCliExit(mode, 0);
         }
         sessionStart = promptedSessionStart.sessionStart;
         initialInputLines = promptedSessionStart.initialInputLines;
@@ -681,7 +719,7 @@ async function runSessionCli(
             const preparation =
               await mode.prepareResumedGoal(goalForPreparation);
             if (preparation.kind === "rejected") {
-              return 1;
+              return sessionCliExit(mode, 1);
             }
             headlessPreparedSessionGoal = preparation.goal;
             headlessGoalBashPermission = preparation.bashPermission;
@@ -1412,18 +1450,25 @@ async function runSessionCli(
         interactiveSessionOptions,
         interactiveTerminalDisplay,
       );
+      let headlessGoalOutcome: HeadlessGoalOutcome | undefined;
+      if (mode.kind === "headless-goal" && exitCode === 0) {
+        headlessGoalOutcome = requireHeadlessGoalOutcome(
+          activeSessionId,
+          interactiveResult.goal,
+        );
+      }
       if (
         cliArgs.reportFile !== undefined &&
         interactiveResult.report !== undefined
       ) {
         const goalOutcome =
-          mode.kind === "headless-goal" && activeSessionId !== undefined
-            ? runReportGoalOutcome(activeSessionId, interactiveResult.goal)
-            : undefined;
+          headlessGoalOutcome === undefined
+            ? undefined
+            : headlessGoalRunReportOutcome(headlessGoalOutcome);
         const headlessStopReason =
-          mode.kind === "headless-goal" &&
+          headlessGoalOutcome !== undefined &&
           interactiveResult.report.end.stopReason !== "cost_budget"
-            ? headlessGoalReportStopReason(interactiveResult.goal)
+            ? headlessGoalRunReportStopReason(headlessGoalOutcome)
             : undefined;
         writeRunReport(cliArgs.reportFile, {
           tasks: interactiveResult.report.tasks,
@@ -1451,11 +1496,10 @@ async function runSessionCli(
           ...(goalOutcome !== undefined ? { goalOutcome } : {}),
         });
       }
-      if (mode.kind === "headless-goal" && activeSessionId !== undefined) {
-        mode.onFinished({
-          sessionId: activeSessionId,
-          goal: interactiveResult.goal,
-        });
+      if (mode.kind === "headless-goal") {
+        return headlessGoalOutcome === undefined
+          ? { kind: "failed", exitCode }
+          : { kind: "finished", outcome: headlessGoalOutcome };
       }
     } finally {
       sourceSessionLock?.release();
@@ -1464,96 +1508,38 @@ async function runSessionCli(
   } catch (error) {
     if (error instanceof ProviderConfigError) {
       runtime.writeStderr(`${error.message}\n`);
-      return 1;
+      return sessionCliExit(mode, 1);
     }
     if (error instanceof ProjectInstructionsError) {
       runtime.writeStderr(`${error.message}\n`);
-      return 1;
+      return sessionCliExit(mode, 1);
     }
     if (error instanceof ProjectMemoryError) {
       runtime.writeStderr(`${error.message}\n`);
-      return 1;
+      return sessionCliExit(mode, 1);
     }
     if (
       error instanceof WorkflowSkillError ||
       error instanceof SkillUserConfigError
     ) {
       runtime.writeStderr(`${error.message}\n`);
-      return 1;
+      return sessionCliExit(mode, 1);
     }
     if (error instanceof BashProjectApprovalsError) {
       runtime.writeStderr(`${error.message}\n`);
-      return 1;
+      return sessionCliExit(mode, 1);
     }
     if (isAbortThrow(error)) {
-      return 130;
+      return sessionCliExit(mode, 130);
     }
     if (error instanceof SessionStoreError) {
       runtime.writeStderr(`${error.message}\n`);
-      return 1;
+      return sessionCliExit(mode, 1);
     }
     runtime.writeStderr(formatCliRuntimeError(error));
-    return 1;
+    return sessionCliExit(mode, 1);
   }
-  return exitCode;
-}
-
-function runReportGoalOutcome(
-  sessionId: string,
-  goal: SessionGoal | undefined,
-): RunReportGoalOutcome | undefined {
-  /* v8 ignore start: report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused. */
-  if (
-    goal === undefined ||
-    goal.status === "active" ||
-    goal.status === "paused"
-  ) {
-    return undefined;
-  }
-  /* v8 ignore stop */
-  if (goal.status === "completed") {
-    return {
-      sessionId,
-      status: "completed",
-      /* v8 ignore next: completed Goals always persist a completion runtime outcome before report finalization. */
-      reason: goal.latestRuntimeOutcome?.reason ?? "Session goal completed.",
-      evidenceKind: goal.completionEvidence.kind,
-    };
-  }
-  return {
-    sessionId,
-    status: goal.status,
-    reason: goal.statusReason,
-  };
-}
-
-function headlessGoalReportStopReason(
-  goal: SessionGoal | undefined,
-): "goal_blocked" | "goal_budget" | "goal_usage_limit" | undefined {
-  /* v8 ignore start: report finalization follows a terminal headless Goal, so it cannot be absent, active, or paused. */
-  if (
-    goal === undefined ||
-    goal.status === "active" ||
-    goal.status === "paused"
-  )
-    return undefined;
-  /* v8 ignore stop */
-  switch (goal.status) {
-    case "blocked":
-      return "goal_blocked";
-    case "budget_limited":
-      return "goal_budget";
-    case "usage_limited":
-      return "goal_usage_limit";
-    case "completed":
-      return undefined;
-  }
-}
-
-export interface HeadlessSessionCliResult {
-  readonly exitCode: number;
-  readonly sessionId?: string;
-  readonly goal?: SessionGoal;
+  return sessionCliExit(mode, exitCode);
 }
 
 export async function runHeadlessSessionCli(
@@ -1565,7 +1551,7 @@ export async function runHeadlessSessionCli(
   prepareResumedGoal?: (goal: SessionGoal | undefined) => Promise<
     | {
         readonly kind: "ready";
-        readonly goal: SessionGoal;
+        readonly goal: ResumableSessionGoal;
         readonly bashPermission?: SessionBashPermissionPolicy;
       }
     | { readonly kind: "rejected" }
@@ -1574,10 +1560,8 @@ export async function runHeadlessSessionCli(
     goal: SessionGoal | undefined,
   ) => SessionGoalResumeAssessment,
 ): Promise<HeadlessSessionCliResult> {
-  let finalSessionId: string | undefined;
-  let finalGoal: SessionGoal | undefined;
   const headlessInput = Readable.from([]);
-  const exitCode = await runSessionCli(
+  return await runSessionCli(
     cliArgs,
     { ...runtime, input: headlessInput },
     {
@@ -1589,17 +1573,8 @@ export async function runHeadlessSessionCli(
         ? { latestGoalResumeAssessment }
         : {}),
       onActivated,
-      onFinished: (result) => {
-        finalSessionId = result.sessionId;
-        finalGoal = result.goal;
-      },
     },
   );
-  return {
-    exitCode,
-    ...(finalSessionId !== undefined ? { sessionId: finalSessionId } : {}),
-    ...(finalGoal !== undefined ? { goal: finalGoal } : {}),
-  };
 }
 
 export async function runInteractiveCli(
