@@ -5,9 +5,9 @@ import {
   location,
   objectLiteralPropertyNames,
   objectProperty,
-  propertyNameText,
   type ParsedSource,
   parseSource,
+  propertyNameText,
   unwrapExpression,
   variableInitializer,
 } from "./_ast.ts";
@@ -53,7 +53,9 @@ function toolRegistryEntries(
   const expression =
     initializer === null ? null : unwrapExpression(initializer);
   if (expression === null || !ts.isObjectLiteralExpression(expression)) {
-    throw new Error(`${source.path} missing builtinToolRegistry object literal`);
+    throw new Error(
+      `${source.path} missing builtinToolRegistry object literal`,
+    );
   }
 
   return expression.properties.map((property) => {

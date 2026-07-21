@@ -22,10 +22,7 @@ import {
   writeToolArgumentsSchema,
 } from "./tool-arguments.ts";
 import { invalidBuiltinToolCallError } from "./tool-error.ts";
-import {
-  stripUndefinedProperties,
-  toolArgumentKeys,
-} from "./tool-schema.ts";
+import { stripUndefinedProperties, toolArgumentKeys } from "./tool-schema.ts";
 
 type ToolArgShape = z.ZodRawShape;
 
