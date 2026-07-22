@@ -20,7 +20,7 @@ import {
   isBinarySample,
 } from "../tools/text-file.ts";
 import {
-  auditSkillPackage,
+  auditSkillPackageContents,
   firstSkillAuditBlocker,
   type SkillAuditFinding,
   type SkillPackageAudit,
@@ -79,6 +79,7 @@ interface ReadSkill {
   readonly skill: WorkflowSkill;
   readonly findings: readonly SkillAuditFinding[];
   readonly packageLocation: SkillPackageLocation;
+  readonly resourceDigests: ReadonlyMap<string, string>;
 }
 
 interface CatalogedSkill {
@@ -575,6 +576,7 @@ function readSkillResourceText(
   packageLocation: SkillPackageLocation,
   resourcePath: string,
   relativePath: string,
+  expectedDigest: string | undefined,
 ): string {
   let fd: number | null = null;
   try {
@@ -611,13 +613,19 @@ function readSkillResourceText(
     if (hasBinaryControlBytes(content)) {
       throw binarySkillResourceError(relativePath);
     }
+    let decoded: string;
     try {
-      return new TextDecoder("utf-8", { fatal: true })
-        .decode(content)
-        .trimEnd();
+      decoded = new TextDecoder("utf-8", { fatal: true }).decode(content);
     } catch {
       throw binarySkillResourceError(relativePath);
     }
+    if (
+      expectedDigest === undefined ||
+      skillDigest(content) !== expectedDigest
+    ) {
+      throw unreadableSkillResourceError(relativePath);
+    }
+    return decoded.trimEnd();
   } catch (error) {
     if (isErrnoException(error)) {
       throw unreadableSkillResourceError(relativePath);
@@ -677,7 +685,7 @@ function readSkillFileFromDisk(
   const qualifiedName = `${root.scope}:${parsed.name}`;
   const relativePath = skillDisplayPath(root, skillName);
   const inventory = listSkillResourcePaths(root, skillName);
-  const findings = auditSkillPackage({
+  const audit = auditSkillPackageContents({
     skillDirectory: packageLocation.directoryPath,
     skillRelativePath: relativePath,
     content: decoded,
@@ -720,8 +728,9 @@ function readSkillFileFromDisk(
       resourcePaths: includeResourcePaths ? inventory.resourcePaths : [],
       content: parsed.content,
     },
-    findings,
+    findings: audit.findings,
     packageLocation,
+    resourceDigests: audit.resourceDigests,
   };
 }
 
@@ -1196,7 +1205,12 @@ export function discoverSkillCatalog(
         );
       }
       const resourcePath = join(root.rootPath, descriptor.name, path);
-      return readSkillResourceText(packageLocation, resourcePath, path);
+      return readSkillResourceText(
+        packageLocation,
+        resourcePath,
+        path,
+        current.resourceDigests.get(path),
+      );
     },
     readPackageResource: (packageId, digest, path) => {
       if (!isWorkflowSkillResourcePath(path)) {
@@ -1231,7 +1245,12 @@ export function discoverSkillCatalog(
         );
       }
       const resourcePath = join(root.rootPath, descriptor.name, path);
-      return readSkillResourceText(packageLocation, resourcePath, path);
+      return readSkillResourceText(
+        packageLocation,
+        resourcePath,
+        path,
+        current.resourceDigests.get(path),
+      );
     },
   };
 }

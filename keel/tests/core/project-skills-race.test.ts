@@ -617,6 +617,132 @@ describe("Project Skill Package Race Handling", () => {
   });
 
   test.each([
+    { race: "is replaced by another regular file before open", mode: "replace" },
+    { race: "is rewritten in place after open", mode: "rewrite" },
+  ])(
+    `Given an audited text resource $race,
+      When skill_resource reads valid UTF-8 bytes that were not audited,
+      Then the content digest rejects the changed bytes without returning them`,
+    async ({ mode }) => {
+      // Given
+      const fixture = await createSkillFixture(
+        "keel-skill-resource-content-race-",
+      );
+      const actualFs = await vi.importActual<FsModule>("node:fs");
+      const changedContent = `Credential: ghp_${"s".repeat(36)}`;
+      let raceArmed = false;
+      let resourceReaudited = false;
+      let changed = false;
+      const projectSkills = await importProjectSkillsWithFs({
+        openSync: (path, flags, openMode) => {
+          if (
+            String(path) === fixture.resourcePath &&
+            raceArmed &&
+            resourceReaudited &&
+            !changed
+          ) {
+            changed = true;
+            if (mode === "replace") {
+              actualFs.rmSync(fixture.resourcePath);
+              actualFs.writeFileSync(fixture.resourcePath, changedContent);
+              return actualFs.openSync(path, flags, openMode);
+            }
+            const fd = actualFs.openSync(path, flags, openMode);
+            actualFs.writeFileSync(fixture.resourcePath, changedContent);
+            return fd;
+          }
+          return actualFs.openSync(path, flags, openMode);
+        },
+        readFileSync: (path) => {
+          const result = actualFs.readFileSync(path);
+          if (String(path) === fixture.resourcePath && raceArmed) {
+            resourceReaudited = true;
+          }
+          return result;
+        },
+      });
+
+      try {
+        const catalog = projectSkills.discoverSkillCatalog({
+          workspace: fixture.workspace,
+        });
+        raceArmed = true;
+
+        // When
+        let message = "";
+        try {
+          catalog.readResource("repo:review", "references/guide.md");
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+
+        // Then
+        expect(message).toContain(
+          'workflow skill resource "references/guide.md" changed or became unreadable after package validation',
+        );
+        expect(message).not.toContain(changedContent);
+        expect(message).not.toContain(fixture.resourcePath);
+      } finally {
+        await rm(fixture.workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(`Given an audited binary asset becomes text at the final open boundary,
+    When skill_resource would otherwise return unaudited UTF-8 content,
+    Then the missing audited text digest rejects the replacement`, async () => {
+    // Given
+    const fixture = await createSkillFixture(
+      "keel-skill-resource-binary-text-race-",
+    );
+    const assetsPath = join(fixture.skillPath, "assets");
+    const assetPath = join(assetsPath, "diagram.bin");
+    const changedContent = "previously unaudited text";
+    await rm(fixture.referencesPath, { recursive: true, force: true });
+    await mkdir(assetsPath, { recursive: true });
+    await writeFile(assetPath, new Uint8Array([0, 1, 2]));
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    let raceArmed = false;
+    let auditedOpenCount = 0;
+    const projectSkills = await importProjectSkillsWithFs({
+      openSync: (path, flags, mode) => {
+        if (String(path) === assetPath && raceArmed) {
+          auditedOpenCount += 1;
+          if (auditedOpenCount === 2) {
+            actualFs.rmSync(assetPath);
+            actualFs.writeFileSync(assetPath, changedContent);
+          }
+        }
+        return actualFs.openSync(path, flags, mode);
+      },
+    });
+
+    try {
+      const catalog = projectSkills.discoverSkillCatalog({
+        workspace: fixture.workspace,
+      });
+      raceArmed = true;
+
+      // When
+      let message = "";
+      try {
+        catalog.readResource("repo:review", "assets/diagram.bin");
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      // Then
+      expect(message).toContain(
+        'workflow skill resource "assets/diagram.bin" changed or became unreadable after package validation',
+      );
+      expect(message).not.toContain(changedContent);
+      expect(message).not.toContain(assetPath);
+    } finally {
+      await rm(fixture.workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
     { replacement: "a directory", mode: "directory" },
     { replacement: "a different regular file", mode: "regular" },
   ])(
