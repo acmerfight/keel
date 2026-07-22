@@ -617,7 +617,10 @@ describe("Project Skill Package Race Handling", () => {
   });
 
   test.each([
-    { race: "is replaced by another regular file before open", mode: "replace" },
+    {
+      race: "is replaced by another regular file before open",
+      mode: "replace",
+    },
     { race: "is rewritten in place after open", mode: "rewrite" },
   ])(
     `Given an audited text resource $race,

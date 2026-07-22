@@ -333,9 +333,7 @@ function auditResource(options: {
   }
 }
 
-export function auditSkillPackageContents(
-  options: AuditSkillPackageOptions,
-): {
+export function auditSkillPackageContents(options: AuditSkillPackageOptions): {
   readonly findings: readonly SkillAuditFinding[];
   readonly resourceDigests: ReadonlyMap<string, string>;
 } {
