@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
+  readonly existsSync?: (path: PathLike) => boolean;
   readonly fstatSync?: (fd: number) => Stats;
   readonly lstatSync?: (
     path: PathLike,
@@ -29,6 +30,7 @@ interface FsOverrides {
     length: number,
     position: number | null,
   ) => number;
+  readonly statSync?: (path: PathLike) => Stats;
 }
 
 class TestNodeError extends Error implements NodeJS.ErrnoException {
@@ -243,6 +245,148 @@ describe("Project Skill Package Race Handling", () => {
       );
       expect(catalog.warnings[0]?.message).not.toContain(outsideContent);
       expect(catalog.warnings[0]?.message).not.toContain(outsideSkillPath);
+    } finally {
+      await rm(fixture.workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the validated Skill root is replaced before its package identity is captured,
+    When discovery starts reading the previously enumerated package,
+    Then the fixed root identity rejects the replacement`, async () => {
+    // Given
+    const fixture = await createSkillFixture("keel-skill-root-race-");
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    const rootPath = join(fixture.workspace, ".agents", "skills");
+    const skillFilePath = join(fixture.skillPath, "SKILL.md");
+    const outsideRootPath = join(fixture.workspace, "outside-root");
+    const outsideSkillPath = join(outsideRootPath, "review");
+    await mkdir(outsideSkillPath, { recursive: true });
+    await writeFile(
+      join(outsideSkillPath, "SKILL.md"),
+      "---\nname: review\ndescription: Outside root.\n---\nOutside.\n",
+    );
+    let swapped = false;
+    const projectSkills = await importProjectSkillsWithFs({
+      existsSync: (path) => {
+        const exists = actualFs.existsSync(path);
+        if (String(path) === skillFilePath && !swapped) {
+          actualFs.rmSync(rootPath, { recursive: true });
+          actualFs.symlinkSync(outsideRootPath, rootPath);
+          swapped = true;
+        }
+        return exists;
+      },
+    });
+
+    try {
+      // When
+      const catalog = projectSkills.discoverSkillCatalog({
+        workspace: fixture.workspace,
+      });
+
+      // Then
+      expect(catalog.skills).toEqual([]);
+      expect(catalog.audits[0]?.findings).toContainEqual(
+        expect.objectContaining({
+          severity: "blocker",
+          code: "invalid_package",
+          message: "SKILL.md resolves outside its declared Skill root",
+        }),
+      );
+    } finally {
+      await rm(fixture.workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a Skill package changes immediately after its identity is captured,
+    When discovery crosses the first package read boundary,
+    Then the fixed package identity rejects the replacement`, async () => {
+    // Given
+    const fixture = await createSkillFixture(
+      "keel-skill-package-capture-race-",
+    );
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    const outsideSkillPath = join(fixture.workspace, "outside-review");
+    await mkdir(outsideSkillPath, { recursive: true });
+    await writeFile(
+      join(outsideSkillPath, "SKILL.md"),
+      "---\nname: review\ndescription: Outside package.\n---\nOutside.\n",
+    );
+    let swapped = false;
+    const projectSkills = await importProjectSkillsWithFs({
+      statSync: (path) => {
+        const stat = actualFs.statSync(path);
+        if (String(path) === fixture.skillPath && !swapped) {
+          actualFs.rmSync(fixture.skillPath, { recursive: true });
+          actualFs.symlinkSync(outsideSkillPath, fixture.skillPath);
+          swapped = true;
+        }
+        return stat;
+      },
+    });
+
+    try {
+      // When
+      const catalog = projectSkills.discoverSkillCatalog({
+        workspace: fixture.workspace,
+      });
+
+      // Then
+      expect(catalog.skills).toEqual([]);
+      expect(catalog.audits[0]?.findings).toContainEqual(
+        expect.objectContaining({
+          severity: "blocker",
+          code: "invalid_package",
+          message: "SKILL.md resolves outside its declared Skill root",
+        }),
+      );
+    } finally {
+      await rm(fixture.workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a Skill package changes while its audited resource bytes are inspected,
+    When discovery completes deterministic package validation,
+    Then the post-audit identity check rejects the changed package`, async () => {
+    // Given
+    const fixture = await createSkillFixture(
+      "keel-skill-package-audit-race-",
+    );
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    const outsideSkillPath = join(fixture.workspace, "outside-review");
+    await mkdir(outsideSkillPath, { recursive: true });
+    await writeFile(
+      join(outsideSkillPath, "SKILL.md"),
+      "---\nname: review\ndescription: Outside package.\n---\nOutside.\n",
+    );
+    let swapped = false;
+    const projectSkills = await importProjectSkillsWithFs({
+      readFileSync: (path) => {
+        const bytes = actualFs.readFileSync(path);
+        if (String(path) === fixture.resourcePath && !swapped) {
+          actualFs.rmSync(fixture.skillPath, { recursive: true });
+          actualFs.symlinkSync(outsideSkillPath, fixture.skillPath);
+          swapped = true;
+        }
+        return bytes;
+      },
+    });
+
+    try {
+      // When
+      const catalog = projectSkills.discoverSkillCatalog({
+        workspace: fixture.workspace,
+      });
+
+      // Then
+      expect(catalog.skills).toEqual([]);
+      expect(catalog.audits[0]?.findings).toContainEqual(
+        expect.objectContaining({
+          severity: "blocker",
+          code: "invalid_package",
+          message: "SKILL.md resolves outside its declared Skill root",
+        }),
+      );
     } finally {
       await rm(fixture.workspace, { recursive: true, force: true });
     }

@@ -940,7 +940,7 @@ export function discoverSkillCatalog(
   const skills: CatalogedSkill[] = [];
   const discoveredAudits: DiscoveredSkillAudit[] = [];
   const recordInvalidPackage = (
-    root: SkillRoot,
+    root: ValidatedSkillRoot,
     skillName: string,
     auditMessage: string,
   ): void => {
