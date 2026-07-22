@@ -18,24 +18,10 @@ import {
   toolCallCanonicalArguments,
   toolCallFromParsedArguments,
 } from "../../src/tools/registry.ts";
-import { builtinTools } from "../../src/tools/tool-definitions.ts";
-
-type RegisteredBuiltinTool = (typeof builtinTools)[number];
-
-function builtinToolByName<Name extends ToolName>(
-  name: Name,
-): Extract<RegisteredBuiltinTool, { readonly name: Name }> {
-  const tool = builtinTools.find(
-    (
-      candidate,
-    ): candidate is Extract<RegisteredBuiltinTool, { readonly name: Name }> =>
-      candidate.name === name,
-  );
-  if (tool === undefined) {
-    throw new Error(`Expected builtin tool ${name} to be registered`);
-  }
-  return tool;
-}
+import {
+  builtinToolRegistry,
+  builtinTools,
+} from "../../src/tools/tool-definitions.ts";
 
 function inclusiveIntegerMinimum(
   schemaField: z.core.JSONSchema.JSONSchema,
@@ -385,7 +371,7 @@ describe("tool registry", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-registry-patch-"));
     const workspacePath = await realpath(workspace);
-    const applyPatchTool = builtinToolByName("apply_patch");
+    const applyPatchTool = builtinToolRegistry.apply_patch;
     const patch = [
       "*** Begin Patch",
       "*** Add File: note.txt",
@@ -438,17 +424,17 @@ describe("tool registry", () => {
   test(`Given builtin tools declare display contracts,
     When labels and approval prompts are rendered,
     Then each tool has explicit user-visible text without generic fallback`, () => {
-    const readTool = builtinToolByName("read");
-    const lsTool = builtinToolByName("ls");
-    const globTool = builtinToolByName("glob");
-    const grepTool = builtinToolByName("grep");
-    const gitStatusTool = builtinToolByName("git_status");
-    const gitDiffTool = builtinToolByName("git_diff");
-    const editTool = builtinToolByName("edit");
-    const writeTool = builtinToolByName("write");
-    const applyPatchTool = builtinToolByName("apply_patch");
-    const bashTool = builtinToolByName("bash");
-    const updateGoalTool = builtinToolByName("update_goal");
+    const readTool = builtinToolRegistry.read;
+    const lsTool = builtinToolRegistry.ls;
+    const globTool = builtinToolRegistry.glob;
+    const grepTool = builtinToolRegistry.grep;
+    const gitStatusTool = builtinToolRegistry.git_status;
+    const gitDiffTool = builtinToolRegistry.git_diff;
+    const editTool = builtinToolRegistry.edit;
+    const writeTool = builtinToolRegistry.write;
+    const applyPatchTool = builtinToolRegistry.apply_patch;
+    const bashTool = builtinToolRegistry.bash;
+    const updateGoalTool = builtinToolRegistry.update_goal;
 
     expect(readTool.display.formatLabel({ path: "src/index.ts" })).toBe(
       "read src/index.ts",
@@ -522,7 +508,7 @@ describe("tool registry", () => {
 
   test(`Given builtin tools declare their contracts,
     When the registry metadata is inspected,
-    Then every builtin tool has a unique name in stable order`, () => {
+    Then each unique name indexes the same tool in stable order`, () => {
     const names = builtinTools.map((tool) => tool.name);
 
     expect(names).toEqual([
@@ -546,6 +532,9 @@ describe("tool registry", () => {
       "bash",
     ]);
     expect(new Set(names).size).toBe(names.length);
+    for (const tool of builtinTools) {
+      expect(builtinToolRegistry[tool.name]).toBe(tool);
+    }
   });
 
   test(`Given builtin tools declare their behavior contracts,
@@ -782,7 +771,7 @@ describe("tool registry", () => {
   test(`Given registry-derived builtin call helpers receive malformed internal calls,
     When they validate the call before deriving labels or canonical arguments,
     Then they reject missing required fields`, () => {
-    const readTool = builtinToolByName("read");
+    const readTool = builtinToolRegistry.read;
     const malformedCall = { id: "call_read", tool: "read" };
     expect(readTool.name).toBe("read");
 
@@ -797,7 +786,7 @@ describe("tool registry", () => {
   test(`Given registry-derived builtin call helpers receive a different tool call,
     When they validate the call before deriving arguments,
     Then they reject the mismatched tool name`, () => {
-    const readTool = builtinToolByName("read");
+    const readTool = builtinToolRegistry.read;
     expect(readTool.name).toBe("read");
 
     expect(() =>
@@ -941,7 +930,7 @@ describe("tool registry", () => {
 
   test(`Given builtin tools declare arguments in Zod,
     When provider metadata is compared with generated JSON schema,
-    Then keys requiredness types and numeric bounds stay equivalent`, () => {
+    Then parsing keys requiredness types and numeric bounds stay equivalent`, () => {
     const providerTools = openAICompatibleTools({
       kind: "auto",
       bash: true,
@@ -987,6 +976,14 @@ describe("tool registry", () => {
         tool.args.schema.safeParse(completeArgs).success,
         `${tool.name} metadata-derived arguments must parse`,
       ).toBe(true);
+      expect(
+        toolCallFromParsedArguments(
+          `contract_${tool.name}`,
+          tool.name,
+          completeArgs,
+        )?.tool,
+        `${tool.name} must belong to the builtin call union`,
+      ).toBe(tool.name);
 
       for (const [fieldName, field] of Object.entries(providerFields)) {
         expectProviderParameterMatchesSchema(

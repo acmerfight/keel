@@ -298,7 +298,3 @@ export function openAICompatibleParametersFromSchema(
 export function toolArgumentKeys(schema: z.ZodType): readonly string[] {
   return Object.keys(openAICompatibleParametersFromSchema(schema).properties);
 }
-
-export function toolRequiredArgumentKeys(schema: z.ZodType): readonly string[] {
-  return openAICompatibleParametersFromSchema(schema).required;
-}

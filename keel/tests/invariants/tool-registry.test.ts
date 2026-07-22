@@ -1,13 +1,13 @@
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
 import {
-  arrayIdentifierElements,
   importedBindings,
   location,
   objectLiteralPropertyNames,
   objectProperty,
   type ParsedSource,
   parseSource,
+  propertyNameText,
   unwrapExpression,
   variableInitializer,
 } from "./_ast.ts";
@@ -26,11 +26,12 @@ const executionSource = parseSource(executionPath);
 const cliOutputSource = parseSource(cliOutputPath);
 const contextCompactionSource = parseSource(contextCompactionPath);
 const fakeProviderSource = parseSource(fakeProviderPath);
+const builtinToolRegistryEntries = toolRegistryEntries(toolDefinitionsSource);
 const builtinToolConstantNames = new Set(
-  arrayIdentifierElements(toolDefinitionsSource, "builtinTools"),
+  builtinToolRegistryEntries.map((entry) => entry.constantName),
 );
 const builtinToolNames = new Set(
-  builtinToolLiteralNames(toolDefinitionsSource, builtinToolConstantNames),
+  builtinToolRegistryEntries.map((entry) => entry.toolName),
 );
 const perToolArgumentSchemaNames = new Set(
   builtinToolArgumentSchemaNames(
@@ -39,6 +40,40 @@ const perToolArgumentSchemaNames = new Set(
   ),
 );
 const perToolExecutorNames = new Set(importedExecutorNames(executionSource));
+
+interface ToolRegistryEntry {
+  readonly toolName: string;
+  readonly constantName: string;
+}
+
+function toolRegistryEntries(
+  source: ParsedSource,
+): readonly ToolRegistryEntry[] {
+  const initializer = variableInitializer(source, "builtinToolRegistry");
+  const expression =
+    initializer === null ? null : unwrapExpression(initializer);
+  if (expression === null || !ts.isObjectLiteralExpression(expression)) {
+    throw new Error(
+      `${source.path} missing builtinToolRegistry object literal`,
+    );
+  }
+
+  return expression.properties.map((property) => {
+    if (
+      !ts.isPropertyAssignment(property) ||
+      !ts.isIdentifier(property.initializer)
+    ) {
+      throw new Error(
+        `${location(source, property)} registry entry must reference one tool identifier`,
+      );
+    }
+    const toolName = propertyNameText(property.name);
+    if (toolName === null) {
+      throw new Error(`${location(source, property)} registry key is invalid`);
+    }
+    return { toolName, constantName: property.initializer.text };
+  });
+}
 
 function defineToolObject(
   source: ParsedSource,
@@ -352,6 +387,14 @@ function propertyNames(
 }
 
 describe("builtin tool registry invariants", () => {
+  test(`Given the keyed registry owns builtin tool lookup,
+    When registry entries and definition names are inspected,
+    Then every key names the same definition in stable order`, () => {
+    expect(builtinToolRegistryEntries.map((entry) => entry.toolName)).toEqual(
+      builtinToolLiteralNames(toolDefinitionsSource, builtinToolConstantNames),
+    );
+  });
+
   test(`Given Zod schemas own builtin tool arguments,
     When definition, contract, and registry syntax is inspected,
     Then no parallel ToolArgDefinition field layer remains`, () => {
@@ -399,7 +442,7 @@ describe("builtin tool registry invariants", () => {
     }
   });
 
-  test(`Given builtin tool names are owned by builtinTools,
+  test(`Given builtin tool names are owned by builtinToolRegistry,
     When tool-call contract syntax is inspected,
     Then tool name checks do not duplicate the names as string comparisons`, () => {
     expect(toolNameStringComparisons(toolCallSource)).toEqual([]);
