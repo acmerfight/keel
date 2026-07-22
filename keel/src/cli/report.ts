@@ -113,12 +113,22 @@ interface RunReportActiveSkill {
   readonly diskStatus: "current" | "changed_on_disk" | "missing_on_disk";
 }
 
-export interface RunReportGoalOutcome {
-  readonly sessionId: string;
-  readonly status: "blocked" | "budget_limited" | "usage_limited" | "completed";
-  readonly reason: string;
-  readonly evidenceKind?: "command" | "assertion_evaluator" | "user_override";
-}
+export type RunReportGoalOutcome =
+  | {
+      readonly sessionId: string;
+      readonly status: "completed";
+      readonly reason: string;
+      readonly evidenceKind:
+        | "command"
+        | "assertion_evaluator"
+        | "user_override";
+    }
+  | {
+      readonly sessionId: string;
+      readonly status: "blocked" | "budget_limited" | "usage_limited";
+      readonly reason: string;
+      readonly evidenceKind?: never;
+    };
 
 interface RunReport {
   readonly schemaVersion: 17;

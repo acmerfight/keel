@@ -44,6 +44,29 @@ describe("Eval Runner", () => {
       }),
     },
     {
+      name: "completed Goal without completion evidence",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        goalOutcome: {
+          sessionId: "goal-without-evidence",
+          status: "completed",
+          reason: "Reported complete without evidence.",
+        },
+      }),
+    },
+    {
+      name: "blocked Goal with completion evidence",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        goalOutcome: {
+          sessionId: "blocked-goal-with-evidence",
+          status: "blocked",
+          reason: "The Goal is blocked.",
+          evidenceKind: "command",
+        },
+      }),
+    },
+    {
       name: "approved memory proposal without linked memory",
       reportContent: JSON.stringify({
         ...VALID_REPORT,
