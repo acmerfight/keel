@@ -231,7 +231,8 @@ function auditResource(options: {
   try {
     const stat = lstatSync(absolutePath);
     const findings: SkillAuditFinding[] = [];
-    /* v8 ignore next 10 -- the bounded inventory admits only regular files; this fail-closed branch protects a concurrent replacement. */
+    // Inventory admitted a regular file, but audit must fail closed if a
+    // concurrent replacement changes its type before content inspection.
     if (!stat.isFile()) {
       return [
         {

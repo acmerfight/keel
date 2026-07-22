@@ -333,7 +333,7 @@ function listSkillResourceDirectory(options: {
           state: options.state,
         });
       } else {
-        /* v8 ignore else -- portable Skill fixtures can create files, directories, and symlinks; device/socket entries remain fail-closed. */
+        // Device and socket entries are not portable package resources.
         if (entry.isFile()) {
           options.state.resourcePaths.push(resourcePath);
         } else {
@@ -348,7 +348,7 @@ function listSkillResourceDirectory(options: {
       }
     }
   } catch {
-    /* v8 ignore next 7 -- a directory read can fail only after a successful open because of a concurrent filesystem or mount fault. */
+    // An opened directory can still fail while a mount or peer mutates it.
     options.state.findings.push({
       severity: "blocker",
       code: "resource_unreadable",
@@ -456,7 +456,8 @@ function decodeSkillBytes(skillFilePath: string, bytes: Uint8Array): string {
 }
 
 function binarySkillResourceError(relativePath: string): WorkflowSkillError {
-  /* v8 ignore next 2 -- audit blocks non-assets binaries; the fallback wording only protects a concurrent replacement after re-audit. */
+  // Re-audit normally blocks binary text resources. Keep the broader wording
+  // for a text resource replaced concurrently before its authorized read.
   const kind = relativePath.startsWith("assets/")
     ? "binary asset"
     : "binary resource";
@@ -484,7 +485,7 @@ function readSkillResourceText(
     ) {
       throw binarySkillResourceError(relativePath);
     }
-    /* v8 ignore next 4 -- the package is re-audited immediately before this read; only concurrent growth can cross the text limit here. */
+    // Re-audit bounded the resource, but the opened identity may have grown.
     if (reportedSize > MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES) {
       throw new WorkflowSkillError(
         `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} is too large to read as text (${reportedSize} bytes; limit ${MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES} bytes).`,
@@ -493,7 +494,7 @@ function readSkillResourceText(
     const bytes = Buffer.allocUnsafe(reportedSize);
     const bytesRead = readSync(fd, bytes, 0, bytes.length, 0);
     const content = bytes.subarray(0, bytesRead);
-    /* v8 ignore next 3 -- the package is re-audited immediately before this read; only concurrent replacement can introduce later binary bytes. */
+    // The complete read catches replacements whose sampled prefix stayed text.
     if (hasBinaryControlBytes(content)) {
       throw binarySkillResourceError(relativePath);
     }
@@ -502,7 +503,6 @@ function readSkillResourceText(
         .decode(content)
         .trimEnd();
     } catch {
-      /* v8 ignore next 1 -- the package is re-audited immediately before this read; only concurrent replacement can introduce invalid UTF-8. */
       throw binarySkillResourceError(relativePath);
     }
   } finally {
@@ -613,7 +613,8 @@ function readSkillFile(
         auditMessage,
       );
     }
-    /* v8 ignore else: filesystem operations throw errno exceptions; unexpected implementation faults must retain their original identity. */
+    // Filesystem failures become stable package diagnostics. Programming
+    // faults retain their identity for the outer runtime boundary.
     if (isErrnoException(error)) {
       const auditMessage =
         "Skill package files could not be read during deterministic validation";
@@ -622,7 +623,6 @@ function readSkillFile(
         auditMessage,
       );
     }
-    /* v8 ignore next: preserve unexpected implementation faults for the runtime boundary. */
     throw error;
   }
 }
@@ -753,7 +753,7 @@ function invalidPackageAuditMessage(error: WorkflowSkillError): string {
   if (message.includes("must be a regular SKILL.md")) {
     return "SKILL.md must be a regular file";
   }
-  /* v8 ignore next 2 -- discovery checks SKILL.md existence immediately before reading; this only catches a concurrent deletion. */
+  // Discovery may observe the file immediately before a concurrent deletion.
   if (message.includes("was not found")) {
     return "SKILL.md is missing from the package";
   }
@@ -862,7 +862,7 @@ export function discoverSkillCatalog(
         }
         skills.push({ descriptor: read.descriptor, root });
       } catch (error) {
-        /* v8 ignore next 3: unexpected filesystem/runtime faults must propagate. */
+        // Package validation is catalog data; implementation faults are not.
         if (!(error instanceof WorkflowSkillError)) throw error;
         recordInvalidPackage(
           root,

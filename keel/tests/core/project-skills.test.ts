@@ -641,6 +641,37 @@ describe("project skills catalog", () => {
     }
   });
 
+  test(`Given SKILL.md contains invalid UTF-8 beyond the bounded binary sample,
+    When the project catalog decodes the complete package document,
+    Then the package is blocked with the stable text-validation diagnostic`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-late-invalid-utf8-"),
+    );
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    await mkdir(skillDirectory, { recursive: true });
+    const bytes = Buffer.alloc(4_097, 0x61);
+    Buffer.from(
+      "---\nname: review\ndescription: Review changes.\n---\n",
+    ).copy(bytes);
+    bytes[4_096] = 0x80;
+    await writeFile(join(skillDirectory, "SKILL.md"), bytes);
+
+    try {
+      const catalog = discoverSkillCatalog({ workspace });
+
+      expect(catalog.skills).toEqual([]);
+      expect(catalog.audits[0]?.findings).toContainEqual(
+        expect.objectContaining({
+          severity: "blocker",
+          code: "invalid_package",
+          message: "SKILL.md must be valid UTF-8 text without binary control bytes",
+        }),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a safe cataloged Skill gains a secret before activation,
     When the user activates that existing descriptor,
     Then Keel re-audits and blocks it before returning changed content`, async () => {
