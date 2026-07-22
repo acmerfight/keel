@@ -32,13 +32,26 @@ function runtime(home: string): {
 
 async function importSkillUserConfigWithFs(
   overrides: Readonly<{
-    renameSync: (
+    mkdirSync?: (
+      path: Parameters<typeof import("node:fs").mkdirSync>[0],
+      options?: Parameters<typeof import("node:fs").mkdirSync>[1],
+    ) => ReturnType<typeof import("node:fs").mkdirSync>;
+    renameSync?: (
       oldPath: Parameters<typeof import("node:fs").renameSync>[0],
       newPath: Parameters<typeof import("node:fs").renameSync>[1],
     ) => void;
-    statSync: (
+    rmSync?: (
+      path: Parameters<typeof import("node:fs").rmSync>[0],
+      options?: Parameters<typeof import("node:fs").rmSync>[1],
+    ) => void;
+    statSync?: (
       path: Parameters<typeof import("node:fs").statSync>[0],
     ) => ReturnType<typeof import("node:fs").statSync>;
+    writeFileSync?: (
+      file: Parameters<typeof import("node:fs").writeFileSync>[0],
+      data: Parameters<typeof import("node:fs").writeFileSync>[1],
+      options?: Parameters<typeof import("node:fs").writeFileSync>[2],
+    ) => void;
   }>,
 ) {
   const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -269,6 +282,285 @@ describe("Workflow Skill Control Races", () => {
       );
     } finally {
       await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a live process owns the config lock,
+    When the user updates a Skill control after the wait deadline,
+    Then the writer preserves the live lock and reports bounded contention`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-skill-lock-live-owner-"));
+    const lockPath = join(home, "skills.lock");
+    const owner = {
+      pid: process.pid,
+      token: "00000000-0000-4000-8000-000000000005",
+    };
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), `${JSON.stringify(owner)}\n`);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(5_001);
+    const skillUserConfig = await importSkillUserConfigWithFs({});
+
+    try {
+      // When / Then
+      expect(() =>
+        skillUserConfig.setWorkflowSkillEnabled(
+          runtime(home),
+          "repo:root:review",
+          false,
+        ),
+      ).toThrow(
+        `Error: workflow skill config ${join(home, "skills.json")} is busy; retry after the other Keel process finishes.`,
+      );
+      expect(
+        JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8")),
+      ).toEqual(owner);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a recent ownerless config lock is still publishing its owner record,
+    When the user updates a Skill control,
+    Then the writer preserves the publishing lock and reports bounded contention`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-lock-owner-publish-"),
+    );
+    const lockPath = join(home, "skills.lock");
+    await mkdir(lockPath);
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      now = 5_001;
+      return "timed-out";
+    });
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const skillUserConfig = await importSkillUserConfigWithFs({});
+
+    try {
+      // When / Then
+      expect(() =>
+        skillUserConfig.setWorkflowSkillEnabled(
+          runtime(home),
+          "repo:root:review",
+          false,
+        ),
+      ).toThrow(
+        `Error: workflow skill config ${join(home, "skills.json")} is busy; retry after the other Keel process finishes.`,
+      );
+      expect(actualFs.statSync(lockPath).isDirectory()).toBe(true);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an ownerless config lock disappears during freshness inspection,
+    When the user updates a Skill control,
+    Then the writer retries and persists the requested control`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-skill-lock-age-vanish-"));
+    const lockPath = join(home, "skills.lock");
+    await mkdir(lockPath);
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let lockInspected = false;
+    const skillUserConfig = await importSkillUserConfigWithFs({
+      statSync: (path) => {
+        if (String(path) === lockPath && !lockInspected) {
+          lockInspected = true;
+          actualFs.rmSync(lockPath, { recursive: true, force: true });
+          throw nodeError("ENOENT");
+        }
+        return actualFs.statSync(path);
+      },
+    });
+
+    try {
+      // When
+      const result = skillUserConfig.setWorkflowSkillEnabled(
+        runtime(home),
+        "repo:root:review",
+        false,
+      );
+
+      // Then
+      expect(result.changed).toBe(true);
+      expect(
+        JSON.parse(await readFile(join(home, "skills.json"), "utf8")),
+      ).toMatchObject({ disabledPackageIds: ["repo:root:review"] });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an ownerless config lock becomes unreadable during freshness inspection,
+    When the user updates a Skill control,
+    Then the writer fails closed with the inspection error`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-skill-lock-age-denied-"));
+    const lockPath = join(home, "skills.lock");
+    await mkdir(lockPath);
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const skillUserConfig = await importSkillUserConfigWithFs({
+      statSync: (path) => {
+        if (String(path) === lockPath) throw nodeError("EACCES");
+        return actualFs.statSync(path);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        skillUserConfig.setWorkflowSkillEnabled(
+          runtime(home),
+          "repo:root:review",
+          false,
+        ),
+      ).toThrow(
+        `Error: cannot inspect workflow skill config lock ${lockPath}: EACCES during workflow Skill control race`,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user home denies config lock creation,
+    When the user updates a Skill control,
+    Then the writer reports the acquisition failure`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-lock-acquire-denied-"),
+    );
+    const lockPath = join(home, "skills.lock");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const skillUserConfig = await importSkillUserConfigWithFs({
+      mkdirSync: (path, options) => {
+        if (String(path) === lockPath) throw nodeError("EACCES");
+        return actualFs.mkdirSync(path, options);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        skillUserConfig.setWorkflowSkillEnabled(
+          runtime(home),
+          "repo:root:review",
+          false,
+        ),
+      ).toThrow(
+        `Error: cannot acquire workflow skill config lock ${lockPath}: EACCES during workflow Skill control race`,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given config lock owner publication fails after exclusive acquisition,
+    When the user updates a Skill control,
+    Then the writer removes the unpublished lock and reports initialization failure`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-skill-lock-owner-denied-"));
+    const lockPath = join(home, "skills.lock");
+    const ownerPath = join(lockPath, "owner.json");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const skillUserConfig = await importSkillUserConfigWithFs({
+      writeFileSync: (file, data, options) => {
+        if (String(file) === ownerPath) throw nodeError("EACCES");
+        actualFs.writeFileSync(file, data, options);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        skillUserConfig.setWorkflowSkillEnabled(
+          runtime(home),
+          "repo:root:review",
+          false,
+        ),
+      ).toThrow(
+        `Error: cannot initialize workflow skill config lock ${lockPath}: EACCES during workflow Skill control race`,
+      );
+      expect(
+        actualFs.statSync(lockPath, { throwIfNoEntry: false }),
+      ).toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given another writer replaces the config lock before release,
+    When the current writer finishes a Skill control update,
+    Then it preserves the replacement lock generation`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-lock-release-replaced-"),
+    );
+    const lockPath = join(home, "skills.lock");
+    const configPath = join(home, "skills.json");
+    const replacementToken = "00000000-0000-4000-8000-000000000004";
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const skillUserConfig = await importSkillUserConfigWithFs({
+      renameSync: (oldPath, newPath) => {
+        actualFs.renameSync(oldPath, newPath);
+        if (String(newPath) !== configPath) return;
+        actualFs.rmSync(lockPath, { recursive: true, force: true });
+        actualFs.mkdirSync(lockPath, { mode: 0o700 });
+        actualFs.writeFileSync(
+          join(lockPath, "owner.json"),
+          `${JSON.stringify({ pid: process.pid, token: replacementToken })}\n`,
+          { encoding: "utf8", mode: 0o600 },
+        );
+      },
+    });
+
+    try {
+      // When
+      const result = skillUserConfig.setWorkflowSkillEnabled(
+        runtime(home),
+        "repo:root:review",
+        false,
+      );
+
+      // Then
+      expect(result.changed).toBe(true);
+      expect(
+        JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8")),
+      ).toEqual({ pid: process.pid, token: replacementToken });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the filesystem denies release of an owned config lock,
+    When the user finishes a Skill control update,
+    Then the writer reports the release failure`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-skill-lock-release-denied-"),
+    );
+    const lockPath = join(home, "skills.lock");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const skillUserConfig = await importSkillUserConfigWithFs({
+      rmSync: (path, options) => {
+        if (String(path) === lockPath) throw nodeError("EACCES");
+        actualFs.rmSync(path, options);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        skillUserConfig.setWorkflowSkillEnabled(
+          runtime(home),
+          "repo:root:review",
+          false,
+        ),
+      ).toThrow(
+        `Error: cannot release workflow skill config lock ${lockPath}: EACCES during workflow Skill control race`,
+      );
+    } finally {
+      actualFs.rmSync(home, { recursive: true, force: true });
     }
   });
 

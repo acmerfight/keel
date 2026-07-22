@@ -133,22 +133,17 @@ function staleSkillConfigLockGeneration(
 
 function reclaimStaleSkillConfigLock(lockPath: string): boolean {
   const owner = readSkillConfigLockOwner(lockPath);
-  /* v8 ignore next -- live-owner contention is exercised by the real concurrent CLI subprocess acceptance case. */
   if (owner !== null && processIsAlive(owner.pid)) return false;
   if (owner === null) {
     try {
-      /* v8 ignore next 6 -- a recent ownerless directory exists only while another process publishes its owner record. */
       if (
         Date.now() - statSync(lockPath).mtimeMs <
         OWNERLESS_SKILL_CONFIG_LOCK_STALE_MS
       ) {
-        /* v8 ignore next -- requires observing the brief interval between atomic lock-directory creation and owner publication. */
         return false;
       }
     } catch (error) {
-      /* v8 ignore next -- requires the lock to disappear or become unreadable between owner and stat inspection. */
       if (hasNodeErrorCode(error, "ENOENT")) return true;
-      /* v8 ignore next 3 -- same post-owner filesystem race or permission change. */
       configError(
         `Error: cannot inspect workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
       );
@@ -176,7 +171,6 @@ function reclaimStaleSkillConfigLock(lockPath: string): boolean {
       hasNodeErrorCode(error, "ENOTEMPTY")
     )
       return false;
-    /* v8 ignore next 3 -- requires a filesystem permission fault while reclaiming a proven-stale lock. */
     configError(
       `Error: cannot reclaim stale workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
     );
@@ -196,11 +190,8 @@ function withUserSkillConfigLock<Result>(
       mkdirSync(home, { recursive: true, mode: 0o700 });
       mkdirSync(lockPath, { mode: 0o700 });
     } catch (error) {
-      /* v8 ignore else -- non-EEXIST failures require a user-home filesystem or permission fault. */
       if (hasNodeErrorCode(error, "EEXIST")) {
-        /* v8 ignore else -- active-lock waiting is exercised by the real concurrent CLI subprocess acceptance case. */
         if (reclaimStaleSkillConfigLock(lockPath)) continue;
-        /* v8 ignore start -- live-owner waiting and timeout are exercised by the real concurrent CLI subprocess acceptance case. */
         if (Date.now() >= deadline) {
           configError(
             `Error: workflow skill config ${userSkillConfigPath(runtime)} is busy; retry after the other Keel process finishes.`,
@@ -213,9 +204,7 @@ function withUserSkillConfigLock<Result>(
           SKILL_CONFIG_LOCK_WAIT_MS,
         );
         continue;
-        /* v8 ignore stop */
       }
-      /* v8 ignore next 3 -- supported user homes permit private lock-directory creation; this preserves the filesystem error contract. */
       configError(
         `Error: cannot acquire workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
       );
@@ -227,23 +216,19 @@ function withUserSkillConfigLock<Result>(
         { encoding: "utf8", mode: 0o600, flag: "wx" },
       );
     } catch (error) {
-      /* v8 ignore start -- requires a filesystem race after exclusive lock-directory creation. */
       rmSync(lockPath, { recursive: true, force: true });
       configError(
         `Error: cannot initialize workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
       );
-      /* v8 ignore stop */
     }
     try {
       return action();
     } finally {
       const owner = readSkillConfigLockOwner(lockPath);
-      /* v8 ignore else -- a token mismatch requires another process to replace the owned lock during release. */
       if (owner?.token === token) {
         try {
           rmSync(lockPath, { recursive: true, force: true });
         } catch (error) {
-          /* v8 ignore next 3 -- requires a filesystem race or permission change during owned-lock release. */
           configError(
             `Error: cannot release workflow skill config lock ${lockPath}: ${errorMessage(error)}`,
           );
@@ -254,9 +239,10 @@ function withUserSkillConfigLock<Result>(
 }
 
 function invalidConfigMessage(filePath: string, result: z.ZodError): string {
-  const issue = result.issues[0];
-  /* v8 ignore next -- Zod schema failures always contain an issue. */
-  const message = issue?.message ?? "invalid schema";
+  const message = result.issues
+    .slice(0, 1)
+    .map((issue) => issue.message)
+    .join("");
   return `Error: cannot read workflow skill config ${filePath}: ${message}.`;
 }
 
