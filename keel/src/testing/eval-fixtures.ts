@@ -1,24 +1,15 @@
 import { writeFile } from "node:fs/promises";
 import type { RunReport } from "../eval/report-schema.ts";
-
-type EvalTrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
+import {
+  type EvalResultLine,
+  type EvalTrialCondition,
+  type EvalTrialOutcome,
+  evalResultRequirement,
+  evalResultVerdict,
+} from "../eval/result-schema.ts";
 
 export type EvalRunReport = RunReport;
-
-export interface EvalResultLine {
-  readonly schemaVersion: 2;
-  readonly timestamp: string;
-  readonly keelVersion: string;
-  readonly taskId: string;
-  readonly trial: number;
-  readonly condition: "standard" | "memory_disabled" | "memory_enabled";
-  readonly requiredToPass: boolean;
-  readonly pass: boolean;
-  readonly outcome: EvalTrialOutcome;
-  readonly wallMs: number;
-  readonly report?: EvalRunReport;
-  readonly transcriptPath?: string;
-}
+export type { EvalResultLine };
 
 export interface EvalRunReportOptions {
   readonly humanInterventions?: number;
@@ -29,16 +20,23 @@ export interface EvalRunReportOptions {
   readonly costUsd?: number;
 }
 
-export interface EvalResultLineOptions {
+interface EvalResultLineOptionsBase {
   readonly taskId: string;
   readonly trial: number;
-  readonly condition?: "standard" | "memory_disabled" | "memory_enabled";
-  readonly pass: boolean;
-  readonly outcome?: EvalTrialOutcome;
+  readonly condition?: EvalTrialCondition;
   readonly wallMs?: number;
   readonly report?: EvalRunReport;
   readonly transcriptPath?: string;
 }
+
+export type EvalResultLineOptions = EvalResultLineOptionsBase &
+  (
+    | { readonly pass: true; readonly outcome?: never }
+    | {
+        readonly pass: false;
+        readonly outcome?: Exclude<EvalTrialOutcome, "verified">;
+      }
+  );
 
 export function evalRunReport(
   options: EvalRunReportOptions = {},
@@ -159,17 +157,16 @@ export function evalRunReport(
 
 export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
   const condition = options.condition ?? "standard";
+  const outcome =
+    options.pass === true ? "verified" : (options.outcome ?? "verify_failed");
   return {
     schemaVersion: 2,
     timestamp: "2026-06-22T00:00:00.000Z",
     keelVersion: "0.0.1",
     taskId: options.taskId,
     trial: options.trial,
-    condition,
-    requiredToPass: condition !== "memory_disabled",
-    pass: options.pass,
-    outcome:
-      options.outcome ?? (options.pass === true ? "verified" : "verify_failed"),
+    ...evalResultRequirement(condition),
+    ...evalResultVerdict(outcome),
     wallMs: options.wallMs ?? 1000,
     ...(options.report !== undefined ? { report: options.report } : {}),
     ...(options.transcriptPath !== undefined

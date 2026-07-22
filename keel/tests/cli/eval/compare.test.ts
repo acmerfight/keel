@@ -202,6 +202,95 @@ describe("CLI Eval", () => {
     }
   });
 
+  test.each([
+    {
+      contradiction: "a passing trial has a crashed outcome",
+      fields: {
+        condition: "standard",
+        requiredToPass: true,
+        pass: true,
+        outcome: "crashed",
+      },
+    },
+    {
+      contradiction: "a verified trial is marked as failed",
+      fields: {
+        condition: "standard",
+        requiredToPass: true,
+        pass: false,
+        outcome: "verified",
+      },
+    },
+    {
+      contradiction: "a standard trial is not required to pass",
+      fields: {
+        condition: "standard",
+        requiredToPass: false,
+        pass: true,
+        outcome: "verified",
+      },
+    },
+    {
+      contradiction: "a memory-disabled trial is required to pass",
+      fields: {
+        condition: "memory_disabled",
+        requiredToPass: true,
+        pass: false,
+        outcome: "verify_failed",
+      },
+    },
+  ])(
+    `Given an eval result where $contradiction,
+    When user compares it with a current result file,
+    Then the CLI rejects the contradictory result line`,
+    async ({ fields }) => {
+      // Given
+      const root = await mkdtemp(
+        join(tmpdir(), "keel-eval-compare-contradictory-"),
+      );
+      const baseFile = join(root, "base.jsonl");
+      const headFile = join(root, "head.jsonl");
+      await writeFile(
+        baseFile,
+        `${JSON.stringify({
+          schemaVersion: 2,
+          timestamp: "2026-06-22T00:00:00.000Z",
+          keelVersion: "0.0.1",
+          taskId: "contradictory-result",
+          trial: 1,
+          ...fields,
+          wallMs: 1000,
+        })}\n`,
+        "utf8",
+      );
+      await writeResultFile(headFile, [
+        resultLine({
+          taskId: "contradictory-result",
+          trial: 1,
+          pass: true,
+        }),
+      ]);
+
+      try {
+        // When
+        const result = await runCli(
+          ["eval", "compare", "--base", baseFile, "--head", headFile],
+          { cwd: root, env: { KEEL_PROVIDER: "unknown" } },
+        );
+
+        // Then
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(baseFile);
+        expect(result.stderr).toContain(
+          "line 1 is not a schemaVersion 2 eval result",
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   test(`Given an eval result contains an obsolete v1 run report,
     When user compares it with a current result file,
     Then the CLI rejects the old report schema`, async () => {
