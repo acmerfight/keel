@@ -21,6 +21,13 @@ import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import { type RunReport, runReportSchema } from "./report-schema.ts";
 import {
+  type EvalResultLine,
+  type EvalTrialCondition,
+  type EvalTrialOutcome,
+  evalResultRequirement,
+  evalResultVerdict,
+} from "./result-schema.ts";
+import {
   type EvalTask,
   loadEvalTasks,
   type MemoryPairEvalTask,
@@ -46,13 +53,8 @@ function keelVersion(): string {
   return packageJsonSchema.parse(JSON.parse(raw)).version;
 }
 
-// Trial outcomes separate harness failures (timeout, crashed) from graded
-// failures (verify_failed) so a broken environment never reads as a bad agent.
-type TrialOutcome = "verified" | "verify_failed" | "timeout" | "crashed";
-type TrialCondition = "standard" | "memory_disabled" | "memory_enabled";
-
 interface TrialResult {
-  readonly outcome: TrialOutcome;
+  readonly outcome: EvalTrialOutcome;
   readonly wallMs: number;
   readonly report?: RunReport;
   readonly transcriptPath?: string;
@@ -205,7 +207,7 @@ async function runTrialInWorkspace(
   task: EvalTask,
   cliEntry: string,
   selection: EvalProviderSelection,
-  condition: TrialCondition,
+  condition: EvalTrialCondition,
   workDir: string,
   metaDir: string,
   env: Readonly<NodeJS.ProcessEnv>,
@@ -420,21 +422,6 @@ async function checkTask(task: EvalTask): Promise<boolean> {
   });
 }
 
-interface ResultLine {
-  readonly schemaVersion: 2;
-  readonly timestamp: string;
-  readonly keelVersion: string;
-  readonly taskId: string;
-  readonly trial: number;
-  readonly condition: TrialCondition;
-  readonly requiredToPass: boolean;
-  readonly pass: boolean;
-  readonly outcome: TrialOutcome;
-  readonly wallMs: number;
-  readonly report?: RunReport;
-  readonly transcriptPath?: string;
-}
-
 interface EvalProviderSelection {
   readonly providerId?: ProviderId;
   readonly model?: string;
@@ -468,7 +455,7 @@ function ensureResultOutputFile(outFile: string): boolean {
 
 function appendResultLines(
   outFile: string,
-  lines: readonly ResultLine[],
+  lines: readonly EvalResultLine[],
 ): boolean {
   if (!ensureResultOutputDirectory(outFile)) return false;
   try {
@@ -490,19 +477,17 @@ function trialResultLine(
   version: string,
   task: EvalTask,
   trial: number,
-  condition: TrialCondition,
+  condition: EvalTrialCondition,
   result: TrialResult,
-): ResultLine {
+): EvalResultLine {
   return {
     schemaVersion: 2,
     timestamp: new Date().toISOString(),
     keelVersion: version,
     taskId: task.id,
     trial,
-    condition,
-    requiredToPass: condition !== "memory_disabled",
-    pass: result.outcome === "verified",
-    outcome: result.outcome,
+    ...evalResultRequirement(condition),
+    ...evalResultVerdict(result.outcome),
     wallMs: result.wallMs,
     ...(result.report !== undefined ? { report: result.report } : {}),
     ...(result.transcriptPath !== undefined

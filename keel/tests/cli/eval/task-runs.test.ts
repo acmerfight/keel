@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { evalResultLineSchema } from "../../../src/eval/result-schema.ts";
 import {
   createEvalDir,
   createTask,
@@ -12,22 +13,22 @@ import {
   z,
 } from "./fixtures.ts";
 
-const pairedMemoryResultSchema = z.object({
-  schemaVersion: z.literal(2),
-  taskId: z.string(),
-  trial: z.number().int().positive(),
-  condition: z.enum(["memory_disabled", "memory_enabled"]),
-  requiredToPass: z.boolean(),
-  pass: z.boolean(),
-  transcriptPath: z.string(),
-  report: z.object({
-    memory: z.object({
-      enabled: z.boolean(),
-      loadedIds: z.array(z.string()),
-      renderedBytes: z.number().nonnegative(),
-    }),
-  }),
-});
+function parsePairedMemoryResult(input: unknown) {
+  const result = evalResultLineSchema.parse(input);
+  if (
+    result.condition === "standard" ||
+    result.transcriptPath === undefined ||
+    result.report === undefined
+  ) {
+    throw new Error("expected a paired memory result with artifacts");
+  }
+  return {
+    ...result,
+    condition: result.condition,
+    transcriptPath: result.transcriptPath,
+    report: result.report,
+  };
+}
 
 const transcriptHeaderSchema = z.object({
   schemaVersion: z.literal(1),
@@ -86,7 +87,7 @@ describe("CLI Eval", () => {
       const lines = (await readFile(outFile, "utf8"))
         .trimEnd()
         .split("\n")
-        .map((line) => pairedMemoryResultSchema.parse(JSON.parse(line)));
+        .map((line) => parsePairedMemoryResult(JSON.parse(line)));
       expect(lines).toHaveLength(2);
       expect(lines).toMatchObject([
         {

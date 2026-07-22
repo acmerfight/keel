@@ -1,27 +1,12 @@
 import { readFileSync } from "node:fs";
-import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import { type RunReport, runReportSchema } from "./report-schema.ts";
-
-const outcomes = ["verified", "verify_failed", "timeout", "crashed"] as const;
-
-const evalResultLineSchema = z.object({
-  schemaVersion: z.literal(2),
-  timestamp: z.string(),
-  keelVersion: z.string(),
-  taskId: z.string(),
-  trial: z.number().int().positive(),
-  condition: z.enum(["standard", "memory_disabled", "memory_enabled"]),
-  requiredToPass: z.boolean(),
-  pass: z.boolean(),
-  outcome: z.enum(outcomes),
-  wallMs: z.number().nonnegative(),
-  report: runReportSchema.optional(),
-  transcriptPath: z.string().optional(),
-});
-
-type ResultLine = z.infer<typeof evalResultLineSchema>;
-type TrialOutcome = z.infer<typeof evalResultLineSchema>["outcome"];
+import type { RunReport } from "./report-schema.ts";
+import {
+  type EvalResultLine,
+  type EvalTrialOutcome,
+  evalResultLineSchema,
+  evalTrialOutcomes,
+} from "./result-schema.ts";
 
 interface MetricSummary {
   readonly count: number;
@@ -29,7 +14,7 @@ interface MetricSummary {
 }
 
 interface OutcomeCount {
-  readonly outcome: TrialOutcome;
+  readonly outcome: EvalTrialOutcome;
   readonly count: number;
 }
 
@@ -55,7 +40,7 @@ export interface EvalCompareCommandArgs {
   readonly headFile: string;
 }
 
-function readEvalResultLines(filePath: string): readonly ResultLine[] {
+function readEvalResultLines(filePath: string): readonly EvalResultLine[] {
   let raw: string;
   try {
     raw = readFileSync(filePath, "utf8");
@@ -65,7 +50,7 @@ function readEvalResultLines(filePath: string): readonly ResultLine[] {
     );
   }
 
-  const results: ResultLine[] = [];
+  const results: EvalResultLine[] = [];
   for (const [index, line] of raw.split(/\r?\n/u).entries()) {
     if (line.trim() === "") continue;
 
@@ -95,9 +80,9 @@ function readEvalResultLines(filePath: string): readonly ResultLine[] {
 }
 
 function groupByTask(
-  lines: readonly ResultLine[],
-): ReadonlyMap<string, readonly ResultLine[]> {
-  const groups = new Map<string, ResultLine[]>();
+  lines: readonly EvalResultLine[],
+): ReadonlyMap<string, readonly EvalResultLine[]> {
+  const groups = new Map<string, EvalResultLine[]>();
   for (const line of lines) {
     const groupId =
       line.condition === "standard"
@@ -120,7 +105,7 @@ function summarizeMetric(values: readonly number[]): MetricSummary {
 }
 
 function reportMetric(
-  lines: readonly ResultLine[],
+  lines: readonly EvalResultLine[],
   read: (report: RunReport) => number,
 ): MetricSummary {
   const values: number[] = [];
@@ -132,10 +117,10 @@ function reportMetric(
 
 function summarizeTask(
   taskId: string,
-  lines: readonly ResultLine[],
+  lines: readonly EvalResultLine[],
 ): TaskSummary {
   const passes = lines.filter((line) => line.pass).length;
-  const outcomesForTask = outcomes.map((outcome) => ({
+  const outcomesForTask = evalTrialOutcomes.map((outcome) => ({
     outcome,
     count: lines.filter((line) => line.outcome === outcome).length,
   }));
@@ -170,8 +155,8 @@ function summarizeTask(
 }
 
 function sortedTaskIds(
-  baseGroups: ReadonlyMap<string, readonly ResultLine[]>,
-  headGroups: ReadonlyMap<string, readonly ResultLine[]>,
+  baseGroups: ReadonlyMap<string, readonly EvalResultLine[]>,
+  headGroups: ReadonlyMap<string, readonly EvalResultLine[]>,
 ): readonly string[] {
   const taskIds = new Set<string>();
   for (const taskId of baseGroups.keys()) taskIds.add(taskId);

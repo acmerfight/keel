@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { z } from "zod";
-import { runReportSchema } from "../../../src/eval/report-schema.ts";
+import { evalResultLineSchema } from "../../../src/eval/result-schema.ts";
 import { runEvalCommand } from "../../../src/eval/run.ts";
 
 export {
@@ -18,17 +18,7 @@ export {
   writeFile,
   z,
 };
-export const resultLineSchema = z.object({
-  schemaVersion: z.literal(2),
-  taskId: z.string(),
-  trial: z.number().int().positive(),
-  condition: z.enum(["standard", "memory_disabled", "memory_enabled"]),
-  requiredToPass: z.boolean(),
-  pass: z.boolean(),
-  outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
-  report: runReportSchema.optional(),
-  transcriptPath: z.string().optional(),
-});
+export const resultLineSchema = evalResultLineSchema;
 
 export interface TaskFixture {
   readonly prompt: string;

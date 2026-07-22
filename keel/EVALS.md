@@ -179,9 +179,11 @@ Each standard trial appends one JSON line:
 - `outcome` separates harness failures from graded failures: `verified` /
   `verify_failed` are the agent's score; `timeout` / `crashed` mean the
   environment or harness broke and the trial must not be read as agent
-  quality.
+  quality. `pass` is true exactly when `outcome` is `verified`; compare rejects
+  a current-schema result line when those fields contradict each other.
 - `condition` is `standard`, `memory_disabled`, or `memory_enabled`.
-  `requiredToPass` states whether verification is part of the task gate. A
+  `requiredToPass` is false exactly for `memory_disabled` and true for the
+  other conditions; compare also rejects lines that contradict this rule. A
   memory-paired trial appends two lines in disabled/enabled order. Each line
   carries the ordinary report, so memory IDs, bytes, model usage, cost, and
   timing remain inspectable without a second result format.
