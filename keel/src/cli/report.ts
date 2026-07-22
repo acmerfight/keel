@@ -8,7 +8,10 @@ import type {
 } from "../skills/model.ts";
 import type { AgentMemoryOperation } from "../tools/memory.ts";
 import type { EndEvent } from "./output.ts";
-import type { ActiveProjectMemoryEntry } from "./project-memory.ts";
+import type {
+  ActiveProjectMemoryEntry,
+  ProjectMemoryScope,
+} from "./project-memory.ts";
 import {
   accountModelOperations,
   type RunReportContextCompaction,
@@ -36,16 +39,37 @@ interface RunReportInput {
   readonly goalOutcome?: RunReportGoalOutcome;
 }
 
-export interface RunReportMemory {
-  readonly enabled: boolean;
-  readonly scope: { readonly kind: "project"; readonly id: string } | null;
-  readonly loadedIds: readonly string[];
-  readonly loadedEntries: readonly RunReportMemoryEntry[];
-  readonly renderedBytes: number;
-  readonly estimatedTokens?: number;
-  readonly operations: readonly RunReportMemoryOperation[];
-  readonly error?: string;
-}
+export type RunReportMemory =
+  | {
+      readonly status: "disabled";
+      readonly scope: null;
+      readonly loadedIds: readonly [];
+      readonly loadedEntries: readonly [];
+      readonly renderedBytes: 0;
+      readonly estimatedTokens: 0;
+      readonly operations: readonly [];
+      readonly error?: never;
+    }
+  | {
+      readonly status: "available";
+      readonly scope: ProjectMemoryScope;
+      readonly loadedIds: readonly string[];
+      readonly loadedEntries: readonly RunReportMemoryEntry[];
+      readonly renderedBytes: number;
+      readonly estimatedTokens: number;
+      readonly operations: readonly RunReportMemoryOperation[];
+      readonly error?: never;
+    }
+  | {
+      readonly status: "error";
+      readonly scope: ProjectMemoryScope | null;
+      readonly loadedIds: readonly string[];
+      readonly loadedEntries: readonly RunReportMemoryEntry[];
+      readonly renderedBytes: number;
+      readonly estimatedTokens: number;
+      readonly operations: readonly RunReportMemoryOperation[];
+      readonly error: string;
+    };
 
 export interface RunReportMemoryEntry {
   readonly id: string;
@@ -131,7 +155,7 @@ export type RunReportGoalOutcome =
     };
 
 interface RunReport {
-  readonly schemaVersion: 17;
+  readonly schemaVersion: 18;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -194,7 +218,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
       ? input.end.cost.budget.overshootUsd
       : 0;
   const report: RunReport = {
-    schemaVersion: 17,
+    schemaVersion: 18,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,

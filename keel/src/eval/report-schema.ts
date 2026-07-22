@@ -203,40 +203,62 @@ const runReportMemoryOperationSchema = z.union([
   ]),
 ]);
 
+const runReportMemoryEntrySchema = z.object({
+  id: z.string(),
+  status: z.enum(["current", "stale"]),
+  source: z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("user_explicit"),
+      channel: z.enum(["agent", "cli"]),
+      candidateId: z.null(),
+    }),
+    z.object({
+      type: z.literal("user_approved"),
+      channel: z.enum(["cli", "interactive"]),
+      candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
+    }),
+  ]),
+  createdAt: z.string(),
+  lastVerifiedAt: z.string(),
+  supersedes: z.array(z.string()),
+  supersededBy: z.null(),
+  reviewAfter: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+});
+
+const loadedMemoryReportShape = {
+  loadedIds: z.array(z.string()),
+  loadedEntries: z.array(runReportMemoryEntrySchema),
+  renderedBytes: z.number().int().nonnegative(),
+  estimatedTokens: z.number().int().nonnegative(),
+  operations: z.array(runReportMemoryOperationSchema),
+};
+
 const runReportMemorySchema = z
-  .object({
-    enabled: z.boolean(),
-    scope: projectMemoryScopeSchema.nullable(),
-    loadedIds: z.array(z.string()),
-    loadedEntries: z.array(
-      z.object({
-        id: z.string(),
-        status: z.enum(["current", "stale"]),
-        source: z.discriminatedUnion("type", [
-          z.object({
-            type: z.literal("user_explicit"),
-            channel: z.enum(["agent", "cli"]),
-            candidateId: z.null(),
-          }),
-          z.object({
-            type: z.literal("user_approved"),
-            channel: z.enum(["cli", "interactive"]),
-            candidateId: z.string().regex(/^cand_[0-9a-f-]+$/u),
-          }),
-        ]),
-        createdAt: z.string(),
-        lastVerifiedAt: z.string(),
-        supersedes: z.array(z.string()),
-        supersededBy: z.null(),
-        reviewAfter: z.string().nullable(),
-        expiresAt: z.string().nullable(),
-      }),
-    ),
-    renderedBytes: z.number().int().nonnegative(),
-    estimatedTokens: z.number().int().nonnegative().optional(),
-    operations: z.array(runReportMemoryOperationSchema),
-    error: z.string().optional(),
-  })
+  .discriminatedUnion("status", [
+    z.object({
+      status: z.literal("disabled"),
+      scope: z.null(),
+      loadedIds: z.tuple([]),
+      loadedEntries: z.tuple([]),
+      renderedBytes: z.literal(0),
+      estimatedTokens: z.literal(0),
+      operations: z.tuple([]),
+      error: z.never().optional(),
+    }),
+    z.object({
+      status: z.literal("available"),
+      scope: projectMemoryScopeSchema,
+      ...loadedMemoryReportShape,
+      error: z.never().optional(),
+    }),
+    z.object({
+      status: z.literal("error"),
+      scope: projectMemoryScopeSchema.nullable(),
+      ...loadedMemoryReportShape,
+      error: z.string(),
+    }),
+  ])
   .superRefine((memory, ctx) => {
     const entryIds = memory.loadedEntries.map((entry) => entry.id);
     if (new Set(entryIds).size !== entryIds.length) {
@@ -274,7 +296,7 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(17),
+  schemaVersion: z.literal(18),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),

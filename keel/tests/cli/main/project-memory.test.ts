@@ -283,7 +283,7 @@ describe("CLI project memory", () => {
 
       const report = JSON.parse(await readFile(reportPath, "utf8"));
       expect(report.memory).toEqual({
-        enabled: true,
+        status: "available",
         scope: { kind: "project", id: projectId },
         loadedIds: [memoryId],
         loadedEntries: [
@@ -1806,7 +1806,7 @@ describe("CLI project memory", () => {
         .map((line) => JSON.parse(line));
       expect(header.systemPrompt).not.toContain("Project memory");
       expect(JSON.parse(await readFile(reportPath, "utf8")).memory).toEqual({
-        enabled: false,
+        status: "disabled",
         scope: null,
         loadedIds: [],
         loadedEntries: [],
@@ -1926,7 +1926,7 @@ describe("CLI project memory", () => {
       expect(exitCode, fixture.stderr()).toBe(0);
       expect(fixture.stdout()).toContain("memory: disabled");
       expect(JSON.parse(await readFile(reportPath, "utf8")).memory).toEqual({
-        enabled: false,
+        status: "disabled",
         scope: null,
         loadedIds: [],
         loadedEntries: [],
@@ -2432,7 +2432,7 @@ describe("CLI project memory", () => {
       expect(fixture.stdout()).toContain("memory: error");
       expect(fixture.stdout()).toContain("invalid JSON");
       expect(JSON.parse(await readFile(reportPath, "utf8")).memory).toEqual({
-        enabled: true,
+        status: "error",
         scope: null,
         loadedIds: [],
         loadedEntries: [],
@@ -2466,7 +2466,7 @@ describe("CLI project memory", () => {
       expect(
         JSON.parse(await readFile(exitOnlyReportPath, "utf8")).memory,
       ).toEqual({
-        enabled: true,
+        status: "error",
         scope: null,
         loadedIds: [],
         loadedEntries: [],

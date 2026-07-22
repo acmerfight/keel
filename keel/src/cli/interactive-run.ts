@@ -1223,7 +1223,7 @@ async function runSessionCli(
       let exposedMemoryTokens = 0;
       const agentMemory = createAgentProjectMemory({ runtime, workspace });
       const disabledMemoryReport = (): RunReportMemory => ({
-        enabled: false,
+        status: "disabled",
         scope: null,
         loadedIds: [],
         loadedEntries: [],
@@ -1234,7 +1234,7 @@ async function runSessionCli(
       const loadedMemoryReport = (
         memory: RenderedProjectMemory,
       ): RunReportMemory => ({
-        enabled: true,
+        status: "available",
         scope: memory.scope,
         loadedIds: memory.entries.map((entry) => entry.id),
         loadedEntries: memory.entries.map(projectMemoryReportEntry),
@@ -1269,7 +1269,7 @@ async function runSessionCli(
         if (!cliArgs.memoryEnabled) return disabledMemoryReport();
         if (memoryLoadError !== undefined) {
           return {
-            enabled: true,
+            status: "error",
             scope: lastLoadedMemoryScope(),
             loadedIds: [...exposedMemoryEntries.keys()],
             loadedEntries: [...exposedMemoryEntries.values()],
@@ -1284,7 +1284,7 @@ async function runSessionCli(
           currentMemory ??= readMemory();
         } catch (error) {
           return {
-            enabled: true,
+            status: "error",
             scope: lastLoadedMemoryScope(),
             loadedIds: [...exposedMemoryEntries.keys()],
             loadedEntries: [...exposedMemoryEntries.values()],
@@ -1295,7 +1295,7 @@ async function runSessionCli(
           };
         }
         return {
-          enabled: true,
+          status: "available",
           scope: currentMemory.scope,
           loadedIds: [...exposedMemoryEntries.keys()],
           loadedEntries: [...exposedMemoryEntries.values()],
@@ -1310,11 +1310,12 @@ async function runSessionCli(
           return loadedMemoryReport(readMemory());
         } catch (error) {
           return {
-            enabled: true,
+            status: "error",
             scope: lastLoadedMemoryScope(),
             loadedIds: [],
             loadedEntries: [],
             renderedBytes: 0,
+            estimatedTokens: 0,
             operations: agentMemory.operations(),
             error: errorMessage(error),
           };

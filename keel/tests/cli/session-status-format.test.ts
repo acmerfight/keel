@@ -150,9 +150,9 @@ describe("CLI Session Status Format", () => {
     expect(formatted).not.toContain("...");
   });
 
-  test(`Given project memory is disabled, failed, or has no loaded metadata,
+  test(`Given project memory is disabled, failed, or available without entries,
     When the status snapshot is formatted,
-    Then each memory state is explicit without inventing scope or cost data`, () => {
+    Then each exact memory state is rendered without fallback data`, () => {
     // Given
     const base = {
       session: "scratch",
@@ -172,7 +172,7 @@ describe("CLI Session Status Format", () => {
     const disabled = formatSessionStatusSnapshot({
       ...base,
       memory: {
-        enabled: false,
+        status: "disabled",
         scope: null,
         loadedIds: [],
         loadedEntries: [],
@@ -184,23 +184,25 @@ describe("CLI Session Status Format", () => {
     const failed = formatSessionStatusSnapshot({
       ...base,
       memory: {
-        enabled: true,
+        status: "error",
         scope: null,
         loadedIds: [],
         loadedEntries: [],
         renderedBytes: 0,
+        estimatedTokens: 0,
         operations: [],
         error: "Error: invalid memory\nignored detail",
       },
     });
-    const unavailable = formatSessionStatusSnapshot({
+    const available = formatSessionStatusSnapshot({
       ...base,
       memory: {
-        enabled: true,
-        scope: null,
+        status: "available",
+        scope: { kind: "project", id: "project_status" },
         loadedIds: [],
         loadedEntries: [],
         renderedBytes: 0,
+        estimatedTokens: 0,
         operations: [],
       },
     });
@@ -210,8 +212,8 @@ describe("CLI Session Status Format", () => {
     expect(failed).toContain(
       "  memory: error - Error: invalid memory ignored detail\n",
     );
-    expect(unavailable).toContain(
-      "  memory: 0 loaded for project unknown; IDs: none; lifecycle: none (0 bytes, token estimate unavailable)\n",
+    expect(available).toContain(
+      "  memory: 0 loaded for project project_status; IDs: none; lifecycle: none (0 bytes, ~0 tokens)\n",
     );
   });
 

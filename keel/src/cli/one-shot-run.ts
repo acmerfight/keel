@@ -292,7 +292,7 @@ export async function runOneShotCli(
         return loadedMemory.prompt;
       };
       memoryReport = () => ({
-        enabled: true,
+        status: "available",
         scope: loadedMemory.scope,
         loadedIds: [...exposedMemoryEntries.keys()],
         loadedEntries: [...exposedMemoryEntries.values()],
@@ -302,7 +302,7 @@ export async function runOneShotCli(
       });
     } else {
       memoryReport = () => ({
-        enabled: false,
+        status: "disabled",
         scope: null,
         loadedIds: [],
         loadedEntries: [],
