@@ -63,15 +63,28 @@ interface SkillRoot {
   readonly priority: number;
 }
 
+interface ValidatedSkillRoot extends SkillRoot {
+  readonly canonicalPath: string;
+  readonly identity: string;
+}
+
+interface SkillPackageLocation {
+  readonly directoryPath: string;
+  readonly canonicalPath: string;
+  readonly identity: string;
+}
+
 interface ReadSkill {
   readonly descriptor: SkillDescriptor;
   readonly skill: WorkflowSkill;
   readonly findings: readonly SkillAuditFinding[];
+  readonly packageLocation: SkillPackageLocation;
 }
 
 interface CatalogedSkill {
   readonly descriptor: SkillDescriptor;
-  readonly root: SkillRoot;
+  readonly root: ValidatedSkillRoot;
+  readonly packageLocation: SkillPackageLocation;
 }
 
 interface SkillResourceInventory {
@@ -218,9 +231,18 @@ function discoveryRoots(options: SkillDiscoveryOptions): readonly SkillRoot[] {
   ];
 }
 
-function ensureSkillRootDirectory(root: SkillRoot): boolean {
+function filesystemIdentity(stat: {
+  readonly dev: number | bigint;
+  readonly ino: number | bigint;
+}): string {
+  return `${stat.dev}:${stat.ino}`;
+}
+
+function ensureSkillRootDirectory(
+  root: SkillRoot,
+): ValidatedSkillRoot | undefined {
   const status = skillRootStatus(root.rootPath);
-  if (status === "missing") return false;
+  if (status === "missing") return undefined;
   if (status === "not-directory") {
     throw new WorkflowSkillError(
       `Error: ${root.displayRoot} must be a local directory to load workflow skills.`,
@@ -230,12 +252,17 @@ function ensureSkillRootDirectory(root: SkillRoot): boolean {
     root.displayBasePath === undefined
       ? realpathSync(root.rootPath)
       : resolve(realpathSync(root.displayBasePath), LOCAL_SKILL_ROOT);
-  if (realpathSync(root.rootPath) !== expectedRootPath) {
+  const canonicalPath = realpathSync(root.rootPath);
+  if (canonicalPath !== expectedRootPath) {
     throw new WorkflowSkillError(
       `Error: ${root.displayRoot} must be a local directory to load workflow skills.`,
     );
   }
-  return true;
+  return {
+    ...root,
+    canonicalPath,
+    identity: filesystemIdentity(statSync(root.rootPath)),
+  };
 }
 
 function skillDisplayPath(root: SkillRoot, skillName: string): string {
@@ -407,55 +434,93 @@ function listSkillResourcePaths(
   };
 }
 
-function ensureRealPathInsideRoot(
-  rootPath: string,
-  skillFilePath: string,
-): void {
-  if (!fileResolvesInsideRoot(rootPath, skillFilePath)) {
-    throw new WorkflowSkillError(
-      "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.",
-    );
-  }
+function unsafeSkillFileError(): WorkflowSkillError {
+  return new WorkflowSkillError(
+    "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.",
+  );
 }
 
-function fileResolvesInsideRoot(rootPath: string, filePath: string): boolean {
-  const relativeRealPath = relative(
-    realpathSync(rootPath),
-    realpathSync(filePath),
-  );
+function canonicalPathIsInsideRoot(
+  canonicalRootPath: string,
+  canonicalFilePath: string,
+): boolean {
+  const relativeRealPath = relative(canonicalRootPath, canonicalFilePath);
   return !relativeRealPath.startsWith("..") && !isAbsolute(relativeRealPath);
 }
 
+function directoryMatchesLocation(location: SkillPackageLocation): boolean {
+  const currentStat = statSync(location.directoryPath);
+  return (
+    currentStat.isDirectory() &&
+    realpathSync(location.directoryPath) === location.canonicalPath &&
+    filesystemIdentity(currentStat) === location.identity
+  );
+}
+
+function rootMatchesValidation(root: ValidatedSkillRoot): boolean {
+  const currentStat = statSync(root.rootPath);
+  return (
+    currentStat.isDirectory() &&
+    realpathSync(root.rootPath) === root.canonicalPath &&
+    filesystemIdentity(currentStat) === root.identity
+  );
+}
+
+function captureSkillPackageLocation(
+  root: ValidatedSkillRoot,
+  skillName: string,
+): SkillPackageLocation {
+  if (!rootMatchesValidation(root)) {
+    throw unsafeSkillFileError();
+  }
+  const directoryPath = join(root.rootPath, skillName);
+  const canonicalPath = realpathSync(directoryPath);
+  const directoryStat = statSync(directoryPath);
+  if (
+    !canonicalPathIsInsideRoot(root.canonicalPath, canonicalPath) ||
+    !directoryStat.isDirectory()
+  ) {
+    throw unsafeSkillFileError();
+  }
+  return {
+    directoryPath,
+    canonicalPath,
+    identity: filesystemIdentity(directoryStat),
+  };
+}
+
 function assertOpenedFileInsideRoot(options: {
-  readonly rootPath: string;
+  readonly packageLocation: SkillPackageLocation;
   readonly filePath: string;
   readonly fd: number;
   readonly unsafeError: () => WorkflowSkillError;
 }): void {
   const pathStat = lstatSync(options.filePath);
   const openedStat = fstatSync(options.fd);
-  const pathIdentity = `${pathStat.dev}:${pathStat.ino}`;
-  const openedIdentity = `${openedStat.dev}:${openedStat.ino}`;
   if (
-    !fileResolvesInsideRoot(options.rootPath, options.filePath) ||
+    !directoryMatchesLocation(options.packageLocation) ||
+    !canonicalPathIsInsideRoot(
+      options.packageLocation.canonicalPath,
+      realpathSync(options.filePath),
+    ) ||
     !openedStat.isFile() ||
-    pathIdentity !== openedIdentity
+    filesystemIdentity(pathStat) !== filesystemIdentity(openedStat)
   ) {
     throw options.unsafeError();
   }
 }
 
-function readSkillBytes(rootPath: string, skillFilePath: string): Buffer {
+function readSkillBytes(
+  packageLocation: SkillPackageLocation,
+  skillFilePath: string,
+): Buffer {
   const fd = openSync(skillFilePath, "r");
   try {
     assertOpenedFileInsideRoot({
-      rootPath,
+      packageLocation,
       filePath: skillFilePath,
       fd,
-      unsafeError: () =>
-        new WorkflowSkillError(
-          "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.",
-        ),
+      unsafeError: unsafeSkillFileError,
     });
     const reportedSize = fstatSync(fd).size;
     if (reportedSize > MAX_WORKFLOW_SKILL_BYTES) {
@@ -507,7 +572,7 @@ function unreadableSkillResourceError(
 }
 
 function readSkillResourceText(
-  skillDirectory: string,
+  packageLocation: SkillPackageLocation,
   resourcePath: string,
   relativePath: string,
 ): string {
@@ -515,7 +580,7 @@ function readSkillResourceText(
   try {
     fd = openSync(resourcePath, "r");
     assertOpenedFileInsideRoot({
-      rootPath: skillDirectory,
+      packageLocation,
       filePath: resourcePath,
       fd,
       unsafeError: () => unreadableSkillResourceError(relativePath),
@@ -567,17 +632,18 @@ function skillDigest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function skillRootKey(root: SkillRoot): string {
+function skillRootKey(root: ValidatedSkillRoot): string {
   return createHash("sha256")
-    .update(realpathSync(root.rootPath))
+    .update(root.canonicalPath)
     .digest("hex")
     .slice(0, 12);
 }
 
 function readSkillFileFromDisk(
-  root: SkillRoot,
+  root: ValidatedSkillRoot,
   skillName: string,
   includeResourcePaths: boolean,
+  expectedPackageLocation?: SkillPackageLocation,
 ): ReadSkill {
   validateSkillName(skillName);
   const skillFilePath = join(root.rootPath, skillName, SKILL_FILE);
@@ -586,13 +652,17 @@ function readSkillFileFromDisk(
       `Error: workflow skill ${JSON.stringify(`${root.scope}:${skillName}`)} was not found.`,
     );
   }
-  ensureRealPathInsideRoot(root.rootPath, skillFilePath);
+  const packageLocation =
+    expectedPackageLocation ?? captureSkillPackageLocation(root, skillName);
+  if (!directoryMatchesLocation(packageLocation)) {
+    throw unsafeSkillFileError();
+  }
   if (!statSync(skillFilePath).isFile()) {
     throw new WorkflowSkillError(
       `Error: workflow skill ${JSON.stringify(`${root.scope}:${skillName}`)} must be a regular SKILL.md file.`,
     );
   }
-  const bytes = readSkillBytes(join(root.rootPath, skillName), skillFilePath);
+  const bytes = readSkillBytes(packageLocation, skillFilePath);
   const decoded = decodeSkillBytes(skillFilePath, bytes);
   const parsed = parseSkillDocument(toPosixPath(skillFilePath), decoded);
   if (parsed.name !== skillName) {
@@ -608,7 +678,7 @@ function readSkillFileFromDisk(
   const relativePath = skillDisplayPath(root, skillName);
   const inventory = listSkillResourcePaths(root, skillName);
   const findings = auditSkillPackage({
-    skillDirectory: join(root.rootPath, skillName),
+    skillDirectory: packageLocation.directoryPath,
     skillRelativePath: relativePath,
     content: decoded,
     description: parsed.description,
@@ -622,6 +692,9 @@ function readSkillFileFromDisk(
       ? { compatibility: parsed.compatibility }
       : {}),
   });
+  if (!directoryMatchesLocation(packageLocation)) {
+    throw unsafeSkillFileError();
+  }
   return {
     descriptor: {
       id,
@@ -648,16 +721,23 @@ function readSkillFileFromDisk(
       content: parsed.content,
     },
     findings,
+    packageLocation,
   };
 }
 
 function readSkillFile(
-  root: SkillRoot,
+  root: ValidatedSkillRoot,
   skillName: string,
   includeResourcePaths: boolean,
+  expectedPackageLocation?: SkillPackageLocation,
 ): ReadSkill {
   try {
-    return readSkillFileFromDisk(root, skillName, includeResourcePaths);
+    return readSkillFileFromDisk(
+      root,
+      skillName,
+      includeResourcePaths,
+      expectedPackageLocation,
+    );
   } catch (error) {
     if (error instanceof WorkflowSkillError) {
       const auditMessage = invalidPackageAuditMessage(error);
@@ -879,9 +959,10 @@ export function discoverSkillCatalog(
       ],
     });
   };
-  for (const root of discoveryRoots(options)) {
-    if (!ensureSkillRootDirectory(root)) continue;
-    const rootIdentity = `${root.scope}:${realpathSync(root.rootPath)}`;
+  for (const discoveredRoot of discoveryRoots(options)) {
+    const root = ensureSkillRootDirectory(discoveredRoot);
+    if (root === undefined) continue;
+    const rootIdentity = `${root.scope}:${root.canonicalPath}`;
     if (seenRoots.has(rootIdentity)) continue;
     seenRoots.add(rootIdentity);
     for (const entry of readdirSync(root.rootPath, { withFileTypes: true })) {
@@ -915,7 +996,11 @@ export function discoverSkillCatalog(
         if (blocker !== undefined) {
           continue;
         }
-        skills.push({ descriptor: read.descriptor, root });
+        skills.push({
+          descriptor: read.descriptor,
+          root,
+          packageLocation: read.packageLocation,
+        });
       } catch (error) {
         // Package validation is catalog data; implementation faults are not.
         /* v8 ignore next 3 -- unexpected filesystem/runtime faults must propagate. */
@@ -990,12 +1075,17 @@ export function discoverSkillCatalog(
     candidates: readonly CatalogedSkill[],
     lookup: string,
   ): WorkflowSkill => {
-    const { descriptor, root } = resolveSkillValue(
+    const { descriptor, root, packageLocation } = resolveSkillValue(
       candidates,
       lookup,
       (skill) => skill.descriptor,
     );
-    const current = readSkillFile(root, descriptor.name, true);
+    const current = readSkillFile(
+      root,
+      descriptor.name,
+      true,
+      packageLocation,
+    );
     assertSkillAuditPass(descriptor.qualifiedName, current.findings);
     if (
       current.descriptor.digest !== descriptor.digest ||
@@ -1061,8 +1151,13 @@ export function discoverSkillCatalog(
         (skill) => skill.descriptor.packageId === packageId,
       );
       if (catalogedSkill === undefined) return undefined;
-      const { descriptor, root } = catalogedSkill;
-      const current = readSkillFile(root, descriptor.name, true);
+      const { descriptor, root, packageLocation } = catalogedSkill;
+      const current = readSkillFile(
+        root,
+        descriptor.name,
+        true,
+        packageLocation,
+      );
       assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       return { ...current.skill, qualifiedName: descriptor.qualifiedName };
     },
@@ -1083,12 +1178,17 @@ export function discoverSkillCatalog(
           "Error: skill resource paths must stay under references/, scripts/, or assets/.",
         );
       }
-      const { descriptor, root } = resolveSkillValue(
+      const { descriptor, root, packageLocation } = resolveSkillValue(
         sortedCatalogedSkills,
         lookup,
         (skill) => skill.descriptor,
       );
-      const current = readSkillFile(root, descriptor.name, true);
+      const current = readSkillFile(
+        root,
+        descriptor.name,
+        true,
+        packageLocation,
+      );
       assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       if (current.descriptor.digest !== descriptor.digest) {
         throw new WorkflowSkillError(
@@ -1101,11 +1201,7 @@ export function discoverSkillCatalog(
         );
       }
       const resourcePath = join(root.rootPath, descriptor.name, path);
-      return readSkillResourceText(
-        join(root.rootPath, descriptor.name),
-        resourcePath,
-        path,
-      );
+      return readSkillResourceText(packageLocation, resourcePath, path);
     },
     readPackageResource: (packageId, digest, path) => {
       if (!isWorkflowSkillResourcePath(path)) {
@@ -1121,8 +1217,13 @@ export function discoverSkillCatalog(
           `Error: active workflow skill package ${JSON.stringify(packageId)} is no longer available.`,
         );
       }
-      const { descriptor, root } = catalogedSkill;
-      const current = readSkillFile(root, descriptor.name, true);
+      const { descriptor, root, packageLocation } = catalogedSkill;
+      const current = readSkillFile(
+        root,
+        descriptor.name,
+        true,
+        packageLocation,
+      );
       assertSkillAuditPass(descriptor.qualifiedName, current.findings);
       if (current.skill.digest !== digest) {
         throw new WorkflowSkillError(
@@ -1135,11 +1236,7 @@ export function discoverSkillCatalog(
         );
       }
       const resourcePath = join(root.rootPath, descriptor.name, path);
-      return readSkillResourceText(
-        join(root.rootPath, descriptor.name),
-        resourcePath,
-        path,
-      );
+      return readSkillResourceText(packageLocation, resourcePath, path);
     },
   };
 }

@@ -704,9 +704,7 @@ describe("project skills catalog", () => {
     When discovery inventories the bounded package contents,
     Then the non-regular entry blocks the package without advertising a readable path`,
     async () => {
-      const workspace = await mkdtemp(
-        join(tmpdir(), "keel-skill-socket-entry-"),
-      );
+      const workspace = await mkdtemp(join("/tmp", "keel-s-"));
       const skillDirectory = join(workspace, ".agents", "skills", "review");
       const references = join(skillDirectory, "references");
       const socketPath = join(references, "device");
@@ -716,12 +714,11 @@ describe("project skills catalog", () => {
         "---\nname: review\ndescription: Review changes.\n---\nRead references.\n",
       );
       const server = createServer();
-      await new Promise<void>((resolveListen, rejectListen) => {
-        server.once("error", rejectListen);
-        server.listen(socketPath, resolveListen);
-      });
-
       try {
+        await new Promise<void>((resolveListen, rejectListen) => {
+          server.once("error", rejectListen);
+          server.listen(socketPath, resolveListen);
+        });
         const catalog = discoverSkillCatalog({ workspace });
 
         expect(catalog.skills).toEqual([]);
@@ -733,9 +730,11 @@ describe("project skills catalog", () => {
             "is not a regular file or directory and cannot be audited safely",
         });
       } finally {
-        await new Promise<void>((resolveClose) => {
-          server.close(() => resolveClose());
-        });
+        if (server.listening) {
+          await new Promise<void>((resolveClose) => {
+            server.close(() => resolveClose());
+          });
+        }
         await rm(workspace, { recursive: true, force: true });
       }
     },

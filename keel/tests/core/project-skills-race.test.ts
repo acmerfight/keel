@@ -198,6 +198,56 @@ describe("Project Skill Package Race Handling", () => {
     }
   });
 
+  test(`Given the whole Skill package becomes an out-of-root symlink before SKILL.md opens,
+    When discovery validates the opened package document,
+    Then the fixed package identity rejects outside instructions`, async () => {
+    // Given
+    const fixture = await createSkillFixture(
+      "keel-skill-package-symlink-race-",
+    );
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    const skillFilePath = join(fixture.skillPath, "SKILL.md");
+    const outsideSkillPath = join(fixture.workspace, "outside-review");
+    const outsideContent = "OUTSIDE-PACKAGE-INSTRUCTIONS";
+    await mkdir(outsideSkillPath, { recursive: true });
+    await writeFile(
+      join(outsideSkillPath, "SKILL.md"),
+      `---\nname: review\ndescription: Outside package.\n---\n${outsideContent}\n`,
+    );
+    let swapped = false;
+    const projectSkills = await importProjectSkillsWithFs({
+      openSync: (path, flags, mode) => {
+        if (String(path) === skillFilePath && !swapped) {
+          actualFs.rmSync(fixture.skillPath, { recursive: true });
+          actualFs.symlinkSync(outsideSkillPath, fixture.skillPath);
+          swapped = true;
+        }
+        return actualFs.openSync(path, flags, mode);
+      },
+    });
+
+    try {
+      // When
+      const catalog = projectSkills.discoverSkillCatalog({
+        workspace: fixture.workspace,
+      });
+
+      // Then
+      expect(catalog.skills).toEqual([]);
+      expect(catalog.audits[0]?.findings).toContainEqual(
+        expect.objectContaining({
+          severity: "blocker",
+          code: "invalid_package",
+          message: "SKILL.md resolves outside its declared Skill root",
+        }),
+      );
+      expect(catalog.warnings[0]?.message).not.toContain(outsideContent);
+      expect(catalog.warnings[0]?.message).not.toContain(outsideSkillPath);
+    } finally {
+      await rm(fixture.workspace, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     {
       race: "grows beyond the text limit",
@@ -351,6 +401,74 @@ describe("Project Skill Package Race Handling", () => {
       );
       expect(message).not.toContain(outsideContent);
       expect(message).not.toContain(outsidePath);
+    } finally {
+      await rm(fixture.workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the whole audited Skill package becomes an outside symlink before resource open,
+    When skill_resource validates the opened package identity,
+    Then outside resource content is rejected with a stable content-free diagnostic`, async () => {
+    // Given
+    const fixture = await createSkillFixture(
+      "keel-skill-resource-package-race-",
+    );
+    const outsideSkillPath = join(fixture.workspace, "outside-review");
+    const outsideReferencesPath = join(outsideSkillPath, "references");
+    const outsideContent = "OUTSIDE-PACKAGE-RESOURCE";
+    await mkdir(outsideReferencesPath, { recursive: true });
+    await writeFile(
+      join(outsideSkillPath, "SKILL.md"),
+      "---\nname: review\ndescription: Outside package.\n---\nRead the guide.\n",
+    );
+    await writeFile(join(outsideReferencesPath, "guide.md"), outsideContent);
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    let raceArmed = false;
+    let resourceReaudited = false;
+    let swapped = false;
+    const projectSkills = await importProjectSkillsWithFs({
+      openSync: (path, flags, mode) => {
+        if (
+          String(path) === fixture.resourcePath &&
+          raceArmed &&
+          resourceReaudited &&
+          !swapped
+        ) {
+          actualFs.rmSync(fixture.skillPath, { recursive: true });
+          actualFs.symlinkSync(outsideSkillPath, fixture.skillPath);
+          swapped = true;
+        }
+        return actualFs.openSync(path, flags, mode);
+      },
+      readFileSync: (path) => {
+        const result = actualFs.readFileSync(path);
+        if (String(path) === fixture.resourcePath && raceArmed) {
+          resourceReaudited = true;
+        }
+        return result;
+      },
+    });
+
+    try {
+      const catalog = projectSkills.discoverSkillCatalog({
+        workspace: fixture.workspace,
+      });
+      raceArmed = true;
+
+      // When
+      let message = "";
+      try {
+        catalog.readResource("repo:review", "references/guide.md");
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      // Then
+      expect(message).toContain(
+        'workflow skill resource "references/guide.md" changed or became unreadable after package validation',
+      );
+      expect(message).not.toContain(outsideContent);
+      expect(message).not.toContain(outsideSkillPath);
     } finally {
       await rm(fixture.workspace, { recursive: true, force: true });
     }
