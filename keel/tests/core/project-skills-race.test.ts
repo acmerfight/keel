@@ -1,4 +1,4 @@
-import type { Dirent, PathLike } from "node:fs";
+import type { Dir, PathLike, Stats } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,12 +7,28 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
-  readonly fstatSync?: FsModule["fstatSync"];
-  readonly lstatSync?: FsModule["lstatSync"];
-  readonly openSync?: FsModule["openSync"];
-  readonly opendirSync?: FsModule["opendirSync"];
-  readonly readFileSync?: FsModule["readFileSync"];
-  readonly readSync?: FsModule["readSync"];
+  readonly fstatSync?: (fd: number) => Stats;
+  readonly lstatSync?: (
+    path: PathLike,
+    options?: {
+      readonly bigint?: false;
+      readonly throwIfNoEntry?: false;
+    },
+  ) => Stats | undefined;
+  readonly openSync?: (
+    path: PathLike,
+    flags: string | number,
+    mode?: string | number | null,
+  ) => number;
+  readonly opendirSync?: (path: PathLike) => Dir;
+  readonly readFileSync?: (path: PathLike) => Buffer;
+  readonly readSync?: (
+    fd: number,
+    buffer: NodeJS.ArrayBufferView,
+    offset: number,
+    length: number,
+    position: number | null,
+  ) => number;
 }
 
 class TestNodeError extends Error implements NodeJS.ErrnoException {
@@ -52,15 +68,6 @@ async function createSkillFixture(prefix: string): Promise<{
   return { workspace, skillPath, referencesPath, resourcePath };
 }
 
-function fakeDirectory(
-  readSync: () => Dirent | null,
-): ReturnType<FsModule["opendirSync"]> {
-  return {
-    readSync,
-    closeSync: () => undefined,
-  } as unknown as ReturnType<FsModule["opendirSync"]>;
-}
-
 describe("Project Skill Package Race Handling", () => {
   afterEach(() => {
     vi.doUnmock("node:fs");
@@ -76,21 +83,27 @@ describe("Project Skill Package Race Handling", () => {
     const actualFs = await vi.importActual<FsModule>("node:fs");
     let emitted = false;
     const projectSkills = await importProjectSkillsWithFs({
-      opendirSync: ((path: PathLike) => {
+      opendirSync: (path) => {
         if (String(path) !== fixture.referencesPath) {
           return actualFs.opendirSync(path);
         }
-        return fakeDirectory(() => {
+        const directory = actualFs.opendirSync(path);
+        const entry = directory.readSync();
+        if (entry === null) {
+          throw new Error("expected the Skill fixture resource entry");
+        }
+        directory.readSync = () => {
           if (emitted) return null;
           emitted = true;
-          return {
+          return Object.assign(entry, {
             name: "device",
             isSymbolicLink: () => false,
             isDirectory: () => false,
             isFile: () => false,
-          } as Dirent;
-        });
-      }) as FsModule["opendirSync"],
+          });
+        };
+        return directory;
+      },
     });
 
     try {
@@ -120,12 +133,15 @@ describe("Project Skill Package Race Handling", () => {
     const fixture = await createSkillFixture("keel-skill-directory-read-race-");
     const actualFs = await vi.importActual<FsModule>("node:fs");
     const projectSkills = await importProjectSkillsWithFs({
-      opendirSync: ((path: PathLike) =>
-        String(path) === fixture.referencesPath
-          ? fakeDirectory(() => {
-              throw new TestNodeError("EIO");
-            })
-          : actualFs.opendirSync(path)) as FsModule["opendirSync"],
+      opendirSync: (path) => {
+        const directory = actualFs.opendirSync(path);
+        if (String(path) === fixture.referencesPath) {
+          directory.readSync = () => {
+            throw new TestNodeError("EIO");
+          };
+        }
+        return directory;
+      },
     });
 
     try {
@@ -155,17 +171,14 @@ describe("Project Skill Package Race Handling", () => {
     const fixture = await createSkillFixture("keel-skill-resource-replace-");
     const actualFs = await vi.importActual<FsModule>("node:fs");
     const projectSkills = await importProjectSkillsWithFs({
-      lstatSync: ((
-        path: PathLike,
-        options?: { readonly throwIfNoEntry?: boolean },
-      ) => {
+      lstatSync: (path, options) => {
         if (String(path) === fixture.resourcePath) {
           return Object.assign(actualFs.lstatSync(path), {
             isFile: () => false,
           });
         }
         return actualFs.lstatSync(path, options);
-      }) as FsModule["lstatSync"],
+      },
     });
 
     try {
@@ -212,14 +225,16 @@ describe("Project Skill Package Race Handling", () => {
       Then the read fails closed with the stable resource diagnostic`,
     async ({ replacementBytes, replacementSize, diagnostic }) => {
       // Given
-      const fixture = await createSkillFixture("keel-skill-resource-read-race-");
+      const fixture = await createSkillFixture(
+        "keel-skill-resource-read-race-",
+      );
       const actualFs = await vi.importActual<FsModule>("node:fs");
       const racedFds = new Set<number>();
       const targetReadCounts = new Map<number, number>();
       let raceArmed = false;
       let resourceReaudited = false;
       const projectSkills = await importProjectSkillsWithFs({
-        openSync: ((path: PathLike, flags: string | number, mode?: number) => {
+        openSync: (path, flags, mode) => {
           const fd = actualFs.openSync(path, flags, mode);
           if (
             String(path) === fixture.resourcePath &&
@@ -230,27 +245,21 @@ describe("Project Skill Package Race Handling", () => {
             targetReadCounts.set(fd, 0);
           }
           return fd;
-        }) as FsModule["openSync"],
-        fstatSync: ((fd: number) => {
+        },
+        fstatSync: (fd) => {
           const stat = actualFs.fstatSync(fd);
           return racedFds.has(fd) && replacementSize !== undefined
             ? Object.assign(stat, { size: replacementSize })
             : stat;
-        }) as FsModule["fstatSync"],
-        readFileSync: ((path: PathLike) => {
+        },
+        readFileSync: (path) => {
           const result = actualFs.readFileSync(path);
           if (String(path) === fixture.resourcePath && raceArmed) {
             resourceReaudited = true;
           }
           return result;
-        }) as FsModule["readFileSync"],
-        readSync: ((
-          fd: number,
-          buffer: NodeJS.ArrayBufferView,
-          offset: number,
-          length: number,
-          position: number | null,
-        ) => {
+        },
+        readSync: (fd, buffer, offset, length, position) => {
           const readCount = (targetReadCounts.get(fd) ?? 0) + 1;
           targetReadCounts.set(fd, readCount);
           if (
@@ -258,18 +267,17 @@ describe("Project Skill Package Race Handling", () => {
             readCount === 2 &&
             replacementBytes !== undefined
           ) {
-            const target = buffer as Uint8Array;
-            target.set(replacementBytes, offset);
+            if (!Buffer.isBuffer(buffer)) {
+              throw new Error("expected the Skill resource read buffer");
+            }
+            buffer.set(replacementBytes, offset);
             return replacementBytes.length;
           }
-          return actualFs.readSync(
-            fd,
-            buffer as Buffer,
-            offset,
-            length,
-            position,
-          );
-        }) as FsModule["readSync"],
+          if (!Buffer.isBuffer(buffer)) {
+            throw new Error("expected the Skill resource read buffer");
+          }
+          return actualFs.readSync(fd, buffer, offset, length, position);
+        },
       });
 
       try {
@@ -297,15 +305,15 @@ describe("Project Skill Package Race Handling", () => {
     const skillFilePath = join(fixture.skillPath, "SKILL.md");
     const skillFds = new Set<number>();
     const projectSkills = await importProjectSkillsWithFs({
-      openSync: ((path: PathLike, flags: string | number, mode?: number) => {
+      openSync: (path, flags, mode) => {
         const fd = actualFs.openSync(path, flags, mode);
         if (String(path) === skillFilePath) skillFds.add(fd);
         return fd;
-      }) as FsModule["openSync"],
-      fstatSync: ((fd: number) => {
+      },
+      fstatSync: (fd) => {
         if (skillFds.has(fd)) throw new TestNodeError("EIO");
         return actualFs.fstatSync(fd);
-      }) as FsModule["fstatSync"],
+      },
     });
 
     try {
@@ -339,15 +347,15 @@ describe("Project Skill Package Race Handling", () => {
     const skillFds = new Set<number>();
     const fault = new TypeError("unexpected Skill validation fault");
     const projectSkills = await importProjectSkillsWithFs({
-      openSync: ((path: PathLike, flags: string | number, mode?: number) => {
+      openSync: (path, flags, mode) => {
         const fd = actualFs.openSync(path, flags, mode);
         if (String(path) === skillFilePath) skillFds.add(fd);
         return fd;
-      }) as FsModule["openSync"],
-      fstatSync: ((fd: number) => {
+      },
+      fstatSync: (fd) => {
         if (skillFds.has(fd)) throw fault;
         return actualFs.fstatSync(fd);
-      }) as FsModule["fstatSync"],
+      },
     });
 
     try {

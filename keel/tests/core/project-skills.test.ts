@@ -650,9 +650,9 @@ describe("project skills catalog", () => {
     const skillDirectory = join(workspace, ".agents", "skills", "review");
     await mkdir(skillDirectory, { recursive: true });
     const bytes = Buffer.alloc(4_097, 0x61);
-    Buffer.from(
-      "---\nname: review\ndescription: Review changes.\n---\n",
-    ).copy(bytes);
+    Buffer.from("---\nname: review\ndescription: Review changes.\n---\n").copy(
+      bytes,
+    );
     bytes[4_096] = 0x80;
     await writeFile(join(skillDirectory, "SKILL.md"), bytes);
 
@@ -664,7 +664,8 @@ describe("project skills catalog", () => {
         expect.objectContaining({
           severity: "blocker",
           code: "invalid_package",
-          message: "SKILL.md must be valid UTF-8 text without binary control bytes",
+          message:
+            "SKILL.md must be valid UTF-8 text without binary control bytes",
         }),
       );
     } finally {
