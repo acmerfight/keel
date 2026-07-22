@@ -321,19 +321,20 @@ describe("Workflow Skill Control Races", () => {
 
   test(`Given a recent ownerless config lock is still publishing its owner record,
     When the user updates a Skill control,
-    Then the writer waits before reporting bounded contention`, async () => {
+    Then the writer preserves the publishing lock and reports bounded contention`, async () => {
     // Given
     const home = await mkdtemp(
       join(tmpdir(), "keel-skill-lock-owner-publish-"),
     );
     const lockPath = join(home, "skills.lock");
     await mkdir(lockPath);
-    let nowCalls = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => {
-      nowCalls += 1;
-      return nowCalls >= 5 ? 5_001 : 0;
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      now = 5_001;
+      return "timed-out";
     });
-    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
     const skillUserConfig = await importSkillUserConfigWithFs({});
 
     try {
@@ -347,7 +348,7 @@ describe("Workflow Skill Control Races", () => {
       ).toThrow(
         `Error: workflow skill config ${join(home, "skills.json")} is busy; retry after the other Keel process finishes.`,
       );
-      expect(wait).toHaveBeenCalledOnce();
+      expect(actualFs.statSync(lockPath).isDirectory()).toBe(true);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
