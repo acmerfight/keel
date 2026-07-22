@@ -285,6 +285,40 @@ describe("Workflow Skill Control Races", () => {
     }
   });
 
+  test(`Given a live process owns the config lock,
+    When the user updates a Skill control after the wait deadline,
+    Then the writer preserves the live lock and reports bounded contention`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-skill-lock-live-owner-"));
+    const lockPath = join(home, "skills.lock");
+    const owner = {
+      pid: process.pid,
+      token: "00000000-0000-4000-8000-000000000005",
+    };
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), `${JSON.stringify(owner)}\n`);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(5_001);
+    const skillUserConfig = await importSkillUserConfigWithFs({});
+
+    try {
+      // When / Then
+      expect(() =>
+        skillUserConfig.setWorkflowSkillEnabled(
+          runtime(home),
+          "repo:root:review",
+          false,
+        ),
+      ).toThrow(
+        `Error: workflow skill config ${join(home, "skills.json")} is busy; retry after the other Keel process finishes.`,
+      );
+      expect(
+        JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8")),
+      ).toEqual(owner);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a recent ownerless config lock is still publishing its owner record,
     When the user updates a Skill control,
     Then the writer waits before reporting bounded contention`, async () => {
