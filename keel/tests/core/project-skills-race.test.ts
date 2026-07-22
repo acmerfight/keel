@@ -349,9 +349,7 @@ describe("Project Skill Package Race Handling", () => {
     When discovery completes deterministic package validation,
     Then the post-audit identity check rejects the changed package`, async () => {
     // Given
-    const fixture = await createSkillFixture(
-      "keel-skill-package-audit-race-",
-    );
+    const fixture = await createSkillFixture("keel-skill-package-audit-race-");
     const actualFs = await vi.importActual<FsModule>("node:fs");
     const outsideSkillPath = join(fixture.workspace, "outside-review");
     await mkdir(outsideSkillPath, { recursive: true });

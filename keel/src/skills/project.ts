@@ -1080,12 +1080,7 @@ export function discoverSkillCatalog(
       lookup,
       (skill) => skill.descriptor,
     );
-    const current = readSkillFile(
-      root,
-      descriptor.name,
-      true,
-      packageLocation,
-    );
+    const current = readSkillFile(root, descriptor.name, true, packageLocation);
     assertSkillAuditPass(descriptor.qualifiedName, current.findings);
     if (
       current.descriptor.digest !== descriptor.digest ||
