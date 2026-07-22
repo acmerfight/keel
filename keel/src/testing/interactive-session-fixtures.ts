@@ -42,7 +42,7 @@ export const EPHEMERAL_INTERACTIVE_SESSION = {
 const DISABLED_TEST_MEMORY = {
   kind: "disabled",
   status: () => ({
-    enabled: false,
+    status: "disabled",
     scope: null,
     loadedIds: [],
     loadedEntries: [],

@@ -94,7 +94,7 @@ describe("CLI Main - Headless Goal", () => {
       for (const reportPath of [launchReportPath, resumeReportPath]) {
         expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
           memory: {
-            enabled: false,
+            status: "disabled",
             scope: null,
             loadedIds: [],
             renderedBytes: 0,
@@ -1809,7 +1809,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(4);
       expect(providerCalls).toBe(1);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 17,
+        schemaVersion: 18,
         stopReason: "cost_budget",
         costBudgetUsd: 0.01,
         costUsd: 0.14,
@@ -2270,7 +2270,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(0);
       expect(providerCalls).toBe(3);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 17,
+        schemaVersion: 18,
         agentLoopTurns: 3,
         tasks: [
           {

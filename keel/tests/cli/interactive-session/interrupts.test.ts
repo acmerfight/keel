@@ -345,7 +345,7 @@ describe("Interactive Session - Interrupts", () => {
         },
         proposal: memoryProposal,
         status: () => ({
-          enabled: true,
+          status: "available",
           scope: { kind: "project", id: "project_reviewed_abort" },
           loadedIds: [],
           loadedEntries: [],

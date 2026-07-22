@@ -86,7 +86,7 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 17,
+    schemaVersion: 18,
     tasks: [
       {
         ordinal: 1,
@@ -144,7 +144,7 @@ export function evalRunReport(
       latestCheckpoint: null,
     },
     memory: {
-      enabled: false,
+      status: "disabled",
       scope: null,
       loadedIds: [],
       loadedEntries: [],

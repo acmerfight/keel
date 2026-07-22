@@ -106,7 +106,7 @@ Each standard trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 15,
+    "schemaVersion": 18,
     "tasks": [
       {
         "ordinal": 1,
@@ -171,7 +171,7 @@ Each standard trial appends one JSON line:
     "skillCatalog": { "exposed": 0, "omitted": 0, "total": 0, "budgetChars": 8000, "usedChars": 0 },
     "skillPolicy": { "mode": "enabled", "disabledPackages": 0 },
     "undoProtection": { "status": "available", "checkpointsWritten": 1, "failures": [], "latestCheckpoint": { "written": true } },
-    "memory": { "enabled": false, "scope": null, "loadedIds": [], "loadedEntries": [], "renderedBytes": 0, "estimatedTokens": 0, "operations": [] }
+    "memory": { "status": "disabled", "scope": null, "loadedIds": [], "loadedEntries": [], "renderedBytes": 0, "estimatedTokens": 0, "operations": [] }
   }
 }
 ```

@@ -151,28 +151,28 @@ function formatUndoProtectionStatus(summary: UndoProtectionSummary): string {
 
 function formatMemoryStatus(memory: RunReportMemory | undefined): string {
   if (memory === undefined) return "not available";
-  if (!memory.enabled) return "disabled (--no-memory)";
-  if (memory.error !== undefined)
-    return `error - ${formatStatusText(memory.error)}`;
-  const scope = memory.scope?.id ?? "unknown";
-  const estimatedTokens =
-    memory.estimatedTokens === undefined
-      ? "token estimate unavailable"
-      : `~${memory.estimatedTokens} tokens`;
-  const loadedIds =
-    memory.loadedIds.length === 0
-      ? "none"
-      : memory.loadedIds.map(formatStatusText).join(", ");
-  const lifecycle =
-    memory.loadedEntries.length === 0
-      ? "none"
-      : memory.loadedEntries
-          .map(
-            (entry) =>
-              `${formatStatusText(entry.id)}=${formatStatusText(entry.status)}`,
-          )
-          .join(", ");
-  return `${memory.loadedIds.length} loaded for project ${formatStatusText(scope)}; IDs: ${loadedIds}; lifecycle: ${lifecycle} (${memory.renderedBytes} bytes, ${estimatedTokens})`;
+  switch (memory.status) {
+    case "disabled":
+      return "disabled (--no-memory)";
+    case "error":
+      return `error - ${formatStatusText(memory.error)}`;
+    case "available": {
+      const loadedIds =
+        memory.loadedIds.length === 0
+          ? "none"
+          : memory.loadedIds.map(formatStatusText).join(", ");
+      const lifecycle =
+        memory.loadedEntries.length === 0
+          ? "none"
+          : memory.loadedEntries
+              .map(
+                (entry) =>
+                  `${formatStatusText(entry.id)}=${formatStatusText(entry.status)}`,
+              )
+              .join(", ");
+      return `${memory.loadedIds.length} loaded for project ${formatStatusText(memory.scope.id)}; IDs: ${loadedIds}; lifecycle: ${lifecycle} (${memory.renderedBytes} bytes, ~${memory.estimatedTokens} tokens)`;
+    }
+  }
 }
 
 export function formatSessionStatusSnapshot(

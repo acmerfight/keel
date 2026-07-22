@@ -12,6 +12,12 @@ import {
   writeFile,
 } from "./fixtures.ts";
 
+const AVAILABLE_MEMORY_REPORT = {
+  ...VALID_REPORT.memory,
+  status: "available",
+  scope: { kind: "project", id: "project_report" },
+};
+
 describe("Eval Runner", () => {
   test.each([
     {
@@ -67,11 +73,61 @@ describe("Eval Runner", () => {
       }),
     },
     {
-      name: "approved memory proposal without linked memory",
+      name: "disabled memory with a project scope",
       reportContent: JSON.stringify({
         ...VALID_REPORT,
         memory: {
           ...VALID_REPORT.memory,
+          scope: { kind: "project", id: "project_report" },
+        },
+      }),
+    },
+    {
+      name: "available memory without a project scope",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...VALID_REPORT.memory,
+          status: "available",
+        },
+      }),
+    },
+    {
+      name: "disabled memory with a load error",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...VALID_REPORT.memory,
+          error: "memory load failed",
+        },
+      }),
+    },
+    {
+      name: "available memory with a load error",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...AVAILABLE_MEMORY_REPORT,
+          error: "memory load failed",
+        },
+      }),
+    },
+    {
+      name: "error memory without a load error",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...AVAILABLE_MEMORY_REPORT,
+          status: "error",
+        },
+      }),
+    },
+    {
+      name: "approved memory proposal without linked memory",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        memory: {
+          ...AVAILABLE_MEMORY_REPORT,
           operations: [
             {
               operation: "propose",
@@ -89,7 +145,7 @@ describe("Eval Runner", () => {
       reportContent: JSON.stringify({
         ...VALID_REPORT,
         memory: {
-          ...VALID_REPORT.memory,
+          ...AVAILABLE_MEMORY_REPORT,
           operations: [
             {
               operation: "propose",
@@ -107,7 +163,7 @@ describe("Eval Runner", () => {
       reportContent: JSON.stringify({
         ...VALID_REPORT,
         memory: {
-          ...VALID_REPORT.memory,
+          ...AVAILABLE_MEMORY_REPORT,
           operations: [
             {
               operation: "propose",
@@ -125,13 +181,17 @@ describe("Eval Runner", () => {
       reportContent: JSON.stringify({
         ...VALID_REPORT,
         memory: {
-          ...VALID_REPORT.memory,
+          ...AVAILABLE_MEMORY_REPORT,
           loadedIds: ["mem_inactive"],
           loadedEntries: [
             {
               id: "mem_inactive",
               status: "forgotten",
-              source: { type: "user_explicit", channel: "cli" },
+              source: {
+                type: "user_explicit",
+                channel: "cli",
+                candidateId: null,
+              },
               createdAt: "2026-07-16T00:00:00.000Z",
               lastVerifiedAt: "2026-07-16T00:00:00.000Z",
               supersedes: [],
@@ -148,13 +208,17 @@ describe("Eval Runner", () => {
       reportContent: JSON.stringify({
         ...VALID_REPORT,
         memory: {
-          ...VALID_REPORT.memory,
+          ...AVAILABLE_MEMORY_REPORT,
           loadedIds: ["mem_expected"],
           loadedEntries: [
             {
               id: "mem_other",
               status: "current",
-              source: { type: "user_explicit", channel: "cli" },
+              source: {
+                type: "user_explicit",
+                channel: "cli",
+                candidateId: null,
+              },
               createdAt: "2026-07-16T00:00:00.000Z",
               lastVerifiedAt: "2026-07-16T00:00:00.000Z",
               supersedes: [],
@@ -171,13 +235,17 @@ describe("Eval Runner", () => {
       reportContent: JSON.stringify({
         ...VALID_REPORT,
         memory: {
-          ...VALID_REPORT.memory,
+          ...AVAILABLE_MEMORY_REPORT,
           loadedIds: ["mem_duplicate", "mem_duplicate"],
           loadedEntries: [
             ...[1, 2].map(() => ({
               id: "mem_duplicate",
               status: "current",
-              source: { type: "user_explicit", channel: "cli" },
+              source: {
+                type: "user_explicit",
+                channel: "cli",
+                candidateId: null,
+              },
               createdAt: "2026-07-16T00:00:00.000Z",
               lastVerifiedAt: "2026-07-16T00:00:00.000Z",
               supersedes: [],
@@ -290,7 +358,10 @@ describe("Eval Runner", () => {
     const previousReportContent = process.env[REPORT_CONTENT_ENV];
     process.env[REPORT_CONTENT_ENV] = JSON.stringify({
       ...VALID_REPORT,
-      memory: { ...VALID_REPORT.memory, operations },
+      memory: {
+        ...AVAILABLE_MEMORY_REPORT,
+        operations,
+      },
     });
 
     try {

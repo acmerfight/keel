@@ -96,7 +96,7 @@ describe("CLI Eval", () => {
           condition: "memory_disabled",
           requiredToPass: false,
           report: {
-            memory: { enabled: false, loadedIds: [], renderedBytes: 0 },
+            memory: { status: "disabled", loadedIds: [], renderedBytes: 0 },
           },
         },
         {
@@ -105,7 +105,10 @@ describe("CLI Eval", () => {
           condition: "memory_enabled",
           requiredToPass: true,
           report: {
-            memory: { enabled: true, loadedIds: [expect.any(String)] },
+            memory: {
+              status: "available",
+              loadedIds: [expect.any(String)],
+            },
           },
         },
       ]);
