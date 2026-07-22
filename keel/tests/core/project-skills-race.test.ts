@@ -538,5 +538,4 @@ describe("Project Skill Package Race Handling", () => {
       await rm(fixture.workspace, { recursive: true, force: true });
     }
   });
-
 });
