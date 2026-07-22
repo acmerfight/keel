@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -697,6 +698,48 @@ describe("project skills catalog", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    `Given a package resource directory contains a Unix socket,
+    When discovery inventories the bounded package contents,
+    Then the non-regular entry blocks the package without advertising a readable path`,
+    async () => {
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-skill-socket-entry-"),
+      );
+      const skillDirectory = join(workspace, ".agents", "skills", "review");
+      const references = join(skillDirectory, "references");
+      const socketPath = join(references, "device");
+      await mkdir(references, { recursive: true });
+      await writeFile(
+        join(skillDirectory, "SKILL.md"),
+        "---\nname: review\ndescription: Review changes.\n---\nRead references.\n",
+      );
+      const server = createServer();
+      await new Promise<void>((resolveListen, rejectListen) => {
+        server.once("error", rejectListen);
+        server.listen(socketPath, resolveListen);
+      });
+
+      try {
+        const catalog = discoverSkillCatalog({ workspace });
+
+        expect(catalog.skills).toEqual([]);
+        expect(catalog.audits[0]?.findings).toContainEqual({
+          severity: "blocker",
+          code: "resource_unreadable",
+          relativePath: "references/device",
+          message:
+            "is not a regular file or directory and cannot be audited safely",
+        });
+      } finally {
+        await new Promise<void>((resolveClose) => {
+          server.close(() => resolveClose());
+        });
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a skill advertises one resource,
     When callers use inactive, invalid, missing, valid, and stale resource paths,

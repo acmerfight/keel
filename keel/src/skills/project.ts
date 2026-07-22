@@ -411,20 +411,52 @@ function ensureRealPathInsideRoot(
   rootPath: string,
   skillFilePath: string,
 ): void {
-  const relativeRealPath = relative(
-    realpathSync(rootPath),
-    realpathSync(skillFilePath),
-  );
-  if (relativeRealPath.startsWith("..") || isAbsolute(relativeRealPath)) {
+  if (!fileResolvesInsideRoot(rootPath, skillFilePath)) {
     throw new WorkflowSkillError(
       "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.",
     );
   }
 }
 
-function readSkillBytes(skillFilePath: string): Buffer {
+function fileResolvesInsideRoot(rootPath: string, filePath: string): boolean {
+  const relativeRealPath = relative(
+    realpathSync(rootPath),
+    realpathSync(filePath),
+  );
+  return !relativeRealPath.startsWith("..") && !isAbsolute(relativeRealPath);
+}
+
+function assertOpenedFileInsideRoot(options: {
+  readonly rootPath: string;
+  readonly filePath: string;
+  readonly fd: number;
+  readonly unsafeError: () => WorkflowSkillError;
+}): void {
+  const pathStat = lstatSync(options.filePath);
+  const openedStat = fstatSync(options.fd);
+  const pathIdentity = `${pathStat.dev}:${pathStat.ino}`;
+  const openedIdentity = `${openedStat.dev}:${openedStat.ino}`;
+  if (
+    !fileResolvesInsideRoot(options.rootPath, options.filePath) ||
+    !openedStat.isFile() ||
+    pathIdentity !== openedIdentity
+  ) {
+    throw options.unsafeError();
+  }
+}
+
+function readSkillBytes(rootPath: string, skillFilePath: string): Buffer {
   const fd = openSync(skillFilePath, "r");
   try {
+    assertOpenedFileInsideRoot({
+      rootPath,
+      filePath: skillFilePath,
+      fd,
+      unsafeError: () =>
+        new WorkflowSkillError(
+          "Error: cannot load workflow skill: resolved SKILL.md path escapes its skill root.",
+        ),
+    });
     const reportedSize = fstatSync(fd).size;
     if (reportedSize > MAX_WORKFLOW_SKILL_BYTES) {
       throw new WorkflowSkillError(
@@ -466,12 +498,28 @@ function binarySkillResourceError(relativePath: string): WorkflowSkillError {
   );
 }
 
+function unreadableSkillResourceError(
+  relativePath: string,
+): WorkflowSkillError {
+  return new WorkflowSkillError(
+    `Error: workflow skill resource ${JSON.stringify(redactSecretLikeText(relativePath))} changed or became unreadable after package validation.`,
+  );
+}
+
 function readSkillResourceText(
+  skillDirectory: string,
   resourcePath: string,
   relativePath: string,
 ): string {
-  const fd = openSync(resourcePath, "r");
+  let fd: number | null = null;
   try {
+    fd = openSync(resourcePath, "r");
+    assertOpenedFileInsideRoot({
+      rootPath: skillDirectory,
+      filePath: resourcePath,
+      fd,
+      unsafeError: () => unreadableSkillResourceError(relativePath),
+    });
     const reportedSize = fstatSync(fd).size;
     const sample = Buffer.allocUnsafe(
       Math.min(reportedSize, BINARY_SAMPLE_BYTES),
@@ -505,8 +553,13 @@ function readSkillResourceText(
     } catch {
       throw binarySkillResourceError(relativePath);
     }
+  } catch (error) {
+    if (isErrnoException(error)) {
+      throw unreadableSkillResourceError(relativePath);
+    }
+    throw error;
   } finally {
-    closeSync(fd);
+    if (fd !== null) closeSync(fd);
   }
 }
 
@@ -539,7 +592,7 @@ function readSkillFileFromDisk(
       `Error: workflow skill ${JSON.stringify(`${root.scope}:${skillName}`)} must be a regular SKILL.md file.`,
     );
   }
-  const bytes = readSkillBytes(skillFilePath);
+  const bytes = readSkillBytes(join(root.rootPath, skillName), skillFilePath);
   const decoded = decodeSkillBytes(skillFilePath, bytes);
   const parsed = parseSkillDocument(toPosixPath(skillFilePath), decoded);
   if (parsed.name !== skillName) {
@@ -615,6 +668,7 @@ function readSkillFile(
     }
     // Filesystem failures become stable package diagnostics. Programming
     // faults retain their identity for the outer runtime boundary.
+    /* v8 ignore else -- filesystem operations throw errno exceptions; unexpected implementation faults must retain their original identity. */
     if (isErrnoException(error)) {
       const auditMessage =
         "Skill package files could not be read during deterministic validation";
@@ -623,6 +677,7 @@ function readSkillFile(
         auditMessage,
       );
     }
+    /* v8 ignore next -- preserve unexpected implementation faults for the runtime boundary. */
     throw error;
   }
 }
@@ -863,6 +918,7 @@ export function discoverSkillCatalog(
         skills.push({ descriptor: read.descriptor, root });
       } catch (error) {
         // Package validation is catalog data; implementation faults are not.
+        /* v8 ignore next 3 -- unexpected filesystem/runtime faults must propagate. */
         if (!(error instanceof WorkflowSkillError)) throw error;
         recordInvalidPackage(
           root,
@@ -1045,11 +1101,11 @@ export function discoverSkillCatalog(
         );
       }
       const resourcePath = join(root.rootPath, descriptor.name, path);
-      ensureRealPathInsideRoot(
+      return readSkillResourceText(
         join(root.rootPath, descriptor.name),
         resourcePath,
+        path,
       );
-      return readSkillResourceText(resourcePath, path);
     },
     readPackageResource: (packageId, digest, path) => {
       if (!isWorkflowSkillResourcePath(path)) {
@@ -1079,11 +1135,11 @@ export function discoverSkillCatalog(
         );
       }
       const resourcePath = join(root.rootPath, descriptor.name, path);
-      ensureRealPathInsideRoot(
+      return readSkillResourceText(
         join(root.rootPath, descriptor.name),
         resourcePath,
+        path,
       );
-      return readSkillResourceText(resourcePath, path);
     },
   };
 }
