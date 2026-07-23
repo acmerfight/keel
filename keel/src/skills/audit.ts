@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   closeSync,
   lstatSync,
@@ -226,12 +227,14 @@ function readResourceSample(path: string, reportedSize: number): Uint8Array {
 function auditResource(options: {
   readonly skillDirectory: string;
   readonly relativePath: string;
+  readonly resourceDigests: Map<string, string>;
 }): readonly SkillAuditFinding[] {
   const absolutePath = join(options.skillDirectory, options.relativePath);
   try {
     const stat = lstatSync(absolutePath);
     const findings: SkillAuditFinding[] = [];
-    /* v8 ignore next 10 -- the bounded inventory admits only regular files; this fail-closed branch protects a concurrent replacement. */
+    // Inventory admitted a regular file, but audit must fail closed if a
+    // concurrent replacement changes its type before content inspection.
     if (!stat.isFile()) {
       return [
         {
@@ -301,6 +304,10 @@ function auditResource(options: {
     }
     try {
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      options.resourceDigests.set(
+        options.relativePath,
+        createHash("sha256").update(bytes).digest("hex"),
+      );
       findings.push(...auditText(options.relativePath, text));
     } catch {
       if (!options.relativePath.startsWith("assets/")) {
@@ -326,9 +333,11 @@ function auditResource(options: {
   }
 }
 
-export function auditSkillPackage(
-  options: AuditSkillPackageOptions,
-): readonly SkillAuditFinding[] {
+export function auditSkillPackageContents(options: AuditSkillPackageOptions): {
+  readonly findings: readonly SkillAuditFinding[];
+  readonly resourceDigests: ReadonlyMap<string, string>;
+} {
+  const resourceDigests = new Map<string, string>();
   const findings: SkillAuditFinding[] = [
     ...options.inventoryFindings,
     ...auditText(options.skillRelativePath, options.content),
@@ -376,10 +385,20 @@ export function auditSkillPackage(
       ...auditResource({
         skillDirectory: options.skillDirectory,
         relativePath,
+        resourceDigests,
       }),
     );
   }
-  return uniqueFindings(findings);
+  return {
+    findings: uniqueFindings(findings),
+    resourceDigests,
+  };
+}
+
+export function auditSkillPackage(
+  options: AuditSkillPackageOptions,
+): readonly SkillAuditFinding[] {
+  return auditSkillPackageContents(options).findings;
 }
 
 export function firstSkillAuditBlocker(

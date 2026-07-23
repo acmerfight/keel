@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -641,6 +642,38 @@ describe("project skills catalog", () => {
     }
   });
 
+  test(`Given SKILL.md contains invalid UTF-8 beyond the bounded binary sample,
+    When the project catalog decodes the complete package document,
+    Then the package is blocked with the stable text-validation diagnostic`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-skill-late-invalid-utf8-"),
+    );
+    const skillDirectory = join(workspace, ".agents", "skills", "review");
+    await mkdir(skillDirectory, { recursive: true });
+    const bytes = Buffer.alloc(4_097, 0x61);
+    Buffer.from("---\nname: review\ndescription: Review changes.\n---\n").copy(
+      bytes,
+    );
+    bytes[4_096] = 0x80;
+    await writeFile(join(skillDirectory, "SKILL.md"), bytes);
+
+    try {
+      const catalog = discoverSkillCatalog({ workspace });
+
+      expect(catalog.skills).toEqual([]);
+      expect(catalog.audits[0]?.findings).toContainEqual(
+        expect.objectContaining({
+          severity: "blocker",
+          code: "invalid_package",
+          message:
+            "SKILL.md must be valid UTF-8 text without binary control bytes",
+        }),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a safe cataloged Skill gains a secret before activation,
     When the user activates that existing descriptor,
     Then Keel re-audits and blocks it before returning changed content`, async () => {
@@ -665,6 +698,47 @@ describe("project skills catalog", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    `Given a package resource directory contains a Unix socket,
+    When discovery inventories the bounded package contents,
+    Then the non-regular entry blocks the package without advertising a readable path`,
+    async () => {
+      const workspace = await mkdtemp(join("/tmp", "keel-s-"));
+      const skillDirectory = join(workspace, ".agents", "skills", "review");
+      const references = join(skillDirectory, "references");
+      const socketPath = join(references, "device");
+      await mkdir(references, { recursive: true });
+      await writeFile(
+        join(skillDirectory, "SKILL.md"),
+        "---\nname: review\ndescription: Review changes.\n---\nRead references.\n",
+      );
+      const server = createServer();
+      try {
+        await new Promise<void>((resolveListen, rejectListen) => {
+          server.once("error", rejectListen);
+          server.listen(socketPath, resolveListen);
+        });
+        const catalog = discoverSkillCatalog({ workspace });
+
+        expect(catalog.skills).toEqual([]);
+        expect(catalog.audits[0]?.findings).toContainEqual({
+          severity: "blocker",
+          code: "resource_unreadable",
+          relativePath: "references/device",
+          message:
+            "is not a regular file or directory and cannot be audited safely",
+        });
+      } finally {
+        if (server.listening) {
+          await new Promise<void>((resolveClose) => {
+            server.close(() => resolveClose());
+          });
+        }
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a skill advertises one resource,
     When callers use inactive, invalid, missing, valid, and stale resource paths,
