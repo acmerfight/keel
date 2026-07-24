@@ -1,10 +1,10 @@
+import type { FileRevision } from "../file-revision.ts";
+import type { ReadBeforeEdit } from "../read-before-edit.ts";
 import type { ProjectInstructionVisibilityState } from "../scoped-project-instructions.ts";
 import type { FileIdentity } from "../workspace-path.ts";
 
 export interface ExecuteApplyPatchOptions {
-  readonly readBeforeEdit?: {
-    readonly hasRead: (targetPath: string) => boolean;
-  };
+  readonly readBeforeEdit?: ReadBeforeEdit;
   readonly projectInstructions?: ProjectInstructionVisibilityState;
   readonly recordCheckpoint?: boolean;
 }
@@ -73,6 +73,9 @@ export type PreparedPatchOperation =
   | {
       readonly kind: "copy";
       readonly sourcePath: string;
+      readonly sourceTargetPath: string;
+      readonly sourceFileRevision: FileRevision;
+      readonly sourceIdentity: FileIdentity;
       readonly path: string;
       readonly workspacePath: string;
       readonly targetPath: string;
@@ -87,6 +90,7 @@ export type PreparedPatchOperation =
       readonly path: string;
       readonly workspacePath: string;
       readonly targetPath: string;
+      readonly fileRevision: FileRevision;
       readonly beforeContent: string;
       readonly afterContent: string;
       readonly mode: number;
@@ -99,6 +103,7 @@ export type PreparedPatchOperation =
       readonly movePath: string;
       readonly workspacePath: string;
       readonly targetPath: string;
+      readonly fileRevision: FileRevision;
       readonly beforeContent: string;
       readonly afterContent: string;
       readonly mode: number;
@@ -114,6 +119,7 @@ export type PreparedPatchOperation =
       readonly path: string;
       readonly workspacePath: string;
       readonly targetPath: string;
+      readonly fileRevision: FileRevision;
       readonly beforeContent: string;
       readonly mode: number;
       readonly targetIdentity: FileIdentity;

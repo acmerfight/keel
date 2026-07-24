@@ -12,6 +12,7 @@ import {
   resolveWorkspaceTarget,
 } from "../workspace-path.ts";
 import {
+  assertPatchReadRevision,
   fileTooLargeError,
   MAX_PATCH_EDIT_FILE_BYTES,
   patchError,
@@ -117,17 +118,6 @@ function prepareUpdateOperation(
     targetPath,
     operation.path,
   );
-  if (
-    options.readBeforeEdit !== undefined &&
-    !options.readBeforeEdit.hasRead(validatedTarget.targetPath)
-  ) {
-    throw new KeelError(
-      "tool_file_not_read",
-      `apply_patch failed: file has not been read: ${operation.path}`,
-      `Use read(path: "${operation.path}") to view the current file content, then retry apply_patch with hunks copied from the read output.`,
-    );
-  }
-
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   let openedMode = validatedTarget.mode;
   let targetIdentity: FileIdentity | null = null;
@@ -155,16 +145,6 @@ function prepareUpdateOperation(
             "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
           );
         }
-        if (
-          options.readBeforeEdit !== undefined &&
-          !options.readBeforeEdit.hasRead(openedTargetPath)
-        ) {
-          throw new KeelError(
-            "tool_file_not_read",
-            `apply_patch failed: file has not been read: ${operation.path}`,
-            `Use read(path: "${operation.path}") to view the current file content, then retry apply_patch with hunks copied from the read output.`,
-          );
-        }
         const openedStat = fstatSync(fd);
         openedMode = openedStat.mode & 0o7777;
         if (needsTargetIdentity) {
@@ -173,6 +153,12 @@ function prepareUpdateOperation(
         return openedTargetPath;
       },
     },
+  );
+  assertPatchReadRevision(
+    options.readBeforeEdit,
+    file.targetPath,
+    operation.path,
+    file.fileRevision,
   );
   const updated = applyUpdateHunks(
     operation.path,
@@ -197,6 +183,7 @@ function prepareUpdateOperation(
       movePath: operation.movePath,
       workspacePath,
       targetPath: file.targetPath,
+      fileRevision: file.fileRevision,
       beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
       afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
       mode: writeMode,
@@ -213,6 +200,7 @@ function prepareUpdateOperation(
     path: operation.path,
     workspacePath,
     targetPath: file.targetPath,
+    fileRevision: file.fileRevision,
     beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
     afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
     mode: writeMode,
@@ -245,17 +233,6 @@ function prepareDeleteOperation(
     targetPath,
     operation.path,
   );
-  if (
-    options.readBeforeEdit !== undefined &&
-    !options.readBeforeEdit.hasRead(validatedTarget.targetPath)
-  ) {
-    throw new KeelError(
-      "tool_file_not_read",
-      `apply_patch failed: file has not been read: ${operation.path}`,
-      `Use read(path: "${operation.path}") to view the current file content, then retry apply_patch after confirming the file should be deleted.`,
-    );
-  }
-
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   let openedMode = validatedTarget.mode;
   let targetIdentity: FileIdentity | null = null;
@@ -282,22 +259,18 @@ function prepareDeleteOperation(
             "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
           );
         }
-        if (
-          options.readBeforeEdit !== undefined &&
-          !options.readBeforeEdit.hasRead(openedTargetPath)
-        ) {
-          throw new KeelError(
-            "tool_file_not_read",
-            `apply_patch failed: file has not been read: ${operation.path}`,
-            `Use read(path: "${operation.path}") to view the current file content, then retry apply_patch after confirming the file should be deleted.`,
-          );
-        }
         const openedStat = fstatSync(fd);
         openedMode = openedStat.mode & 0o7777;
         targetIdentity = fileIdentityFromStats(openedStat);
         return openedTargetPath;
       },
     },
+  );
+  assertPatchReadRevision(
+    options.readBeforeEdit,
+    file.targetPath,
+    operation.path,
+    file.fileRevision,
   );
   if (
     operation.expectedContent !== null &&
@@ -322,6 +295,7 @@ function prepareDeleteOperation(
     path: operation.path,
     workspacePath,
     targetPath: file.targetPath,
+    fileRevision: file.fileRevision,
     beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
     mode: openedMode,
     targetIdentity: openedFileIdentity(targetIdentity),
@@ -362,19 +336,9 @@ function prepareCopyOperation(
     targetPath,
     operation.sourcePath,
   );
-  if (
-    options.readBeforeEdit !== undefined &&
-    !options.readBeforeEdit.hasRead(validatedTarget.targetPath)
-  ) {
-    throw new KeelError(
-      "tool_file_not_read",
-      `apply_patch failed: file has not been read: ${operation.sourcePath}`,
-      `Use read(path: "${operation.sourcePath}") to view the current file content, then retry apply_patch with copy hunks copied from the read output.`,
-    );
-  }
-
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
   let openedMode = validatedTarget.mode;
+  let sourceIdentity: FileIdentity | null = null;
   const file = readEditableTextFileWithMetadata(
     validatedTarget.targetPath,
     operation.sourcePath,
@@ -398,20 +362,18 @@ function prepareCopyOperation(
             "This file is excluded by project .gitignore. Choose a different file that is not ignored.",
           );
         }
-        if (
-          options.readBeforeEdit !== undefined &&
-          !options.readBeforeEdit.hasRead(openedTargetPath)
-        ) {
-          throw new KeelError(
-            "tool_file_not_read",
-            `apply_patch failed: file has not been read: ${operation.sourcePath}`,
-            `Use read(path: "${operation.sourcePath}") to view the current file content, then retry apply_patch with copy hunks copied from the read output.`,
-          );
-        }
-        openedMode = fstatSync(fd).mode & 0o7777;
+        const openedStat = fstatSync(fd);
+        openedMode = openedStat.mode & 0o7777;
+        sourceIdentity = fileIdentityFromStats(openedStat);
         return openedTargetPath;
       },
     },
+  );
+  assertPatchReadRevision(
+    options.readBeforeEdit,
+    file.targetPath,
+    operation.sourcePath,
+    file.fileRevision,
   );
   const updated = applyUpdateHunks(
     operation.sourcePath,
@@ -432,6 +394,9 @@ function prepareCopyOperation(
   return {
     kind: "copy",
     sourcePath: operation.sourcePath,
+    sourceTargetPath: file.targetPath,
+    sourceFileRevision: file.fileRevision,
+    sourceIdentity: openedFileIdentity(sourceIdentity),
     path: operation.path,
     workspacePath: destination.workspacePath,
     targetPath: destination.targetPath,

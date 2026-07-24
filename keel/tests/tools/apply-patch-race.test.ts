@@ -340,7 +340,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_file_exists",
         "file already exists: new.txt",
@@ -384,7 +384,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_file_exists",
         "file already exists: copied.txt",
@@ -477,7 +477,7 @@ describe("Apply Patch Tool Race Handling", () => {
       // When / Then
       expect(() =>
         executeApplyPatch(workspace, patch, {
-          readBeforeEdit: { hasRead: () => true },
+          readBeforeEdit: { revisionStatus: () => "current" },
         }),
       ).toThrow();
       expect(await readFile(targetPath, "utf8")).toBe("old\n");
@@ -590,7 +590,7 @@ describe("Apply Patch Tool Race Handling", () => {
       // When / Then
       expect(() =>
         executeApplyPatch(workspace, patch, {
-          readBeforeEdit: { hasRead: () => true },
+          readBeforeEdit: { revisionStatus: () => "current" },
         }),
       ).toThrow(publishError);
       expect(await readFile(targetPath, "utf8")).toBe("old\n");
@@ -651,7 +651,7 @@ describe("Apply Patch Tool Race Handling", () => {
       // When / Then
       expect(() =>
         executeApplyPatch(workspace, patch, {
-          readBeforeEdit: { hasRead: () => true },
+          readBeforeEdit: { revisionStatus: () => "current" },
         }),
       ).toThrow(publishError);
       expect(await readFile(targetPath, "utf8")).toBe("user\n");
@@ -840,7 +840,8 @@ describe("Apply Patch Tool Race Handling", () => {
       expect(() =>
         executeApplyPatch(workspace, patch, {
           readBeforeEdit: {
-            hasRead: (targetPath) => targetPath === updatePath,
+            revisionStatus: (targetPath) =>
+              targetPath === updatePath ? "current" : "unread",
           },
         }),
       ).toThrow(publishError);
@@ -949,7 +950,7 @@ describe("Apply Patch Tool Race Handling", () => {
       // When / Then
       expect(() =>
         executeApplyPatch(workspace, patch, {
-          readBeforeEdit: { hasRead: () => true },
+          readBeforeEdit: { revisionStatus: () => "current" },
         }),
       ).toThrow(publishError);
       expect(await readFile(targetPath, "utf8")).toBe("user-at-target\n");
@@ -1236,7 +1237,10 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+            readBeforeEdit: {
+              revisionStatus: (path) =>
+                path === readTargetPath ? "current" : "unread",
+            },
           }),
         "tool_file_not_read",
         "file has not been read",
@@ -1286,7 +1290,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_ignored",
         "ignored path",
@@ -1337,7 +1341,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_ignored",
         "ignored path",
@@ -1387,7 +1391,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_ignored",
         "ignored path",
@@ -1434,7 +1438,10 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+            readBeforeEdit: {
+              revisionStatus: (path) =>
+                path === readTargetPath ? "current" : "unread",
+            },
           }),
         "tool_file_not_read",
         "file has not been read",
@@ -1482,7 +1489,10 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+            readBeforeEdit: {
+              revisionStatus: (path) =>
+                path === readTargetPath ? "current" : "unread",
+            },
           }),
         "tool_file_not_read",
         "file has not been read",
@@ -1531,7 +1541,10 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: (path) => path === readSourcePath },
+            readBeforeEdit: {
+              revisionStatus: (path) =>
+                path === readSourcePath ? "current" : "unread",
+            },
           }),
         "tool_file_not_read",
         "file has not been read",
@@ -1589,7 +1602,10 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+            readBeforeEdit: {
+              revisionStatus: (path) =>
+                path === readTargetPath ? "current" : "unread",
+            },
           }),
         "tool_path_ignored",
         "ignored path",
@@ -1639,7 +1655,10 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: (path) => path === readTargetPath },
+            readBeforeEdit: {
+              revisionStatus: (path) =>
+                path === readTargetPath ? "current" : "unread",
+            },
           }),
         "tool_path_outside_workspace",
         "path changed outside the verified workspace target",
@@ -1693,7 +1712,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_outside_workspace",
         "outside the workspace",
@@ -1759,7 +1778,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_ignored",
         "ignored path",
@@ -1822,7 +1841,7 @@ describe("Apply Patch Tool Race Handling", () => {
         expectApplyPatchError(
           () =>
             executeApplyPatch(workspace, patch, {
-              readBeforeEdit: { hasRead: () => true },
+              readBeforeEdit: { revisionStatus: () => "current" },
             }),
           "tool_path_ignored",
           "ignored path",
@@ -1886,7 +1905,7 @@ describe("Apply Patch Tool Race Handling", () => {
         expectApplyPatchError(
           () =>
             executeApplyPatch(workspace, patch, {
-              readBeforeEdit: { hasRead: () => true },
+              readBeforeEdit: { revisionStatus: () => "current" },
             }),
           "tool_path_ignored",
           "ignored path: src/old.txt",
@@ -1946,7 +1965,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
             projectInstructions,
           }),
         "tool_path_outside_workspace",
@@ -2010,7 +2029,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
             projectInstructions,
           }),
         "tool_path_outside_workspace",
@@ -2061,7 +2080,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_outside_workspace",
         "path changed outside the verified workspace target",
@@ -2108,7 +2127,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_outside_workspace",
         "path changed outside",
@@ -2157,7 +2176,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_outside_workspace",
         "path changed outside",
@@ -2205,7 +2224,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_outside_workspace",
         "path changed outside",
@@ -2264,7 +2283,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_outside_workspace",
         "outside the workspace",
@@ -2321,7 +2340,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_ignored",
         "ignored path",
@@ -2379,7 +2398,7 @@ describe("Apply Patch Tool Race Handling", () => {
       expectApplyPatchError(
         () =>
           executeApplyPatch(workspace, patch, {
-            readBeforeEdit: { hasRead: () => true },
+            readBeforeEdit: { revisionStatus: () => "current" },
           }),
         "tool_path_ignored",
         "ignored path",

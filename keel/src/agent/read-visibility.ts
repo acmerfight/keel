@@ -3,17 +3,22 @@ import {
   toolExecutionEffect,
   toolExecutionEffects,
 } from "../tools/execution.ts";
+import { type FileRevision, sameFileRevision } from "../tools/file-revision.ts";
+import type {
+  FileRevisionStatus,
+  ReadBeforeEdit,
+} from "../tools/read-before-edit.ts";
 
 const VISIBLE_READS_MAX_ENTRIES = 256;
 
 interface VisibleReadSnapshot {
   readonly targetPath: string;
+  readonly fileRevision: FileRevision;
   readonly offset?: number;
   readonly limit?: number;
 }
 
-export interface ReadVisibilityState {
-  readonly hasRead: (targetPath: string) => boolean;
+export interface ReadVisibilityState extends ReadBeforeEdit {
   readonly visibleReadsMostRecentFirst: () => readonly VisibleReadSnapshot[];
   readonly clear: () => void;
   readonly snapshot: () => readonly VisibleReadSnapshot[];
@@ -45,9 +50,20 @@ export function createReadVisibilityState(): ReadVisibilityState {
         visibleReads.delete(targetPath);
       }
     }
+    if (
+      toolExecutionEffect(execution, "opaque_workspace_mutation") !== undefined
+    ) {
+      visibleReads.clear();
+    }
   };
   return {
-    hasRead: (targetPath) => visibleReads.has(targetPath),
+    revisionStatus: (targetPath, currentRevision): FileRevisionStatus => {
+      const read = visibleReads.get(targetPath);
+      if (read === undefined) return "unread";
+      return sameFileRevision(read.fileRevision, currentRevision)
+        ? "current"
+        : "changed";
+    },
     visibleReadsMostRecentFirst: () => [...visibleReads.values()].reverse(),
     clear: () => visibleReads.clear(),
     snapshot: () => [...visibleReads.values()],
@@ -68,6 +84,7 @@ export function createReadVisibilityState(): ReadVisibilityState {
           visibleReads.delete(read.targetPath);
           visibleReads.set(read.targetPath, {
             targetPath: read.targetPath,
+            fileRevision: read.fileRevision,
             ...(read.offset !== undefined ? { offset: read.offset } : {}),
             ...(read.limit !== undefined ? { limit: read.limit } : {}),
           });
