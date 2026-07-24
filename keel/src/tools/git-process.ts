@@ -2,7 +2,7 @@ import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import type { Readable } from "node:stream";
-import { KeelError } from "../core/error.ts";
+import { errorMessage, KeelError } from "../core/error.ts";
 import {
   type CapturedByteOutput,
   HeadByteOutputLimit,
@@ -225,7 +225,7 @@ export function runGitProcess(
         capturedArtifactStderr = artifactStderr.capture();
       } catch (error) {
         cleanup();
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         rejectProcess(
           new KeelError(
             "tool_unavailable",
@@ -276,7 +276,7 @@ export function runGitProcess(
         artifact.append(chunk);
       } catch (error) {
         stopChildProcess(child.pid);
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         finish({
           type: "reject",
           error: new KeelError(

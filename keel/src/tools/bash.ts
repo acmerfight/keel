@@ -4,7 +4,7 @@ import {
   DEFAULT_COMMAND_TIMEOUT_MS,
   MAX_COMMAND_TIMEOUT_MS,
 } from "../core/command-timeout.ts";
-import { KeelError } from "../core/error.ts";
+import { errorMessage, KeelError } from "../core/error.ts";
 import {
   type CapturedByteOutput,
   TailByteOutputLimit,
@@ -267,7 +267,7 @@ function runBashProcess(
         capturedArtifactStderr = artifactStderr.capture();
       } catch (error) {
         cleanup();
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         rejectProcess(
           new KeelError(
             "tool_unavailable",
@@ -338,7 +338,7 @@ function runBashProcess(
         artifact.append(chunk);
       } catch (error) {
         stopChildProcess(child.pid);
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         finish({
           type: "reject",
           error: new KeelError(
