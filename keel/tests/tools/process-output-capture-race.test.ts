@@ -23,9 +23,9 @@ async function importProcessesWithCaptureFailure(
 
   vi.doMock("node:fs", () => ({
     ...actualFs,
-    mkdtempSync: ((prefix, options) => {
-      const directory = actualFs.mkdtempSync(prefix, options);
-      captureDirectories.push(String(directory));
+    mkdtempSync: ((prefix: string) => {
+      const directory = actualFs.mkdtempSync(prefix);
+      captureDirectories.push(directory);
       return directory;
     }) as FsModule["mkdtempSync"],
     openSync: ((path, flags, mode) => {
