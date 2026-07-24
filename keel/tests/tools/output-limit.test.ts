@@ -4,6 +4,7 @@ import {
   HeadByteOutputLimit,
   limitCountedOutput,
   TailByteOutputLimit,
+  TempFileByteOutputCapture,
 } from "../../src/tools/output-limit.ts";
 
 describe("Output Limit Accountants", () => {
@@ -104,5 +105,55 @@ describe("Output Limit Accountants", () => {
       text: "world",
       truncated: true,
     });
+  });
+
+  test(`Given artifact output crosses the memory spill threshold,
+    When the artifact capture is finalized,
+    Then it returns the complete output from temporary storage`, () => {
+    const output = new TempFileByteOutputCapture(
+      "keel-output-limit-test-",
+      10,
+      3,
+    );
+
+    output.append(Buffer.from("hel"));
+    output.append(Buffer.from("lo"));
+
+    expect(output.capture()).toEqual({
+      text: "hello",
+      truncated: false,
+    });
+  });
+
+  test(`Given artifact output has already reached its byte budget,
+    When another stream chunk arrives,
+    Then it preserves the capped output and reports truncation`, () => {
+    const output = new TempFileByteOutputCapture(
+      "keel-output-limit-test-",
+      5,
+      5,
+    );
+
+    output.append(Buffer.from("hello"));
+    output.append(Buffer.from(" world"));
+
+    expect(output.capture()).toEqual({
+      text: "hello",
+      truncated: true,
+    });
+  });
+
+  test(`Given an artifact capture has already been cleaned up,
+    When a late stream chunk arrives,
+    Then it ignores the chunk without recreating temporary storage`, () => {
+    const output = new TempFileByteOutputCapture(
+      "keel-output-limit-test-",
+      10,
+      1,
+    );
+
+    output.cleanup();
+
+    expect(() => output.append(Buffer.from("late"))).not.toThrow();
   });
 });

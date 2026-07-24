@@ -224,7 +224,6 @@ export function runGitProcess(
         capturedArtifactStdout = artifactStdout.capture();
         capturedArtifactStderr = artifactStderr.capture();
       } catch (error) {
-        /* v8 ignore start: temp output capture failures require filesystem faults after process completion. */
         cleanup();
         const detail = error instanceof Error ? error.message : String(error);
         rejectProcess(
@@ -235,7 +234,6 @@ export function runGitProcess(
           ),
         );
         return;
-        /* v8 ignore stop */
       }
       cleanup();
       resolveProcess({
@@ -277,7 +275,6 @@ export function runGitProcess(
         preview.append(chunk);
         artifact.append(chunk);
       } catch (error) {
-        /* v8 ignore start: temp output write failures require filesystem faults while streaming. */
         stopChildProcess(child.pid);
         const detail = error instanceof Error ? error.message : String(error);
         finish({
@@ -288,7 +285,6 @@ export function runGitProcess(
             "Use paths to narrow output or inspect files directly with read/grep.",
           ),
         });
-        /* v8 ignore stop */
       }
     };
 
