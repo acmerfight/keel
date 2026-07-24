@@ -26,6 +26,9 @@ type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
   readonly linkSync?: FsModule["linkSync"];
+  readonly lstatSync?: (
+    path: PathLike,
+  ) => ReturnType<typeof import("node:fs").lstatSync>;
   readonly mkdirSync?: FsModule["mkdirSync"];
   readonly openSync?: FsModule["openSync"];
   readonly realpathSync?: (path: PathLike) => string;
@@ -40,6 +43,7 @@ function expectApplyPatchError(
   action: () => unknown,
   code: KeelErrorCode,
   message: string,
+  recovery?: string,
 ): void {
   try {
     action();
@@ -49,6 +53,9 @@ function expectApplyPatchError(
       name: "KeelError",
       code,
       message: expect.stringContaining(message),
+      ...(recovery === undefined
+        ? {}
+        : { recovery: expect.stringContaining(recovery) }),
     });
   }
 }
@@ -259,6 +266,228 @@ describe("Apply Patch Tool Race Handling", () => {
     }
   });
 
+  test(`Given another process creates an add target after validation,
+    When apply_patch publishes the new file,
+    Then it reports the existing file and preserves the concurrent content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-add-exists-"));
+    const targetPath = join(workspace, "new.txt");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: new.txt",
+      "+created",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let raced = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (!raced && String(newPath) === targetPath) {
+          raced = true;
+          actualFs.writeFileSync(targetPath, "user\n", "utf8");
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () => executeApplyPatch(workspace, patch),
+        "tool_file_exists",
+        "file already exists: new.txt",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("user\n");
+      expect(
+        (await readdir(workspace)).some((path) =>
+          path.startsWith(".keel-write-"),
+        ),
+      ).toBe(false);
+      expect(raced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given another process creates a move destination after validation,
+    When apply_patch publishes the destination,
+    Then it reports the existing file without deleting the source or concurrent destination`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-move-exists-"));
+    const sourcePath = join(workspace, "old.txt");
+    const destinationPath = join(workspace, "new.txt");
+    await writeFile(sourcePath, "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let raced = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (!raced && String(newPath) === destinationPath) {
+          raced = true;
+          actualFs.writeFileSync(destinationPath, "user\n", "utf8");
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_file_exists",
+        "file already exists: new.txt",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("old\n");
+      expect(await readFile(destinationPath, "utf8")).toBe("user\n");
+      expect(raced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given another process creates a copy target after validation,
+    When apply_patch publishes the copied file,
+    Then it reports the copy-specific guidance and preserves the concurrent content`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-copy-exists-"));
+    const sourcePath = join(workspace, "source.txt");
+    const targetPath = join(workspace, "copied.txt");
+    await writeFile(sourcePath, "source\n", "utf8");
+    const patch = [
+      "diff --git a/source.txt b/copied.txt",
+      "similarity index 100%",
+      "copy from source.txt",
+      "copy to copied.txt",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let raced = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (!raced && String(newPath) === targetPath) {
+          raced = true;
+          actualFs.writeFileSync(targetPath, "user\n", "utf8");
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_file_exists",
+        "file already exists: copied.txt",
+        "copying over it",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("source\n");
+      expect(await readFile(targetPath, "utf8")).toBe("user\n");
+      expect(raced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an add target becomes ignored after patch preparation,
+    When apply_patch revalidates the target before mutation,
+    Then it reports the new ignore rule without creating the file`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-add-ignored-"));
+    const targetPath = join(workspace, "new.txt");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: new.txt",
+      "+created",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let ignored = false;
+    const projectInstructions: ProjectInstructionVisibilityState = {
+      ...createProjectInstructionVisibilityState(workspace),
+      assertMutationAllowed: () => {
+        if (!ignored) {
+          ignored = true;
+          actualFs.writeFileSync(
+            join(workspace, ".gitignore"),
+            "new.txt\n",
+            "utf8",
+          );
+        }
+      },
+    };
+    const { executeApplyPatch } = await import(
+      "../../src/tools/apply-patch.ts"
+    );
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () => executeApplyPatch(workspace, patch, { projectInstructions }),
+        "tool_path_ignored",
+        "ignored path: new.txt",
+      );
+      expect(await pathExists(targetPath)).toBe(false);
+      expect(ignored).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an update temp file moves after its descriptor is opened,
+    When apply_patch resolves the temp path before writing,
+    Then it removes the moved temp identity and preserves the original file`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-update-temp-moved-"),
+    );
+    const targetPath = join(workspace, "note.txt");
+    const movedTempPath = join(workspace, "moved-temp.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: note.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let moved = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      realpathSync: (path) => {
+        if (!moved && String(path).includes(".keel-edit-")) {
+          moved = true;
+          actualFs.renameSync(path, movedTempPath);
+        }
+        return actualFs.realpathSync(path);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        executeApplyPatch(workspace, patch, {
+          readBeforeEdit: { hasRead: () => true },
+        }),
+      ).toThrow();
+      expect(await readFile(targetPath, "utf8")).toBe("old\n");
+      expect(await pathExists(movedTempPath)).toBe(false);
+      expect(moved).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an earlier add target is swapped outside before rollback,
     When a later patch operation fails during publish,
     Then rollback removes the created workspace file without touching outside content`, async () => {
@@ -304,6 +533,190 @@ describe("Apply Patch Tool Race Handling", () => {
       );
       expect(await pathExists(join(backupParentPath, "new.txt"))).toBe(false);
       expect(swapped).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an earlier update succeeds before a later operation fails,
+    When apply_patch rolls back the transaction,
+    Then it restores the owned target while preserving a discovered path that loses the identity`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-update-rollback-"),
+    );
+    const targetPath = join(workspace, "updated.txt");
+    const aliasPath = join(workspace, "updated-alias.txt");
+    const aliasReplacementPath = join(workspace, "alias-replacement.txt");
+    const lateTargetPath = join(workspace, "late.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    await writeFile(aliasReplacementPath, "user\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: updated.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    let rollbackStarted = false;
+    let aliasReplaced = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath) === lateTargetPath) {
+          actualFs.linkSync(targetPath, aliasPath);
+          rollbackStarted = true;
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+      lstatSync: (path) => {
+        const stat = actualFs.lstatSync(path);
+        if (rollbackStarted && !aliasReplaced && String(path) === aliasPath) {
+          aliasReplaced = true;
+          actualFs.rmSync(aliasPath, { force: true });
+          actualFs.renameSync(aliasReplacementPath, aliasPath);
+        }
+        return stat;
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        executeApplyPatch(workspace, patch, {
+          readBeforeEdit: { hasRead: () => true },
+        }),
+      ).toThrow(publishError);
+      expect(await readFile(targetPath, "utf8")).toBe("old\n");
+      expect(await readFile(aliasPath, "utf8")).toBe("user\n");
+      expect(await pathExists(lateTargetPath)).toBe(false);
+      expect(aliasReplaced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an update target is replaced after rollback first confirms its identity,
+    When rollback rechecks the discovered target before restoration,
+    Then it preserves the concurrent replacement`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-update-rollback-recheck-"),
+    );
+    const targetPath = join(workspace, "updated.txt");
+    const replacementPath = join(workspace, "replacement.txt");
+    const lateTargetPath = join(workspace, "late.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    await writeFile(replacementPath, "user\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: updated.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    let rollbackStarted = false;
+    let replaced = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath) === lateTargetPath) {
+          rollbackStarted = true;
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+      statSync: (path) => {
+        const stat = actualFs.statSync(path);
+        if (rollbackStarted && !replaced && String(path) === targetPath) {
+          replaced = true;
+          actualFs.rmSync(targetPath, { force: true });
+          actualFs.renameSync(replacementPath, targetPath);
+        }
+        return stat;
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        executeApplyPatch(workspace, patch, {
+          readBeforeEdit: { hasRead: () => true },
+        }),
+      ).toThrow(publishError);
+      expect(await readFile(targetPath, "utf8")).toBe("user\n");
+      expect(await pathExists(lateTargetPath)).toBe(false);
+      expect(replaced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an earlier add is moved outside the workspace and disappears during rollback,
+    When a later patch operation fails,
+    Then rollback tolerates the missing Keel identity without touching unrelated outside content`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-rollback-outside-missing-"),
+    );
+    const parentPath = join(workspace, "race");
+    const targetPath = join(parentPath, "new.txt");
+    const lateTargetPath = join(workspace, "late.txt");
+    const outside = await mkdtemp(
+      join(tmpdir(), "keel-patch-rollback-owned-outside-"),
+    );
+    const outsideParentPath = join(outside, "moved-race");
+    const outsideMarkerPath = join(outside, "marker.txt");
+    await mkdir(parentPath);
+    await writeFile(outsideMarkerPath, "outside\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: race/new.txt",
+      "+created",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    let rollbackStarted = false;
+    let disappeared = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath) === lateTargetPath) {
+          actualFs.renameSync(parentPath, outsideParentPath);
+          actualFs.symlinkSync(outsideParentPath, parentPath, "dir");
+          rollbackStarted = true;
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+      statSync: (path) => {
+        const stat = actualFs.statSync(path);
+        if (rollbackStarted && !disappeared && String(path) === targetPath) {
+          disappeared = true;
+          actualFs.rmSync(targetPath, { force: true });
+        }
+        return stat;
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() => executeApplyPatch(workspace, patch)).toThrow(publishError);
+      expect(await pathExists(join(outsideParentPath, "new.txt"))).toBe(false);
+      expect(await readFile(outsideMarkerPath, "utf8")).toBe("outside\n");
+      expect(disappeared).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
@@ -433,6 +846,115 @@ describe("Apply Patch Tool Race Handling", () => {
       ).toThrow(publishError);
       expect(await pathExists(updatePath)).toBe(false);
       expect(await pathExists(join(workspacePath, "late.txt"))).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an earlier add is changed in place before rollback,
+    When a later patch operation fails,
+    Then rollback preserves the concurrent content instead of removing the file`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-add-rollback-changed-"),
+    );
+    const firstTargetPath = join(workspace, "first.txt");
+    const lateTargetPath = join(workspace, "late.txt");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: first.txt",
+      "+created",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    let changed = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath) === lateTargetPath) {
+          changed = true;
+          actualFs.writeFileSync(firstTargetPath, "user\n", "utf8");
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() => executeApplyPatch(workspace, patch)).toThrow(publishError);
+      expect(await readFile(firstTargetPath, "utf8")).toBe("user\n");
+      expect(await pathExists(lateTargetPath)).toBe(false);
+      expect(changed).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an earlier update identity is replaced after rollback discovers its moved path,
+    When a later patch operation fails,
+    Then rollback preserves both concurrent replacements`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-update-rollback-identity-"),
+    );
+    const targetPath = join(workspace, "updated.txt");
+    const movedPath = join(workspace, "moved-updated.txt");
+    const movedReplacementPath = join(workspace, "moved-replacement.txt");
+    const lateTargetPath = join(workspace, "late.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    await writeFile(movedReplacementPath, "user-at-moved-path\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: updated.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: late.txt",
+      "+late",
+      "*** End Patch",
+    ].join("\n");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const publishError = new Error("late publish failed");
+    let rollbackStarted = false;
+    let replacedAfterDiscovery = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      linkSync: (existingPath, newPath) => {
+        if (String(newPath) === lateTargetPath) {
+          rollbackStarted = true;
+          actualFs.renameSync(targetPath, movedPath);
+          actualFs.writeFileSync(targetPath, "user-at-target\n", "utf8");
+          throw publishError;
+        }
+        return actualFs.linkSync(existingPath, newPath);
+      },
+      lstatSync: (path) => {
+        const stat = actualFs.lstatSync(path);
+        if (
+          rollbackStarted &&
+          !replacedAfterDiscovery &&
+          String(path) === movedPath
+        ) {
+          replacedAfterDiscovery = true;
+          actualFs.rmSync(movedPath, { force: true });
+          actualFs.renameSync(movedReplacementPath, movedPath);
+        }
+        return stat;
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        executeApplyPatch(workspace, patch, {
+          readBeforeEdit: { hasRead: () => true },
+        }),
+      ).toThrow(publishError);
+      expect(await readFile(targetPath, "utf8")).toBe("user-at-target\n");
+      expect(await readFile(movedPath, "utf8")).toBe("user-at-moved-path\n");
+      expect(replacedAfterDiscovery).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1547,6 +2069,150 @@ describe("Apply Patch Tool Race Handling", () => {
       expect(await readFile(sourcePath, "utf8")).toBe("old\n");
       expect(await readFile(destinationPath, "utf8")).toBe("user\n");
       expect(replaced).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a deleted file identity is recreated immediately after removal,
+    When apply_patch verifies the deletion,
+    Then it reports the race without overwriting the recreated file`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-delete-recreated-"),
+    );
+    const targetPath = join(workspace, "old.txt");
+    const backupPath = join(workspace, "old-backup.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    actualFs.linkSync(targetPath, backupPath);
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: old.txt",
+      "*** End Patch",
+    ].join("\n");
+    let recreated = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      rmSync: (path, options) => {
+        const result = actualFs.rmSync(path, options);
+        if (!recreated && String(path) === targetPath) {
+          recreated = true;
+          actualFs.linkSync(backupPath, targetPath);
+        }
+        return result;
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("old\n");
+      expect(recreated).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a deleted file identity reappears between verification and checkpointing,
+    When apply_patch records the deletion checkpoint,
+    Then it reports the race without overwriting the recreated file`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-delete-checkpoint-race-"),
+    );
+    const targetPath = join(workspace, "old.txt");
+    const backupPath = join(workspace, "old-backup.txt");
+    await writeFile(targetPath, "old\n", "utf8");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    actualFs.linkSync(targetPath, backupPath);
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: old.txt",
+      "*** End Patch",
+    ].join("\n");
+    let recreated = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      statSync: (path) => {
+        try {
+          return actualFs.statSync(path);
+        } catch (error) {
+          if (!recreated && String(path) === targetPath) {
+            recreated = true;
+            actualFs.linkSync(backupPath, targetPath);
+          }
+          throw error;
+        }
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside",
+      );
+      expect(await readFile(targetPath, "utf8")).toBe("old\n");
+      expect(recreated).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a moved source identity is recreated immediately after removal,
+    When apply_patch verifies the move,
+    Then rollback removes its destination without overwriting the recreated source`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-patch-move-source-recreated-"),
+    );
+    const sourcePath = join(workspace, "old.txt");
+    const backupPath = join(workspace, "old-backup.txt");
+    const destinationPath = join(workspace, "new.txt");
+    await writeFile(sourcePath, "old\n", "utf8");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    actualFs.linkSync(sourcePath, backupPath);
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "*** End Patch",
+    ].join("\n");
+    let recreated = false;
+    const { executeApplyPatch } = await importApplyPatchWithFs({
+      rmSync: (path, options) => {
+        const result = actualFs.rmSync(path, options);
+        if (!recreated && String(path) === sourcePath) {
+          recreated = true;
+          actualFs.linkSync(backupPath, sourcePath);
+        }
+        return result;
+      },
+    });
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspace, patch, {
+            readBeforeEdit: { hasRead: () => true },
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside",
+      );
+      expect(await readFile(sourcePath, "utf8")).toBe("old\n");
+      expect(await pathExists(destinationPath)).toBe(false);
+      expect(recreated).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
