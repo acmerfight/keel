@@ -1,27 +1,44 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
-  chmodSync,
   closeSync,
+  constants,
   existsSync,
   fchmodSync,
+  fstatSync,
+  fsyncSync,
+  ftruncateSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import {
   basename,
   dirname,
   isAbsolute,
+  join,
   relative,
   resolve,
   sep,
 } from "node:path";
 import { z } from "zod";
+import {
+  createTextFileAtomically,
+  restoreTextFileByIdentityBestEffort,
+} from "../tools/atomic-write.ts";
+import {
+  type FileIdentity,
+  fileIdentityFromStats,
+  sameFileIdentity,
+} from "../tools/workspace-path.ts";
 import { KeelError } from "./error.ts";
 import { debugLog } from "./logger.ts";
 import type { RecordUndoCheckpointResult } from "./undo-protection.ts";
@@ -456,14 +473,20 @@ function writeCheckpoint(
   checkpoints: readonly PersistedCheckpoint[],
 ): void {
   mkdirSync(dirname(checkpointPath), { recursive: true });
-  writeFileSync(
-    checkpointPath,
-    `${JSON.stringify({
-      version: 1,
-      checkpoints: checkpoints.map(checkpointForDisk),
-    })}\n`,
-    "utf8",
-  );
+  const temporaryPath = `${checkpointPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(
+      temporaryPath,
+      `${JSON.stringify({
+        version: 1,
+        checkpoints: checkpoints.map(checkpointForDisk),
+      })}\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+    renameSync(temporaryPath, checkpointPath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
 }
 
 function invalidCheckpointError(): never {
@@ -819,7 +842,6 @@ export function recordLastBatchCheckpoint(
 
     return { written: true };
   } catch (error) {
-    /* v8 ignore next 1: checkpoint writes can fail from filesystem races or permissions. */
     return skippedBatchCheckpointRecord(
       options,
       String(error),
@@ -1235,7 +1257,9 @@ type ResolvedBatchRestoreOperation =
       readonly relativePath: string;
       readonly beforeContent: string;
       readonly afterContent: string;
-      readonly modeOwnership: EditCheckpointModeOwnership;
+      readonly restoreMode: number;
+      readonly rollbackMode: number;
+      readonly identity: FileIdentity;
     }
   | {
       readonly operation: "create";
@@ -1308,7 +1332,6 @@ function validateBatchRestoreOperation(
       return blockedRestore(operation);
     }
     const restorePath = realpathIfPossible(filePath);
-    /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
     if (restorePath === null || !isInside(gitRoot, restorePath)) {
       return blockedRestore(operation);
     }
@@ -1334,7 +1357,6 @@ function validateBatchRestoreOperation(
     return blockedRestore(operation);
   }
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
   if (restorePath === null || !isInside(gitRoot, restorePath)) {
     return blockedRestore(operation);
   }
@@ -1351,26 +1373,67 @@ function validateBatchRestoreOperation(
     relativePath: operation.relativePath,
     beforeContent: operation.beforeContent,
     afterContent: operation.afterContent,
-    modeOwnership: operation.modeOwnership,
+    restoreMode:
+      operation.modeOwnership.kind === "owned"
+        ? operation.modeOwnership.beforeMode
+        : targetStat.mode & 0o7777,
+    rollbackMode:
+      operation.modeOwnership.kind === "owned"
+        ? operation.modeOwnership.afterMode
+        : targetStat.mode & 0o7777,
+    identity: fileIdentityFromStats(targetStat),
   };
 }
 
-function restoreDeletedFile(
-  filePath: string,
-  beforeContent: string,
-  mode: number,
-): boolean {
+function restoreEditedFile(
+  operation: Extract<
+    ResolvedBatchRestoreOperation,
+    { readonly operation: "edit" }
+  >,
+): FileIdentity | null {
   let fileDescriptor: number | null = null;
-  let created = false;
+  let mutationStarted = false;
   try {
-    fileDescriptor = openSync(filePath, "wx", mode);
-    created = true;
-    writeFileSync(fileDescriptor, beforeContent, "utf8");
-    fchmodSync(fileDescriptor, mode);
-    closeSync(fileDescriptor);
-    fileDescriptor = null;
-    return true;
+    fileDescriptor = openSync(
+      operation.restorePath,
+      constants.O_RDWR | constants.O_NOFOLLOW,
+    );
+    const openedStat = fstatSync(fileDescriptor);
+    const openedIdentity = fileIdentityFromStats(openedStat);
+    if (
+      !sameFileIdentity(openedIdentity, operation.identity) ||
+      !modeMatches(openedStat, operation.rollbackMode) ||
+      readFileSync(fileDescriptor, "utf8") !== operation.afterContent
+    ) {
+      return null;
+    }
+    mutationStarted = true;
+    ftruncateSync(fileDescriptor, 0);
+    writeTextToDescriptor(fileDescriptor, operation.beforeContent);
+    fchmodSync(fileDescriptor, operation.restoreMode);
+    fsyncSync(fileDescriptor);
+    if (
+      !sameFileIdentity(
+        fileIdentityFromStats(lstatSync(operation.restorePath)),
+        openedIdentity,
+      )
+    ) {
+      throw new Error("undo target changed during restore");
+    }
+    return openedIdentity;
   } catch {
+    if (fileDescriptor !== null && mutationStarted) {
+      try {
+        ftruncateSync(fileDescriptor, 0);
+        writeTextToDescriptor(fileDescriptor, operation.afterContent);
+        fchmodSync(fileDescriptor, operation.rollbackMode);
+        fsyncSync(fileDescriptor);
+      } catch {
+        // Best-effort recovery must not hide the original restore failure.
+      }
+    }
+    return null;
+  } finally {
     if (fileDescriptor !== null) {
       try {
         closeSync(fileDescriptor);
@@ -1378,14 +1441,74 @@ function restoreDeletedFile(
         // The descriptor may already have been closed by the failing operation.
       }
     }
-    if (created) {
-      try {
-        rmSync(filePath, { force: true });
-      } catch {
-        // The checkpoint is preserved so the user can retry or inspect manually.
-      }
+  }
+}
+
+function writeTextToDescriptor(fileDescriptor: number, content: string): void {
+  const contentBuffer = Buffer.from(content);
+  let writeOffset = 0;
+  while (writeOffset < contentBuffer.length) {
+    const bytesWritten = writeSync(
+      fileDescriptor,
+      contentBuffer,
+      writeOffset,
+      contentBuffer.length - writeOffset,
+      writeOffset,
+    );
+    /* v8 ignore next 3: a blocking regular-file write returning zero requires an OS fault; this guard prevents an infinite loop. */
+    if (bytesWritten === 0) {
+      throw new Error("undo target write made no progress");
     }
-    return false;
+    writeOffset += bytesWritten;
+  }
+}
+
+function restoreDeletedFile(
+  filePath: string,
+  beforeContent: string,
+  mode: number,
+): FileIdentity | null {
+  try {
+    return createTextFileAtomically(filePath, beforeContent, { mode }).identity;
+  } catch {
+    return null;
+  }
+}
+
+function removeFileByIdentityBestEffort(
+  filePath: string,
+  identity: FileIdentity,
+  expectedContent: string,
+): void {
+  const quarantinePath = join(
+    dirname(filePath),
+    `.${basename(filePath)}.keel-undo-${process.pid}-${randomUUID()}.tmp`,
+  );
+  let quarantined = false;
+  try {
+    renameSync(filePath, quarantinePath);
+    quarantined = true;
+    if (
+      sameFileIdentity(
+        fileIdentityFromStats(lstatSync(quarantinePath)),
+        identity,
+      ) &&
+      readFileIfPossible(quarantinePath) === expectedContent
+    ) {
+      rmSync(quarantinePath, { force: true });
+      quarantined = false;
+      return;
+    }
+
+    linkSync(quarantinePath, filePath);
+    rmSync(quarantinePath, { force: true });
+    quarantined = false;
+  } catch {
+    // Preserve the quarantined path if another process claimed the target.
+  } finally {
+    if (quarantined) {
+      debugLog(`undo rollback preserved concurrent file: ${quarantinePath}`);
+    }
   }
 }
 
@@ -1393,8 +1516,10 @@ type AppliedBatchRestoreOperation =
   | {
       readonly operation: "edit";
       readonly restorePath: string;
+      readonly restoredContent: string;
       readonly afterContent: string;
-      readonly mode?: number;
+      readonly rollbackMode: number;
+      readonly identity: FileIdentity;
     }
   | {
       readonly operation: "create";
@@ -1405,6 +1530,8 @@ type AppliedBatchRestoreOperation =
   | {
       readonly operation: "delete";
       readonly filePath: string;
+      readonly restoredContent: string;
+      readonly identity: FileIdentity;
     };
 
 function rollbackBatchRestore(
@@ -1413,18 +1540,27 @@ function rollbackBatchRestore(
   for (const operation of operations.toReversed()) {
     try {
       if (operation.operation === "edit") {
-        writeFileSync(operation.restorePath, operation.afterContent, "utf8");
-        /* v8 ignore next 3: only chmod-changing restore failures need mode rollback. */
-        if (operation.mode !== undefined) {
-          chmodSync(operation.restorePath, operation.mode);
-        }
+        restoreTextFileByIdentityBestEffort(
+          operation.restorePath,
+          operation.identity,
+          {
+            beforeContent: operation.afterContent,
+            afterContent: operation.restoredContent,
+          },
+          operation.rollbackMode,
+        );
       } else if (operation.operation === "create") {
         writeFileSync(operation.filePath, operation.afterContent, {
           encoding: "utf8",
+          flag: "wx",
           mode: operation.mode,
         });
       } else {
-        rmSync(operation.filePath, { force: true });
+        removeFileByIdentityBestEffort(
+          operation.filePath,
+          operation.identity,
+          operation.restoredContent,
+        );
       }
     } catch {
       // Best-effort rollback: the checkpoint is preserved so the user can retry.
@@ -1444,6 +1580,7 @@ function blockedBatchRestore(
 function restoreBatchCheckpoint(
   checkpoint: BatchCheckpoint,
   gitWorkspace: GitWorkspace,
+  applied: AppliedBatchRestoreOperation[],
 ): RestoreLastEditCheckpointResult {
   const operations: ResolvedBatchRestoreOperation[] = [];
   for (const operation of checkpoint.operations) {
@@ -1455,7 +1592,6 @@ function restoreBatchCheckpoint(
     operations.push(validated);
   }
 
-  const applied: AppliedBatchRestoreOperation[] = [];
   for (const operation of operations.toReversed()) {
     if (operation.operation === "create") {
       if (operation.exists) {
@@ -1476,40 +1612,34 @@ function restoreBatchCheckpoint(
         }
       }
     } else if (operation.operation === "delete") {
-      if (
-        !restoreDeletedFile(
-          operation.filePath,
-          operation.beforeContent,
-          operation.mode,
-        )
-      ) {
+      const identity = restoreDeletedFile(
+        operation.filePath,
+        operation.beforeContent,
+        operation.mode,
+      );
+      if (identity === null) {
         return blockedBatchRestore(applied, operation);
       }
-      applied.push({ operation: "delete", filePath: operation.filePath });
+      applied.push({
+        operation: "delete",
+        filePath: operation.filePath,
+        restoredContent: operation.beforeContent,
+        identity,
+      });
     } else {
-      try {
-        writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
-        if (operation.modeOwnership.kind === "owned") {
-          chmodSync(operation.restorePath, operation.modeOwnership.beforeMode);
-        }
+      const identity = restoreEditedFile(operation);
+      if (identity !== null) {
         applied.push({
           operation: "edit",
           restorePath: operation.restorePath,
+          restoredContent: operation.beforeContent,
           afterContent: operation.afterContent,
-          ...modeState(editModeAfter(operation.modeOwnership)),
+          rollbackMode: operation.rollbackMode,
+          identity,
         });
-      } catch {
-        /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
+      } else {
         return blockedBatchRestore(
-          [
-            ...applied,
-            {
-              operation: "edit",
-              restorePath: operation.restorePath,
-              afterContent: operation.afterContent,
-              ...modeState(editModeAfter(operation.modeOwnership)),
-            },
-          ],
+          applied,
           operation,
           "Could not restore file.",
         );
@@ -1541,6 +1671,7 @@ type ResolvedDeleteCreateRestoreOperation =
       readonly afterContent: string;
       readonly mode: number;
       readonly rollbackMode: number;
+      readonly identity: FileIdentity;
     };
 
 type ResolvedCoalescedRestoreOperation =
@@ -1572,7 +1703,6 @@ function validateCoalescedCreateRestoreOperation(
     return blockedRestore(operation);
   }
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
   if (restorePath === null || !isInside(gitRoot, restorePath)) {
     return blockedRestore(operation);
   }
@@ -1625,7 +1755,6 @@ function validateDeleteCreateRestoreOperation(
   }
 
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
   if (restorePath === null || !isInside(gitRoot, restorePath)) {
     return blockedRestore(operation);
   }
@@ -1647,44 +1776,57 @@ function validateDeleteCreateRestoreOperation(
     afterContent: operation.afterContent,
     mode: operation.mode,
     rollbackMode: targetStat.mode & 0o7777,
+    identity: fileIdentityFromStats(targetStat),
   };
 }
 
 function restoreResolvedCoalescedOperations(
   operations: readonly ResolvedCoalescedRestoreOperation[],
+  applied: AppliedBatchRestoreOperation[],
 ): RestoreLastEditCheckpointResult | null {
-  const applied: AppliedBatchRestoreOperation[] = [];
   for (const operation of operations.toReversed()) {
     if (operation.operation === "delete-create") {
       if (!operation.exists) {
-        /* v8 ignore next 8: filesystem races or permissions can still block after validation. */
-        if (
-          !restoreDeletedFile(
-            operation.filePath,
-            operation.beforeContent,
-            operation.mode,
-          )
-        ) {
+        const identity = restoreDeletedFile(
+          operation.filePath,
+          operation.beforeContent,
+          operation.mode,
+        );
+        if (identity === null) {
           return blockedBatchRestore(applied, operation);
         }
-        applied.push({ operation: "delete", filePath: operation.filePath });
+        applied.push({
+          operation: "delete",
+          filePath: operation.filePath,
+          restoredContent: operation.beforeContent,
+          identity,
+        });
         continue;
       }
 
       const rollbackOperation: AppliedBatchRestoreOperation = {
         operation: "edit",
         restorePath: operation.restorePath,
+        restoredContent: operation.beforeContent,
         afterContent: operation.afterContent,
-        mode: operation.rollbackMode,
+        rollbackMode: operation.rollbackMode,
+        identity: operation.identity,
       };
-      try {
-        writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
-        chmodSync(operation.restorePath, operation.mode);
+      const identity = restoreEditedFile({
+        operation: "edit",
+        restorePath: operation.restorePath,
+        relativePath: operation.relativePath,
+        beforeContent: operation.beforeContent,
+        afterContent: operation.afterContent,
+        restoreMode: operation.mode,
+        rollbackMode: operation.rollbackMode,
+        identity: operation.identity,
+      });
+      if (identity !== null) {
         applied.push(rollbackOperation);
-      } catch {
-        /* v8 ignore next 5: filesystem races or permissions can still block after validation. */
+      } else {
         return blockedBatchRestore(
-          [...applied, rollbackOperation],
+          applied,
           operation,
           "Could not restore file.",
         );
@@ -1703,7 +1845,6 @@ function restoreResolvedCoalescedOperations(
             mode: operation.mode,
           });
         } catch {
-          /* v8 ignore next 5: filesystem races or permissions can still block after validation. */
           return blockedBatchRestore(
             applied,
             operation,
@@ -1712,41 +1853,34 @@ function restoreResolvedCoalescedOperations(
         }
       }
     } else if (operation.operation === "delete") {
-      /* v8 ignore next 8: filesystem races or permissions can still block after validation. */
-      if (
-        !restoreDeletedFile(
-          operation.filePath,
-          operation.beforeContent,
-          operation.mode,
-        )
-      ) {
+      const identity = restoreDeletedFile(
+        operation.filePath,
+        operation.beforeContent,
+        operation.mode,
+      );
+      if (identity === null) {
         return blockedBatchRestore(applied, operation);
       }
-      applied.push({ operation: "delete", filePath: operation.filePath });
+      applied.push({
+        operation: "delete",
+        filePath: operation.filePath,
+        restoredContent: operation.beforeContent,
+        identity,
+      });
     } else {
-      try {
-        writeFileSync(operation.restorePath, operation.beforeContent, "utf8");
-        if (operation.modeOwnership.kind === "owned") {
-          chmodSync(operation.restorePath, operation.modeOwnership.beforeMode);
-        }
+      const identity = restoreEditedFile(operation);
+      if (identity !== null) {
         applied.push({
           operation: "edit",
           restorePath: operation.restorePath,
+          restoredContent: operation.beforeContent,
           afterContent: operation.afterContent,
-          ...modeState(editModeAfter(operation.modeOwnership)),
+          rollbackMode: operation.rollbackMode,
+          identity,
         });
-      } catch {
-        /* v8 ignore next 12: filesystem races or permissions can still block after validation. */
+      } else {
         return blockedBatchRestore(
-          [
-            ...applied,
-            {
-              operation: "edit",
-              restorePath: operation.restorePath,
-              afterContent: operation.afterContent,
-              ...modeState(editModeAfter(operation.modeOwnership)),
-            },
-          ],
+          applied,
           operation,
           "Could not restore file.",
         );
@@ -1759,9 +1893,10 @@ function restoreResolvedCoalescedOperations(
 function restoreCheckpoint(
   checkpoint: LastEditCheckpoint,
   gitWorkspace: GitWorkspace,
+  applied: AppliedBatchRestoreOperation[],
 ): RestoreLastEditCheckpointResult {
   if (checkpoint.operation === "batch") {
-    return restoreBatchCheckpoint(checkpoint, gitWorkspace);
+    return restoreBatchCheckpoint(checkpoint, gitWorkspace, applied);
   }
 
   const filePath = checkpointTargetPath(
@@ -1796,6 +1931,12 @@ function restoreCheckpoint(
     }
 
     rmSync(filePath);
+    applied.push({
+      operation: "create",
+      filePath,
+      afterContent: checkpoint.afterContent,
+      mode: targetStat.mode & 0o7777,
+    });
     return {
       status: "restored",
       restoredLabel: checkpoint.relativePath,
@@ -1811,11 +1952,20 @@ function restoreCheckpoint(
       return blockedRestore(checkpoint);
     }
 
-    if (
-      !restoreDeletedFile(filePath, checkpoint.beforeContent, checkpoint.mode)
-    ) {
+    const identity = restoreDeletedFile(
+      filePath,
+      checkpoint.beforeContent,
+      checkpoint.mode,
+    );
+    if (identity === null) {
       return blockedRestore(checkpoint);
     }
+    applied.push({
+      operation: "delete",
+      filePath,
+      restoredContent: checkpoint.beforeContent,
+      identity,
+    });
     return {
       status: "restored",
       restoredLabel: checkpoint.relativePath,
@@ -1827,7 +1977,6 @@ function restoreCheckpoint(
     return blockedRestore(checkpoint);
   }
   const restorePath = realpathIfPossible(filePath);
-  /* v8 ignore next 3: symlinks are blocked above; this guards post-validation path races. */
   if (restorePath === null || !isInside(gitWorkspace.root, restorePath)) {
     return blockedRestore(checkpoint);
   }
@@ -1840,10 +1989,35 @@ function restoreCheckpoint(
     return blockedRestore(checkpoint);
   }
 
-  writeFileSync(restorePath, checkpoint.beforeContent, "utf8");
-  if (checkpoint.modeOwnership.kind === "owned") {
-    chmodSync(restorePath, checkpoint.modeOwnership.beforeMode);
+  const restoreMode =
+    checkpoint.modeOwnership.kind === "owned"
+      ? checkpoint.modeOwnership.beforeMode
+      : targetStat.mode & 0o7777;
+  const rollbackMode =
+    checkpoint.modeOwnership.kind === "owned"
+      ? checkpoint.modeOwnership.afterMode
+      : targetStat.mode & 0o7777;
+  const identity = restoreEditedFile({
+    operation: "edit",
+    restorePath,
+    relativePath: checkpoint.relativePath,
+    beforeContent: checkpoint.beforeContent,
+    afterContent: checkpoint.afterContent,
+    restoreMode,
+    rollbackMode,
+    identity: fileIdentityFromStats(targetStat),
+  });
+  if (identity === null) {
+    return blockedRestore(checkpoint, "Could not restore file.");
   }
+  applied.push({
+    operation: "edit",
+    restorePath,
+    restoredContent: checkpoint.beforeContent,
+    afterContent: checkpoint.afterContent,
+    rollbackMode,
+    identity,
+  });
   return {
     status: "restored",
     restoredLabel: checkpoint.relativePath,
@@ -1870,6 +2044,7 @@ function unavailableUndoCheckpointMessage(checkpointIndex: number): string {
 function restoreCoalescedUndoCheckpointOperations(
   operations: readonly CoalescedUndoCheckpointOperation[],
   gitWorkspace: GitWorkspace,
+  applied: AppliedBatchRestoreOperation[],
 ): RestoreLastEditCheckpointResult {
   const restoreOperations: ResolvedCoalescedRestoreOperation[] = [];
   for (const operation of operations) {
@@ -1903,8 +2078,10 @@ function restoreCoalescedUndoCheckpointOperations(
     };
   }
 
-  const blocked = restoreResolvedCoalescedOperations(restoreOperations);
-  /* v8 ignore next 1: post-validation filesystem races are covered by rollback helpers. */
+  const blocked = restoreResolvedCoalescedOperations(
+    restoreOperations,
+    applied,
+  );
   if (blocked !== null) return blocked;
   return {
     status: "restored",
@@ -1974,9 +2151,15 @@ export function restoreUndoCheckpointsThrough(
     if (checkpoint === undefined) {
       return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
     }
-    const result = restoreCheckpoint(checkpoint, gitWorkspace);
+    const applied: AppliedBatchRestoreOperation[] = [];
+    const result = restoreCheckpoint(checkpoint, gitWorkspace, applied);
     if (result.status === "restored") {
-      writeCheckpoint(gitWorkspace.checkpointPath, checkpoints.slice(0, -1));
+      try {
+        writeCheckpoint(gitWorkspace.checkpointPath, checkpoints.slice(0, -1));
+      } catch (error) {
+        rollbackBatchRestore(applied);
+        throw error;
+      }
     }
     return result;
   }
@@ -1986,15 +2169,22 @@ export function restoreUndoCheckpointsThrough(
   );
   const coalesced = coalesceUndoCheckpointOperations(checkpointOperations);
   if (coalesced.status !== "ok") return coalesced;
+  const applied: AppliedBatchRestoreOperation[] = [];
   const result = restoreCoalescedUndoCheckpointOperations(
     coalesced.operations,
     gitWorkspace,
+    applied,
   );
   if (result.status === "restored") {
-    writeCheckpoint(
-      gitWorkspace.checkpointPath,
-      checkpoints.slice(0, -checkpointIndex),
-    );
+    try {
+      writeCheckpoint(
+        gitWorkspace.checkpointPath,
+        checkpoints.slice(0, -checkpointIndex),
+      );
+    } catch (error) {
+      rollbackBatchRestore(applied);
+      throw error;
+    }
     return {
       status: "restored",
       restoredLabel: selectedCheckpointsRestoredLabel(selectedCheckpoints),
