@@ -1,10 +1,21 @@
-import { rmSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readSync,
+  rmSync,
+} from "node:fs";
 import { KeelError } from "../../core/error.ts";
 import {
   type AtomicWriteResult,
   createTextFileAtomically,
   writeTextFileAtomically,
 } from "../atomic-write.ts";
+import {
+  createFileRevisionAccumulator,
+  type FileRevision,
+} from "../file-revision.ts";
 import { createProjectIgnorePolicy } from "../project-ignore.ts";
 import type { ProjectInstructionVisibilityState } from "../scoped-project-instructions.ts";
 import {
@@ -16,7 +27,9 @@ import {
   findWorkspacePathsByIdentity,
   resolveWorkspaceCreateTargetAtAccess,
   rollbackWorkspaceParentDirectoriesBestEffort,
+  sameFileIdentity,
 } from "../workspace-path.ts";
+import { assertPreparedFileRevision } from "./errors.ts";
 import {
   changedTargetError,
   isErrnoException,
@@ -28,6 +41,85 @@ import type {
   ExecuteApplyPatchOptions,
   PreparedPatchOperation,
 } from "./model.ts";
+
+type RevisionBoundSourceOperation = Extract<
+  PreparedPatchOperation,
+  { readonly kind: "copy" | "delete" | "move" }
+>;
+const REVISION_CHUNK_BYTES = 64 * 1024;
+
+function fileRevisionFromDescriptor(fd: number): FileRevision {
+  const revision = createFileRevisionAccumulator();
+  const chunk = Buffer.allocUnsafe(REVISION_CHUNK_BYTES);
+  let position = 0;
+  while (true) {
+    const bytesRead = readSync(fd, chunk, 0, chunk.length, position);
+    if (bytesRead === 0) return revision.finish();
+    revision.update(chunk.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+}
+
+function sourceRevision(operation: RevisionBoundSourceOperation): FileRevision {
+  return operation.kind === "copy"
+    ? operation.sourceFileRevision
+    : operation.fileRevision;
+}
+
+function sourceTargetPath(operation: RevisionBoundSourceOperation): string {
+  return operation.kind === "copy"
+    ? operation.sourceTargetPath
+    : operation.targetPath;
+}
+
+function sourceDisplayPath(operation: RevisionBoundSourceOperation): string {
+  return operation.kind === "copy" ? operation.sourcePath : operation.path;
+}
+
+function sourceIdentity(operation: RevisionBoundSourceOperation): FileIdentity {
+  return operation.kind === "copy"
+    ? operation.sourceIdentity
+    : operation.targetIdentity;
+}
+
+function changedSourceError(
+  operation: RevisionBoundSourceOperation,
+): KeelError {
+  if (operation.kind !== "copy") return changedTargetError(operation);
+  return new KeelError(
+    "tool_path_outside_workspace",
+    `apply_patch failed: path changed outside the verified workspace target: ${operation.sourcePath}`,
+    "Retry after ensuring the target path remains stable within the workspace.",
+  );
+}
+
+function assertSourceRevisionCurrent(
+  operation: RevisionBoundSourceOperation,
+  options: ExecuteApplyPatchOptions,
+): void {
+  const targetPath = sourceTargetPath(operation);
+  const displayPath = sourceDisplayPath(operation);
+  let fd: number;
+  try {
+    fd = openSync(targetPath, constants.O_RDONLY | constants.O_NONBLOCK);
+  } catch {
+    throw changedSourceError(operation);
+  }
+  try {
+    if (!sameFileIdentity(fstatSync(fd), sourceIdentity(operation))) {
+      throw changedSourceError(operation);
+    }
+    assertPreparedFileRevision(
+      options.readBeforeEdit,
+      targetPath,
+      displayPath,
+      sourceRevision(operation),
+      fileRevisionFromDescriptor(fd),
+    );
+  } finally {
+    closeSync(fd);
+  }
+}
 
 function validateCreateTargetAfterMkdir(
   operation:
@@ -66,6 +158,9 @@ export function applyPreparedOperation(
   options: ExecuteApplyPatchOptions,
 ): AppliedPatchOperation {
   if (operation.kind === "add" || operation.kind === "copy") {
+    if (operation.kind === "copy") {
+      assertSourceRevisionCurrent(operation, options);
+    }
     const createdParentDirectories = createWorkspaceParentDirectories({
       workspacePath: operation.workspacePath,
       parentPath: operation.parentPath,
@@ -125,6 +220,13 @@ export function applyPreparedOperation(
           : operation.mode === null
             ? {}
             : { mode: operation.mode };
+      const validateBeforePublish =
+        operation.kind === "copy"
+          ? (): void => {
+              validateTargetAtAccess();
+              assertSourceRevisionCurrent(operation, options);
+            }
+          : validateTargetAtAccess;
       const result = createTextFileAtomically(
         realTargetPath,
         operation.afterContent,
@@ -132,7 +234,7 @@ export function applyPreparedOperation(
           ...createOptions,
           beforeAccess: validateTargetAtAccess,
           beforeWrite: validateOpenedTempAtAccess,
-          beforePublish: validateTargetAtAccess,
+          beforePublish: validateBeforePublish,
           afterPublish: validatePublishedTargetAtAccess,
           cleanupPathsByIdentity: (identity) =>
             findWorkspacePathsByIdentity(operation.workspacePath, identity),
@@ -163,6 +265,7 @@ export function applyPreparedOperation(
     operation.workspacePath,
   );
   if (operation.kind === "move") {
+    assertSourceRevisionCurrent(operation, options);
     const createdDestinationParentDirectories =
       createWorkspaceParentDirectories({
         workspacePath: operation.workspacePath,
@@ -230,7 +333,10 @@ export function applyPreparedOperation(
             mode: operation.mode,
             beforeAccess: validateDestinationAtAccess,
             beforeWrite: validateOpenedTempAtAccess,
-            beforePublish: validateDestinationAtAccess,
+            beforePublish: () => {
+              validateDestinationAtAccess();
+              assertSourceRevisionCurrent(operation, options);
+            },
             afterPublish: validatePublishedDestinationAtAccess,
             cleanupPathsByIdentity: (identity) =>
               findWorkspacePathsByIdentity(operation.workspacePath, identity),
@@ -265,6 +371,7 @@ export function applyPreparedOperation(
         if (!pathHasIdentity(accessTargetPath, operation.targetIdentity)) {
           throw changedTargetError(operation);
         }
+        assertSourceRevisionCurrent(operation, options);
         rmSync(accessTargetPath);
         return {
           ...operation,
@@ -309,6 +416,7 @@ export function applyPreparedOperation(
     if (!pathHasIdentity(accessTargetPath, operation.targetIdentity)) {
       throw changedTargetError(operation);
     }
+    assertSourceRevisionCurrent(operation, options);
     rmSync(accessTargetPath);
     return {
       ...operation,
@@ -373,7 +481,16 @@ export function applyPreparedOperation(
       beforeWrite: validateOpenedTempAtAccess,
       beforePublish: validateTargetAtAccess,
       afterPublish: validatePublishedTargetAtAccess,
-      validateReplacement: validateOpenedTempAtAccess,
+      validateReplacement: (replacementPath, fd) => {
+        validateOpenedTempAtAccess(replacementPath, fd);
+        assertPreparedFileRevision(
+          options.readBeforeEdit,
+          replacementPath,
+          operation.path,
+          operation.fileRevision,
+          fileRevisionFromDescriptor(fd),
+        );
+      },
       rollbackOnPublishFailure: {
         beforeContent: operation.beforeContent,
         afterContent: operation.afterContent,

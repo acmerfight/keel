@@ -958,9 +958,7 @@ export async function* runAgentTurn(
         bash,
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
-        readBeforeEdit: {
-          hasRead: readVisibility.hasRead,
-        },
+        readBeforeEdit: readVisibility,
         projectInstructions: projectInstructionVisibility,
         evaluateAssertionGoalCompletion: async (goal) => {
           const evidenceMessages = sessionLedgerMessages(sessionLedger);

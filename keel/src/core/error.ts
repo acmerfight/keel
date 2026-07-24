@@ -3,6 +3,7 @@ const recoverableToolErrorCodes = [
   "tool_file_exists",
   "tool_file_not_found",
   "tool_file_not_read",
+  "tool_file_changed_since_read",
   "tool_empty_command",
   "tool_empty_old_string",
   "tool_empty_pattern",

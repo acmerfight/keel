@@ -35,6 +35,7 @@ import { WorkflowSkillError } from "../skills/model.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
 import { executeEdit } from "./edit.ts";
+import type { FileRevision } from "./file-revision.ts";
 import { executeGitDiff } from "./git-diff.ts";
 import { executeGitStatus } from "./git-status.ts";
 import { executeGlob } from "./glob.ts";
@@ -48,6 +49,7 @@ import {
   validateAgentMemoryProposal,
 } from "./memory.ts";
 import { executeRead } from "./read.ts";
+import type { ReadBeforeEdit } from "./read-before-edit.ts";
 import { observeReadResource } from "./read-resource-observation.ts";
 import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import { ScopedProjectInstructionsNotVisibleError } from "./scoped-project-instructions.ts";
@@ -123,9 +125,7 @@ interface BuiltinToolExecutionContext {
   >;
   readonly memory?: AgentMemoryToolContext;
   readonly recordCheckpoints?: boolean;
-  readonly readBeforeEdit?: {
-    readonly hasRead: (targetPath: string) => boolean;
-  };
+  readonly readBeforeEdit?: ReadBeforeEdit;
   readonly projectInstructions?: ProjectInstructionVisibilityState;
   readonly sessionGoal?: SessionGoal;
   readonly completionProposalHasFollowingToolCalls?: boolean;
@@ -143,6 +143,7 @@ interface BashCommandEvidence {
 interface ReadToolExecutionEffect {
   readonly kind: "read";
   readonly targetPath: string;
+  readonly fileRevision: FileRevision;
   readonly offset?: number;
   readonly limit?: number;
   readonly resourceObservation: ReadResourceObservation;
@@ -174,6 +175,10 @@ interface BashCommandToolExecutionEffect {
   readonly evidence: BashCommandEvidence;
 }
 
+interface OpaqueWorkspaceMutationToolExecutionEffect {
+  readonly kind: "opaque_workspace_mutation";
+}
+
 interface SkillActivationToolExecutionEffect {
   readonly kind: "skill_activation";
   readonly activation: SkillActivationRecord;
@@ -191,6 +196,7 @@ type ToolExecutionEffect =
   | TaskProgressToolExecutionEffect
   | SessionGoalToolExecutionEffect
   | BashCommandToolExecutionEffect
+  | OpaqueWorkspaceMutationToolExecutionEffect
   | SkillActivationToolExecutionEffect
   | MemoryOperationToolExecutionEffect;
 
@@ -896,6 +902,7 @@ function executeReadTool(
     {
       kind: "read",
       targetPath: result.targetPath,
+      fileRevision: result.fileRevision,
       resourceObservation: observeReadResource({
         workspace,
         targetPath: result.targetPath,
@@ -1169,6 +1176,9 @@ async function executeBashTool(
     ok: true,
     ...sourceTruncation(result),
     effects: [
+      {
+        kind: "opaque_workspace_mutation",
+      },
       {
         kind: "bash_command",
         evidence: {

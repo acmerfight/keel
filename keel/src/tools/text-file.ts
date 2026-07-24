@@ -1,6 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { extname } from "node:path";
 import { KeelError } from "../core/error.ts";
+import { type FileRevision, fileRevisionFromBytes } from "./file-revision.ts";
 
 export const BINARY_SAMPLE_BYTES = 4096;
 
@@ -189,6 +190,7 @@ export function decodeUtf8(
 
 export interface EditableTextFile {
   readonly content: string;
+  readonly fileRevision: FileRevision;
   readonly hasUtf8Bom: boolean;
   readonly targetPath: string;
 }
@@ -268,6 +270,7 @@ export function readEditableTextFileWithMetadata(
       new TextDecoder("utf-8", { fatal: true }),
       bytes,
     ),
+    fileRevision: fileRevisionFromBytes(bytes),
     hasUtf8Bom: hasUtf8Bom(bytes),
     targetPath: openedTargetPath,
   };

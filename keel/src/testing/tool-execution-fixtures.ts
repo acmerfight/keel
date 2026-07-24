@@ -1,11 +1,17 @@
 import type { RecordLastBatchCheckpointOperation } from "../core/git.ts";
 import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { ToolExecution } from "../tools/execution.ts";
+import type { FileRevision } from "../tools/file-revision.ts";
 
 const TEST_READ_RESOURCE_OBSERVATION: ReadResourceObservation = {
   kind: "read_projection",
   targetPathSha256: "test-target-path",
   contentSha256: "test-content",
+};
+
+const TEST_FILE_REVISION: FileRevision = {
+  algorithm: "sha256",
+  digest: "test-file-content",
 };
 
 export function successfulReadToolExecution(options: {
@@ -21,6 +27,7 @@ export function successfulReadToolExecution(options: {
       {
         kind: "read",
         targetPath: options.targetPath,
+        fileRevision: TEST_FILE_REVISION,
         resourceObservation: TEST_READ_RESOURCE_OBSERVATION,
         ...(options.offset !== undefined ? { offset: options.offset } : {}),
         ...(options.limit !== undefined ? { limit: options.limit } : {}),

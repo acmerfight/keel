@@ -18,6 +18,15 @@ import { createProjectInstructionVisibilityState } from "../../../src/tools/scop
 const CURRENT_TOOL_OUTPUT_MARKER =
   "[current tool output compacted after context overflow: approximately omitted 100 chars; rerun the tool with narrower parameters if needed]";
 
+function hasVisibleRead(
+  state: ReturnType<typeof createReadVisibilityState>,
+  targetPath: string,
+): boolean {
+  return state
+    .visibleReadsMostRecentFirst()
+    .some((read) => read.targetPath === targetPath);
+}
+
 describe("File Editing Post-Compaction Read Restore", () => {
   test(`Given a compacted current windowed read is still retained,
     When recent reads are restored after compaction,
@@ -92,7 +101,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
           content: `second\n${CURRENT_TOOL_OUTPUT_MARKER}`,
         },
       ]);
-      expect(readVisibility.hasRead(noteTargetPath)).toBe(false);
+      expect(hasVisibleRead(readVisibility, noteTargetPath)).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -184,7 +193,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
           }),
         },
       ]);
-      expect(readVisibility.hasRead(noteTargetPath)).toBe(true);
+      expect(hasVisibleRead(readVisibility, noteTargetPath)).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -848,8 +857,8 @@ describe("File Editing Post-Compaction Read Restore", () => {
           }),
         },
       ]);
-      expect(readVisibility.hasRead(keepTargetPath)).toBe(true);
-      expect(readVisibility.hasRead(goneTargetPath)).toBe(false);
+      expect(hasVisibleRead(readVisibility, keepTargetPath)).toBe(true);
+      expect(hasVisibleRead(readVisibility, goneTargetPath)).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -913,9 +922,9 @@ describe("File Editing Post-Compaction Read Restore", () => {
         ),
       ).toBe(50_000);
       expect(JSON.stringify(messages)).not.toContain("after budget");
-      expect(readVisibility.hasRead(fillerTargetPath)).toBe(true);
-      expect(readVisibility.hasRead(tinyBudgetTargetPath)).toBe(false);
-      expect(readVisibility.hasRead(afterBudgetTargetPath)).toBe(false);
+      expect(hasVisibleRead(readVisibility, fillerTargetPath)).toBe(true);
+      expect(hasVisibleRead(readVisibility, tinyBudgetTargetPath)).toBe(false);
+      expect(hasVisibleRead(readVisibility, afterBudgetTargetPath)).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

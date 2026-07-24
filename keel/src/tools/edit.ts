@@ -1,4 +1,4 @@
-import { fstatSync, statSync } from "node:fs";
+import { fstatSync, readSync, statSync } from "node:fs";
 import { KeelError } from "../core/error.ts";
 import {
   type RecordLastBatchCheckpointOperation,
@@ -17,7 +17,12 @@ import {
   sourcePreservingReplacement,
   sourceSpanReplacement,
 } from "./edit-match.ts";
+import {
+  createFileRevisionAccumulator,
+  type FileRevision,
+} from "./file-revision.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
+import type { FileRevisionStatus, ReadBeforeEdit } from "./read-before-edit.ts";
 import { readEditableTextFileWithMetadata } from "./text-file.ts";
 import type { ToolResult } from "./types.ts";
 import {
@@ -36,9 +41,7 @@ export interface EditReplacement {
 }
 
 interface ExecuteEditOptions {
-  readonly readBeforeEdit?: {
-    readonly hasRead: (targetPath: string) => boolean;
-  };
+  readonly readBeforeEdit?: ReadBeforeEdit;
   readonly recordCheckpoint?: boolean;
 }
 
@@ -52,11 +55,24 @@ const MAX_EDIT_DIAGNOSTIC_LINES = 40;
 const MAX_EDIT_DIAGNOSTIC_LINE_CHARS = 160;
 const MAX_EDIT_DIAGNOSTIC_MATCHES = 5;
 const EDIT_DIAGNOSTIC_CONTEXT_LINES = 1;
+const REVISION_CHUNK_BYTES = 64 * 1024;
 
 interface DiagnosticLine {
   readonly lineNumber: number;
   readonly end: number;
   readonly text: string;
+}
+
+function fileRevisionFromDescriptor(fd: number): FileRevision {
+  const revision = createFileRevisionAccumulator();
+  const chunk = Buffer.allocUnsafe(REVISION_CHUNK_BYTES);
+  let position = 0;
+  while (true) {
+    const bytesRead = readSync(fd, chunk, 0, chunk.length, position);
+    if (bytesRead === 0) return revision.finish();
+    revision.update(chunk.subarray(0, bytesRead));
+    position += bytesRead;
+  }
 }
 
 function fileNotReadError(filePath: string): KeelError {
@@ -65,6 +81,29 @@ function fileNotReadError(filePath: string): KeelError {
     `edit failed: file has not been read: ${filePath}`,
     `Use read(path: "${filePath}") to view the current file content, then retry edit with edits[].oldText copied from the read output.`,
   );
+}
+
+function fileChangedSinceReadError(filePath: string): KeelError {
+  return new KeelError(
+    "tool_file_changed_since_read",
+    `edit failed: file has changed since it was read: ${filePath}`,
+    `Use read(path: "${filePath}") to view the current file content, then retry edit with edits[].oldText copied from the new read output.`,
+  );
+}
+
+function assertCurrentReadRevision(
+  readBeforeEdit: ReadBeforeEdit | undefined,
+  targetPath: string,
+  filePath: string,
+  currentRevision: FileRevision,
+): void {
+  if (readBeforeEdit === undefined) return;
+  const status: FileRevisionStatus = readBeforeEdit.revisionStatus(
+    targetPath,
+    currentRevision,
+  );
+  if (status === "unread") throw fileNotReadError(filePath);
+  if (status === "changed") throw fileChangedSinceReadError(filePath);
 }
 
 function ignoredPathError(filePath: string): KeelError {
@@ -510,13 +549,6 @@ function executeEditBatch(
       "The path is a directory, not a file. Specify a file path inside it.",
     );
   }
-  if (
-    options.readBeforeEdit !== undefined &&
-    !options.readBeforeEdit.hasRead(accessTargetPath)
-  ) {
-    throw fileNotReadError(filePath);
-  }
-
   let openedMode = targetStat.mode & 0o7777;
   const file = readEditableTextFileWithMetadata(accessTargetPath, filePath, {
     maxBytes: MAX_EDIT_FILE_BYTES,
@@ -533,16 +565,16 @@ function executeEditBatch(
       if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
         throw ignoredPathError(filePath);
       }
-      if (
-        options.readBeforeEdit !== undefined &&
-        !options.readBeforeEdit.hasRead(openedTargetPath)
-      ) {
-        throw fileNotReadError(filePath);
-      }
       openedMode = fstatSync(fd).mode & 0o7777;
       return openedTargetPath;
     },
   });
+  assertCurrentReadRevision(
+    options.readBeforeEdit,
+    file.targetPath,
+    filePath,
+    file.fileRevision,
+  );
   const content = file.content;
   const normalizedContent = normalizeWithSourceMap(content);
   const updated = applyMatchedReplacements(
@@ -601,7 +633,15 @@ function executeEditBatch(
     beforeWrite: validateOpenedTempAtAccess,
     beforePublish: validateTargetAtAccess,
     afterPublish: validatePublishedTargetAtAccess,
-    validateReplacement: validateOpenedTempAtAccess,
+    validateReplacement: (replacementPath, fd) => {
+      validateOpenedTempAtAccess(replacementPath, fd);
+      assertCurrentReadRevision(
+        options.readBeforeEdit,
+        replacementPath,
+        filePath,
+        fileRevisionFromDescriptor(fd),
+      );
+    },
     rollbackOnPublishFailure: { beforeContent, afterContent },
     cleanupPathsByIdentity: (identity) =>
       findWorkspacePathsByIdentity(workspacePath, identity),

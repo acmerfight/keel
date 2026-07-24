@@ -1,3 +1,4 @@
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 import {
   access,
   chmod,
@@ -20,6 +21,10 @@ import {
   runGit as git,
 } from "../../src/testing/cli-harness.ts";
 import { executeApplyPatch } from "../../src/tools/apply-patch.ts";
+import {
+  createProjectInstructionVisibilityState,
+  type ProjectInstructionVisibilityState,
+} from "../../src/tools/scoped-project-instructions.ts";
 
 async function createWorkspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), "keel-apply-patch-tool-"));
@@ -90,7 +95,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) => targetPath === join(workspacePath, "src.ts"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "src.ts") ? "current" : "unread",
         },
       });
 
@@ -163,9 +169,11 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
+          revisionStatus: (targetPath) =>
             targetPath === join(workspacePath, "src.ts") ||
-            targetPath === join(workspacePath, "util.ts"),
+            targetPath === join(workspacePath, "util.ts")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -224,8 +232,10 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "obsolete.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "obsolete.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -319,7 +329,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === targetPath,
+          revisionStatus: (path) =>
+            path === targetPath ? "current" : "unread",
         },
       });
 
@@ -382,7 +393,8 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === targetPath,
+              revisionStatus: (path) =>
+                path === targetPath ? "current" : "unread",
             },
           }),
         "tool_patch_hunk_not_found",
@@ -424,7 +436,8 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === targetPath,
+              revisionStatus: (path) =>
+                path === targetPath ? "current" : "unread",
             },
           }),
         "tool_patch_hunk_not_found",
@@ -469,7 +482,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === targetPath,
+          revisionStatus: (path) =>
+            path === targetPath ? "current" : "unread",
         },
       });
 
@@ -506,7 +520,7 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: () => false,
+              revisionStatus: () => "unread",
             },
           }),
         "tool_file_not_read",
@@ -543,8 +557,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "obsolete.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "obsolete.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_patch_hunk_not_found",
@@ -623,8 +639,10 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "empty-old.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "empty-old.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -667,8 +685,10 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "plain.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -702,8 +722,10 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "a b", "file.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "a b", "file.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -738,8 +760,10 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "plain.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -774,8 +798,10 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "plain.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -810,8 +836,10 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "plain.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "plain.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -848,7 +876,7 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: () => false,
+              revisionStatus: () => "unread",
             },
           }),
         "tool_file_not_read",
@@ -883,7 +911,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === sourcePath,
+          revisionStatus: (path) =>
+            path === sourcePath ? "current" : "unread",
         },
       });
 
@@ -940,7 +969,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === sourcePath,
+          revisionStatus: (path) =>
+            path === sourcePath ? "current" : "unread",
         },
       });
 
@@ -999,7 +1029,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === sourcePath,
+          revisionStatus: (path) =>
+            path === sourcePath ? "current" : "unread",
         },
       });
 
@@ -1043,7 +1074,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === sourcePath,
+          revisionStatus: (path) =>
+            path === sourcePath ? "current" : "unread",
         },
       });
 
@@ -1091,7 +1123,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === sourcePath,
+          revisionStatus: (path) =>
+            path === sourcePath ? "current" : "unread",
         },
       });
 
@@ -1145,7 +1178,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === sourcePath,
+          revisionStatus: (path) =>
+            path === sourcePath ? "current" : "unread",
         },
       });
 
@@ -1189,7 +1223,7 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: () => false,
+              revisionStatus: () => "unread",
             },
           }),
         "tool_file_not_read",
@@ -2002,7 +2036,8 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === targetPath,
+              revisionStatus: (path) =>
+                path === targetPath ? "current" : "unread",
             },
           }),
         "tool_patch_hunk_not_found",
@@ -2035,7 +2070,8 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === targetPath,
+          revisionStatus: (path) =>
+            path === targetPath ? "current" : "unread",
         },
       });
 
@@ -2070,7 +2106,8 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === targetPath,
+              revisionStatus: (path) =>
+                path === targetPath ? "current" : "unread",
             },
           }),
         "tool_invalid_patch",
@@ -2100,7 +2137,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === targetPath,
+          revisionStatus: (path) =>
+            path === targetPath ? "current" : "unread",
         },
       });
 
@@ -2150,7 +2188,8 @@ describe("Apply Patch Tool", () => {
       // When
       const result = executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (path) => path === sourcePath,
+          revisionStatus: (path) =>
+            path === sourcePath ? "current" : "unread",
         },
       });
 
@@ -2184,6 +2223,157 @@ describe("Apply Patch Tool", () => {
     }
   });
 
+  test(`Given a move source changes while its destination is prepared,
+    When apply_patch reaches the final publication boundary,
+    Then it rejects the stale revision before publishing the destination`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "old.txt");
+    const destinationPath = join(workspacePath, "new.txt");
+    await writeFile(sourcePath, "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "*** End Patch",
+    ].join("\n");
+    const baseProjectInstructions =
+      createProjectInstructionVisibilityState(workspacePath);
+    let destinationChecks = 0;
+    const projectInstructions: ProjectInstructionVisibilityState = {
+      ...baseProjectInstructions,
+      assertMutationAllowed: (targetPaths) => {
+        baseProjectInstructions.assertMutationAllowed(targetPaths);
+        if (targetPaths.length === 1 && targetPaths[0] === destinationPath) {
+          destinationChecks++;
+          if (destinationChecks === 3) {
+            writeFileSync(sourcePath, "external\n", "utf8");
+          }
+        }
+      },
+    };
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspacePath, patch, {
+            readBeforeEdit: { revisionStatus: () => "current" },
+            projectInstructions,
+            recordCheckpoint: false,
+          }),
+        "tool_file_changed_since_read",
+        "file has changed since it was read: old.txt",
+      );
+      expect(destinationChecks).toBe(3);
+      expect(await readFile(sourcePath, "utf8")).toBe("external\n");
+      expect(await pathExists(destinationPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a copy source is removed after patch preparation,
+    When apply_patch begins the copy,
+    Then it rejects the changed source without publishing the destination`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "source.txt");
+    const destinationPath = join(workspacePath, "copied.txt");
+    await writeFile(sourcePath, "source\n", "utf8");
+    const patch = [
+      "diff --git a/source.txt b/copied.txt",
+      "similarity index 100%",
+      "copy from source.txt",
+      "copy to copied.txt",
+    ].join("\n");
+    const baseProjectInstructions =
+      createProjectInstructionVisibilityState(workspacePath);
+    let removed = false;
+    const projectInstructions: ProjectInstructionVisibilityState = {
+      ...baseProjectInstructions,
+      assertMutationAllowed: (targetPaths) => {
+        baseProjectInstructions.assertMutationAllowed(targetPaths);
+        if (!removed && targetPaths.includes(destinationPath)) {
+          removed = true;
+          rmSync(sourcePath);
+        }
+      },
+    };
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspacePath, patch, {
+            projectInstructions,
+            recordCheckpoint: false,
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside the verified workspace target: source.txt",
+      );
+      expect(removed).toBe(true);
+      expect(await pathExists(sourcePath)).toBe(false);
+      expect(await pathExists(destinationPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a move source is replaced after patch preparation,
+    When apply_patch validates the prepared source identity,
+    Then it rejects the replacement without publishing the destination`, async () => {
+    // Given
+    const workspace = await createWorkspace();
+    const workspacePath = await realpath(workspace);
+    const sourcePath = join(workspacePath, "old.txt");
+    const backupPath = join(workspacePath, "original.txt");
+    const destinationPath = join(workspacePath, "new.txt");
+    await writeFile(sourcePath, "old\n", "utf8");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "*** Move to: new.txt",
+      "*** End Patch",
+    ].join("\n");
+    const baseProjectInstructions =
+      createProjectInstructionVisibilityState(workspacePath);
+    let replaced = false;
+    const projectInstructions: ProjectInstructionVisibilityState = {
+      ...baseProjectInstructions,
+      assertMutationAllowed: (targetPaths) => {
+        baseProjectInstructions.assertMutationAllowed(targetPaths);
+        if (!replaced && targetPaths.includes(sourcePath)) {
+          replaced = true;
+          renameSync(sourcePath, backupPath);
+          writeFileSync(sourcePath, "external\n", "utf8");
+        }
+      },
+    };
+
+    try {
+      // When / Then
+      expectApplyPatchError(
+        () =>
+          executeApplyPatch(workspacePath, patch, {
+            readBeforeEdit: { revisionStatus: () => "current" },
+            projectInstructions,
+            recordCheckpoint: false,
+          }),
+        "tool_path_outside_workspace",
+        "path changed outside the verified workspace target: old.txt",
+      );
+      expect(replaced).toBe(true);
+      expect(await readFile(sourcePath, "utf8")).toBe("external\n");
+      expect(await readFile(backupPath, "utf8")).toBe("old\n");
+      expect(await pathExists(destinationPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a patch moves a file to an existing destination,
     When apply_patch prevalidates the move,
     Then it rejects the patch without changing either file`, async () => {
@@ -2208,7 +2398,8 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === join(workspacePath, "old.txt"),
+              revisionStatus: (path) =>
+                path === join(workspacePath, "old.txt") ? "current" : "unread",
             },
           }),
         "tool_file_exists",
@@ -2248,8 +2439,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "bom.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "bom.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2294,9 +2487,11 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
+              revisionStatus: (targetPath) =>
                 targetPath === join(workspacePath, "first.txt") ||
-                targetPath === join(workspacePath, "second.txt"),
+                targetPath === join(workspacePath, "second.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_patch_hunk_not_found",
@@ -2336,8 +2531,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "win.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "win.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2383,10 +2580,12 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
+          revisionStatus: (targetPath) =>
             targetPath === join(workspacePath, "after.txt") ||
             targetPath === join(workspacePath, "before.txt") ||
-            targetPath === join(workspacePath, "none.txt"),
+            targetPath === join(workspacePath, "none.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2432,8 +2631,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "indented.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "indented.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2474,8 +2675,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "example.py"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "example.py")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2512,8 +2715,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "note.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "note.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2556,8 +2761,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "note.ts"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "note.ts")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2606,8 +2813,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "note.ts"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "note.ts")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2640,8 +2849,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "copy.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "copy.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2674,8 +2885,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "copy.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "copy.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2715,8 +2928,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "copy.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "copy.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_patch_hunk_not_found",
@@ -2757,8 +2972,10 @@ describe("Apply Patch Tool", () => {
       // When
       executeApplyPatch(workspace, patch, {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "note.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "note.txt")
+              ? "current"
+              : "unread",
         },
       });
 
@@ -2792,7 +3009,7 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: () => false,
+              revisionStatus: () => "unread",
             },
           }),
         "tool_file_not_read",
@@ -2823,7 +3040,7 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: () => false,
+              revisionStatus: () => "unread",
             },
           }),
         "tool_file_not_read",
@@ -2860,8 +3077,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "image.png"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "image.png")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_binary_file",
@@ -2892,7 +3111,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === join(workspacePath, "image.png"),
+              revisionStatus: (path) =>
+                path === join(workspacePath, "image.png")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_binary_file",
@@ -2926,8 +3148,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "large.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "large.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_file_too_large",
@@ -2958,7 +3182,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === join(workspacePath, "large.txt"),
+              revisionStatus: (path) =>
+                path === join(workspacePath, "large.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_file_too_large",
@@ -2990,7 +3217,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === join(workspacePath, "large.txt"),
+              revisionStatus: (path) =>
+                path === join(workspacePath, "large.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_file_too_large",
@@ -3109,8 +3339,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "src"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "src")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_not_file",
@@ -3140,8 +3372,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "src"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "src")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_not_file",
@@ -3178,8 +3412,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "private", "secret.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "private", "secret.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_path_ignored",
@@ -3212,8 +3448,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "repeat.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "repeat.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_patch_hunk_not_found",
@@ -3253,8 +3491,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "note.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_invalid_patch",
@@ -3289,8 +3529,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "note.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_invalid_patch",
@@ -3434,8 +3676,10 @@ describe("Apply Patch Tool", () => {
       ].join("\n"),
       {
         readBeforeEdit: {
-          hasRead: (targetPath) =>
-            targetPath === join(workspacePath, "checkpointed.txt"),
+          revisionStatus: (targetPath) =>
+            targetPath === join(workspacePath, "checkpointed.txt")
+              ? "current"
+              : "unread",
         },
       },
     );
@@ -3460,8 +3704,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "target.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "target.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_path_ignored",
@@ -3523,7 +3769,8 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === targetPath,
+              revisionStatus: (path) =>
+                path === targetPath ? "current" : "unread",
             },
           }),
         "tool_path_ignored",
@@ -3579,7 +3826,8 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (path) => path === sourcePath,
+              revisionStatus: (path) =>
+                path === sourcePath ? "current" : "unread",
             },
           }),
         "tool_path_ignored",
@@ -3624,8 +3872,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "note.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_path_ignored",
@@ -3666,8 +3916,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "obsolete.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "obsolete.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_path_ignored",
@@ -3711,8 +3963,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "old.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "old.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_path_ignored",
@@ -3760,8 +4014,10 @@ describe("Apply Patch Tool", () => {
         () =>
           executeApplyPatch(workspace, patch, {
             readBeforeEdit: {
-              hasRead: (targetPath) =>
-                targetPath === join(workspacePath, "note.txt"),
+              revisionStatus: (targetPath) =>
+                targetPath === join(workspacePath, "note.txt")
+                  ? "current"
+                  : "unread",
             },
           }),
         "tool_path_outside_workspace",

@@ -7,6 +7,10 @@ import {
   statSync,
 } from "node:fs";
 import { KeelError } from "../core/error.ts";
+import {
+  createFileRevisionAccumulator,
+  type FileRevision,
+} from "./file-revision.ts";
 import { createProjectIgnorePolicy } from "./project-ignore.ts";
 import {
   BINARY_SAMPLE_BYTES,
@@ -34,11 +38,13 @@ export interface ReadOptions {
 }
 
 interface ReadToolResult extends ToolResult {
+  readonly fileRevision: FileRevision;
   readonly targetPath: string;
 }
 
 interface ReadTextWindowResult {
   readonly content: string;
+  readonly fileRevision: FileRevision;
   readonly truncated: boolean;
 }
 
@@ -230,12 +236,15 @@ function readTextWindow(
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
   const acc = createLineWindowAccumulator();
+  const revision = createFileRevisionAccumulator();
 
-  while (acc.keepReading) {
+  while (true) {
     const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
     if (bytesRead === 0) break;
 
     const bytes = chunk.subarray(0, bytesRead);
+    revision.update(bytes);
+    if (!acc.keepReading) continue;
     if (hasBinaryControlBytes(bytes)) {
       throw binaryFileError("read", filePath);
     }
@@ -266,6 +275,7 @@ function readTextWindow(
       content: `[Read output truncated: line ${options.offset} exceeds ${formatSize(
         MAX_READ_BYTES,
       )}. Use grep to find a smaller target before reading this file.]`,
+      fileRevision: revision.finish(),
       truncated: true,
     };
   }
@@ -291,6 +301,7 @@ function readTextWindow(
           acc.truncatedReason,
         )
       : acc.content,
+    fileRevision: revision.finish(),
     truncated: acc.truncated,
   };
 }
@@ -365,6 +376,7 @@ export function executeRead(
     const textWindow = readTextWindow(fd, filePath, normalizedOptions);
     return {
       content: textWindow.content,
+      fileRevision: textWindow.fileRevision,
       sourceTruncated: textWindow.truncated,
       targetPath: openedTargetPath,
     };

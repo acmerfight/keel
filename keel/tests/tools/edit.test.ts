@@ -413,7 +413,7 @@ describe("Edit Tool", () => {
       // When
       const error = captureEditError(() =>
         executeEdit(workspace, "secret.txt", singleEdit("apiToken", "token"), {
-          readBeforeEdit: { hasRead: () => false },
+          readBeforeEdit: { revisionStatus: () => "unread" },
         }),
       );
 
