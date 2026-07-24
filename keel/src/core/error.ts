@@ -29,22 +29,36 @@ const recoverableToolErrorCodes = [
 export type RecoverableToolErrorCode =
   (typeof recoverableToolErrorCodes)[number];
 
-export type KeelErrorCode =
-  | "agent_missing_stop"
-  | "goal_terminal_outcome_invalid"
-  | RecoverableToolErrorCode
-  | "tool_aborted"
-  | "tool_invalid_bash_timeout"
-  | "tool_invalid_read_options"
-  | "tool_unavailable"
-  | "provider_auth_failed"
-  | "provider_rate_limited"
-  | "provider_server_error"
-  | "provider_context_overflow"
-  | "provider_http_error"
-  | "provider_protocol_error"
-  | "provider_aborted"
-  | "provider_network_error";
+export const keelErrorCodes = [
+  "agent_missing_stop",
+  "goal_terminal_outcome_invalid",
+  ...recoverableToolErrorCodes,
+  "tool_aborted",
+  "tool_invalid_bash_timeout",
+  "tool_invalid_read_options",
+  "tool_unavailable",
+  "provider_auth_failed",
+  "provider_rate_limited",
+  "provider_server_error",
+  "provider_context_overflow",
+  "provider_http_error",
+  "provider_protocol_error",
+  "provider_aborted",
+  "provider_network_error",
+  "first_response_timeout",
+  "stream_inactivity_timeout",
+] as const;
+
+export type KeelErrorCode = (typeof keelErrorCodes)[number];
+
+export const providerRequestTerminalErrorCodes = [
+  ...keelErrorCodes,
+  "provider_unexpected_error",
+  "provider_consumer_closed",
+] as const;
+
+export type ProviderRequestTerminalErrorCode =
+  (typeof providerRequestTerminalErrorCodes)[number];
 
 const recoverableToolErrorCodeSet: ReadonlySet<KeelErrorCode> = new Set(
   recoverableToolErrorCodes,

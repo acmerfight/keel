@@ -162,6 +162,8 @@ const providerRetryReasonLabels: Readonly<Record<string, string>> = {
   provider_network_error: "network error",
   provider_protocol_error: "stream interrupted",
   provider_http_error: "HTTP error",
+  first_response_timeout: "response timeout",
+  stream_inactivity_timeout: "stream inactivity timeout",
 };
 
 function providerRetryReasonLabel(reason: string): string {

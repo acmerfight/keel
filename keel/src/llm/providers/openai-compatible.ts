@@ -13,6 +13,7 @@ import {
   ProviderRetryController,
   requestChatCompletions,
   requestRetryDecisionForReport,
+  resolveProviderLivenessConfig,
   waitForProviderRetry,
 } from "./openai-compatible-retry.ts";
 import {
@@ -25,7 +26,10 @@ import {
   readSseEvents,
 } from "./openai-compatible-sse.ts";
 
-export type { ProviderRetryConfig } from "./openai-compatible-retry.ts";
+export type {
+  ProviderLivenessConfig,
+  ProviderRetryConfig,
+} from "./openai-compatible-retry.ts";
 export type {
   OpenAICompatibleChunk,
   OpenAICompatibleStreamState,
@@ -41,9 +45,15 @@ interface OpenAICompatibleProviderConfig<Chunk extends OpenAICompatibleChunk>
 function isRetryablePreOutputStreamError(
   error: KeelError,
 ): error is KeelError & {
-  readonly code: "provider_network_error" | "provider_protocol_error";
+  readonly code:
+    | "provider_network_error"
+    | "provider_protocol_error"
+    | "stream_inactivity_timeout";
 } {
-  if (error.code === "provider_network_error") {
+  if (
+    error.code === "provider_network_error" ||
+    error.code === "stream_inactivity_timeout"
+  ) {
     return true;
   }
   return isMissingDoneSignalError(error);
@@ -84,6 +94,9 @@ export function createOpenAICompatibleProvider<
           providerConfig.messageOptions,
         );
       const retry = new ProviderRetryController(providerConfig.config.retry);
+      const liveness = resolveProviderLivenessConfig(
+        providerConfig.config.liveness,
+      );
 
       for (;;) {
         let emittedAssistantOutput = false;
@@ -103,18 +116,23 @@ export function createOpenAICompatibleProvider<
           attemptFinished = true;
           response.attempt.finish(result);
         };
+        const state = createStreamState();
         try {
           const reader = getResponseReader(
             response.response,
             providerConfig.providerName,
           );
-          const state = createStreamState();
 
           for await (const event of readSseEvents(
             reader,
             options.signal,
             state,
             providerConfig,
+            {
+              timeoutMs: liveness.streamInactivityTimeoutMs,
+              abort: response.abortForStreamInactivity,
+              timedOut: response.streamInactivityTimedOut,
+            },
           )) {
             emittedAssistantOutput = true;
             yield event;
@@ -136,21 +154,32 @@ export function createOpenAICompatibleProvider<
           return;
         } catch (error) {
           if (!(error instanceof KeelError)) {
-            finishAttempt({ outcome: "terminal_error" });
+            finishAttempt({
+              outcome: "terminal_error",
+              errorCode: "provider_unexpected_error",
+            });
             throw error;
           }
           if (
             emittedAssistantOutput ||
+            (error.code === "stream_inactivity_timeout" &&
+              state.hasAssistantOutput) ||
             !isRetryablePreOutputStreamError(error)
           ) {
-            finishAttempt({
-              outcome: terminalAttemptOutcome(error),
-            });
+            const outcome = terminalAttemptOutcome(error);
+            finishAttempt(
+              outcome === "aborted"
+                ? { outcome }
+                : { outcome, errorCode: error.code },
+            );
             throw error;
           }
           const decision = retry.transportDecision(error.code);
           if (decision === null) {
-            finishAttempt({ outcome: "terminal_error" });
+            finishAttempt({
+              outcome: "terminal_error",
+              errorCode: error.code,
+            });
             throw error;
           }
           finishAttempt({
@@ -167,9 +196,15 @@ export function createOpenAICompatibleProvider<
             decision,
           );
         } finally {
-          finishAttempt({
-            outcome: options.signal.aborted ? "aborted" : "terminal_error",
-          });
+          response.close();
+          finishAttempt(
+            options.signal.aborted
+              ? { outcome: "aborted" }
+              : {
+                  outcome: "terminal_error",
+                  errorCode: "provider_consumer_closed",
+                },
+          );
         }
       }
     },

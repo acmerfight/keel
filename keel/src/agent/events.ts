@@ -1,3 +1,4 @@
+import type { KeelErrorCode } from "../core/error.ts";
 import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
@@ -41,7 +42,7 @@ export type AgentEvent =
   | {
       readonly type: "provider_retry";
       readonly provider: string;
-      readonly reason: string;
+      readonly reason: KeelErrorCode;
       readonly attempt: number;
       readonly maxRetries: number;
       readonly delayMs: number;

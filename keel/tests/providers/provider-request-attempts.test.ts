@@ -355,7 +355,7 @@ describe("Provider Request Attempt Conformance", () => {
 
     expect(observed.attempts).toHaveLength(1);
     expect(observed.attempts[0]?.finishes).toEqual([
-      { outcome: "terminal_error" },
+      { outcome: "terminal_error", errorCode: "provider_network_error" },
     ]);
   });
 
@@ -365,18 +365,21 @@ describe("Provider Request Attempt Conformance", () => {
       status: 401,
       body: "unauthorized",
       errorCode: "provider_auth_failed",
-      attemptOutcome: "terminal_error" as const,
+      attemptFinish: {
+        outcome: "terminal_error",
+        errorCode: "provider_auth_failed",
+      } as const,
     },
     {
       label: "context overflow response",
       status: 400,
       body: "context_length_exceeded: prompt too long",
       errorCode: "provider_context_overflow",
-      attemptOutcome: "context_overflow" as const,
+      attemptFinish: { outcome: "context_overflow" } as const,
     },
   ])(
     `Given a $label, Then its physical attempt has the exact failure outcome`,
-    async ({ status, body, errorCode, attemptOutcome }) => {
+    async ({ status, body, errorCode, attemptFinish }) => {
       let physicalRequests = 0;
       const { baseUrl } = await localServer((_req, res) => {
         physicalRequests++;
@@ -396,9 +399,7 @@ describe("Provider Request Attempt Conformance", () => {
       ).rejects.toMatchObject({ code: errorCode });
 
       assertConformantAttemptCount(physicalRequests, observed.attempts);
-      expect(observed.attempts[0]?.finishes).toEqual([
-        { outcome: attemptOutcome },
-      ]);
+      expect(observed.attempts[0]?.finishes).toEqual([attemptFinish]);
     },
   );
 
@@ -429,7 +430,7 @@ describe("Provider Request Attempt Conformance", () => {
 
     assertConformantAttemptCount(physicalRequests, observed.attempts);
     expect(observed.attempts[0]?.finishes).toEqual([
-      { outcome: "terminal_error" },
+      { outcome: "terminal_error", errorCode: "provider_network_error" },
     ]);
   });
 
@@ -525,7 +526,10 @@ describe("Provider Request Attempt Conformance", () => {
     expect(first.value).toMatchObject({ type: "text" });
     assertConformantAttemptCount(physicalRequests, observed.attempts);
     expect(observed.attempts[0]?.finishes).toEqual([
-      { outcome: "terminal_error" },
+      {
+        outcome: "terminal_error",
+        errorCode: "provider_consumer_closed",
+      },
     ]);
   });
 

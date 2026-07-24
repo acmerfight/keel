@@ -4,7 +4,11 @@ import {
   toolCallFromParsedArguments,
 } from "../../tools/tool-call.ts";
 import type { LLMEvent, LLMStopReason, Usage } from "../types.ts";
-import { transportError } from "./openai-compatible-retry.ts";
+import {
+  type ProviderInactivityControl,
+  readWithProviderInactivityDeadline,
+  transportError,
+} from "./openai-compatible-retry.ts";
 
 interface OpenAICompatibleToolCallDelta {
   readonly id?: string | undefined;
@@ -50,6 +54,7 @@ interface PendingToolCall {
 export interface OpenAICompatibleStreamState {
   usage: Usage | null;
   receivedDone: boolean;
+  hasAssistantOutput: boolean;
   finishReason: string | undefined;
   toolCalls: Map<number, PendingToolCall>;
   pendingToolCalls: readonly ToolCallEvent[];
@@ -73,6 +78,11 @@ type ToolCallEvent = Extract<LLMEvent, { readonly type: "tool_call" }>;
 export interface OpenAICompatibleFinalStream {
   readonly events: readonly LLMEvent[];
   readonly usage: Usage;
+}
+
+interface ParsedSseLine {
+  readonly isActivity: boolean;
+  readonly events: readonly LLMEvent[];
 }
 
 class MissingDoneSignalError extends KeelError {
@@ -108,6 +118,7 @@ export function createStreamState(): OpenAICompatibleStreamState {
   return {
     usage: null,
     receivedDone: false,
+    hasAssistantOutput: false,
     finishReason: undefined,
     toolCalls: new Map(),
     pendingToolCalls: [],
@@ -248,35 +259,46 @@ function finishReasonToStopReason(
   }
 }
 
-function* parseSseLine<Chunk extends OpenAICompatibleChunk>(
+function parseSseLine<Chunk extends OpenAICompatibleChunk>(
   line: string,
   state: OpenAICompatibleStreamState,
   config: OpenAICompatibleStreamConfig<Chunk>,
-): Generator<LLMEvent> {
+): ParsedSseLine {
   const trimmed = line.trim();
-  if (!trimmed.startsWith("data: ")) return;
+  if (!trimmed.startsWith("data: ")) {
+    return { isActivity: false, events: [] };
+  }
 
   const data = trimmed.slice(6);
   if (data === "[DONE]") {
     state.receivedDone = true;
-    return;
+    return { isActivity: true, events: [] };
   }
 
   const chunk = config.parseChunk(data);
   const choice = chunk.choices?.[0];
+  const events: LLMEvent[] = [];
 
   if (choice !== undefined) {
     const reasoningContent = choice.delta?.reasoning_content;
+    if (reasoningContent) {
+      state.hasAssistantOutput = true;
+    }
     if (config.emitReasoningContent === true && reasoningContent) {
-      yield { type: "reasoning", text: reasoningContent };
+      events.push({ type: "reasoning", text: reasoningContent });
     }
 
     const content = choice.delta?.content;
     if (content) {
-      yield { type: "text", text: content };
+      state.hasAssistantOutput = true;
+      events.push({ type: "text", text: content });
     }
 
-    for (const toolCall of choice.delta?.tool_calls ?? []) {
+    const toolCalls = choice.delta?.tool_calls ?? [];
+    if (toolCalls.length > 0) {
+      state.hasAssistantOutput = true;
+    }
+    for (const toolCall of toolCalls) {
       appendToolCallDelta(state, toolCall, config.providerName);
     }
 
@@ -286,6 +308,14 @@ function* parseSseLine<Chunk extends OpenAICompatibleChunk>(
   }
 
   config.captureUsage(state, chunk, choice);
+  return { isActivity: true, events };
+}
+
+function streamInactivityError(providerName: string): KeelError {
+  return new KeelError(
+    "stream_inactivity_timeout",
+    `${providerName} stream timed out waiting for activity`,
+  );
 }
 
 export async function* readSseEvents<Chunk extends OpenAICompatibleChunk>(
@@ -293,13 +323,20 @@ export async function* readSseEvents<Chunk extends OpenAICompatibleChunk>(
   signal: AbortSignal,
   state: OpenAICompatibleStreamState,
   config: OpenAICompatibleStreamConfig<Chunk>,
+  liveness: ProviderInactivityControl,
 ): AsyncGenerator<LLMEvent> {
   const decoder = new TextDecoder();
   let buffer = "";
+  let activityDeadline = Date.now() + liveness.timeoutMs;
+  let reachedEof = false;
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithProviderInactivityDeadline(
+        reader,
+        activityDeadline,
+        liveness,
+      );
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -307,19 +344,34 @@ export async function* readSseEvents<Chunk extends OpenAICompatibleChunk>(
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        for (const event of parseSseLine(line, state, config)) {
+        const parsed = parseSseLine(line, state, config);
+        if (parsed.isActivity) {
+          activityDeadline = Date.now() + liveness.timeoutMs;
+        }
+        for (const event of parsed.events) {
           yield event;
+        }
+        if (parsed.isActivity) {
+          activityDeadline = Date.now() + liveness.timeoutMs;
+        }
+        if (state.receivedDone) {
+          return;
         }
       }
     }
 
     buffer += decoder.decode();
     if (buffer.trim() !== "") {
-      for (const event of parseSseLine(buffer, state, config)) {
+      const parsed = parseSseLine(buffer, state, config);
+      for (const event of parsed.events) {
         yield event;
       }
     }
+    reachedEof = true;
   } catch (error) {
+    if (liveness.timedOut()) {
+      throw streamInactivityError(config.providerName);
+    }
     throw transportError(
       error,
       signal,
@@ -327,6 +379,9 @@ export async function* readSseEvents<Chunk extends OpenAICompatibleChunk>(
       `${config.providerName} stream failed`,
     );
   } finally {
+    if (!reachedEof) {
+      await reader.cancel().catch(() => undefined);
+    }
     reader.releaseLock();
   }
 }

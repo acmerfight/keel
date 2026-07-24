@@ -1,3 +1,7 @@
+import type {
+  KeelErrorCode,
+  ProviderRequestTerminalErrorCode,
+} from "../core/error.ts";
 import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { ModelToolExposure, ToolCall } from "../tools/tool-call.ts";
 
@@ -90,7 +94,7 @@ export type ProviderRequestAttemptOutcome =
 
 export interface ProviderRequestRetryDecision {
   readonly provider: string;
-  readonly reason: string;
+  readonly reason: KeelErrorCode;
   readonly attempt: number;
   readonly maxRetries: number;
   readonly delayMs: number;
@@ -103,7 +107,11 @@ export type ProviderRequestAttemptFinish =
       readonly retryDecision: ProviderRequestRetryDecision;
     }
   | {
-      readonly outcome: "context_overflow" | "terminal_error" | "aborted";
+      readonly outcome: "context_overflow" | "aborted";
+    }
+  | {
+      readonly outcome: "terminal_error";
+      readonly errorCode: ProviderRequestTerminalErrorCode;
     };
 
 export interface ProviderRequestAttemptHandle {
@@ -121,7 +129,7 @@ export type LLMEvent =
   | {
       readonly type: "provider_retry";
       readonly provider: string;
-      readonly reason: string;
+      readonly reason: KeelErrorCode;
       readonly attempt: number;
       readonly maxRetries: number;
       readonly delayMs: number;

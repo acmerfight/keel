@@ -1359,7 +1359,7 @@ describe("Context Compaction Summary Checkpoints", () => {
         yield {
           type: "provider_retry",
           provider: "summary-serializer-provider",
-          reason: "temporary_rate_limit",
+          reason: "provider_rate_limited",
           attempt: 1,
           maxRetries: 1,
           delayMs: 0,

@@ -4,6 +4,10 @@ import { z } from "zod";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { ZERO_COST_MODEL } from "../../../src/core/cost.ts";
+import {
+  keelErrorCodes,
+  providerRequestTerminalErrorCodes,
+} from "../../../src/core/error.ts";
 import type { LLMProvider } from "../../../src/llm/types.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -33,7 +37,7 @@ const usageSchema = z.object({
 
 const retryDecisionSchema = z.object({
   provider: z.string(),
-  reason: z.string(),
+  reason: z.enum(keelErrorCodes),
   attempt: z.number().int().positive(),
   maxRetries: z.number().int().nonnegative(),
   delayMs: z.number().nonnegative(),
@@ -60,7 +64,12 @@ const providerAttemptSchema = z.discriminatedUnion("outcome", [
   }),
   z.object({
     ...providerAttemptBase,
-    outcome: z.enum(["terminal_error", "aborted"]),
+    outcome: z.literal("terminal_error"),
+    errorCode: z.enum(providerRequestTerminalErrorCodes),
+  }),
+  z.object({
+    ...providerAttemptBase,
+    outcome: z.literal("aborted"),
   }),
 ]);
 
@@ -100,7 +109,7 @@ const modelOperationSchema = z.object(modelOperationBase);
 
 const modelOperationReportSchema = z
   .object({
-    schemaVersion: z.literal(18),
+    schemaVersion: z.literal(19),
     modelOperations: z.array(modelOperationSchema),
     modelOperationCount: z.number().int().nonnegative(),
     providerRequestAttemptCount: z.number().int().nonnegative(),
@@ -461,7 +470,7 @@ describe("CLI Run Report - Model Operations", () => {
     expect(stderr).toContain("Context compacted: manual");
     expect(result.report).toBeDefined();
     const rawReport = {
-      schemaVersion: 18,
+      schemaVersion: 19,
       tasks: result.report?.tasks ?? [],
       modelOperations: result.report?.modelOperations ?? [],
       modelOperationCount: result.report?.modelOperationCount ?? 0,

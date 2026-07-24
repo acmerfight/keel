@@ -133,7 +133,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 18,
+  schemaVersion: 19,
   tasks: [
     {
       ordinal: 1,
