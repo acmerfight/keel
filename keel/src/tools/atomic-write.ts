@@ -134,7 +134,10 @@ export function restoreTextFileByIdentityBestEffort(
 ): void {
   let fd: number | null = null;
   try {
-    fd = openSync(targetPath, constants.O_RDWR | constants.O_NONBLOCK);
+    fd = openSync(
+      targetPath,
+      constants.O_RDWR | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+    );
     if (
       !sameFileIdentity(fileIdentityFromStats(fstatSync(fd)), identity) ||
       readFileSync(fd, "utf8") !== rollback.afterContent
@@ -142,7 +145,22 @@ export function restoreTextFileByIdentityBestEffort(
       return;
     }
     ftruncateSync(fd, 0);
-    writeSync(fd, rollback.beforeContent, 0, "utf8");
+    const rollbackContent = Buffer.from(rollback.beforeContent);
+    let writeOffset = 0;
+    while (writeOffset < rollbackContent.length) {
+      const bytesWritten = writeSync(
+        fd,
+        rollbackContent,
+        writeOffset,
+        rollbackContent.length - writeOffset,
+        writeOffset,
+      );
+      /* v8 ignore next 3: a blocking regular-file write returning zero requires an OS fault; this guard prevents an infinite loop. */
+      if (bytesWritten === 0) {
+        throw new Error("atomic rollback write made no progress");
+      }
+      writeOffset += bytesWritten;
+    }
     fchmodSync(fd, mode);
     fsyncSync(fd);
   } catch {
