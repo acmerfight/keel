@@ -4,6 +4,7 @@ import type { Usage } from "../types.ts";
 import {
   createOpenAICompatibleProvider,
   type OpenAICompatibleStreamState,
+  type ProviderLivenessConfig,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
 
@@ -68,6 +69,7 @@ export interface DeepseekConfig {
   readonly baseUrl: string;
   readonly model: string;
   readonly retry?: ProviderRetryConfig;
+  readonly liveness?: ProviderLivenessConfig;
 }
 
 function parseDeepseekChunk(data: string): DeepseekStreamChunk {

@@ -4,6 +4,7 @@ import type { Usage } from "../types.ts";
 import {
   createOpenAICompatibleProvider,
   type OpenAICompatibleStreamState,
+  type ProviderLivenessConfig,
   type ProviderRetryConfig,
 } from "./openai-compatible.ts";
 
@@ -97,6 +98,7 @@ export interface KimiConfig {
   readonly baseUrl: string;
   readonly model: string;
   readonly retry?: ProviderRetryConfig;
+  readonly liveness?: ProviderLivenessConfig;
 }
 
 function parseKimiChunk(data: string): KimiStreamChunk {

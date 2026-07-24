@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  keelErrorCodes,
+  providerRequestTerminalErrorCodes,
+} from "../core/error.ts";
 
 // Mirrors the CLI --report payload. The eval runner and comparator consume the
 // same report file a user would, so bump this together with CLI report output.
@@ -62,7 +66,7 @@ const contextCompactionSchema = z.object({
 
 const providerRetrySchema = z.object({
   provider: z.string(),
-  reason: z.string(),
+  reason: z.enum(keelErrorCodes),
   attempt: z.number().int().nonnegative(),
   maxRetries: z.number().int().nonnegative(),
   delayMs: z.number().nonnegative(),
@@ -93,7 +97,7 @@ const taskSchema = z.object({
 
 const retryDecisionSchema = z.object({
   provider: z.string(),
-  reason: z.string(),
+  reason: z.enum(keelErrorCodes),
   attempt: z.number().int().positive(),
   maxRetries: z.number().int().nonnegative(),
   delayMs: z.number().nonnegative(),
@@ -122,7 +126,12 @@ const providerRequestAttemptSchema = z.discriminatedUnion("outcome", [
   }),
   z.object({
     ...providerRequestAttemptBase,
-    outcome: z.enum(["terminal_error", "aborted"]),
+    outcome: z.literal("terminal_error"),
+    errorCode: z.enum(providerRequestTerminalErrorCodes),
+  }),
+  z.object({
+    ...providerRequestAttemptBase,
+    outcome: z.literal("aborted"),
   }),
 ]);
 
@@ -296,7 +305,7 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(18),
+  schemaVersion: z.literal(19),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),

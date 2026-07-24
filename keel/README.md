@@ -281,7 +281,7 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 15. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 19. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
 context-compaction records, and stop reason. A human intervention is one user
@@ -292,7 +292,9 @@ single model-operation ledger derives root usage, cost, operation count,
 physical-attempt count, `usageByModel`, and root `agentLoopTurns`; only
 completed `agent_turn` operations count as Agent-loop turns. Goal `usage.turns`
 has a different owner: it increments once per Goal Agent Run, including
-automatic continuation.
+automatic continuation. Failed physical provider attempts report a distinct
+terminal `errorCode`; retry attempts retain the exact phase-specific reason,
+including first-response and stream-inactivity timeouts.
 
 Resuming a process does not silently continue an old Task. If a persisted Goal
 was active when the process stopped, Keel restores it as paused and requires

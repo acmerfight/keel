@@ -44,17 +44,27 @@ function createObservedFakeProvider(
       } catch (error) {
         if (!finished) {
           finished = true;
-          attempt?.finish({
-            outcome: options.signal.aborted ? "aborted" : "terminal_error",
-          });
+          attempt?.finish(
+            options.signal.aborted
+              ? { outcome: "aborted" }
+              : {
+                  outcome: "terminal_error",
+                  errorCode: "provider_unexpected_error",
+                },
+          );
         }
         throw error;
       } finally {
         if (!finished) {
           finished = true;
-          attempt?.finish({
-            outcome: options.signal.aborted ? "aborted" : "terminal_error",
-          });
+          attempt?.finish(
+            options.signal.aborted
+              ? { outcome: "aborted" }
+              : {
+                  outcome: "terminal_error",
+                  errorCode: "provider_consumer_closed",
+                },
+          );
         }
       }
       /* v8 ignore stop */

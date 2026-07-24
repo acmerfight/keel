@@ -185,7 +185,10 @@ describe("CLI Run Report Recorder", () => {
     const ledger = createModelOperationReportLedger(() => null);
     const operation = beginSessionModelOperation(ledger);
     const attempt = operation.providerRequestAttempts.begin();
-    attempt.finish({ outcome: "terminal_error" });
+    attempt.finish({
+      outcome: "terminal_error",
+      errorCode: "provider_unexpected_error",
+    });
     operation.finish({ outcome: "terminal_error" });
 
     // When / Then
@@ -207,9 +210,10 @@ describe("CLI Run Report Recorder", () => {
     const ledger = createModelOperationReportLedger(() => null);
     const completedWithoutAttempt = beginSessionModelOperation(ledger);
     const admittedOperation = beginSessionModelOperation(ledger);
-    admittedOperation.providerRequestAttempts
-      .begin()
-      .finish({ outcome: "terminal_error" });
+    admittedOperation.providerRequestAttempts.begin().finish({
+      outcome: "terminal_error",
+      errorCode: "provider_unexpected_error",
+    });
 
     // When / Then
     completedWithoutAttempt.finish({ outcome: "completed" });

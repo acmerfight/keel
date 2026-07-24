@@ -10,6 +10,7 @@ import {
   requestCostUsd,
 } from "../agent/model-operations.ts";
 import type { CostModel } from "../core/cost.ts";
+import type { ProviderRequestTerminalErrorCode } from "../core/error.ts";
 import type {
   ProviderRequestAttemptFinish,
   ProviderRequestAttemptHandle,
@@ -44,7 +45,11 @@ type RunReportProviderRequestAttempt =
       readonly recoveryOperationOrdinal: number | null;
     })
   | (RunReportProviderRequestAttemptBase & {
-      readonly outcome: "terminal_error" | "aborted";
+      readonly outcome: "terminal_error";
+      readonly errorCode: ProviderRequestTerminalErrorCode;
+    })
+  | (RunReportProviderRequestAttemptBase & {
+      readonly outcome: "aborted";
     });
 
 interface RunReportModelOperationBase {
@@ -109,7 +114,11 @@ type MutableProviderRequestAttemptResult =
         operationOrdinal: number | null;
       };
     }
-  | { readonly state: "terminal_error" | "aborted" };
+  | {
+      readonly state: "terminal_error";
+      readonly errorCode: ProviderRequestTerminalErrorCode;
+    }
+  | { readonly state: "aborted" };
 
 type FinishedProviderRequestAttemptResult = Exclude<
   MutableProviderRequestAttemptResult,
@@ -222,6 +231,11 @@ function finishProviderRequestAttempt(
       };
     }
     case "terminal_error":
+      attempt.result = {
+        state: "terminal_error",
+        errorCode: result.errorCode,
+      };
+      return null;
     case "aborted":
       attempt.result = { state: result.outcome };
       return null;
@@ -254,6 +268,11 @@ function providerRequestAttemptReport(
         recoveryOperationOrdinal: result.recovery.operationOrdinal,
       };
     case "terminal_error":
+      return {
+        ...base,
+        outcome: "terminal_error",
+        errorCode: result.errorCode,
+      };
     case "aborted":
       return { ...base, outcome: result.state };
   }

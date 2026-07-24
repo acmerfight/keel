@@ -124,10 +124,21 @@ export function createFakeProvider(
 
         finishAttempt({ outcome: "completed", usage: response.usage });
         yield { type: "stop", reason: "stop", usage: response.usage };
-      } finally {
+      } catch (error) {
         finishAttempt({
-          outcome: options.signal.aborted ? "aborted" : "terminal_error",
+          outcome: "terminal_error",
+          errorCode: "provider_unexpected_error",
         });
+        throw error;
+      } finally {
+        finishAttempt(
+          options.signal.aborted
+            ? { outcome: "aborted" }
+            : {
+                outcome: "terminal_error",
+                errorCode: "provider_consumer_closed",
+              },
+        );
       }
     },
   };

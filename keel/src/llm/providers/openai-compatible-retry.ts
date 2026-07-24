@@ -20,6 +20,11 @@ export interface ProviderRetryConfig {
   readonly maxTotalDelayMs?: number;
 }
 
+export interface ProviderLivenessConfig {
+  readonly firstResponseTimeoutMs: number;
+  readonly streamInactivityTimeoutMs: number;
+}
+
 interface ResolvedProviderRetryConfig {
   readonly maxRetries: number;
   readonly initialDelayMs: number;
@@ -34,6 +39,7 @@ export interface ProviderConfig {
   readonly baseUrl: string;
   readonly model: string;
   readonly retry?: ProviderRetryConfig;
+  readonly liveness?: ProviderLivenessConfig;
 }
 
 type RetryDelay =
@@ -60,6 +66,17 @@ const DEFAULT_PROVIDER_RETRY_CONFIG: ResolvedProviderRetryConfig = {
   maxRetryAfterMs: 60_000,
   maxTotalDelayMs: 120_000,
 };
+
+const DEFAULT_PROVIDER_LIVENESS_CONFIG: ProviderLivenessConfig = {
+  firstResponseTimeoutMs: 120_000,
+  streamInactivityTimeoutMs: 120_000,
+};
+
+export function resolveProviderLivenessConfig(
+  liveness: ProviderLivenessConfig | undefined,
+): ProviderLivenessConfig {
+  return liveness ?? DEFAULT_PROVIDER_LIVENESS_CONFIG;
+}
 
 function resolveRetryConfig(
   retry: ProviderRetryConfig | undefined,
@@ -138,6 +155,32 @@ export function transportError(
     );
   }
   return new KeelError("provider_network_error", message);
+}
+
+export interface ProviderInactivityControl {
+  readonly timeoutMs: number;
+  readonly abort: () => void;
+  readonly timedOut: () => boolean;
+}
+
+export async function readWithProviderInactivityDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  activityDeadline: number,
+  liveness: ProviderInactivityControl,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const deadline = Promise.withResolvers<never>();
+  const timer = setTimeout(
+    () => {
+      liveness.abort();
+      deadline.reject(new Error("provider inactivity deadline reached"));
+    },
+    Math.max(0, activityDeadline - Date.now()),
+  );
+  try {
+    return await Promise.race([reader.read(), deadline.promise]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function isRetryableStatus(status: number): boolean {
@@ -285,6 +328,7 @@ export class ProviderRetryController {
   #retry: ResolvedProviderRetryConfig;
   #attemptCount = 0;
   #totalRetryDelayMs = 0;
+  #timeoutRetryCount = 0;
 
   constructor(retry: ProviderRetryConfig | undefined) {
     this.#retry = resolveRetryConfig(retry);
@@ -293,6 +337,13 @@ export class ProviderRetryController {
   transportDecision(
     reason: Exclude<KeelErrorCode, RecoverableToolErrorCode>,
   ): RetryDecision | null {
+    if (
+      (reason === "first_response_timeout" ||
+        reason === "stream_inactivity_timeout") &&
+      this.#timeoutRetryCount >= 1
+    ) {
+      return null;
+    }
     if (this.#attemptCount >= this.#retry.maxRetries) {
       return null;
     }
@@ -331,6 +382,12 @@ export class ProviderRetryController {
   recordRetry(decision: RetryDecision): void {
     this.#attemptCount = decision.attemptIndex + 1;
     this.#totalRetryDelayMs += decision.delayMs;
+    if (
+      decision.reason === "first_response_timeout" ||
+      decision.reason === "stream_inactivity_timeout"
+    ) {
+      this.#timeoutRetryCount++;
+    }
   }
 }
 
@@ -400,6 +457,175 @@ export function requestRetryDecisionForReport(
 export interface ChatCompletionsResponse {
   readonly response: Response;
   readonly attempt: ProviderRequestAttemptHandle | null;
+  readonly abortForStreamInactivity: () => void;
+  readonly streamInactivityTimedOut: () => boolean;
+  readonly close: () => void;
+}
+
+type RequestTermination =
+  | "active"
+  | "caller_abort"
+  | "first_response_timeout"
+  | "stream_inactivity_timeout"
+  | "closed";
+
+interface ProviderRequestControl {
+  readonly signal: AbortSignal;
+  readonly responseReceived: () => void;
+  readonly abortForStreamInactivity: () => void;
+  readonly termination: () => RequestTermination;
+  readonly close: () => void;
+}
+
+function createProviderRequestControl(
+  callerSignal: AbortSignal,
+  firstResponseTimeoutMs: number,
+): ProviderRequestControl {
+  const controller = new AbortController();
+  let termination: RequestTermination = "active";
+  let firstResponseTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearFirstResponseTimer = (): void => {
+    clearTimeout(firstResponseTimer ?? undefined);
+    firstResponseTimer = null;
+  };
+  const abort = (
+    reason: Extract<
+      RequestTermination,
+      "caller_abort" | "first_response_timeout" | "stream_inactivity_timeout"
+    >,
+  ): void => {
+    /* v8 ignore next -- late terminal paths are intentionally ignored after the first cause wins. */
+    if (termination !== "active") return;
+    termination = reason;
+    clearFirstResponseTimer();
+    controller.abort();
+  };
+  const onCallerAbort = (): void => abort("caller_abort");
+  callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+  if (callerSignal.aborted) {
+    abort("caller_abort");
+  } else {
+    firstResponseTimer = setTimeout(
+      () => abort("first_response_timeout"),
+      firstResponseTimeoutMs,
+    );
+  }
+
+  return {
+    signal: controller.signal,
+    responseReceived: clearFirstResponseTimer,
+    abortForStreamInactivity: () => abort("stream_inactivity_timeout"),
+    termination: () => termination,
+    close: () => {
+      clearFirstResponseTimer();
+      callerSignal.removeEventListener("abort", onCallerAbort);
+      if (termination === "active") {
+        termination = "closed";
+      }
+    },
+  };
+}
+
+type FirstResponseFailure =
+  | {
+      readonly outcome: "aborted";
+      readonly error: KeelError;
+    }
+  | {
+      readonly outcome: "retryable_error";
+      readonly reason: "first_response_timeout" | "provider_network_error";
+      readonly error: KeelError;
+    };
+
+function firstResponseFailure(
+  control: ProviderRequestControl,
+  error: unknown,
+  callerSignal: AbortSignal,
+  providerName: string,
+): FirstResponseFailure {
+  if (control.termination() === "first_response_timeout") {
+    return {
+      outcome: "retryable_error",
+      reason: "first_response_timeout",
+      error: new KeelError(
+        "first_response_timeout",
+        `${providerName} request timed out before response headers`,
+      ),
+    };
+  }
+  if (isAbortThrow(error, callerSignal)) {
+    return {
+      outcome: "aborted",
+      error: new KeelError(
+        "provider_aborted",
+        `${providerName} request was aborted`,
+      ),
+    };
+  }
+  return {
+    outcome: "retryable_error",
+    reason: "provider_network_error",
+    error: new KeelError(
+      "provider_network_error",
+      `${providerName} request failed before response`,
+    ),
+  };
+}
+
+async function readTerminalResponseBody(
+  response: Response,
+  callerSignal: AbortSignal,
+  control: ProviderRequestControl,
+  inactivityTimeoutMs: number,
+  providerName: string,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return "";
+
+  const decoder = new TextDecoder();
+  const liveness: ProviderInactivityControl = {
+    timeoutMs: inactivityTimeoutMs,
+    abort: control.abortForStreamInactivity,
+    timedOut: () => control.termination() === "stream_inactivity_timeout",
+  };
+  let text = "";
+  let activityDeadline = Date.now() + liveness.timeoutMs;
+  let reachedEof = false;
+  try {
+    for (;;) {
+      const { done, value } = await readWithProviderInactivityDeadline(
+        reader,
+        activityDeadline,
+        liveness,
+      );
+      if (done) {
+        reachedEof = true;
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+      activityDeadline = Date.now() + liveness.timeoutMs;
+    }
+    return text + decoder.decode();
+  } catch (error) {
+    if (liveness.timedOut()) {
+      throw new KeelError(
+        "stream_inactivity_timeout",
+        `${providerName} response body timed out waiting for activity`,
+      );
+    }
+    throw transportError(
+      error,
+      callerSignal,
+      providerName,
+      `${providerName} response body failed before streaming`,
+    );
+  } finally {
+    if (!reachedEof) {
+      await reader.cancel().catch(() => undefined);
+    }
+    reader.releaseLock();
+  }
 }
 
 export async function* requestChatCompletions(
@@ -410,9 +636,14 @@ export async function* requestChatCompletions(
   retry: ProviderRetryController,
   providerRequestAttempts: ProviderRequestAttemptObserver | null,
 ): AsyncGenerator<LLMEvent, ChatCompletionsResponse> {
+  const liveness = resolveProviderLivenessConfig(config.liveness);
   for (;;) {
     const body = requestBody();
     const attempt = providerRequestAttempts?.begin() ?? null;
+    const requestControl = createProviderRequestControl(
+      signal,
+      liveness.firstResponseTimeoutMs,
+    );
     let response: Response;
     try {
       response = await fetch(chatCompletionsUrl(config.baseUrl), {
@@ -422,40 +653,48 @@ export async function* requestChatCompletions(
           Authorization: `Bearer ${config.apiKey}`,
         },
         body,
-        signal,
+        signal: requestControl.signal,
       });
+      requestControl.responseReceived();
     } catch (error) {
-      const keelError = transportError(
+      const failure = firstResponseFailure(
+        requestControl,
         error,
         signal,
         providerName,
-        `${providerName} request failed before response`,
       );
-      if (keelError.code === "provider_aborted") {
+      if (failure.outcome === "aborted") {
         attempt?.finish({ outcome: "aborted" });
+        requestControl.close();
+        throw failure.error;
       }
-      /* v8 ignore next 5 -- fetch throws aborts or network failures; transportError only preserves a third KeelError class for non-fetch callers. */
-      if (keelError.code !== "provider_network_error") {
-        if (keelError.code !== "provider_aborted") {
-          attempt?.finish({ outcome: "terminal_error" });
-        }
-        throw keelError;
-      }
-      const decision = retry.transportDecision(keelError.code);
+      const decision = retry.transportDecision(failure.reason);
       if (decision === null) {
-        attempt?.finish({ outcome: "terminal_error" });
-        throw keelError;
+        attempt?.finish({
+          outcome: "terminal_error",
+          errorCode: failure.reason,
+        });
+        requestControl.close();
+        throw failure.error;
       }
       attempt?.finish({
         outcome: "retryable_error",
         retryDecision: requestRetryDecisionForReport(providerName, decision),
       });
+      requestControl.close();
       yield* waitForProviderRetry(retry, providerName, signal, decision);
       continue;
     }
 
     if (response.ok) {
-      return { response, attempt };
+      return {
+        response,
+        attempt,
+        abortForStreamInactivity: requestControl.abortForStreamInactivity,
+        streamInactivityTimedOut: () =>
+          requestControl.termination() === "stream_inactivity_timeout",
+        close: requestControl.close,
+      };
     }
 
     const retryDecision = retry.responseDecision(response);
@@ -468,13 +707,20 @@ export async function* requestChatCompletions(
           retryDecision,
         ),
       });
+      requestControl.close();
       yield* waitForProviderRetry(retry, providerName, signal, retryDecision);
       continue;
     }
 
     let text: string;
     try {
-      text = await response.text();
+      text = await readTerminalResponseBody(
+        response,
+        signal,
+        requestControl,
+        liveness.streamInactivityTimeoutMs,
+        providerName,
+      );
     } catch (error) {
       const keelError = transportError(
         error,
@@ -482,22 +728,24 @@ export async function* requestChatCompletions(
         providerName,
         `${providerName} response body failed before streaming`,
       );
-      attempt?.finish({
+      attempt?.finish(
         /* v8 ignore next -- abort can race before or during response-body reading; provider conformance covers the same aborted physical-attempt result. */
-        outcome:
-          keelError.code === "provider_aborted" ? "aborted" : "terminal_error",
-      });
+        keelError.code === "provider_aborted"
+          ? { outcome: "aborted" }
+          : { outcome: "terminal_error", errorCode: keelError.code },
+      );
+      requestControl.close();
       throw keelError;
     }
     const code = isContextOverflowHttpError(response.status, text)
       ? "provider_context_overflow"
       : httpErrorCode(response.status);
-    attempt?.finish({
-      outcome:
-        code === "provider_context_overflow"
-          ? "context_overflow"
-          : "terminal_error",
-    });
+    attempt?.finish(
+      code === "provider_context_overflow"
+        ? { outcome: "context_overflow" }
+        : { outcome: "terminal_error", errorCode: code },
+    );
+    requestControl.close();
     throw new KeelError(
       code,
       `${providerName} API error (${response.status}): ${text}`,

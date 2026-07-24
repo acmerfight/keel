@@ -286,7 +286,7 @@ describe("CLI memory candidate inbox", () => {
       );
       expect(runAfterApproval.exitCode, runAfterApproval.stderr).toBe(0);
       const report = JSON.parse(await readFile(reportPath, "utf8"));
-      expect(report.schemaVersion).toBe(18);
+      expect(report.schemaVersion).toBe(19);
       expect(report.memory.loadedEntries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
