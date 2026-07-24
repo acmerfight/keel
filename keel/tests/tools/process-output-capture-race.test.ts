@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, type PathLike } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,34 +23,37 @@ async function importProcessesWithCaptureFailure(
 
   vi.doMock("node:fs", () => ({
     ...actualFs,
-    mkdtempSync: ((prefix: string) => {
+    mkdtempSync: (prefix: string) => {
       const directory = actualFs.mkdtempSync(prefix);
       captureDirectories.push(directory);
       return directory;
-    }) as FsModule["mkdtempSync"],
-    openSync: ((path, flags, mode) => {
+    },
+    openSync: (
+      path: PathLike,
+      flags: string | number,
+      mode?: string | number | null,
+    ) => {
       const fd = actualFs.openSync(path, flags, mode);
       if (String(path).endsWith("output.bin")) captureFds.add(fd);
       return fd;
-    }) as FsModule["openSync"],
-    readFileSync: ((path, options) => {
+    },
+    readFileSync: (path: PathLike, encoding: BufferEncoding) => {
       if (phase === "finish" && String(path).endsWith("output.bin")) {
         throw new Error("simulated artifact read failure");
       }
-      return actualFs.readFileSync(path, options);
-    }) as FsModule["readFileSync"],
-    writeSync: ((
+      return actualFs.readFileSync(path, encoding);
+    },
+    writeSync: (
       fd: number,
       buffer: Uint8Array,
-      offset?: number,
-      length?: number,
-      position?: number | null,
+      offset: number,
+      length: number,
     ) => {
       if (phase === "stream" && captureFds.has(fd)) {
         throw new Error("simulated artifact write failure");
       }
-      return actualFs.writeSync(fd, buffer, offset, length, position);
-    }) as FsModule["writeSync"],
+      return actualFs.writeSync(fd, buffer, offset, length);
+    },
   }));
 
   const [{ executeBash }, { runGitProcess }] = await Promise.all([

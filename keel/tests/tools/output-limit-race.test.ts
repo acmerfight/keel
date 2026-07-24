@@ -1,12 +1,21 @@
-import { existsSync } from "node:fs";
+import { existsSync, type PathLike } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
-  readonly openSync?: FsModule["openSync"];
-  readonly readFileSync?: FsModule["readFileSync"];
-  readonly writeSync?: FsModule["writeSync"];
+  readonly openSync?: (
+    path: PathLike,
+    flags: string | number,
+    mode?: string | number | null,
+  ) => number;
+  readonly readFileSync?: (path: PathLike, encoding: BufferEncoding) => string;
+  readonly writeSync?: (
+    fd: number,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+  ) => number;
 }
 
 async function importOutputLimitWithFs(
@@ -37,10 +46,10 @@ describe("Temporary Output Capture Race Handling", () => {
     Then capture reports the filesystem failure and removes its directory`, async () => {
     let captureDirectory: string | undefined;
     const { TempFileByteOutputCapture } = await importOutputLimitWithFs({
-      openSync: ((path, _flags, _mode) => {
+      openSync: (path) => {
         captureDirectory = String(path).replace(/[/\\]output\.bin$/u, "");
         throw Object.assign(new Error("EACCES"), { code: "EACCES" });
-      }) as FsModule["openSync"],
+      },
     });
     const output = new TempFileByteOutputCapture(
       "keel-output-open-race-",
@@ -58,11 +67,11 @@ describe("Temporary Output Capture Race Handling", () => {
     const actualFs = await vi.importActual<FsModule>("node:fs");
     let captureDirectory: string | undefined;
     const { TempFileByteOutputCapture } = await importOutputLimitWithFs({
-      openSync: ((path, flags, mode) => {
+      openSync: (path, flags, mode) => {
         captureDirectory = String(path).replace(/[/\\]output\.bin$/u, "");
         return actualFs.openSync(path, flags, mode);
-      }) as FsModule["openSync"],
-      writeSync: (() => 0) as FsModule["writeSync"],
+      },
+      writeSync: () => 0,
     });
     const output = new TempFileByteOutputCapture(
       "keel-output-write-race-",
@@ -83,16 +92,16 @@ describe("Temporary Output Capture Race Handling", () => {
     const actualFs = await vi.importActual<FsModule>("node:fs");
     let captureDirectory: string | undefined;
     const { TempFileByteOutputCapture } = await importOutputLimitWithFs({
-      openSync: ((path, flags, mode) => {
+      openSync: (path, flags, mode) => {
         captureDirectory = String(path).replace(/[/\\]output\.bin$/u, "");
         return actualFs.openSync(path, flags, mode);
-      }) as FsModule["openSync"],
-      readFileSync: ((path, options) => {
+      },
+      readFileSync: (path, encoding) => {
         if (String(path).endsWith("output.bin")) {
           throw Object.assign(new Error("EIO"), { code: "EIO" });
         }
-        return actualFs.readFileSync(path, options);
-      }) as FsModule["readFileSync"],
+        return actualFs.readFileSync(path, encoding);
+      },
     });
     const output = new TempFileByteOutputCapture(
       "keel-output-read-race-",
