@@ -322,9 +322,7 @@ describe("Provider Request Attempt Conformance", () => {
     await iterator.return?.();
 
     expect(observed.attempts).toHaveLength(1);
-    expect(observed.attempts[0]?.finishes).toEqual([
-      { outcome: "aborted" },
-    ]);
+    expect(observed.attempts[0]?.finishes).toEqual([{ outcome: "aborted" }]);
   });
 
   test(`Given an aborted fake provider request also fails while producing its response,
@@ -353,9 +351,7 @@ describe("Provider Request Attempt Conformance", () => {
     ).rejects.toThrow("Invalid fake tool response arguments for ls");
 
     expect(observed.attempts).toHaveLength(1);
-    expect(observed.attempts[0]?.finishes).toEqual([
-      { outcome: "aborted" },
-    ]);
+    expect(observed.attempts[0]?.finishes).toEqual([{ outcome: "aborted" }]);
   });
 
   test(`Given the first upstream request is rate-limited and the retry succeeds,
