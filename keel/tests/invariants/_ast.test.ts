@@ -47,9 +47,12 @@ describe("Invariant AST Helpers", () => {
     Then the source file uses the TSX script kind`, () => {
     // Given / When
     const source = parseSourceText("component.tsx", "const view = <div />;\n");
+    const initializer = variableInitializer(source, "view");
 
     // Then
-    expect(source.sourceFile.scriptKind).toBe(ts.ScriptKind.TSX);
+    expect(initializer !== null && ts.isJsxSelfClosingElement(initializer)).toBe(
+      true,
+    );
   });
 
   test(`Given an object mixes literal, computed, and spread properties,
