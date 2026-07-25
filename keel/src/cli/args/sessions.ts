@@ -8,6 +8,7 @@ import {
 import type {
   SessionsCliArgs,
   SessionsForkCliArgs,
+  SessionsRepairCliArgs,
   SessionsShowCliArgs,
 } from "./types.ts";
 
@@ -139,6 +140,33 @@ function parseSessionsShowArgs(
   });
 }
 
+function parseSessionsRepairArgs(
+  args: readonly string[],
+): ParseResult<SessionsRepairCliArgs> {
+  const sessionId = args[0];
+  if (sessionId === undefined || sessionId === "") {
+    return parseError("Error: sessions repair requires <id>.");
+  }
+  const [strategy, ...extraArgs] = args.slice(1);
+  if (strategy !== "--truncate-incomplete-tail") {
+    return strategy === undefined
+      ? parseError(
+          "Error: sessions repair requires --truncate-incomplete-tail.",
+        )
+      : parseError(`Error: unknown sessions repair option "${strategy}"`);
+  }
+  const extraArg = extraArgs[0];
+  if (extraArg !== undefined) {
+    return parseError(`Error: unknown sessions repair option "${extraArg}"`);
+  }
+  return parseOk({
+    command: "sessions",
+    mode: "repair",
+    sessionId,
+    strategy: "truncate-incomplete-tail",
+  });
+}
+
 export function parseSessionsArgs(
   args: readonly string[],
 ): ParseResult<SessionsCliArgs> {
@@ -151,6 +179,9 @@ export function parseSessionsArgs(
   }
   if (subcommand === "show") {
     return parseSessionsShowArgs(args.slice(1));
+  }
+  if (subcommand === "repair") {
+    return parseSessionsRepairArgs(args.slice(1));
   }
   return parseError(`Error: unknown sessions option "${subcommand}"`);
 }

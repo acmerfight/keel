@@ -99,10 +99,18 @@ export interface SessionsShowCliArgs {
   readonly timelineLimit: number | null;
 }
 
+export interface SessionsRepairCliArgs {
+  readonly command: "sessions";
+  readonly mode: "repair";
+  readonly sessionId: string;
+  readonly strategy: "truncate-incomplete-tail";
+}
+
 export type SessionsCliArgs =
   | SessionsListCliArgs
   | SessionsForkCliArgs
-  | SessionsShowCliArgs;
+  | SessionsShowCliArgs
+  | SessionsRepairCliArgs;
 
 interface ArtifactsShowCliArgs {
   readonly command: "artifacts";

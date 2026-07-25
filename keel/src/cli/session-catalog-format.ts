@@ -21,6 +21,7 @@ import type {
   SessionCatalogWarning,
   SessionForkPointRecord,
   SessionForkPolicyRecord,
+  SessionRepairResult,
   SessionState,
   StoredMessage,
 } from "./session-store.ts";
@@ -465,4 +466,20 @@ export function formatSessionForkCreated(options: {
       ? `Forked session "${options.sourceSessionId}" to "${options.targetSessionId}".`
       : `Forked session "${options.sourceSessionId}" to "${options.targetSessionId}" before message ${options.forkBeforeMessage}.`;
   return `${forkLine}\nresume: keel --resume ${options.targetSessionId}\n`;
+}
+
+export function formatSessionRepairResult(options: {
+  readonly sessionId: string;
+  readonly result: SessionRepairResult;
+}): string {
+  if (options.result.status === "unchanged") {
+    return `Session "${options.sessionId}" has no incomplete JSONL tail. No changes were made.\n`;
+  }
+  return [
+    `Recovered session "${options.sessionId}" to its last validated record.`,
+    `Dropped ${options.result.droppedBytes} incomplete bytes from the JSONL tail.`,
+    `Original ledger preserved at: ${options.result.backupPath}`,
+    `resume: keel --resume ${options.sessionId}`,
+    "",
+  ].join("\n");
 }

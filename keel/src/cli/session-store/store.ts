@@ -30,7 +30,9 @@ import {
 import {
   appendJsonLine,
   formatResumeSessionLoadError,
+  inspectSessionLedgerTail,
   readSessionRecords,
+  readSessionRecordsAtSize,
   writeInitialHeader,
 } from "./ledger.ts";
 import {
@@ -367,22 +369,13 @@ export function forkSessionStore(options: {
   return forkedSession;
 }
 
-export function resumeSessionStore(options: {
+function replaySessionStore(options: {
   readonly sessionId: string;
-  readonly workspace: string;
-  readonly runtime: SessionStoreRuntime;
+  readonly expectedWorkspace: string;
+  readonly filePath: string;
+  readonly records: SessionRecords;
 }): SessionState {
-  const expectedWorkspace = realpathSync(options.workspace);
-  const filePath = sessionFilePath(options.runtime, options.sessionId);
-  let records: SessionRecords;
-  try {
-    records = readSessionRecords(filePath);
-  } catch (error) {
-    const message = formatResumeSessionLoadError(error);
-    sessionStoreError(
-      `Error: cannot resume session "${options.sessionId}": ${message}`,
-    );
-  }
+  const { expectedWorkspace, filePath, records } = options;
   const { header } = records;
   if (header.id !== options.sessionId) {
     sessionStoreError(
@@ -650,6 +643,64 @@ export function resumeSessionStore(options: {
     activeSkillIds,
     skillStateCheckpoints,
   });
+}
+
+export function resumeSessionStore(options: {
+  readonly sessionId: string;
+  readonly workspace: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionState {
+  const expectedWorkspace = realpathSync(options.workspace);
+  const filePath = sessionFilePath(options.runtime, options.sessionId);
+  let records: SessionRecords;
+  try {
+    records = readSessionRecords(filePath);
+  } catch (error) {
+    const message = formatResumeSessionLoadError(error);
+    let repairGuidance = "";
+    try {
+      const tail = inspectSessionLedgerTail(filePath);
+      if (tail.kind === "invalid_unterminated_fragment") {
+        repairGuidance = ` The ledger appears to end with an incomplete JSONL fragment. Run keel sessions repair ${options.sessionId} --truncate-incomplete-tail to validate and repair it explicitly.`;
+      }
+    } catch {
+      repairGuidance = "";
+    }
+    sessionStoreError(
+      `Error: cannot resume session "${options.sessionId}": ${message}${repairGuidance}`,
+    );
+  }
+  return replaySessionStore({
+    sessionId: options.sessionId,
+    expectedWorkspace,
+    filePath,
+    records,
+  });
+}
+
+export function validateSessionLedgerPrefix(options: {
+  readonly sessionId: string;
+  readonly workspace: string;
+  readonly runtime: SessionStoreRuntime;
+  readonly retainedBytes: number;
+}): SessionState {
+  const expectedWorkspace = realpathSync(options.workspace);
+  const filePath = sessionFilePath(options.runtime, options.sessionId);
+  let records: SessionRecords;
+  try {
+    records = readSessionRecordsAtSize(filePath, options.retainedBytes);
+    return replaySessionStore({
+      sessionId: options.sessionId,
+      expectedWorkspace,
+      filePath,
+      records,
+    });
+  } catch (error) {
+    const message = formatResumeSessionLoadError(error);
+    sessionStoreError(
+      `Error: cannot repair session "${options.sessionId}": the retained ledger prefix is invalid: ${message}`,
+    );
+  }
 }
 
 export function persistSessionTitle(options: {
