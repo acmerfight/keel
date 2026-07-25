@@ -895,6 +895,110 @@ describe("Git Checkpoints", () => {
     }
   });
 
+  test.each([
+    {
+      sequence: "create-delete-edit",
+      checkpointCount: 3,
+      prepare: async (workspace: string, filePath: string) => {
+        await writeFile(filePath, "created\n", "utf8");
+        recordLastCreateCheckpoint({
+          workspace,
+          filePath,
+          afterContent: "created\n",
+        });
+        await rm(filePath);
+        recordLastDeleteCheckpoint({
+          workspace,
+          filePath,
+          beforeContent: "created\n",
+          mode: 0o644,
+        });
+        await writeFile(filePath, "edited after recreation\n", "utf8");
+        recordUnownedEditCheckpoint({
+          workspace,
+          filePath,
+          beforeContent: "recreated by user\n",
+          afterContent: "edited after recreation\n",
+        });
+      },
+    },
+    {
+      sequence: "delete-edit",
+      checkpointCount: 2,
+      prepare: async (workspace: string, filePath: string) => {
+        await writeFile(filePath, "deleted\n", "utf8");
+        await rm(filePath);
+        recordLastDeleteCheckpoint({
+          workspace,
+          filePath,
+          beforeContent: "deleted\n",
+          mode: 0o644,
+        });
+        await writeFile(filePath, "edited after recreation\n", "utf8");
+        recordUnownedEditCheckpoint({
+          workspace,
+          filePath,
+          beforeContent: "recreated by user\n",
+          afterContent: "edited after recreation\n",
+        });
+      },
+    },
+    {
+      sequence: "create-discontinuous-edit",
+      checkpointCount: 2,
+      prepare: async (workspace: string, filePath: string) => {
+        await writeFile(filePath, "created\n", "utf8");
+        recordLastCreateCheckpoint({
+          workspace,
+          filePath,
+          afterContent: "created\n",
+        });
+        await writeFile(filePath, "edited after user change\n", "utf8");
+        recordUnownedEditCheckpoint({
+          workspace,
+          filePath,
+          beforeContent: "changed by user\n",
+          afterContent: "edited after user change\n",
+        });
+      },
+    },
+  ])(
+    `Given a $sequence checkpoint sequence crosses a user-owned state,
+    When restoring through all checkpoints,
+    Then undo blocks before coalescing across that discontinuity`,
+    async ({ checkpointCount, prepare, sequence }) => {
+      // Given
+      const workspace = await createGitWorkspace(
+        `keel-git-undo-through-${sequence}-`,
+      );
+      const filePath = join(workspace, "note.txt");
+      await prepare(workspace, filePath);
+
+      try {
+        // When
+        const restore = restoreUndoCheckpointsThrough(
+          workspace,
+          checkpointCount,
+        );
+
+        // Then
+        expect(restore).toEqual({
+          status: "blocked",
+          filePath: "note.txt",
+          message: "Cannot undo note.txt: Refusing to overwrite user changes.",
+        });
+        expect(await readFile(filePath, "utf8")).toBe(
+          sequence === "create-discontinuous-edit"
+            ? "edited after user change\n"
+            : "edited after recreation\n",
+        );
+        expect(listUndoCheckpoints(workspace)).toHaveLength(checkpointCount);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
   test(`Given a delete checkpoint is followed by a create checkpoint on the same path,
     When restoring through both checkpoints,
     Then the deleted file content and mode are restored`, async () => {

@@ -95,15 +95,13 @@ function hasUnsafeEntryNameChars(name: string): boolean {
 }
 
 function sortLsEntries(entries: readonly LsEntry[]): LsEntry[] {
-  return [...entries].sort((left, right) => {
-    if (left.isDirectory !== right.isDirectory) {
-      return left.isDirectory ? -1 : 1;
-    }
-    if (left.name < right.name) return -1;
-    if (left.name > right.name) return 1;
-    /* v8 ignore next: a single directory cannot contain duplicate entry names. */
-    return 0;
-  });
+  const sortedNames = (directory: boolean): LsEntry[] =>
+    entries
+      .filter((entry) => entry.isDirectory === directory)
+      .map((entry) => entry.name)
+      .sort()
+      .map((name) => ({ name, isDirectory: directory }));
+  return [...sortedNames(true), ...sortedNames(false)];
 }
 
 export function executeLs(

@@ -540,7 +540,6 @@ function executeEditBatch(
       "The path is a directory, not a file. Specify a file path inside it.",
     );
   }
-  let openedMode = targetStat.mode & 0o7777;
   const file = readEditableTextFileWithMetadata(accessTargetPath, filePath, {
     maxBytes: MAX_EDIT_FILE_BYTES,
     tooLargeError: (observedBytes) =>
@@ -556,8 +555,10 @@ function executeEditBatch(
       if (projectIgnorePolicy.isIgnored(openedTargetPath, false)) {
         throw ignoredPathError(filePath);
       }
-      openedMode = fstatSync(fd).mode & 0o7777;
-      return openedTargetPath;
+      return {
+        targetPath: openedTargetPath,
+        metadata: fstatSync(fd).mode & 0o7777,
+      };
     },
   });
   assertCurrentReadRevision(
@@ -619,7 +620,7 @@ function executeEditBatch(
     publishedTargetPath = openedTargetPath;
   };
   writeTextFileAtomically(file.targetPath, afterContent, {
-    mode: openedMode,
+    mode: file.openedMetadata,
     beforeAccess: validateTargetAtAccess,
     beforeWrite: validateOpenedTempAtAccess,
     beforePublish: validateTargetAtAccess,
