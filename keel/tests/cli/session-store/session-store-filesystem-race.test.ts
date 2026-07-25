@@ -49,28 +49,25 @@ describe("Session Store Filesystem Races", () => {
     Then it reports the missing-ledger contract`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-ledger-race-"));
-    const ledgerPath = join(home, "ledger.jsonl");
+    const sessionId = "disappearing-ledger";
+    const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
+    await mkdir(join(home, "sessions", sessionId), { recursive: true });
     await writeFile(ledgerPath, "{}\n", "utf8");
-    const actualFs = await vi.importActual<FsModule>("node:fs");
-    vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actualFs,
-      openSync: (path: PathLike) => {
-        if (String(path) === ledgerPath) {
-          throw new TestNodeError("ENOENT", "open");
-        }
-        return actualFs.openSync(path, "r");
+    const sessionStore = await importSessionStoreWithFs({
+      openSync: () => {
+        throw new TestNodeError("ENOENT", "open");
       },
-    }));
-    const { readSessionRecords } = await import(
-      "../../../src/cli/session-store/ledger.ts"
-    );
+    });
 
     try {
       // When / Then
-      expect(() => readSessionRecords(ledgerPath)).toThrow(
-        `session ledger not found at ${ledgerPath}`,
-      );
+      expect(() =>
+        sessionStore.resumeSessionStore({
+          sessionId,
+          workspace: home,
+          runtime: runtime(home),
+        }),
+      ).toThrow(`session ledger not found at ${ledgerPath}`);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -81,21 +78,23 @@ describe("Session Store Filesystem Races", () => {
     Then it reports the incomplete read instead of parsing partial data`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-ledger-race-"));
-    const ledgerPath = join(home, "ledger.jsonl");
+    const sessionId = "truncated-ledger";
+    const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
+    await mkdir(join(home, "sessions", sessionId), { recursive: true });
     await writeFile(ledgerPath, "{}\n", "utf8");
-    const actualFs = await vi.importActual<FsModule>("node:fs");
-    vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actualFs,
+    const sessionStore = await importSessionStoreWithFs({
       readSync: () => 0,
-    }));
-    const { readSessionRecords } = await import(
-      "../../../src/cli/session-store/ledger.ts"
-    );
+    });
 
     try {
       // When / Then
-      expect(() => readSessionRecords(ledgerPath)).toThrow(
+      expect(() =>
+        sessionStore.resumeSessionStore({
+          sessionId,
+          workspace: home,
+          runtime: runtime(home),
+        }),
+      ).toThrow(
         `cannot read session ledger ${ledgerPath}: unexpected end of file`,
       );
     } finally {
