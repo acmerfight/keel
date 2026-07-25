@@ -392,11 +392,7 @@ async function resolveGitCommitRef(
     ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
     gitRunOptions(config, signal, "metadata"),
   );
-  const completedResult = expectGitCompletion(
-    "git_diff",
-    "rev-parse",
-    result,
-  );
+  const completedResult = expectGitCompletion("git_diff", "rev-parse", result);
   if (completedResult.exitCode !== 0) {
     throw gitRefDoesNotResolveToCommitError(requestedRef);
   }
@@ -429,11 +425,7 @@ async function mergeBaseRef(
     ["merge-base", comparison.baseCommit, comparison.headCommit],
     gitRunOptions(config, signal, "metadata"),
   );
-  const completedResult = expectGitCompletion(
-    "git_diff",
-    "merge-base",
-    result,
-  );
+  const completedResult = expectGitCompletion("git_diff", "merge-base", result);
   if (completedResult.exitCode === 1) {
     throw noCommonAncestorError(comparison);
   }

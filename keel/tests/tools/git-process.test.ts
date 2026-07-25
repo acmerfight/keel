@@ -5,9 +5,9 @@ import { delimiter, join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   expectGitExitCode,
+  GIT_PREVIEW_OUTPUT_MAX_BYTES,
   gitNullDevicePath,
   gitPathVisibleToProvider,
-  GIT_PREVIEW_OUTPUT_MAX_BYTES,
   runGitProcess,
 } from "../../src/tools/git-process.ts";
 
