@@ -1,14 +1,24 @@
-import { existsSync } from "node:fs";
+import { existsSync, type PathLike, type RmOptions } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 type FsModule = typeof import("node:fs");
 
-type FsOverrides = Partial<
-  Pick<
-    FsModule,
-    "closeSync" | "openSync" | "readFileSync" | "rmSync" | "writeSync"
-  >
->;
+interface FsOverrides {
+  readonly closeSync?: (fd: number) => void;
+  readonly openSync?: (
+    path: PathLike,
+    flags: string | number,
+    mode?: string | number | null,
+  ) => number;
+  readonly readFileSync?: (path: PathLike, encoding: BufferEncoding) => string;
+  readonly rmSync?: (path: PathLike, options?: RmOptions) => void;
+  readonly writeSync?: (
+    fd: number,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+  ) => number;
+}
 
 async function importOutputLimitWithFs(
   overrides: FsOverrides,
