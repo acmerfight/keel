@@ -6,6 +6,7 @@ import {
   formatSessionCatalogWarnings,
   formatSessionDetail,
   formatSessionForkCreated,
+  formatSessionRepairResult,
 } from "./session-catalog-format.ts";
 import {
   acquireSessionLock,
@@ -13,6 +14,7 @@ import {
   forkSessionStore,
   listSessionCatalog,
   readSessionCatalogEntry,
+  repairSessionStore,
   resumeSessionStore,
   type SessionLock,
   SessionStoreError,
@@ -24,6 +26,38 @@ export function runSessionsCommand(
   cliArgs: SessionsCliArgs,
   runtime: CliRuntime,
 ): number {
+  if (cliArgs.mode === "repair") {
+    let sessionLock: SessionLock | undefined;
+    try {
+      sessionLock = acquireSessionLock({
+        sessionId: cliArgs.sessionId,
+        runtime,
+      });
+      const result = repairSessionStore({
+        sessionId: cliArgs.sessionId,
+        workspace: runtime.cwd(),
+        runtime,
+        strategy: cliArgs.strategy,
+      });
+      runtime.writeStdout(
+        formatSessionRepairResult({
+          sessionId: cliArgs.sessionId,
+          result,
+        }),
+      );
+      return 0;
+    } catch (error) {
+      /* v8 ignore next 3 -- unexpected faults are handled by the outer CLI runtime boundary. */
+      if (!(error instanceof SessionStoreError)) {
+        throw error;
+      }
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    } finally {
+      sessionLock?.release();
+    }
+  }
+
   if (cliArgs.mode === "show") {
     try {
       const entry = readSessionCatalogEntry({

@@ -1,6 +1,14 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
@@ -62,6 +70,157 @@ function detailTimestamp(index: number): string {
 }
 
 describe("CLI Main - Sessions Command", () => {
+  test(`Given a valid session ledger ends with an incomplete JSON fragment,
+    When the user resumes the session normally,
+    Then the CLI fails closed, preserves the ledger, and points to explicit repair`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionId = "crash-tail";
+    const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
+    await writeSessionLedger({
+      home,
+      id: sessionId,
+      workspace: ledgerWorkspace,
+      createdAt: "2026-04-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-04-01T00:00:01.000Z", [
+          {
+            role: "user",
+            content: "remember the validated prefix",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "The validated prefix is safe.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await appendFile(
+      ledgerPath,
+      '{"schemaVersion":4,"type":"append","timestamp":"2026-04',
+      "utf8",
+    );
+    const originalLedger = await readFile(ledgerPath);
+    const input = new PassThrough();
+    input.end("this should not run\n");
+    const fixture = createRuntime(["--resume", sessionId], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_PROVIDER: "fake",
+      },
+      input,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain(
+        `keel sessions repair ${sessionId} --truncate-incomplete-tail`,
+      );
+      expect(await readFile(ledgerPath)).toEqual(originalLedger);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a valid session ledger ends with an incomplete JSON fragment,
+    When the user explicitly truncates the incomplete tail,
+    Then the CLI backs up the original and restores the last validated state`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionId = "crash-tail";
+    const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
+    const incompleteTail =
+      '{"schemaVersion":4,"type":"append","timestamp":"2026-04';
+    await writeSessionLedger({
+      home,
+      id: sessionId,
+      workspace: ledgerWorkspace,
+      createdAt: "2026-04-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-04-01T00:00:01.000Z", [
+          {
+            role: "user",
+            content: "remember the validated prefix",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "The validated prefix is safe.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    const validatedLedger = await readFile(ledgerPath);
+    await appendFile(ledgerPath, incompleteTail, "utf8");
+    const originalLedger = await readFile(ledgerPath);
+    const repairedAt = Date.parse("2026-04-01T12:34:56.789Z");
+    const backupPath = join(
+      home,
+      "sessions",
+      sessionId,
+      "ledger.backup-2026-04-01T12-34-56-789Z.jsonl",
+    );
+    const repair = createRuntime(
+      ["sessions", "repair", sessionId, "--truncate-incomplete-tail"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+        now: () => repairedAt,
+      },
+    );
+
+    try {
+      // When
+      const repairExitCode = await runCliMain(repair.runtime);
+
+      // Then
+      expect(repairExitCode).toBe(0);
+      expect(repair.stderr()).toBe("");
+      expect(repair.stdout()).toBe(
+        [
+          `Recovered session "${sessionId}" to its last validated record.`,
+          `Dropped ${Buffer.byteLength(incompleteTail)} incomplete bytes from the JSONL tail.`,
+          `Original ledger preserved at: ${backupPath}`,
+          `resume: keel --resume ${sessionId}`,
+          "",
+        ].join("\n"),
+      );
+      expect(await readFile(ledgerPath)).toEqual(validatedLedger);
+      expect(await readFile(backupPath)).toEqual(originalLedger);
+
+      const show = createRuntime(["sessions", "show", sessionId, "--all"], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+        },
+      });
+      expect(await runCliMain(show.runtime)).toBe(0);
+      expect(show.stderr()).toBe("");
+      expect(show.stdout()).toContain("remember the validated prefix");
+      expect(show.stdout()).toContain("The validated prefix is safe.");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no persisted sessions for the current workspace,
     When the user lists sessions,
     Then the CLI reports an empty catalog without contacting a provider`, async () => {
@@ -106,6 +265,42 @@ describe("CLI Main - Sessions Command", () => {
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe('Error: unknown sessions option "--all"\n');
   });
+
+  test.each([
+    {
+      args: ["sessions", "repair"],
+      error: "Error: sessions repair requires <id>.\n",
+    },
+    {
+      args: ["sessions", "repair", "broken"],
+      error: "Error: sessions repair requires --truncate-incomplete-tail.\n",
+    },
+    {
+      args: ["sessions", "repair", "broken", "--all"],
+      error: 'Error: unknown sessions repair option "--all"\n',
+    },
+    {
+      args: [
+        "sessions",
+        "repair",
+        "broken",
+        "--truncate-incomplete-tail",
+        "--all",
+      ],
+      error: 'Error: unknown sessions repair option "--all"\n',
+    },
+  ])(
+    `Given an incomplete or unsupported sessions repair command,
+    When the CLI parses $args,
+    Then it rejects the command without guessing a repair strategy`,
+    async ({ args, error }) => {
+      const fixture = createRuntime(args);
+
+      expect(await runCliMain(fixture.runtime)).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(error);
+    },
+  );
 
   test(`Given saved sessions have active and completed goals,
     When the user lists sessions,

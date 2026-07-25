@@ -4,12 +4,12 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { TextDecoder } from "node:util";
 import { errorMessage } from "../../core/error.ts";
 import {
   formatNestedSessionStoreError,
@@ -158,11 +158,37 @@ function oversizedSessionLedgerError(
   );
 }
 
-function readSessionLedgerContent(filePath: string): string {
+function readSessionLedgerBufferRange(
+  filePath: string,
+  start: number,
+  length: number,
+): Buffer {
+  let fd: number | undefined;
   try {
-    return readFileSync(filePath, "utf8");
+    fd = openSync(filePath, "r");
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const bytesRead = readSync(
+        fd,
+        buffer,
+        offset,
+        length - offset,
+        start + offset,
+      );
+      /* v8 ignore next 3 -- reaching EOF after stat requires an external truncation race. */
+      if (bytesRead === 0) {
+        throw new Error("unexpected end of file");
+      }
+      offset += bytesRead;
+    }
+    return buffer;
   } catch (error) {
     return sessionLedgerReadError(filePath, error);
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
   }
 }
 
@@ -171,19 +197,7 @@ function readSessionLedgerRange(
   start: number,
   length: number,
 ): string {
-  let fd: number | undefined;
-  try {
-    fd = openSync(filePath, "r");
-    const buffer = Buffer.alloc(length);
-    const bytesRead = readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } catch (error) {
-    return sessionLedgerReadError(filePath, error);
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
-  }
+  return readSessionLedgerBufferRange(filePath, start, length).toString("utf8");
 }
 
 function splitSessionJsonLines(content: string): readonly string[] {
@@ -291,15 +305,81 @@ function readOversizedSessionRecords(
 }
 
 function readSessionRecords(filePath: string): SessionRecords {
-  const ledgerSize = sessionLedgerSize(filePath);
+  return readSessionRecordsAtSize(filePath, sessionLedgerSize(filePath));
+}
+
+function readSessionRecordsAtSize(
+  filePath: string,
+  ledgerSize: number,
+): SessionRecords {
   if (ledgerSize > SESSION_LEDGER_RESUME_MAX_BYTES) {
     return readOversizedSessionRecords(filePath, ledgerSize);
   }
 
   return parseSessionRecordsFromLines(
     filePath,
-    splitSessionJsonLines(readSessionLedgerContent(filePath)),
+    splitSessionJsonLines(readSessionLedgerRange(filePath, 0, ledgerSize)),
   );
+}
+
+type SessionLedgerTail =
+  | { readonly kind: "complete" }
+  | { readonly kind: "valid_unterminated_record" }
+  | {
+      readonly kind: "invalid_unterminated_fragment";
+      readonly retainedBytes: number;
+      readonly droppedBytes: number;
+    };
+
+function inspectSessionLedgerTail(filePath: string): SessionLedgerTail {
+  const ledgerSize = sessionLedgerSize(filePath);
+  if (ledgerSize === 0) {
+    return { kind: "complete" };
+  }
+  const sampleLength = Math.min(
+    ledgerSize,
+    SESSION_LEDGER_RESUME_MAX_BYTES + 1,
+  );
+  const sampleStart = ledgerSize - sampleLength;
+  const sample = readSessionLedgerBufferRange(
+    filePath,
+    sampleStart,
+    sampleLength,
+  );
+  if (sample.at(-1) === 0x0a) {
+    return { kind: "complete" };
+  }
+  const finalNewlineIndex = sample.lastIndexOf(0x0a);
+  if (finalNewlineIndex === -1) {
+    if (sampleStart === 0) {
+      try {
+        const decoded = new TextDecoder("utf-8", { fatal: true }).decode(
+          sample,
+        );
+        JSON.parse(decoded);
+        return { kind: "valid_unterminated_record" };
+      } catch {
+        sessionStoreError(
+          `Error: cannot repair session ledger ${filePath}: the unterminated content includes an invalid or incomplete session header.`,
+        );
+      }
+    }
+    sessionStoreError(
+      `Error: cannot repair session ledger ${filePath}: the unterminated final JSONL record exceeds ${formatByteCount(SESSION_LEDGER_RESUME_MAX_BYTES)}.`,
+    );
+  }
+  const fragment = sample.subarray(finalNewlineIndex + 1);
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(fragment);
+    JSON.parse(decoded);
+    return { kind: "valid_unterminated_record" };
+  } catch {
+    return {
+      kind: "invalid_unterminated_fragment",
+      retainedBytes: sampleStart + finalNewlineIndex + 1,
+      droppedBytes: fragment.byteLength,
+    };
+  }
 }
 
 function formatResumeSessionLoadError(error: unknown): string {
@@ -313,8 +393,10 @@ function formatResumeSessionLoadError(error: unknown): string {
 export {
   appendJsonLine,
   formatResumeSessionLoadError,
+  inspectSessionLedgerTail,
   readSessionHeaderLine,
   readSessionRecords,
+  readSessionRecordsAtSize,
   sessionLedgerSize,
   writeInitialHeader,
 };

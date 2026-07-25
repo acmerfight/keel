@@ -24,6 +24,10 @@ export type {
 } from "./session-store/model.ts";
 export { sessionHome } from "./session-store/paths.ts";
 export {
+  repairSessionStore,
+  type SessionRepairResult,
+} from "./session-store/repair.ts";
+export {
   createSessionMessageId,
   sessionStoredMessages,
 } from "./session-store/state.ts";
