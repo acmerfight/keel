@@ -228,16 +228,23 @@ function parseGoalLaunchArgs(
       "Error: --verify and --done-when are mutually exclusive.",
     );
   }
-  const hasVerificationCommand =
-    verificationCommand !== undefined && verificationCommand !== "";
-  const hasAssertionCriterion =
-    assertionCriterion !== undefined && assertionCriterion !== "";
-  if (!hasVerificationCommand && !hasAssertionCriterion) {
+  let criterion: Extract<GoalCliArgs, { readonly mode: "launch" }>["criterion"];
+  if (verificationCommand !== undefined && verificationCommand !== "") {
+    criterion = {
+      kind: "command",
+      command: verificationCommand,
+      ...(verificationTimeoutMs !== undefined
+        ? { verificationTimeoutMs }
+        : {}),
+    };
+  } else if (assertionCriterion !== undefined && assertionCriterion !== "") {
+    criterion = { kind: "assertion", assertion: assertionCriterion };
+  } else {
     return parseError(
       "Error: goal requires exactly one of --verify <command> or --done-when <criterion>.",
     );
   }
-  if (hasAssertionCriterion && verificationTimeoutMs !== undefined) {
+  if (criterion.kind === "assertion" && verificationTimeoutMs !== undefined) {
     return parseError("Error: --timeout is only valid with --verify.");
   }
   if (objective.length > SESSION_GOAL_OBJECTIVE_MAX_LENGTH) {
@@ -245,14 +252,8 @@ function parseGoalLaunchArgs(
       `Error: /goal objective must be ${SESSION_GOAL_OBJECTIVE_MAX_LENGTH} characters or fewer.`,
     );
   }
-  const completionCriterion = hasVerificationCommand
-    ? verificationCommand
-    : assertionCriterion;
-  /* v8 ignore start: the exclusive criterion checks above guarantee a value. */
-  if (completionCriterion === undefined) {
-    return parseError("Error: goal completion criterion is required.");
-  }
-  /* v8 ignore stop */
+  const completionCriterion =
+    criterion.kind === "command" ? criterion.command : criterion.assertion;
   if (
     completionCriterion.length > SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH
   ) {
@@ -268,15 +269,7 @@ function parseGoalLaunchArgs(
     command: "goal",
     mode: "launch",
     objective,
-    criterion: hasVerificationCommand
-      ? {
-          kind: "command",
-          command: completionCriterion,
-          ...(verificationTimeoutMs !== undefined
-            ? { verificationTimeoutMs }
-            : {}),
-        }
-      : { kind: "assertion", assertion: completionCriterion },
+    criterion,
     budget: budget satisfies SessionGoalBudget,
     bashMode,
     skillsEnabled,
