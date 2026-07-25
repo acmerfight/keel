@@ -5,8 +5,10 @@ import {
   toolCallFromParsedArguments,
 } from "../../tools/tool-call.ts";
 import type {
+  LLMEvent,
   LLMProvider,
   ProviderRequestAttemptFinish,
+  StreamOptions,
   Usage,
 } from "../types.ts";
 
@@ -62,6 +64,47 @@ export function fakeToolResponse<Name extends ToolName>(
   };
 }
 
+export async function* observeFakeProviderRequest(
+  options: StreamOptions,
+  stream: AsyncIterable<LLMEvent>,
+): AsyncGenerator<LLMEvent> {
+  const attempt = options.providerRequestAttempts?.begin() ?? null;
+  let attemptFinished = false;
+  const finishAttempt = (result: ProviderRequestAttemptFinish): void => {
+    if (attempt === null || attemptFinished) return;
+    attemptFinished = true;
+    attempt.finish(result);
+  };
+
+  try {
+    for await (const event of stream) {
+      if (event.type === "stop") {
+        finishAttempt({ outcome: "completed", usage: event.usage });
+      }
+      yield event;
+    }
+  } catch (error) {
+    finishAttempt(
+      options.signal.aborted
+        ? { outcome: "aborted" }
+        : {
+            outcome: "terminal_error",
+            errorCode: "provider_unexpected_error",
+          },
+    );
+    throw error;
+  } finally {
+    finishAttempt(
+      options.signal.aborted
+        ? { outcome: "aborted" }
+        : {
+            outcome: "terminal_error",
+            errorCode: "provider_consumer_closed",
+          },
+    );
+  }
+}
+
 export function createFakeProvider(
   script: readonly FakeResponse[],
 ): LLMProvider {
@@ -87,15 +130,7 @@ export function createFakeProvider(
         throw new Error("fake provider: script exhausted");
       }
 
-      const attempt = options.providerRequestAttempts?.begin() ?? null;
-      let attemptFinished = false;
-      const finishAttempt = (result: ProviderRequestAttemptFinish): void => {
-        if (attempt === null || attemptFinished) return;
-        attemptFinished = true;
-        attempt.finish(result);
-      };
-
-      try {
+      const responseStream = async function* (): AsyncGenerator<LLMEvent> {
         switch (response.type) {
           case "text":
             if (response.tokenize) {
@@ -122,24 +157,9 @@ export function createFakeProvider(
           }
         }
 
-        finishAttempt({ outcome: "completed", usage: response.usage });
         yield { type: "stop", reason: "stop", usage: response.usage };
-      } catch (error) {
-        finishAttempt({
-          outcome: "terminal_error",
-          errorCode: "provider_unexpected_error",
-        });
-        throw error;
-      } finally {
-        finishAttempt(
-          options.signal.aborted
-            ? { outcome: "aborted" }
-            : {
-                outcome: "terminal_error",
-                errorCode: "provider_consumer_closed",
-              },
-        );
-      }
+      };
+      yield* observeFakeProviderRequest(options, responseStream());
     },
   };
 }

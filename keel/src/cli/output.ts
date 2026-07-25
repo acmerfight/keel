@@ -65,12 +65,8 @@ function escapeControlChar(char: string): string {
 }
 
 function firstCodePoint(character: string): number {
-  const code = character.codePointAt(0);
-  /* v8 ignore next 3 -- replace callbacks always provide one non-empty matched character. */
-  if (code === undefined) {
-    return 0;
-  }
-  return code;
+  // RegExp replacement callbacks receive the matched, non-empty character.
+  return character.codePointAt(0) as number;
 }
 
 // Assistant text is model-controlled. Newlines and tabs are legitimate prose
