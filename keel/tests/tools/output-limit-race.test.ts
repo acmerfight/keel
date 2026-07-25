@@ -153,8 +153,8 @@ describe("Temporary Output Capture Race Handling", () => {
   });
 
   test(`Given removing closed temporary output fails once,
-    When the caller retries cleanup,
-    Then it removes the retained directory without closing the descriptor twice`, async () => {
+    When the caller retries capture,
+    Then it returns the retained output and removes storage without closing twice`, async () => {
     const actualFs = await vi.importActual<FsModule>("node:fs");
     let captureDirectory: string | undefined;
     let closeAttempts = 0;
@@ -189,8 +189,9 @@ describe("Temporary Output Capture Race Handling", () => {
     expect(captureDirectory).toBeDefined();
     expect(existsSync(captureDirectory ?? "")).toBe(true);
 
-    output.cleanup();
+    const captured = output.capture();
 
+    expect(captured).toEqual({ text: "ab", truncated: false });
     expect(closeAttempts).toBe(1);
     expect(removeAttempts).toBe(2);
     expectDirectoryRemoved(captureDirectory);
