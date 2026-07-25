@@ -7,6 +7,7 @@ import {
   compactMessages,
   compactStaleToolOutputs,
   compactStaleToolOutputsWithArtifacts,
+  projectCompactedToolOutput,
 } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
@@ -912,6 +913,54 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(preview).not.toContain("diff --git a/src/alpha.ts");
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
+
+  test.each([
+    {
+      heading: "diff --git ",
+      expectedSummary: "- diff --git : modified, 1 hunk, +1/-1",
+    },
+    {
+      heading: 'diff --git "a/src/unclosed.ts b/src/unclosed.ts',
+      expectedSummary:
+        '- diff --git "a/src/unclosed.ts b/src/unclosed.ts: modified, 1 hunk, +1/-1',
+    },
+    {
+      heading: "diff --git a/src/old-only.ts",
+      expectedSummary:
+        "- diff --git a/src/old-only.ts: modified, 1 hunk, +1/-1",
+    },
+  ])(
+    `Given git_diff output has an incomplete "$heading" heading,
+    When context compaction projects the tool output,
+    Then the preview preserves the raw heading as a diagnostic path`,
+    ({ heading, expectedSummary }) => {
+      // Given
+      const diffOutput = [
+        heading,
+        "index 0000000..1111111 100644",
+        "@@ -1,1 +1,1 @@",
+        "-old value",
+        "+new value",
+      ].join("\n");
+
+      // When
+      const projected = projectCompactedToolOutput({
+        text: diffOutput,
+        maxChars: 1_000,
+        context: {
+          toolCall: {
+            id: "incomplete_git_diff_heading",
+            tool: "git_diff",
+          },
+        },
+      });
+
+      // Then
+      expect(projected.preview).toContain(expectedSummary);
+      expect(projected.preview).toContain("-old value");
+      expect(projected.preview).toContain("+new value");
+    },
+  );
 
   test(`Given retained git_diff output has staged and unstaged sections,
     When context compaction projects the tool output,

@@ -274,7 +274,6 @@ async function compactCurrentToolOutputsForRequest(options: {
             settledMaxChars: options.resolved.toolOutputMaxChars,
           },
         );
-  /* v8 ignore next 3: agent preflight covers this no-op path; the guard preserves the compacted-result invariant when no current output is eligible. */
   if (currentToolOutputCompaction.stats.toolOutputsCompacted === 0) {
     return { compacted: false, usage: ZERO_USAGE };
   }

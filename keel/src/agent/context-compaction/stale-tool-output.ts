@@ -334,12 +334,10 @@ function toolContextForToolOutput(
     const toolCall = message.toolCalls.find(
       (candidate) => candidate.id === toolCallId,
     );
-    /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; corrupted histories fall through below. */
     if (toolCall !== undefined) {
       return { toolCall };
     }
   }
-  /* v8 ignore next: valid tool-result ledgers preserve the matching assistant tool call; this labels corrupted current-schema histories. */
   return { toolCall: null };
 }
 

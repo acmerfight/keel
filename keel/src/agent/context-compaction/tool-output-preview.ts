@@ -632,7 +632,6 @@ function gitDiffPathToken(
   input: string,
   startIndex: number,
 ): { readonly token: string; readonly nextIndex: number } | null {
-  /* v8 ignore next 3: git_diff headings passed here contain at least one path token. */
   if (startIndex >= input.length) {
     return null;
   }
@@ -658,7 +657,6 @@ function gitDiffPathToken(
     }
     escaped = false;
   }
-  /* v8 ignore next: malformed quoted git path; fall back to the raw heading. */
   return null;
 }
 
@@ -672,7 +670,6 @@ function skipSpaces(input: string, startIndex: number): number {
 
 function gitDiffDisplayPath(block: GitDiffBlock): string {
   const oldPath = gitDiffPathToken(block.pathSpec, 0);
-  /* v8 ignore next 3: git_diff headings contain the old path token. */
   if (oldPath === null) {
     return block.heading;
   }
@@ -680,7 +677,6 @@ function gitDiffDisplayPath(block: GitDiffBlock): string {
     block.pathSpec,
     skipSpaces(block.pathSpec, oldPath.nextIndex),
   );
-  /* v8 ignore next 3: git_diff headings contain the new path token. */
   if (newPath === null) {
     return block.heading;
   }
