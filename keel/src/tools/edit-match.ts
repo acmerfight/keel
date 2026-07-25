@@ -570,8 +570,7 @@ function alignedOldIndexes(
         break;
       }
       if (
-        scores.get(oldIndex, newIndex + 1) >=
-        scores.get(oldIndex + 1, newIndex)
+        scores.get(oldIndex, newIndex + 1) >= scores.get(oldIndex + 1, newIndex)
       ) {
         alignedIndexes.push(null);
         alignedNewItem = true;
