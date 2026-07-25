@@ -1,4 +1,4 @@
-import { type Dirent, type PathLike, type Stats } from "node:fs";
+import type { Dirent, PathLike, Stats } from "node:fs";
 import { link, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

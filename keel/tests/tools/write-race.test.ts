@@ -830,9 +830,9 @@ describe("Write Tool Race Handling", () => {
       });
 
       // When / Then
-      expect(() =>
-        executeWrite(workspace, "new.txt", "content\n"),
-      ).toThrow(originalError);
+      expect(() => executeWrite(workspace, "new.txt", "content\n")).toThrow(
+        originalError,
+      );
       expect(await pathExists(join(workspace, "new.txt"))).toBe(false);
       expect(await readdir(workspace)).toEqual(
         expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
@@ -906,7 +906,7 @@ describe("Write Tool Race Handling", () => {
         await vi.importActual<typeof import("node:fs")>("node:fs");
       const concurrentPath = join(workspace, "fresh", "nested", "user.txt");
       const { executeWrite } = await importWriteWithFs({
-        linkSync: (_existingPath, newPath) => {
+        linkSync: (_existingPath, _newPath) => {
           actualFs.writeFileSync(concurrentPath, "user\n", "utf8");
           throw originalError;
         },
