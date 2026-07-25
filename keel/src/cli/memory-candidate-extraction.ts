@@ -421,8 +421,7 @@ function candidateAdmissionCheck(
 }
 
 async function withAccountingLockRetry<T>(action: () => T): Promise<T> {
-  let lastLockError: ProjectMemoryEventFileError | null = null;
-  for (let attempt = 0; attempt < ACCOUNTING_LOCK_RETRY_COUNT; attempt += 1) {
+  const attempt = async (remainingAttempts: number): Promise<T> => {
     try {
       return action();
     } catch (error) {
@@ -432,16 +431,14 @@ async function withAccountingLockRetry<T>(action: () => T): Promise<T> {
       ) {
         throw error;
       }
-      lastLockError = error;
+      if (remainingAttempts === 1) {
+        throw error;
+      }
       await delay(ACCOUNTING_LOCK_RETRY_DELAY_MS);
+      return attempt(remainingAttempts - 1);
     }
-  }
-  /* v8 ignore next 3 -- the positive retry count guarantees one captured lock error before exhaustion. */
-  if (lastLockError === null) {
-    throw new Error("project-memory accounting lock retry had no error");
-  }
-  /* v8 ignore next -- exhaustion requires a stale lock or an OS-suspended writer beyond the bounded live-contention window. */
-  throw lastLockError;
+  };
+  return attempt(ACCOUNTING_LOCK_RETRY_COUNT);
 }
 
 export async function extractProjectMemoryCandidates(

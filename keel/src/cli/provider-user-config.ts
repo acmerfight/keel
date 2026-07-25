@@ -104,9 +104,10 @@ function invalidFileMessage(
   filePath: string,
   result: z.ZodError,
 ): string {
-  const [issue] = result.issues;
-  /* v8 ignore next: Zod schema failures include at least one issue. */
-  const message = issue?.message ?? "invalid schema";
+  const message = result.issues
+    .map((issue) => issue.message)
+    .slice(0, 1)
+    .join("");
   return `Error: cannot read ${label} ${filePath}: ${message}.`;
 }
 
@@ -221,17 +222,15 @@ function credentialForProvider(
   providers: ProviderAuthProviders,
   providerId: ProviderId,
 ): ProviderAuthCredential | null {
-  switch (providerId) {
-    case "deepseek":
-      return providers.deepseek ?? null;
-    case "kimi":
-      return providers.kimi ?? null;
-    case "qwen":
-      return providers.qwen ?? null;
-    /* v8 ignore next: fake is reported as not-required before credential lookup. */
-    case "fake":
-      return null;
-  }
+  const credentials: Readonly<
+    Record<ProviderId, ProviderAuthCredential | null>
+  > = {
+    deepseek: providers.deepseek ?? null,
+    kimi: providers.kimi ?? null,
+    qwen: providers.qwen ?? null,
+    fake: null,
+  };
+  return credentials[providerId];
 }
 
 function providersWithCredential(
