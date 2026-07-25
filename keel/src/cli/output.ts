@@ -65,8 +65,16 @@ function escapeControlChar(char: string): string {
 }
 
 function firstCodePoint(character: string): number {
-  // RegExp replacement callbacks receive the matched, non-empty character.
-  return character.codePointAt(0) as number;
+  const firstCodeUnit = character.charCodeAt(0);
+  if (firstCodeUnit < 0xd800 || firstCodeUnit > 0xdbff) {
+    return firstCodeUnit;
+  }
+  const secondCodeUnit = character.charCodeAt(1);
+  return (
+    (firstCodeUnit - 0xd800) * 0x400 +
+    (secondCodeUnit - 0xdc00) +
+    0x10000
+  );
 }
 
 // Assistant text is model-controlled. Newlines and tabs are legitimate prose
