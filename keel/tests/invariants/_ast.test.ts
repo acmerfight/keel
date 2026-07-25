@@ -24,7 +24,11 @@ describe("Invariant AST Helpers", () => {
       await writeFile(join(workspace, "z.ts"), "export {};\n", "utf8");
       await writeFile(join(workspace, "notes.md"), "# Notes\n", "utf8");
       await symlink("z.ts", join(workspace, "linked.ts"));
-      await writeFile(join(workspace, "nested", "a.ts"), "export {};\n", "utf8");
+      await writeFile(
+        join(workspace, "nested", "a.ts"),
+        "export {};\n",
+        "utf8",
+      );
 
       // When
       const files = collectTypeScriptFiles(workspace);
