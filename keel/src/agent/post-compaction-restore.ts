@@ -232,7 +232,7 @@ export async function restorePostCompactionReads(options: {
     if (remainingTotalChars <= 0) {
       break;
     }
-    const toolCall: ToolCall = {
+    const toolCall: Extract<ToolCall, { readonly tool: "read" }> = {
       id: options.nextToolCallId(),
       tool: "read",
       path: read.targetPath,
@@ -250,11 +250,7 @@ export async function restorePostCompactionReads(options: {
     if (!execution.ok) {
       continue;
     }
-    const readEffect = toolExecutionEffect(execution, "read");
-    /* v8 ignore next 3: executeReadTool records a read effect on every successful read execution. */
-    if (readEffect === undefined) {
-      continue;
-    }
+    const readEffect = execution.effects[0];
     const fittedContent = fitPostCompactionReadContent(
       execution.content,
       Math.min(POST_COMPACTION_MAX_FILE_CHARS, remainingTotalChars),

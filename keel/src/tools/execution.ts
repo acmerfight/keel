@@ -220,6 +220,18 @@ interface FailedToolExecution extends ToolExecutionBase {
   readonly effects: readonly FailedToolExecutionEffect[];
 }
 
+interface SuccessfulReadToolExecution extends ToolExecutionBase {
+  readonly ok: true;
+  readonly effects: readonly [
+    ReadToolExecutionEffect,
+    ...VisibleProjectInstructionsToolExecutionEffect[],
+  ];
+}
+
+export type ReadToolExecution =
+  | SuccessfulReadToolExecution
+  | FailedToolExecution;
+
 const NO_TOOL_EXECUTION_EFFECTS = [] as const;
 
 export function toolExecutionEffect<K extends ToolExecutionEffect["kind"]>(
@@ -886,7 +898,7 @@ function executeReadTool(
     hiddenWorkspacePaths,
   }: BuiltinToolExecutionContext,
   toolCall: ReadToolCall,
-): ToolExecution {
+): ReadToolExecution {
   const result = executeRead(workspace, toolCall.path, {
     offset: toolCall.offset,
     limit: toolCall.limit,
@@ -898,31 +910,32 @@ function executeReadTool(
     result.targetPath,
     result.content,
   );
-  const effects: ToolExecutionEffect[] = [
-    {
-      kind: "read",
+  const readEffect: ReadToolExecutionEffect = {
+    kind: "read",
+    targetPath: result.targetPath,
+    fileRevision: result.fileRevision,
+    resourceObservation: observeReadResource({
+      workspace,
       targetPath: result.targetPath,
-      fileRevision: result.fileRevision,
-      resourceObservation: observeReadResource({
-        workspace,
-        targetPath: result.targetPath,
-        content: result.content,
-      }),
-      ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
-      ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
-    },
-  ];
-  if (scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0) {
-    effects.push({
-      kind: "visible_project_instructions",
-      instructionPaths: scopedOutput.instructionPaths,
-    });
-  }
+      content: result.content,
+    }),
+    ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
+    ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+  };
+  const instructionEffects: readonly VisibleProjectInstructionsToolExecutionEffect[] =
+    scopedOutput !== undefined && scopedOutput.instructionPaths.length > 0
+      ? [
+          {
+            kind: "visible_project_instructions",
+            instructionPaths: scopedOutput.instructionPaths,
+          },
+        ]
+      : [];
   return {
     content: scopedOutput?.content ?? result.content,
     ok: true,
     ...sourceTruncation(result),
-    effects,
+    effects: [readEffect, ...instructionEffects],
   };
 }
 
@@ -1240,6 +1253,12 @@ function executeBuiltinToolCall(
   }
 }
 
+export function executeToolCall(
+  options: ExecuteToolCallOptions & { readonly toolCall: ReadToolCall },
+): Promise<ReadToolExecution>;
+export function executeToolCall(
+  options: ExecuteToolCallOptions,
+): Promise<ToolExecution>;
 export async function executeToolCall(
   options: ExecuteToolCallOptions,
 ): Promise<ToolExecution> {
