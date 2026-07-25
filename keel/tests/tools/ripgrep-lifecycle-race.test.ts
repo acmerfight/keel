@@ -31,11 +31,13 @@ describe("Ripgrep Process Stop Races", () => {
     When the kill grace period expires,
     Then Keel arms one fallback and sends a single SIGKILL`, async () => {
     // Given
-    vi.useFakeTimers();
     const ripgrep = mockUncooperativeRipgrep();
+    const { resolveRipgrep } = await import("../../src/tools/ripgrep.ts");
+    await resolveRipgrep();
     const { runRipgrepProcess } = await import(
       "../../src/tools/ripgrep-process.ts"
     );
+    vi.useFakeTimers();
     const resultPromise = runRipgrepProcess({
       toolName: "glob",
       workspacePath: process.cwd(),
