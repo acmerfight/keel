@@ -18,6 +18,7 @@ class TestNodeError extends Error implements NodeJS.ErrnoException {
 
 async function importSessionStoreWithFs(
   overrides: Partial<{
+    readonly rmdirSync: (path: PathLike) => void;
     readonly statSync: (path: PathLike) => Stats;
     readonly writeFileSync: () => never;
   }>,
@@ -125,6 +126,41 @@ describe("Session Lock Filesystem Races", () => {
         }),
       ).toThrow(`cannot write session lock ${lockPath}: EACCES during write`);
       await expect(readFile(ownerPath, "utf8")).resolves.toBe(successorOwner);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a partial lock cannot be removed after owner writing fails,
+    When the original acquisition handles that failure,
+    Then it reports the cleanup failure and leaves the lock fail-closed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-lock-race-"));
+    const lockPath = join(home, "sessions", "cleanup-blocked", "active.lock");
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    const sessionStore = await importSessionStoreWithFs({
+      writeFileSync: () => {
+        throw new TestNodeError("EIO", "write");
+      },
+      rmdirSync: (path) => {
+        if (String(path) === lockPath) {
+          throw new TestNodeError("EACCES", "rmdir");
+        }
+        actualFs.rmdirSync(path);
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        sessionStore.acquireSessionLock({
+          sessionId: "cleanup-blocked",
+          runtime: runtime(home),
+        }),
+      ).toThrow(
+        `cannot remove incomplete session lock ${lockPath}: EACCES during rmdir`,
+      );
+      await expect(stat(lockPath)).resolves.toBeDefined();
     } finally {
       await rm(home, { recursive: true, force: true });
     }
