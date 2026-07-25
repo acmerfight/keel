@@ -577,11 +577,7 @@ export async function executeGitStatus(
   options: GitStatusOptions = {},
 ): Promise<GitStatusResult> {
   const workspacePath = realpathSync(workspace);
-  const paths = normalizeGitPathFilters(
-    "git_status",
-    workspacePath,
-    options.paths,
-  );
+  const paths = normalizeGitPathFilters("git_status", options.paths);
   const scope = await resolveGitWorkTreeScope(
     "git_status",
     workspacePath,

@@ -31,6 +31,14 @@ export interface GitProcessResult {
   readonly timeoutMs: number;
 }
 
+export type CompletedGitProcessResult = Omit<
+  GitProcessResult,
+  "exitCode" | "timedOut"
+> & {
+  readonly exitCode: number;
+  readonly timedOut: false;
+};
+
 export interface RunGitOptions {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
@@ -52,9 +60,10 @@ interface GitProcessOutputCapture {
   readonly cleanup: () => void;
 }
 
-export function gitNullDevicePath(): string {
-  /* v8 ignore next: Windows uses a platform-specific null-device path; non-Windows CI exercises /dev/null. */
-  return process.platform === "win32" ? "NUL" : "/dev/null";
+export function gitNullDevicePath(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32" ? "NUL" : "/dev/null";
 }
 
 function isUnsafeGitEnvironmentKey(key: string): boolean {
@@ -341,14 +350,23 @@ export function expectGitExitCode(
   command: string,
   result: GitProcessResult,
   acceptedExitCodes: ReadonlySet<number>,
-): GitProcessResult {
+): CompletedGitProcessResult {
+  const completedResult = expectGitCompletion(toolName, command, result);
+  if (!acceptedExitCodes.has(completedResult.exitCode)) {
+    throw gitCommandFailure(toolName, command, completedResult);
+  }
+  return completedResult;
+}
+
+export function expectGitCompletion(
+  toolName: string,
+  command: string,
+  result: GitProcessResult,
+): CompletedGitProcessResult {
   if (result.exitCode === null || result.timedOut) {
     throw gitCommandFailure(toolName, command, result);
   }
-  if (!acceptedExitCodes.has(result.exitCode)) {
-    throw gitCommandFailure(toolName, command, result);
-  }
-  return result;
+  return { ...result, exitCode: result.exitCode, timedOut: false };
 }
 
 function pathFilterError(toolName: string, requestedPath: string): KeelError {
@@ -369,7 +387,6 @@ function pathIgnoredError(toolName: string, requestedPath: string): KeelError {
 
 function normalizeGitPathFilter(
   toolName: string,
-  workspacePath: string,
   requestedPath: string,
 ): string {
   if (
@@ -387,24 +404,15 @@ function normalizeGitPathFilter(
     throw pathFilterError(toolName, requestedPath);
   }
   const canonicalPath = posix.normalize(normalizedPath);
-
-  const absolutePath = resolve(workspacePath, canonicalPath);
-  /* v8 ignore next 3: lexical validation above constrains normalized relative paths inside the workspace. */
-  if (!isInsideWorkspace(workspacePath, absolutePath)) {
-    throw pathFilterError(toolName, requestedPath);
-  }
   return canonicalPath;
 }
 
 export function normalizeGitPathFilters(
   toolName: string,
-  workspacePath: string,
   requestedPaths: readonly string[] | undefined,
 ): readonly string[] {
   if (requestedPaths === undefined) return [];
-  return requestedPaths.map((path) =>
-    normalizeGitPathFilter(toolName, workspacePath, path),
-  );
+  return requestedPaths.map((path) => normalizeGitPathFilter(toolName, path));
 }
 
 function pathFilterIsDirectory(path: string): boolean {
@@ -447,7 +455,6 @@ export function gitPathVisibleToProvider(
   path: string,
 ): boolean {
   const absolutePath = resolve(gitPathBasePath, path);
-  /* v8 ignore next: git emits paths relative to the queried work tree; this guards unexpected git output. */
   if (!isInsideWorkspace(workspacePath, absolutePath)) return false;
   return !projectIgnorePolicy.isIgnored(absolutePath, false);
 }
