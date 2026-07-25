@@ -196,7 +196,7 @@ export interface EditableTextFile<OpenedMetadata = undefined> {
   readonly openedMetadata: OpenedMetadata;
 }
 
-export interface OpenedFileValidation<OpenedMetadata> {
+interface OpenedFileValidation<OpenedMetadata> {
   readonly targetPath: string;
   readonly metadata: OpenedMetadata;
 }
