@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { createDeepseekProvider } from "../../src/llm/providers/deepseek.ts";
 import {
   createFakeProvider,
+  type FakeResponse,
   fakeResponse,
 } from "../../src/llm/providers/fake.ts";
 import { createKimiProvider } from "../../src/llm/providers/kimi.ts";
@@ -253,6 +254,104 @@ describe("Provider Request Attempt Conformance", () => {
         },
       },
     ]);
+  });
+
+  test(`Given a fake provider request fails while producing its response,
+    When attempt observation is enabled,
+    Then the attempt records one terminal provider error`, async () => {
+    const observed = observeAttempts();
+    const invalidResponse: FakeResponse = {
+      type: "tool",
+      tool: "ls",
+      args: { limit: 0 },
+      usage: {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+      },
+    };
+    const provider = createFakeProvider([invalidResponse]);
+
+    await expect(
+      collect(provider.stream(streamOptions(observed.observer))),
+    ).rejects.toThrow("Invalid fake tool response arguments for ls");
+
+    expect(observed.attempts).toHaveLength(1);
+    expect(observed.attempts[0]?.finishes).toEqual([
+      {
+        outcome: "terminal_error",
+        errorCode: "provider_unexpected_error",
+      },
+    ]);
+  });
+
+  test(`Given a consumer closes a fake provider stream before its response completes,
+    When attempt observation is enabled,
+    Then the attempt records one consumer-closed terminal error`, async () => {
+    const observed = observeAttempts();
+    const provider = createFakeProvider([fakeResponse("partial", true)]);
+    const iterator = provider
+      .stream(streamOptions(observed.observer))
+      [Symbol.asyncIterator]();
+
+    await iterator.next();
+    await iterator.return?.();
+
+    expect(observed.attempts).toHaveLength(1);
+    expect(observed.attempts[0]?.finishes).toEqual([
+      {
+        outcome: "terminal_error",
+        errorCode: "provider_consumer_closed",
+      },
+    ]);
+  });
+
+  test(`Given a fake provider signal aborts before its consumer closes the stream,
+    When attempt observation is enabled,
+    Then the attempt records one aborted outcome`, async () => {
+    const observed = observeAttempts();
+    const controller = new AbortController();
+    const provider = createFakeProvider([fakeResponse("partial", true)]);
+    const iterator = provider
+      .stream(streamOptions(observed.observer, controller.signal))
+      [Symbol.asyncIterator]();
+
+    await iterator.next();
+    controller.abort();
+    await iterator.return?.();
+
+    expect(observed.attempts).toHaveLength(1);
+    expect(observed.attempts[0]?.finishes).toEqual([{ outcome: "aborted" }]);
+  });
+
+  test(`Given an aborted fake provider request also fails while producing its response,
+    When attempt observation is enabled,
+    Then abort remains the terminal attempt outcome`, async () => {
+    const observed = observeAttempts();
+    const controller = new AbortController();
+    const invalidResponse: FakeResponse = {
+      type: "tool",
+      tool: "ls",
+      args: { limit: 0 },
+      usage: {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+      },
+    };
+    const provider = createFakeProvider([invalidResponse]);
+    controller.abort();
+
+    await expect(
+      collect(
+        provider.stream(streamOptions(observed.observer, controller.signal)),
+      ),
+    ).rejects.toThrow("Invalid fake tool response arguments for ls");
+
+    expect(observed.attempts).toHaveLength(1);
+    expect(observed.attempts[0]?.finishes).toEqual([{ outcome: "aborted" }]);
   });
 
   test(`Given the first upstream request is rate-limited and the retry succeeds,

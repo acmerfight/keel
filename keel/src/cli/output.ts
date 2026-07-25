@@ -65,12 +65,12 @@ function escapeControlChar(char: string): string {
 }
 
 function firstCodePoint(character: string): number {
-  const code = character.codePointAt(0);
-  /* v8 ignore next 3 -- replace callbacks always provide one non-empty matched character. */
-  if (code === undefined) {
-    return 0;
+  const firstCodeUnit = character.charCodeAt(0);
+  if (firstCodeUnit < 0xd800 || firstCodeUnit > 0xdbff) {
+    return firstCodeUnit;
   }
-  return code;
+  const secondCodeUnit = character.charCodeAt(1);
+  return (firstCodeUnit - 0xd800) * 0x400 + (secondCodeUnit - 0xdc00) + 0x10000;
 }
 
 // Assistant text is model-controlled. Newlines and tabs are legitimate prose

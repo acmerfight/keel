@@ -1,4 +1,8 @@
-import { createFakeProvider, fakeResponse } from "../llm/providers/fake.ts";
+import {
+  createFakeProvider,
+  fakeResponse,
+  observeFakeProviderRequest,
+} from "../llm/providers/fake.ts";
 import type { LLMProvider } from "../llm/types.ts";
 
 interface CliEditRequest {
@@ -29,45 +33,8 @@ function createObservedFakeProvider(
 ): LLMProvider {
   return {
     id: "fake",
-    async *stream(options) {
-      const attempt = options.providerRequestAttempts?.begin();
-      let finished = false;
-      try {
-        for await (const event of stream(options)) {
-          if (event.type === "stop") {
-            finished = true;
-            attempt?.finish({ outcome: "completed", usage: event.usage });
-          }
-          yield event;
-        }
-        /* v8 ignore start -- demo scripts complete normally; production fake/provider conformance owns error and consumer-cancellation attempt finalization. */
-      } catch (error) {
-        if (!finished) {
-          finished = true;
-          attempt?.finish(
-            options.signal.aborted
-              ? { outcome: "aborted" }
-              : {
-                  outcome: "terminal_error",
-                  errorCode: "provider_unexpected_error",
-                },
-          );
-        }
-        throw error;
-      } finally {
-        if (!finished) {
-          finished = true;
-          attempt?.finish(
-            options.signal.aborted
-              ? { outcome: "aborted" }
-              : {
-                  outcome: "terminal_error",
-                  errorCode: "provider_consumer_closed",
-                },
-          );
-        }
-      }
-      /* v8 ignore stop */
+    stream(options) {
+      return observeFakeProviderRequest(options, stream(options));
     },
   };
 }
