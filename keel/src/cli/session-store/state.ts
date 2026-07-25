@@ -376,9 +376,7 @@ function rebaseReplaySkillStateAfterReplace(
 ): void {
   const current =
     replacement ??
-    state.skillStateCheckpoints.reduce(
-      (_previous, checkpoint) => checkpoint,
-    );
+    state.skillStateCheckpoints.reduce((_previous, checkpoint) => checkpoint);
   state.skillStateCheckpoints.splice(0, state.skillStateCheckpoints.length, {
     messageOrdinal: 0,
     skillActivations: current.skillActivations.map(copySkillActivation),

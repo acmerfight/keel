@@ -60,6 +60,7 @@ export function snapshotSessionRecordLine(
     readonly pendingInputs?: readonly SessionQueuedInput[];
     readonly goal?: SessionGoal;
     readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
+    readonly skillStates?: readonly SkillLifecycleState[];
   } = {},
 ): string {
   return JSON.stringify({
@@ -75,9 +76,13 @@ export function snapshotSessionRecordLine(
     ...(options.taskProgressCheckpoints !== undefined
       ? { taskProgressCheckpoints: options.taskProgressCheckpoints }
       : {}),
-    skillStateCheckpoints: [
-      { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
-    ],
+    skillStateCheckpoints: (options.skillStates ?? [
+      { skillActivations: [], activeSkillIds: [] },
+    ]).map((state, index) => ({
+      messageOrdinal: index,
+      skillActivations: state.skillActivations,
+      activeSkillIds: state.activeSkillIds,
+    })),
     ...(title !== undefined ? { title } : {}),
   });
 }
