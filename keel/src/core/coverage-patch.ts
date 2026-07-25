@@ -97,7 +97,7 @@ function changedLinesAgainstBranch(
   return parseChangedLines(diff);
 }
 
-function parseChangedLines(diff: string): ChangedLinesByPath {
+export function parseChangedLines(diff: string): ChangedLinesByPath {
   const changedLines: ChangedLinesByPath = new Map();
   let currentPath: string | null = null;
 
@@ -109,7 +109,6 @@ function parseChangedLines(diff: string): ChangedLinesByPath {
     if (!line.startsWith("@@ ") || currentPath === null) continue;
 
     const hunk = parseHunkHeader(line);
-    /* v8 ignore next: changedLinesAgainstBranch passes git-generated hunk headers. */
     if (hunk === null) continue;
     const lines = changedLines.get(currentPath) ?? new Set<number>();
     for (let offset = 0; offset < hunk.count; offset += 1) {
@@ -229,21 +228,17 @@ function parseNewDiffPath(line: string): string | null {
 function parseHunkHeader(
   line: string,
 ): { readonly start: number; readonly count: number } | null {
-  const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-  /* v8 ignore next: parseChangedLines only calls this for git hunk header lines. */
-  if (match === null) return null;
-  const startRaw = match[1];
-  /* v8 ignore next: the hunk header regex always captures the new-file start. */
-  if (startRaw === undefined) return null;
-  const countRaw = match[2];
-  const start = parseInteger(startRaw);
-  const count = countRaw === undefined ? 1 : parseInteger(countRaw);
-  /* v8 ignore next: git hunk headers only contain numeric ranges. */
-  if (start === null || count === null) return null;
-  return {
-    start,
-    count,
-  };
+  if (!/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(line)) return null;
+  const plusIndex = line.indexOf("+");
+  const rangeEnd = line.indexOf(" ", plusIndex);
+  const range = line.slice(plusIndex + 1, rangeEnd);
+  const commaIndex = range.indexOf(",");
+  return commaIndex === -1
+    ? { start: Number.parseInt(range, 10), count: 1 }
+    : {
+        start: Number.parseInt(range.slice(0, commaIndex), 10),
+        count: Number.parseInt(range.slice(commaIndex + 1), 10),
+      };
 }
 
 function parseLineCoverage(
