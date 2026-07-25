@@ -99,7 +99,7 @@ function sortLsEntries(entries: readonly LsEntry[]): LsEntry[] {
     if (left.isDirectory !== right.isDirectory) {
       return left.isDirectory ? -1 : 1;
     }
-    return left.name < right.name ? -1 : 1;
+    return Number(left.name > right.name) * 2 - 1;
   });
 }
 
