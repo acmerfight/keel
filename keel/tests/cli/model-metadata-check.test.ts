@@ -1,6 +1,15 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { runCheckModelMetadata } from "../../scripts/check-model-metadata.ts";
+
+const CHECK_MODEL_METADATA_SCRIPT = join(
+  process.cwd(),
+  "scripts/check-model-metadata.ts",
+);
 
 async function runCheck(
   options: Parameters<typeof runCheckModelMetadata>[0],
@@ -46,7 +55,57 @@ async function close(server: Server): Promise<void> {
   });
 }
 
+function runCheckSubprocess(preloadPath: string): Promise<{
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      "node",
+      [
+        "--import",
+        preloadPath,
+        "--experimental-strip-types",
+        CHECK_MODEL_METADATA_SCRIPT,
+      ],
+      (error, stdout, stderr) => {
+        const exitCode =
+          typeof error?.code === "number" ? error.code : (child.exitCode ?? 0);
+        resolve({ exitCode, stdout, stderr });
+      },
+    );
+  });
+}
+
 describe("Model Metadata Check CLI", () => {
+  test(`Given the direct script entry receives a deterministic catalog,
+    When Node executes the metadata check as its main module,
+    Then the adapter maps actionable drift to process output and exit code`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-model-metadata-"));
+    const preloadPath = join(workspace, "fetch-fixture.mjs");
+    await writeFile(
+      preloadPath,
+      'globalThis.fetch = async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } });\n',
+      "utf8",
+    );
+
+    try {
+      // When
+      const result = await runCheckSubprocess(preloadPath);
+
+      // Then
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(
+        "Actionable model metadata drift detected against models.dev:",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no source endpoint override,
     When the metadata check fetches its catalog,
     Then it uses the canonical models.dev API URL`, async () => {
