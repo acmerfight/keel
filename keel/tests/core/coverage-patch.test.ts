@@ -9,6 +9,7 @@ describe("patch coverage diff parsing", () => {
     const diff = [
       "+++ b/src/feature.ts",
       "@@ malformed @@",
+      "@@ -1 +2 @@",
       "@@ -1 +3,2 @@",
     ].join("\n");
 
@@ -16,6 +17,6 @@ describe("patch coverage diff parsing", () => {
     const changedLines = parseChangedLines(diff);
 
     // Then
-    expect([...(changedLines.get("src/feature.ts") ?? [])]).toEqual([3, 4]);
+    expect([...(changedLines.get("src/feature.ts") ?? [])]).toEqual([2, 3, 4]);
   });
 });
