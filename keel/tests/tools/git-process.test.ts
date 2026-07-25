@@ -5,11 +5,47 @@ import { delimiter, join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   expectGitExitCode,
+  gitNullDevicePath,
+  gitPathVisibleToProvider,
   GIT_PREVIEW_OUTPUT_MAX_BYTES,
   runGitProcess,
 } from "../../src/tools/git-process.ts";
 
 const PATH_ENV = "PATH";
+
+describe("git process platform and path contracts", () => {
+  test(`Given Windows and POSIX platform identifiers,
+    When the git null-device path is selected,
+    Then each platform receives its native path`, () => {
+    expect(gitNullDevicePath("win32")).toBe("NUL");
+    expect(gitNullDevicePath("linux")).toBe("/dev/null");
+  });
+
+  test(`Given git reports a path outside the workspace,
+    When provider visibility is evaluated,
+    Then the unexpected path is hidden before ignore policy evaluation`, () => {
+    // Given
+    const workspacePath = join(tmpdir(), "keel-git-visible-workspace");
+    let ignorePolicyCalled = false;
+
+    // When
+    const visible = gitPathVisibleToProvider(
+      workspacePath,
+      workspacePath,
+      {
+        isIgnored: () => {
+          ignorePolicyCalled = true;
+          return false;
+        },
+      },
+      "../outside.txt",
+    );
+
+    // Then
+    expect(visible).toBe(false);
+    expect(ignorePolicyCalled).toBe(false);
+  });
+});
 
 async function createGitWorkspace(prefix: string): Promise<string> {
   const workspace = await mkdtemp(join(tmpdir(), prefix));

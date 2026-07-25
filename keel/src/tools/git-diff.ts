@@ -3,6 +3,7 @@ import { z } from "zod";
 import { KeelError } from "../core/error.ts";
 import {
   assertGitPathFiltersAllowed,
+  expectGitCompletion,
   expectGitExitCode,
   GIT_ARTIFACT_OUTPUT_MAX_BYTES,
   GIT_PREVIEW_OUTPUT_MAX_BYTES,
@@ -391,18 +392,16 @@ async function resolveGitCommitRef(
     ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
     gitRunOptions(config, signal, "metadata"),
   );
-  if (result.exitCode === null) {
-    throw gitCommandFailure("git_diff", "rev-parse", result);
-  }
-  /* v8 ignore next 3 -- the numeric-exit timeout race is owned by expectGitExitCode's process-level contract. */
-  if (result.timedOut) {
-    throw gitCommandFailure("git_diff", "rev-parse", result);
-  }
-  if (result.exitCode !== 0) {
+  const completedResult = expectGitCompletion(
+    "git_diff",
+    "rev-parse",
+    result,
+  );
+  if (completedResult.exitCode !== 0) {
     throw gitRefDoesNotResolveToCommitError(requestedRef);
   }
 
-  return parseGitCommitOid("rev-parse", result.artifactStdout);
+  return parseGitCommitOid("rev-parse", completedResult.artifactStdout);
 }
 
 async function resolveRefComparison(
@@ -430,20 +429,18 @@ async function mergeBaseRef(
     ["merge-base", comparison.baseCommit, comparison.headCommit],
     gitRunOptions(config, signal, "metadata"),
   );
-  if (result.exitCode === null) {
-    throw gitCommandFailure("git_diff", "merge-base", result);
-  }
-  /* v8 ignore next 3 -- the numeric-exit timeout race is owned by expectGitExitCode's process-level contract. */
-  if (result.timedOut) {
-    throw gitCommandFailure("git_diff", "merge-base", result);
-  }
-  if (result.exitCode === 1) {
+  const completedResult = expectGitCompletion(
+    "git_diff",
+    "merge-base",
+    result,
+  );
+  if (completedResult.exitCode === 1) {
     throw noCommonAncestorError(comparison);
   }
-  if (result.exitCode !== 0) {
-    throw gitCommandFailure("git_diff", "merge-base", result);
+  if (completedResult.exitCode !== 0) {
+    throw gitCommandFailure("git_diff", "merge-base", completedResult);
   }
-  return parseGitCommitOid("merge-base", result.artifactStdout);
+  return parseGitCommitOid("merge-base", completedResult.artifactStdout);
 }
 
 async function refComparisonDiffArgs(
@@ -707,11 +704,7 @@ export async function executeGitDiff(
 ): Promise<GitDiffResult> {
   const workspacePath = realpathSync(workspace);
   const requestMode = normalizeGitDiffRequestMode(options);
-  const pathFilters = normalizeGitPathFilters(
-    "git_diff",
-    workspacePath,
-    options.paths,
-  );
+  const pathFilters = normalizeGitPathFilters("git_diff", options.paths);
   const scope = await resolveGitWorkTreeScope(
     "git_diff",
     workspacePath,
