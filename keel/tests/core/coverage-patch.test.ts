@@ -16,6 +16,6 @@ describe("patch coverage diff parsing", () => {
     const changedLines = parseChangedLines(diff);
 
     // Then
-    expect([...changedLines.get("src/feature.ts") ?? []]).toEqual([3, 4]);
+    expect([...(changedLines.get("src/feature.ts") ?? [])]).toEqual([3, 4]);
   });
 });
