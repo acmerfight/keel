@@ -1,5 +1,5 @@
 import type { PathLike, Stats } from "node:fs";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -34,7 +34,7 @@ describe("Session Lock Filesystem Races", () => {
     vi.resetModules();
   });
 
-  test(`Given an ownerless lock disappears from inspection after acquisition detects it,
+  test(`Given an ownerless lock becomes inaccessible after acquisition detects it,
     When the user acquires that session lock,
     Then acquisition fails closed with the inspection error`, async () => {
     // Given
@@ -85,6 +85,46 @@ describe("Session Lock Filesystem Races", () => {
         }),
       ).toThrow(`cannot write session lock ${lockPath}: EACCES during write`);
       await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given another process replaces a partial lock before owner writing fails,
+    When the original acquisition handles that failure,
+    Then it preserves the successor's valid lock`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-lock-race-"));
+    const lockPath = join(home, "sessions", "owner-replacement", "active.lock");
+    const ownerPath = join(lockPath, "owner.json");
+    const successorOwner = `${JSON.stringify({
+      pid: 999_999_999,
+      token: "successor",
+      createdAt: "1970-01-01T00:00:00.000Z",
+    })}\n`;
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    const sessionStore = await importSessionStoreWithFs({
+      writeFileSync: () => {
+        actualFs.rmSync(lockPath, { recursive: true, force: true });
+        actualFs.mkdirSync(lockPath, { mode: 0o700 });
+        actualFs.writeFileSync(ownerPath, successorOwner, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+        throw new TestNodeError("EACCES", "write");
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        sessionStore.acquireSessionLock({
+          sessionId: "owner-replacement",
+          runtime: runtime(home),
+        }),
+      ).toThrow(`cannot write session lock ${lockPath}: EACCES during write`);
+      await expect(readFile(ownerPath, "utf8")).resolves.toBe(successorOwner);
     } finally {
       await rm(home, { recursive: true, force: true });
     }

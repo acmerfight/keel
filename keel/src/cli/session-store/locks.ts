@@ -262,20 +262,37 @@ function releaseSessionLock(lockPath: string, token: string): void {
   removeEmptySessionDirectory(lockPath);
 }
 
+function isBenignEmptyDirectoryRemovalError(error: unknown): boolean {
+  return (
+    hasNodeErrorCode(error, "ENOENT") ||
+    hasNodeErrorCode(error, "ENOTEMPTY") ||
+    hasNodeErrorCode(error, "EEXIST")
+  );
+}
+
 function removeEmptySessionDirectory(lockPath: string): void {
   const sessionDirectory = dirname(lockPath);
   try {
     rmdirSync(sessionDirectory);
   } catch (error) {
-    if (
-      hasNodeErrorCode(error, "ENOENT") ||
-      hasNodeErrorCode(error, "ENOTEMPTY") ||
-      hasNodeErrorCode(error, "EEXIST")
-    ) {
+    if (isBenignEmptyDirectoryRemovalError(error)) {
       return;
     }
     sessionStoreError(
       `Error: cannot remove empty session directory ${sessionDirectory}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function removeIncompleteSessionLock(lockPath: string): void {
+  try {
+    rmdirSync(lockPath);
+  } catch (error) {
+    if (isBenignEmptyDirectoryRemovalError(error)) {
+      return;
+    }
+    sessionStoreError(
+      `Error: cannot remove incomplete session lock ${lockPath}: ${errorMessage(error)}`,
     );
   }
 }
@@ -327,7 +344,7 @@ export function acquireSessionLock(options: {
         { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
     } catch (error) {
-      rmSync(lockPath, { recursive: true, force: true });
+      removeIncompleteSessionLock(lockPath);
       sessionStoreError(
         `Error: cannot write session lock ${lockPath}: ${errorMessage(error)}`,
       );
