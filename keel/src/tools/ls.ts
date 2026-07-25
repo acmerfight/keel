@@ -99,10 +99,7 @@ function sortLsEntries(entries: readonly LsEntry[]): LsEntry[] {
     if (left.isDirectory !== right.isDirectory) {
       return left.isDirectory ? -1 : 1;
     }
-    if (left.name < right.name) return -1;
-    if (left.name > right.name) return 1;
-    /* v8 ignore next: a single directory cannot contain duplicate entry names. */
-    return 0;
+    return left.name < right.name ? -1 : 1;
   });
 }
 

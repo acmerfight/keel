@@ -93,9 +93,7 @@ async function runGlob(
     timeoutMs,
     onStdoutLine: (line, stopRipgrep) => {
       const absoluteMatchPath = resolve(workspacePath, line);
-      /* v8 ignore next: ripgrep applies project ignores before stdout; this is a symlink/race safety filter. */
       if (projectIgnorePolicy.isIgnored(absoluteMatchPath, false)) return;
-      /* v8 ignore next: built-in ignore globs filter these before stdout; this is a symlink/race safety filter. */
       if (hasIgnoredPathSegment(workspacePath, absoluteMatchPath)) return;
 
       if (!matches.append(normalizeRipgrepPath(workspacePath, line))) {
@@ -124,10 +122,8 @@ async function runGlob(
     );
   }
 
-  /* v8 ignore next: close normally reports a numeric code; null requires an external signal race. */
   const exitCode = result.code ?? "unknown";
   const stderr = result.stderr.trim();
-  /* v8 ignore next: fallback code 2 with stderr is handled above as an invalid pattern. */
   const stderrSuffix = stderr === "" ? "" : `: ${stderr}`;
   throw new KeelError(
     "tool_unavailable",
