@@ -95,14 +95,13 @@ function hasUnsafeEntryNameChars(name: string): boolean {
 }
 
 function sortLsEntries(entries: readonly LsEntry[]): LsEntry[] {
-  const entryByName = new Map(entries.map((entry) => [entry.name, entry]));
-  const entriesByName = [...entryByName.keys()]
-    .sort()
-    .map((name) => entryByName.get(name)!);
-  return [
-    ...entriesByName.filter((entry) => entry.isDirectory),
-    ...entriesByName.filter((entry) => !entry.isDirectory),
-  ];
+  const sortedNames = (directory: boolean): LsEntry[] =>
+    entries
+      .filter((entry) => entry.isDirectory === directory)
+      .map((entry) => entry.name)
+      .sort()
+      .map((name) => ({ name, isDirectory: directory }));
+  return [...sortedNames(true), ...sortedNames(false)];
 }
 
 export function executeLs(
