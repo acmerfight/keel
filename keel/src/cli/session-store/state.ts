@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { copySessionGoal, type SessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -18,7 +19,6 @@ import { appendJsonLine, sessionLedgerSize } from "./ledger.ts";
 import {
   type AppendSessionRecord,
   type ModelSwitchSessionRecord,
-  type ObjectValue,
   type ReplaceSessionRecord,
   SESSION_LEDGER_SNAPSHOT_THRESHOLD_BYTES,
   SESSION_SCHEMA_VERSION,
@@ -50,45 +50,8 @@ import {
 } from "./records.ts";
 import { isoTimestamp } from "./runtime.ts";
 
-function objectValue(input: object, key: string): ObjectValue {
-  for (const [name, value] of Object.entries(input)) {
-    if (name === key) {
-      return { exists: true, value };
-    }
-  }
-  /* v8 ignore next: same-tool canonical args share field names; this guards future schema drift. */
-  return { exists: false };
-}
-
 function stableValuesEqual(left: unknown, right: unknown): boolean {
-  if (
-    left === null ||
-    right === null ||
-    typeof left !== "object" ||
-    typeof right !== "object"
-  ) {
-    return left === right;
-  }
-
-  if (Array.isArray(left) || Array.isArray(right)) {
-    /* v8 ignore next 3: same-tool canonical args keep stable field types; this guards future schema drift. */
-    if (!Array.isArray(left) || !Array.isArray(right)) {
-      return false;
-    }
-    return (
-      left.length === right.length &&
-      left.every((item, index) => stableValuesEqual(item, right[index]))
-    );
-  }
-
-  const leftEntries = Object.entries(left);
-  if (leftEntries.length !== Object.keys(right).length) {
-    return false;
-  }
-  return leftEntries.every(([key, value]) => {
-    const rightValue = objectValue(right, key);
-    return rightValue.exists && stableValuesEqual(value, rightValue.value);
-  });
+  return isDeepStrictEqual(left, right);
 }
 
 function toolCallArgumentsEqual(
@@ -411,11 +374,11 @@ function rebaseReplaySkillStateAfterReplace(
   state: SessionReplayState,
   replacement?: SkillLifecycleState,
 ): void {
-  const current = replacement ?? state.skillStateCheckpoints.at(-1);
-  /* v8 ignore next 3 -- every session replay starts with the ordinal-zero lifecycle checkpoint. */
-  if (current === undefined) {
-    throw new Error("session skill lifecycle checkpoint is unavailable");
-  }
+  const current =
+    replacement ??
+    state.skillStateCheckpoints.reduce(
+      (_previous, checkpoint) => checkpoint,
+    );
   state.skillStateCheckpoints.splice(0, state.skillStateCheckpoints.length, {
     messageOrdinal: 0,
     skillActivations: current.skillActivations.map(copySkillActivation),

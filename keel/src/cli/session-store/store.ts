@@ -613,13 +613,9 @@ export function resumeSessionStore(options: {
             activeSkillIds: [...checkpoint.activeSkillIds],
           }),
         );
-        const snapshotSkillState = skillStateCheckpoints.at(-1);
-        /* v8 ignore next 3 -- the snapshot schema requires at least one lifecycle checkpoint. */
-        if (snapshotSkillState === undefined) {
-          sessionStoreError(
-            "Error: session snapshot has no skill lifecycle state.",
-          );
-        }
+        const snapshotSkillState = skillStateCheckpoints.reduce(
+          (_previous, checkpoint) => checkpoint,
+        );
         skillActivations =
           snapshotSkillState.skillActivations.map(copySkillActivation);
         activeSkillIds = [...snapshotSkillState.activeSkillIds];

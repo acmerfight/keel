@@ -181,11 +181,15 @@ describe("CLI tool-output artifact store", () => {
   });
 
   test(`Given artifact refs are malformed, unsafe, or missing,
-    When the artifact store opens them,
+    When the artifact store opens or verifies them,
     Then it rejects the ref or reports the managed file as missing`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-artifact-show-"));
     const runtime = artifactRuntime(home);
+    const store = createToolOutputArtifactStore({
+      runtime,
+      scope: "ref-validation",
+    });
 
     try {
       // When
@@ -200,6 +204,14 @@ describe("CLI tool-output artifact store", () => {
       const missing = await showToolOutputArtifact({
         runtime,
         ref: "tool-output:run/id",
+      });
+      const malformedReuse = await store.verifyReusable({
+        ref: "../secret",
+        toolCallId: "read_secret",
+        previewContent: "secret",
+        omittedChars: 1,
+        previewKind: "prefix",
+        sourceStatus: "complete",
       });
 
       // Then
@@ -219,6 +231,7 @@ describe("CLI tool-output artifact store", () => {
           "Error: cannot read artifact tool-output:run/id:",
         );
       }
+      expect(malformedReuse).toEqual({ status: "not_reusable" });
     } finally {
       await rm(home, { recursive: true, force: true });
     }
