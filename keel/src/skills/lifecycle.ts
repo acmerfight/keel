@@ -128,7 +128,7 @@ function activationRecord(activation: SkillActivation): SkillActivationRecord {
   };
 }
 
-function validateSkillLifecycleState(
+export function activeSkillActivations(
   state: SkillLifecycleState,
 ): readonly SkillActivation[] {
   const activeActivations: SkillActivation[] = [];
@@ -218,7 +218,7 @@ export function createSkillActivation(
   const initialState = copySkillLifecycleState(
     options.initialState ?? { skillActivations: [], activeSkillIds: [] },
   );
-  const initialActiveActivations = validateSkillLifecycleState(initialState);
+  const initialActiveActivations = activeSkillActivations(initialState);
   const activations = [...initialState.skillActivations];
   const activeActivations = [...initialActiveActivations];
   const selectableIds = new Set<string>();
@@ -385,8 +385,7 @@ export function createSkillActivation(
     state,
     restore: (restored) => {
       const restoredState = copySkillLifecycleState(restored);
-      const restoredActiveActivations =
-        validateSkillLifecycleState(restoredState);
+      const restoredActiveActivations = activeSkillActivations(restoredState);
       activations.splice(
         0,
         activations.length,

@@ -140,7 +140,6 @@ function sessionLedgerSize(filePath: string): number {
 }
 
 function sessionLedgerReadError(filePath: string, error: unknown): never {
-  /* v8 ignore next 3: stat succeeds before reads; ENOENT here requires a filesystem race. */
   if (hasNodeErrorCode(error, "ENOENT")) {
     sessionStoreError(`Error: session ledger not found at ${filePath}.`);
   }
@@ -176,7 +175,6 @@ function readSessionLedgerBufferRange(
         length - offset,
         start + offset,
       );
-      /* v8 ignore next 3 -- reaching EOF after stat requires an external truncation race. */
       if (bytesRead === 0) {
         throw new Error("unexpected end of file");
       }
