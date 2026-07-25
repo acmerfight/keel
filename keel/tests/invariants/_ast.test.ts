@@ -18,17 +18,14 @@ describe("Invariant AST Helpers", () => {
     Then only TypeScript files are returned in stable order`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-invariant-ast-"));
-    await mkdir(join(workspace, "nested"));
-    await writeFile(join(workspace, "z.ts"), "export {};\n", "utf8");
-    await writeFile(join(workspace, "notes.md"), "# Notes\n", "utf8");
-    await symlink("z.ts", join(workspace, "linked.ts"));
-    await writeFile(
-      join(workspace, "nested", "a.ts"),
-      "export {};\n",
-      "utf8",
-    );
 
     try {
+      await mkdir(join(workspace, "nested"));
+      await writeFile(join(workspace, "z.ts"), "export {};\n", "utf8");
+      await writeFile(join(workspace, "notes.md"), "# Notes\n", "utf8");
+      await symlink("z.ts", join(workspace, "linked.ts"));
+      await writeFile(join(workspace, "nested", "a.ts"), "export {};\n", "utf8");
+
       // When
       const files = collectTypeScriptFiles(workspace);
 
@@ -50,9 +47,9 @@ describe("Invariant AST Helpers", () => {
     const initializer = variableInitializer(source, "view");
 
     // Then
-    expect(initializer !== null && ts.isJsxSelfClosingElement(initializer)).toBe(
-      true,
-    );
+    expect(
+      initializer !== null && ts.isJsxSelfClosingElement(initializer),
+    ).toBe(true);
   });
 
   test(`Given an object mixes literal, computed, and spread properties,
