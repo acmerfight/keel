@@ -32,6 +32,7 @@ import {
   eventsWithoutCandidateArtifacts,
   eventTargetsMemory,
   MEMORY_ID_PATTERN,
+  type MemoryRecord,
   memoryRecordFromEvent,
   PROJECT_MEMORY_SCHEMA_VERSION,
   type ProjectMemoryEvent,
@@ -376,6 +377,28 @@ function immutableMemoryEntry(
   };
 }
 
+function mutableMemoryEntry(memory: MemoryRecord): MutableProjectMemoryEntry {
+  return {
+    id: memory.id,
+    text: memory.text,
+    source: memory.source,
+    createdAt: memory.createdAt,
+    lastVerifiedAt: memory.lastVerifiedAt,
+    supersedes: memory.supersedes,
+    supersededBy: null,
+    reviewAfter: memory.reviewAfter,
+    expiresAt: memory.expiresAt,
+    forgotten: false,
+  };
+}
+
+export function projectMemoryEntryFromRecord(
+  memory: MemoryRecord,
+  now: number,
+): ProjectMemoryEntry {
+  return immutableMemoryEntry(mutableMemoryEntry(memory), now);
+}
+
 function isActiveMemoryEntry(
   entry: ProjectMemoryEntry,
 ): entry is ActiveProjectMemoryEntry {
@@ -419,18 +442,7 @@ function replayMemoryEvents(
         target.supersededBy = memory.id;
       }
       knownIds.add(memory.id);
-      entries.set(memory.id, {
-        id: memory.id,
-        text: memory.text,
-        source: memory.source,
-        createdAt: memory.createdAt,
-        lastVerifiedAt: memory.lastVerifiedAt,
-        supersedes: memory.supersedes,
-        supersededBy: null,
-        reviewAfter: memory.reviewAfter,
-        expiresAt: memory.expiresAt,
-        forgotten: false,
-      });
+      entries.set(memory.id, mutableMemoryEntry(memory));
       continue;
     }
     if (event.type !== "forget" && event.type !== "verify") continue;
@@ -585,12 +597,7 @@ export function addProjectMemory(
     const next = replayMemoryEvents([...state.events, event], filePath, now);
     validateActiveBudget(next.active);
     appendProjectMemoryEvent(filePath, event);
-    const entry = next.entries.find((candidate) => candidate.id === memory.id);
-    /* v8 ignore next 3 -- replaying the valid add event constructed above must project its unique ID; this guards an internal replay defect. */
-    if (entry === undefined) {
-      throw new Error("newly added project memory was not projected");
-    }
-    return { scope, entry };
+    return { scope, entry: projectMemoryEntryFromRecord(memory, now) };
   });
 }
 

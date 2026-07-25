@@ -10,6 +10,7 @@ import {
   type ProjectMemoryScope,
   projectMemoryDirectory,
   projectMemoryDirectoryForRead,
+  projectMemoryEntryFromRecord,
   projectMemoryEventsWithoutTarget,
   resolveProjectMemoryScope,
   validateProjectMemoryGeneration,
@@ -899,7 +900,8 @@ function approveCandidate(
         `Error: ${resolution.memoryId} is not a current conflict for project-memory candidate ${id}.`,
       );
     }
-    const createdAt = new Date(runtime.now()).toISOString();
+    const now = runtime.now();
+    const createdAt = new Date(now).toISOString();
     const memory: MemoryRecord = {
       id: `mem_${randomUUID()}`,
       text: validatedCandidateText(candidate.statement),
@@ -922,20 +924,15 @@ function approveCandidate(
       memory,
     };
     const nextEvents = [...state.events, event];
-    const entries = validateProjectMemoryGeneration(
-      nextEvents,
-      filePath,
-      runtime.now(),
-    );
-    const next = replayCandidateEvents(nextEvents, filePath, runtime.now());
+    validateProjectMemoryGeneration(nextEvents, filePath, now);
+    const next = replayCandidateEvents(nextEvents, filePath, now);
     appendProjectMemoryEvent(filePath, event);
     const approved = requireCandidate(next, id);
-    const activeMemory = entries.find((entry) => entry.id === memory.id);
-    /* v8 ignore next 3 -- generation validation above projects the candidate_approve memory atomically. */
-    if (activeMemory === undefined) {
-      throw new Error("approved candidate memory was not projected");
-    }
-    return { scope, candidate: approved, memory: activeMemory };
+    return {
+      scope,
+      candidate: approved,
+      memory: projectMemoryEntryFromRecord(memory, now),
+    };
   });
 }
 

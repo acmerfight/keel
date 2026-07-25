@@ -48,9 +48,10 @@ function bashProjectApprovalsError(message: string): never {
 }
 
 function invalidFileMessage(filePath: string, result: z.ZodError): string {
-  const [issue] = result.issues;
-  /* v8 ignore next: Zod schema failures include at least one issue. */
-  const message = issue?.message ?? "invalid schema";
+  const message = result.issues
+    .map((issue) => issue.message)
+    .slice(0, 1)
+    .join("");
   return `Error: cannot read bash project approvals ${filePath}: ${message}.`;
 }
 
