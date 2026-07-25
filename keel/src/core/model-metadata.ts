@@ -19,10 +19,7 @@ export type ModelMetadata =
     }
   | { readonly status: "unknown" };
 
-type KnownModelMetadata = Extract<
-  ModelMetadata,
-  { readonly status: "known" }
->;
+type KnownModelMetadata = Extract<ModelMetadata, { readonly status: "known" }>;
 
 export type RegisteredModelMetadata = KnownModelMetadata & {
   readonly costModel: CostModel;
