@@ -2144,9 +2144,7 @@ export function restoreUndoCheckpointsThrough(
 
   const selectedCheckpoints = checkpoints.slice(-checkpointIndex);
   if (checkpointIndex === 1) {
-    const checkpoint = selectedCheckpoints.reduce(
-      (_previous, current) => current,
-    );
+    const checkpoint = checkpoints.reduce((_previous, current) => current);
     const applied: AppliedBatchRestoreOperation[] = [];
     const result = restoreCheckpoint(checkpoint, gitWorkspace, applied);
     if (result.status === "restored") {

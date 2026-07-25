@@ -225,10 +225,7 @@ function diagnosticLineIndexAtOffset(
   lines: readonly DiagnosticLine[],
   offset: number,
 ): number {
-  for (const [index, line] of lines.entries()) {
-    if (offset < line.end) return index;
-  }
-  return lines.length - 1;
+  return lines.findIndex((line) => offset < line.end);
 }
 
 interface DiagnosticLineRange {
