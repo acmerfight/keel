@@ -58,7 +58,6 @@ export function collectTypeScriptFiles(directory: string): readonly string[] {
       files.push(...collectTypeScriptFiles(path));
       continue;
     }
-    /* v8 ignore next -- invariant source directories only need TypeScript files. */
     if (entry.isFile() && path.endsWith(".ts")) {
       files.push(path);
     }
@@ -72,7 +71,6 @@ export function parseSource(path: string): ParsedSource {
 }
 
 export function parseSourceText(path: string, text: string): ParsedSource {
-  /* v8 ignore next -- current invariant sources are TypeScript; TSX is supported for reuse. */
   const scriptKind = path.endsWith(".tsx")
     ? ts.ScriptKind.TSX
     : ts.ScriptKind.TS;
@@ -97,7 +95,6 @@ export function location(source: ParsedSource, node: ts.Node): string {
 }
 
 export function propertyNameText(node: ts.PropertyName): string | null {
-  /* v8 ignore next 5 -- invariant scans only need literal property names. */
   if (
     ts.isIdentifier(node) ||
     ts.isStringLiteral(node) ||
@@ -105,7 +102,6 @@ export function propertyNameText(node: ts.PropertyName): string | null {
   ) {
     return node.text;
   }
-  /* v8 ignore next -- invariant scans intentionally ignore computed keys. */
   return null;
 }
 
@@ -319,7 +315,6 @@ export function variableInitializer(
       ts.isIdentifier(node.name) &&
       node.name.text === name
     ) {
-      /* v8 ignore next -- invariant callers pass initialized constants. */
       initializer = node.initializer ?? null;
       return;
     }
@@ -352,7 +347,6 @@ export function objectProperty(
       return property;
     }
   }
-  /* v8 ignore next: callers use this to report optional/missing syntax explicitly. */
   return null;
 }
 
@@ -361,10 +355,8 @@ export function objectLiteralPropertyNames(
 ): readonly string[] {
   const names: string[] = [];
   for (const property of object.properties) {
-    /* v8 ignore next -- invariant metadata objects use property assignments. */
     if (ts.isPropertyAssignment(property)) {
       const name = propertyNameText(property.name);
-      /* v8 ignore next: invariant metadata uses plain property names. */
       if (name !== null) names.push(name);
     }
   }
@@ -372,7 +364,6 @@ export function objectLiteralPropertyNames(
 }
 
 function importModuleSpecifier(node: ts.ImportDeclaration): string | null {
-  /* v8 ignore next -- import declarations in parsed TypeScript use string module specifiers. */
   return ts.isStringLiteral(node.moduleSpecifier)
     ? node.moduleSpecifier.text
     : null;
