@@ -15,6 +15,7 @@ type PathLike = Parameters<typeof import("node:fs").realpathSync>[0];
 type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
+  readonly fsyncSync?: FsModule["fsyncSync"];
   readonly openSync?: FsModule["openSync"];
   readonly realpathSync?: (path: PathLike) => string;
   readonly renameSync?: FsModule["renameSync"];
@@ -160,6 +161,39 @@ describe("Edit Tool Race Handling", () => {
       restoreParent();
       await rm(workspace, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given temporary file durability fails before an edit is published,
+    When the edit tool aborts replacement,
+    Then it preserves the original file and removes the temporary replacement`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-edit-fsync-race-"));
+    const targetPath = join(workspace, "note.txt");
+    const originalError = Object.assign(new Error("EIO"), { code: "EIO" });
+    await writeFile(targetPath, "old\n", "utf8");
+    const { executeEdit } = await importEditWithFs({
+      fsyncSync: () => {
+        throw originalError;
+      },
+    });
+
+    try {
+      // When / Then
+      expect(() =>
+        executeEdit(
+          workspace,
+          "note.txt",
+          [{ oldText: "old", newText: "new" }],
+          { readBeforeEdit: { revisionStatus: () => "current" } },
+        ),
+      ).toThrow(originalError);
+      expect(await readFile(targetPath, "utf8")).toBe("old\n");
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-edit-")]),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 

@@ -66,7 +66,6 @@ function syncDirectoryBestEffort(path: string): void {
     // Directory fsync is a durability improvement, but not portable enough to
     // turn an otherwise successful rename into a user-visible edit failure.
   } finally {
-    /* v8 ignore next 3: directory fsync may be unsupported before fd assignment. */
     if (fd !== null) {
       closeSync(fd);
     }
@@ -94,7 +93,6 @@ function assertOpenedFileMatchesPath(fd: number, path: string): void {
       fileIdentityFromStats(pathStat),
     )
   ) {
-    /* v8 ignore next 1: this protects against a temp-file identity race after open. */
     throw new Error(`opened temp file no longer matches path: ${path}`);
   }
 }
@@ -166,7 +164,6 @@ export function restoreTextFileByIdentityBestEffort(
   } catch {
     // Best-effort rollback must not hide the original boundary failure.
   } finally {
-    /* v8 ignore next 3: restore can fail before fd assignment when a concurrent process removes or replaces the target. */
     if (fd !== null) {
       closeSync(fd);
     }
@@ -191,7 +188,8 @@ export function writeTextFileAtomically(
   try {
     options.beforeAccess?.();
     fd = openSync(tempPath, "wx", options.mode);
-    identity = fileIdentityFromStats(fstatSync(fd));
+    const openedIdentity = fileIdentityFromStats(fstatSync(fd));
+    identity = openedIdentity;
     const openedTempPath = realpathSync(tempPath);
     assertOpenedFileMatchesPath(fd, openedTempPath);
     cleanupPath = openedTempPath;
@@ -211,25 +209,20 @@ export function writeTextFileAtomically(
     options.beforePublish?.();
     renameSync(tempPath, targetPath);
     published = true;
-    /* v8 ignore next 3: identity is assigned immediately after successful temp open. */
-    if (identity === null) {
-      throw new Error("atomic write identity invariant violated");
-    }
     try {
-      options.afterPublish?.(targetPath, identity);
+      options.afterPublish?.(targetPath, openedIdentity);
     } catch (error) {
       restoreTextFileByIdentityBestEffort(
         targetPath,
-        identity,
+        openedIdentity,
         options.rollbackOnPublishFailure,
         options.rollbackMode ?? options.mode,
       );
       throw error;
     }
     syncDirectoryBestEffort(parentPath);
-    return { identity };
+    return { identity: openedIdentity };
   } catch (error) {
-    /* v8 ignore next 3: write/fsync failures after opening the temp file require OS faults; open-failure cleanup is covered through edit. */
     if (fd !== null) {
       closeSync(fd);
     }
@@ -263,7 +256,8 @@ export function createTextFileAtomically(
   try {
     options.beforeAccess?.();
     fd = openSync(tempPath, "wx", mode ?? 0o666);
-    identity = fileIdentityFromStats(fstatSync(fd));
+    const openedIdentity = fileIdentityFromStats(fstatSync(fd));
+    identity = openedIdentity;
     const openedTempPath = realpathSync(tempPath);
     assertOpenedFileMatchesPath(fd, openedTempPath);
     cleanupPath = openedTempPath;
@@ -283,11 +277,16 @@ export function createTextFileAtomically(
     options.beforePublish?.();
     linkSync(tempPath, targetPath);
     published = true;
-    /* v8 ignore next 3: identity is assigned immediately after successful temp open. */
-    if (identity === null) {
-      throw new Error("atomic create identity invariant violated");
+    options.afterPublish?.(targetPath, openedIdentity);
+    try {
+      rmSync(cleanupPath, { force: true });
+    } catch (error) {
+      debugLog(
+        `write temp cleanup failed: targetPath=${targetPath} tempPath=${tempPath} error=${String(error)}`,
+      );
     }
-    options.afterPublish?.(targetPath, identity);
+    syncDirectoryBestEffort(parentPath);
+    return { identity: openedIdentity };
   } catch (error) {
     if (fd !== null) {
       closeSync(fd);
@@ -302,18 +301,4 @@ export function createTextFileAtomically(
     );
     throw error;
   }
-
-  try {
-    rmSync(cleanupPath, { force: true });
-  } catch (error) {
-    debugLog(
-      `write temp cleanup failed: targetPath=${targetPath} tempPath=${tempPath} error=${String(error)}`,
-    );
-  }
-  syncDirectoryBestEffort(parentPath);
-  /* v8 ignore next 3: identity is assigned immediately after successful temp open. */
-  if (identity === null) {
-    throw new Error("atomic create identity invariant violated");
-  }
-  return { identity };
 }
