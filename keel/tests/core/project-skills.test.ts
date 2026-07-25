@@ -268,6 +268,21 @@ describe("project skills catalog", () => {
     expect(() => unexpectedFailure.activeStatuses()).toThrow("unexpected");
   });
 
+  test(`Given a caller keeps an active Skill list,
+    When a later activation changes lifecycle state,
+    Then the earlier list remains a stable snapshot`, () => {
+    // Given
+    const lifecycle = createSkillActivation(inMemoryCatalog());
+    const beforeActivation = lifecycle.active();
+
+    // When
+    lifecycle.activateExplicit(workflowSkill(), "");
+
+    // Then
+    expect(beforeActivation).toEqual([]);
+    expect(lifecycle.active()).toHaveLength(1);
+  });
+
   test(`Given an active package is rediscovered with a different descriptor digest,
     When ordinary activation tries to replace it,
     Then Keel requires the explicit reload control`, () => {
@@ -299,6 +314,36 @@ describe("project skills catalog", () => {
       lookup: "repo:012345abcdef:review",
       arguments: "inspect PR 430",
     });
+  });
+
+  test.each([
+    {
+      invocation: "$review",
+      expected: { lookup: "review", arguments: "" },
+    },
+    {
+      invocation: "$repo:review\n  inspect staged changes",
+      expected: {
+        lookup: "repo:review",
+        arguments: "inspect staged changes",
+      },
+    },
+  ])(
+    `Given the explicit invocation $invocation,
+    When the dollar surface parses its lookup and arguments,
+    Then it preserves the supported invocation contract`,
+    ({ invocation, expected }) => {
+      expect(parseExplicitSkillInvocation(invocation)).toEqual(expected);
+    },
+  );
+
+  test(`Given text is not a dollar invocation or has an invalid skill identity,
+    When the explicit skill surface parses it,
+    Then ordinary text is ignored and malformed invocations fail closed`, () => {
+    expect(parseExplicitSkillInvocation("review this")).toBeNull();
+    expect(() => parseExplicitSkillInvocation("$repo:Review")).toThrow(
+      "Error: invalid $skill invocation",
+    );
   });
 
   test(`Given no project skill root exists,

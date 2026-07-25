@@ -20,9 +20,14 @@ export function hasForbiddenSkillTextCharacter(
   options: { readonly allowTextWhitespace: boolean },
 ): boolean {
   for (const character of text) {
-    const code = character.codePointAt(0);
-    /* v8 ignore next -- iteration over a non-empty Unicode string always yields a code point. */
-    if (code === undefined) continue;
+    const firstCodeUnit = character.charCodeAt(0);
+    const code =
+      character.length === 1
+        ? firstCodeUnit
+        : (firstCodeUnit - 0xd800) * 0x400 +
+          character.charCodeAt(1) -
+          0xdc00 +
+          0x10000;
     if (
       (code < 0x20 &&
         (!options.allowTextWhitespace ||

@@ -128,14 +128,17 @@ function activationRecord(activation: SkillActivation): SkillActivationRecord {
   };
 }
 
-function validateSkillLifecycleState(state: SkillLifecycleState): void {
-  const activationIds = new Set(
-    state.skillActivations.map((activation) => activation.descriptorId),
-  );
+function validateSkillLifecycleState(
+  state: SkillLifecycleState,
+): readonly SkillActivation[] {
+  const activeActivations: SkillActivation[] = [];
   const activeIds = new Set<string>();
   const activePackages = new Set<string>();
   for (const id of state.activeSkillIds) {
-    if (!activationIds.has(id)) {
+    const activation = state.skillActivations.findLast(
+      (candidate) => candidate.descriptorId === id,
+    );
+    if (activation === undefined) {
       throw new WorkflowSkillError(
         `Error: active workflow skill id ${JSON.stringify(id)} has no activation snapshot.`,
       );
@@ -146,30 +149,15 @@ function validateSkillLifecycleState(state: SkillLifecycleState): void {
       );
     }
     activeIds.add(id);
-    const activation = activeActivationForId(state.skillActivations, id);
     if (activePackages.has(activation.packageId)) {
       throw new WorkflowSkillError(
         `Error: workflow skill package ${JSON.stringify(activation.packageId)} has multiple active snapshots.`,
       );
     }
     activePackages.add(activation.packageId);
+    activeActivations.push(activation);
   }
-}
-
-function activeActivationForId(
-  activations: readonly SkillActivation[],
-  id: string,
-): SkillActivation {
-  const activation = activations.findLast(
-    (candidate) => candidate.descriptorId === id,
-  );
-  /* v8 ignore next 5 -- lifecycle state is validated before active ids reach this internal lookup. */
-  if (activation === undefined) {
-    throw new WorkflowSkillError(
-      `Error: active workflow skill id ${JSON.stringify(id)} has no activation snapshot.`,
-    );
-  }
-  return activation;
+  return activeActivations;
 }
 
 function lookupScopeAndName(lookup: string): {
@@ -179,13 +167,7 @@ function lookupScopeAndName(lookup: string): {
   const segments = lookup.split(":");
   if (segments.length === 1) return { name: lookup };
   const scope = segments[0];
-  const name = segments.at(-1);
-  /* v8 ignore next 5 -- splitting a string always yields at least one segment. */
-  if (name === undefined) {
-    throw new WorkflowSkillError(
-      `Error: workflow skill ${JSON.stringify(lookup)} is not active.`,
-    );
-  }
+  const name = lookup.slice(lookup.lastIndexOf(":") + 1);
   if (
     scope !== "repo" &&
     scope !== "user" &&
@@ -236,17 +218,21 @@ export function createSkillActivation(
   const initialState = copySkillLifecycleState(
     options.initialState ?? { skillActivations: [], activeSkillIds: [] },
   );
-  validateSkillLifecycleState(initialState);
+  const initialActiveActivations = validateSkillLifecycleState(initialState);
   const activations = [...initialState.skillActivations];
-  const activeSkillIds = [...initialState.activeSkillIds];
+  const activeActivations = [...initialActiveActivations];
   const selectableIds = new Set<string>();
   let modelSelectedThisTurn = 0;
   const now = options.now ?? (() => new Date().toISOString());
 
   const state = (): SkillLifecycleState =>
-    copySkillLifecycleState({ skillActivations: activations, activeSkillIds });
-  const active = (): readonly SkillActivation[] =>
-    activeSkillIds.map((id) => activeActivationForId(activations, id));
+    copySkillLifecycleState({
+      skillActivations: activations,
+      activeSkillIds: activeActivations.map(
+        (activation) => activation.descriptorId,
+      ),
+    });
+  const active = (): readonly SkillActivation[] => [...activeActivations];
   const activateSkill = (
     skill: WorkflowSkill,
     trigger: SkillActivation["trigger"],
@@ -277,7 +263,7 @@ export function createSkillActivation(
       activatedAt: now(),
     });
     activations.push(activation);
-    activeSkillIds.push(activation.descriptorId);
+    activeActivations.push(activation);
     return {
       activation: copySkillActivation(activation),
       skill: workflowSkillFromActivation(activation),
@@ -330,8 +316,8 @@ export function createSkillActivation(
     },
     deactivate: (lookup) => {
       const activation = resolveActive(active(), lookup);
-      const index = activeSkillIds.indexOf(activation.descriptorId);
-      activeSkillIds.splice(index, 1);
+      const index = activeActivations.indexOf(activation);
+      activeActivations.splice(index, 1);
       return copySkillActivation(activation);
     },
     reload: (lookup) => {
@@ -356,7 +342,7 @@ export function createSkillActivation(
           newlyActivated: false,
         };
       }
-      const activeIndex = activeSkillIds.indexOf(previous.descriptorId);
+      const activeIndex = activeActivations.indexOf(previous);
       const activation = skillActivationFromWorkflowSkill({
         skill,
         trigger: "user_explicit",
@@ -364,7 +350,7 @@ export function createSkillActivation(
         activatedAt: now(),
       });
       activations.push(activation);
-      activeSkillIds.splice(activeIndex, 1, activation.descriptorId);
+      activeActivations.splice(activeIndex, 1, activation);
       return {
         activation: copySkillActivation(activation),
         skill: workflowSkillFromActivation(activation),
@@ -398,16 +384,18 @@ export function createSkillActivation(
       }),
     state,
     restore: (restored) => {
-      validateSkillLifecycleState(restored);
+      const restoredState = copySkillLifecycleState(restored);
+      const restoredActiveActivations =
+        validateSkillLifecycleState(restoredState);
       activations.splice(
         0,
         activations.length,
-        ...restored.skillActivations.map(copySkillActivation),
+        ...restoredState.skillActivations,
       );
-      activeSkillIds.splice(
+      activeActivations.splice(
         0,
-        activeSkillIds.length,
-        ...restored.activeSkillIds,
+        activeActivations.length,
+        ...restoredActiveActivations,
       );
     },
   };
