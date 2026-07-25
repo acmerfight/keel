@@ -3,7 +3,7 @@ import type { CostModel } from "./cost.ts";
 import {
   type KnownModelMetadataEntry,
   knownModelMetadataEntries,
-  modelMetadata,
+  registeredModelMetadata,
 } from "./model-metadata.ts";
 import type { ProviderId } from "./provider-id.ts";
 
@@ -756,10 +756,10 @@ export function diffModelMetadataAgainstModelsDev(
 ): readonly ModelMetadataDrift[] {
   const drift: ModelMetadataDrift[] = [];
   for (const target of targets) {
-    const registry = modelMetadata(target.providerId, target.model);
+    const registry = registeredModelMetadata(target.providerId, target.model);
     const external = modelsDevModelForTarget(catalog, target);
     const differences: ModelMetadataDifference[] = [];
-    if (registry.status === "unknown") {
+    if (registry === undefined) {
       differences.push({
         field: "registry",
         registryValue: "unknown",

@@ -24,7 +24,7 @@ export type KnownModelMetadata = Extract<
   { readonly status: "known" }
 >;
 
-type RegisteredModelMetadata = KnownModelMetadata & {
+export type RegisteredModelMetadata = KnownModelMetadata & {
   readonly costModel: CostModel;
 };
 
@@ -221,7 +221,14 @@ export function modelMetadata(
   providerId: ProviderId,
   model: string,
 ): ModelMetadata {
-  return MODEL_METADATA_REGISTRY[providerId][model] ?? { status: "unknown" };
+  return registeredModelMetadata(providerId, model) ?? { status: "unknown" };
+}
+
+export function registeredModelMetadata(
+  providerId: ProviderId,
+  model: string,
+): RegisteredModelMetadata | undefined {
+  return MODEL_METADATA_REGISTRY[providerId][model];
 }
 
 export function modelCostModel(
