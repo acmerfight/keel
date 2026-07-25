@@ -24,6 +24,10 @@ export type KnownModelMetadata = Extract<
   { readonly status: "known" }
 >;
 
+type RegisteredModelMetadata = KnownModelMetadata & {
+  readonly costModel: CostModel;
+};
+
 export function modelMetadataMaxOutputTokens(
   metadata: ModelMetadata | undefined,
 ): number | undefined {
@@ -40,19 +44,19 @@ export function modelMetadataMaxOutputTokens(
 export interface KnownModelMetadataEntry {
   readonly providerId: ProviderId;
   readonly model: string;
-  readonly metadata: KnownModelMetadata;
+  readonly metadata: RegisteredModelMetadata;
 }
 
 type ModelMetadataRegistry = Record<
   ProviderId,
-  Readonly<Record<string, KnownModelMetadata>>
+  Readonly<Record<string, RegisteredModelMetadata>>
 >;
 
 const MODEL_METADATA_LAST_VERIFIED = "2026-06-26";
 
 function verifiedMetadata(
-  metadata: Omit<KnownModelMetadata, "lastVerified">,
-): KnownModelMetadata {
+  metadata: Omit<RegisteredModelMetadata, "lastVerified">,
+): RegisteredModelMetadata {
   return { ...metadata, lastVerified: MODEL_METADATA_LAST_VERIFIED };
 }
 
@@ -132,7 +136,7 @@ const TEXT_TOOL_CAPABILITIES: ModelCapabilities = {
   reasoning: false,
 };
 
-const QWEN_3_6_FLASH_METADATA: KnownModelMetadata = verifiedMetadata({
+const QWEN_3_6_FLASH_METADATA: RegisteredModelMetadata = verifiedMetadata({
   status: "known",
   source: "registry",
   contextWindowTokens: 1_000_000,

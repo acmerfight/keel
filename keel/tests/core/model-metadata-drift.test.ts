@@ -735,6 +735,69 @@ describe("Model Metadata Drift", () => {
     ]);
   });
 
+  test(`Given models.dev adds a pricing tier beyond the registry schedule,
+    When metadata drift is checked,
+    Then the tier count drift is reported without reading past registry tiers`, () => {
+    // Given
+    const catalog = parseModelsDevCatalog({
+      alibaba: {
+        models: {
+          "qwen3.7-plus": {
+            limit: { context: 1_000_000, output: 65_536 },
+            reasoning: true,
+            tool_call: true,
+            cost: {
+              input: 0.4,
+              cache_read: 0.08,
+              output: 1.6,
+              tiers: [
+                {
+                  input: 1.2,
+                  cache_read: 0.24,
+                  output: 4.8,
+                  tier: { type: "context", size: 256_000 },
+                },
+                {
+                  input: 2.4,
+                  cache_read: 0.48,
+                  output: 9.6,
+                  tier: { type: "context", size: 512_000 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // When
+    const drift = diffModelMetadataAgainstModelsDev(catalog, [
+      {
+        providerId: "qwen",
+        model: "qwen3.7-plus",
+        modelsDevProviderId: "alibaba",
+        modelsDevModel: "qwen3.7-plus",
+      },
+    ]);
+
+    // Then
+    expect(drift).toEqual([
+      {
+        providerId: "qwen",
+        model: "qwen3.7-plus",
+        modelsDevProviderId: "alibaba",
+        modelsDevModel: "qwen3.7-plus",
+        differences: [
+          {
+            field: "costModel.tiers.length",
+            registryValue: "2",
+            modelsDevValue: "3",
+          },
+        ],
+      },
+    ]);
+  });
+
   test(`Given models.dev includes current-family provider models missing locally,
     When untracked external models are checked,
     Then relevant provider models are reported without older family noise`, () => {

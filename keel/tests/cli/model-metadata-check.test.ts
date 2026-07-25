@@ -47,6 +47,34 @@ async function close(server: Server): Promise<void> {
 }
 
 describe("Model Metadata Check CLI", () => {
+  test(`Given no source endpoint override,
+    When the metadata check fetches its catalog,
+    Then it uses the canonical models.dev API URL`, async () => {
+    // Given
+    const fetchCatalog = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchCatalog);
+
+    try {
+      // When
+      const result = await runCheck({
+        targets: [],
+        acceptedDifferences: [],
+        acceptedUntrackedModels: [],
+      });
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(fetchCatalog).toHaveBeenCalledWith("https://models.dev/api.json");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test(`Given default process output streams and a configured source endpoint,
     When the metadata check runs,
     Then the command writes the report to stdout`, async () => {

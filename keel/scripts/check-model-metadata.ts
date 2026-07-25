@@ -29,15 +29,6 @@ async function fetchModelsDevCatalog(apiUrl: string): Promise<unknown> {
   return response.json();
 }
 
-function configuredModelsDevApiUrl(apiUrl: string | undefined): string {
-  /* v8 ignore else: the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage. */
-  if (apiUrl !== undefined) {
-    return apiUrl;
-  }
-  /* v8 ignore next 1: the live default URL path is covered by pnpm check:model-metadata, outside Vitest coverage. */
-  return MODELS_DEV_API_URL;
-}
-
 export async function runCheckModelMetadata(
   options: CheckModelMetadataOptions = {},
 ): Promise<number> {
@@ -53,7 +44,7 @@ export async function runCheckModelMetadata(
     });
   const fetchCatalog =
     options.fetchCatalog ??
-    (() => fetchModelsDevCatalog(configuredModelsDevApiUrl(options.apiUrl)));
+    (() => fetchModelsDevCatalog(options.apiUrl ?? MODELS_DEV_API_URL));
 
   let result: ModelMetadataDriftCheckResult;
   try {

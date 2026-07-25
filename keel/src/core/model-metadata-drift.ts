@@ -94,7 +94,10 @@ type ComparableCostModel =
     } & ComparableCostRates)
   | {
       readonly type: "input-token-tiers";
-      readonly tiers: readonly ComparableInputTokenCostTier[];
+      readonly tiers: readonly [
+        ComparableInputTokenCostTier,
+        ...ComparableInputTokenCostTier[],
+      ];
     };
 
 interface ComparableInputTokenCostTier extends ComparableCostRates {
@@ -482,11 +485,7 @@ function comparableRegistryMetadata(
     contextWindowTokens: metadata.contextWindowTokens,
     maxOutputTokens: metadata.maxOutputTokens,
     capabilities: metadata.capabilities,
-    /* v8 ignore next 3: current known registry entries all carry cost metadata. */
-    costModel:
-      metadata.costModel === null
-        ? null
-        : comparableRegistryCostModel(metadata.costModel),
+    costModel: comparableRegistryCostModel(metadata.costModel),
   };
 }
 
@@ -499,14 +498,23 @@ function comparableRegistryCostModel(model: CostModel): ComparableCostModel {
       outputPerMillionTokens: model.outputPerMillionTokens,
     };
   }
+  const [baseTier, ...additionalTiers] = model.tiers;
   return {
     type: "input-token-tiers",
-    tiers: model.tiers.map((tier) => ({
-      startsAboveInputTokens: tier.startsAboveInputTokens,
-      uncachedInputPerMillionTokens: tier.uncachedInputPerMillionTokens,
-      cachedInputPerMillionTokens: tier.cachedInputPerMillionTokens,
-      outputPerMillionTokens: tier.outputPerMillionTokens,
-    })),
+    tiers: [
+      {
+        startsAboveInputTokens: baseTier.startsAboveInputTokens,
+        uncachedInputPerMillionTokens: baseTier.uncachedInputPerMillionTokens,
+        cachedInputPerMillionTokens: baseTier.cachedInputPerMillionTokens,
+        outputPerMillionTokens: baseTier.outputPerMillionTokens,
+      },
+      ...additionalTiers.map((tier) => ({
+        startsAboveInputTokens: tier.startsAboveInputTokens,
+        uncachedInputPerMillionTokens: tier.uncachedInputPerMillionTokens,
+        cachedInputPerMillionTokens: tier.cachedInputPerMillionTokens,
+        outputPerMillionTokens: tier.outputPerMillionTokens,
+      })),
+    ],
   };
 }
 
@@ -559,16 +567,7 @@ function costModelBaseRates(model: ComparableCostModel): ComparableCostRates {
   if (model.type === "fixed") {
     return model;
   }
-  const firstTier = model.tiers[0];
-  /* v8 ignore next 8: comparable tiered models are constructed with at least a base tier. */
-  if (firstTier === undefined) {
-    return {
-      uncachedInputPerMillionTokens: null,
-      cachedInputPerMillionTokens: null,
-      outputPerMillionTokens: null,
-    };
-  }
-  return firstTier;
+  return model.tiers[0];
 }
 
 function valueString(value: number | boolean | string | null): string {
@@ -639,17 +638,9 @@ function pushTieredCostModelDifferences(
     registry.tiers.length,
     modelsDev.tiers.length,
   );
-  const comparedTierCount = Math.min(
-    registry.tiers.length,
-    modelsDev.tiers.length,
-  );
-  for (let index = 0; index < comparedTierCount; index += 1) {
+  for (const [index, modelsDevTier] of modelsDev.tiers.entries()) {
     const registryTier = registry.tiers[index];
-    const modelsDevTier = modelsDev.tiers[index];
-    /* v8 ignore next 3: comparedTierCount is bounded by both arrays. */
-    if (registryTier === undefined || modelsDevTier === undefined) {
-      continue;
-    }
+    if (registryTier === undefined) continue;
     pushDifference(
       differences,
       `costModel.tiers[${index}].startsAboveInputTokens`,
@@ -685,7 +676,7 @@ function pushCostModelDifferences(
     pushRateDifferences(differences, "costModel", registry, modelsDev);
     return;
   }
-  if (registry.type !== modelsDev.type) {
+  if (registry.type === "fixed" || modelsDev.type === "fixed") {
     const registryBaseRates = costModelBaseRates(registry);
     const modelsDevBaseRates = costModelBaseRates(modelsDev);
     pushRateDifferences(
@@ -696,14 +687,7 @@ function pushCostModelDifferences(
     );
     return;
   }
-
-  /* v8 ignore next 4: fixed and mismatched cost models return above. */
-  if (
-    registry.type === "input-token-tiers" &&
-    modelsDev.type === "input-token-tiers"
-  ) {
-    pushTieredCostModelDifferences(differences, registry, modelsDev);
-  }
+  pushTieredCostModelDifferences(differences, registry, modelsDev);
 }
 
 function pushMetadataDifferences(
