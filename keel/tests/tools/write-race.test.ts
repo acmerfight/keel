@@ -20,6 +20,7 @@ type PathLike = Parameters<typeof import("node:fs").realpathSync>[0];
 type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
+  readonly fsyncSync?: FsModule["fsyncSync"];
   readonly lstatSync?: (
     path: PathLike,
   ) => ReturnType<typeof import("node:fs").lstatSync>;
@@ -816,6 +817,57 @@ describe("Write Tool Race Handling", () => {
     }
   });
 
+  test(`Given temporary file durability fails before a new file is published,
+    When the write tool aborts creation,
+    Then it preserves the filesystem error and removes the temporary file`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const originalError = errno("EIO");
+      const { executeWrite } = await importWriteWithFs({
+        fsyncSync: () => {
+          throw originalError;
+        },
+      });
+
+      // When / Then
+      expect(() => executeWrite(workspace, "new.txt", "content\n")).toThrow(
+        originalError,
+      );
+      expect(await pathExists(join(workspace, "new.txt"))).toBe(false);
+      expect(await readdir(workspace)).toEqual(
+        expect.not.arrayContaining([expect.stringContaining(".keel-write-")]),
+      );
+    });
+  });
+
+  test(`Given directory fsync is unsupported after a new file is published,
+    When the write tool completes creation,
+    Then it keeps the durable file and reports success`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const workspacePath = await realpath(workspace);
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const { executeWrite } = await importWriteWithFs({
+        openSync: (path, flags, mode) => {
+          if (String(path) === workspacePath && flags === "r") {
+            throw errno("EINVAL");
+          }
+          return actualFs.openSync(path, flags, mode);
+        },
+      });
+
+      // When
+      const result = executeWrite(workspace, "new.txt", "content\n");
+
+      // Then
+      expect(result.content).toBe("Wrote new.txt");
+      expect(await readFile(join(workspace, "new.txt"), "utf8")).toBe(
+        "content\n",
+      );
+    });
+  });
+
   test(`Given the write tool creates fresh parents before publish fails,
     When the create aborts after parent creation,
     Then it removes the fresh empty parent directories`, async () => {
@@ -841,6 +893,36 @@ describe("Write Tool Race Handling", () => {
       expect(actualFs.existsSync(join(workspace, "fresh", "nested"))).toBe(
         false,
       );
+    });
+  });
+
+  test(`Given a concurrent file appears in fresh parents before publish fails,
+    When the write tool rolls back the failed creation,
+    Then it preserves the concurrent file and the original publish error`, async () => {
+    await withWriteWorkspace(async (workspace) => {
+      // Given
+      const originalError = errno("EIO");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      const concurrentPath = join(workspace, "fresh", "nested", "user.txt");
+      const { executeWrite } = await importWriteWithFs({
+        linkSync: (_existingPath, _newPath) => {
+          actualFs.writeFileSync(concurrentPath, "user\n", "utf8");
+          throw originalError;
+        },
+      });
+
+      // When / Then
+      expect(() =>
+        executeWrite(workspace, "fresh/nested/new.txt", "content\n"),
+      ).toThrow(originalError);
+      expect(await readFile(concurrentPath, "utf8")).toBe("user\n");
+      expect(
+        await pathExists(join(workspace, "fresh", "nested", "new.txt")),
+      ).toBe(false);
+      expect(await readdir(join(workspace, "fresh", "nested"))).toEqual([
+        "user.txt",
+      ]);
     });
   });
 
