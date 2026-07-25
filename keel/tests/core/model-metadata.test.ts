@@ -4,6 +4,7 @@ import {
   knownModelMetadataEntries,
   modelCostModel,
   modelMetadata,
+  registeredModelMetadata,
 } from "../../src/core/model-metadata.ts";
 
 describe("Model Metadata", () => {
@@ -68,6 +69,21 @@ describe("Model Metadata", () => {
       status: "known",
       costModel: ZERO_COST_MODEL,
     });
+  });
+
+  test(`Given registered and unknown model names,
+    When registry-specific metadata is requested,
+    Then only the registered model returns priced metadata`, () => {
+    // Given / When
+    const registered = registeredModelMetadata("deepseek", "deepseek-v4-flash");
+    const unknown = registeredModelMetadata("deepseek", "deepseek-unknown");
+
+    // Then
+    expect(registered?.costModel).toMatchObject({
+      type: "fixed",
+      outputPerMillionTokens: 0.28,
+    });
+    expect(unknown).toBeUndefined();
   });
 
   test(`Given the model metadata registry is inspected,
