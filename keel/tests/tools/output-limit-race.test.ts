@@ -1,15 +1,17 @@
-import { existsSync, type PathLike } from "node:fs";
+import { existsSync, type PathLike, type RmOptions } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 type FsModule = typeof import("node:fs");
 
 interface FsOverrides {
+  readonly closeSync?: (fd: number) => void;
   readonly openSync?: (
     path: PathLike,
     flags: string | number,
     mode?: string | number | null,
   ) => number;
   readonly readFileSync?: (path: PathLike, encoding: BufferEncoding) => string;
+  readonly rmSync?: (path: PathLike, options?: RmOptions) => void;
   readonly writeSync?: (
     fd: number,
     buffer: Uint8Array,
@@ -111,6 +113,87 @@ describe("Temporary Output Capture Race Handling", () => {
     output.append(Buffer.from("ab"));
 
     expect(() => output.capture()).toThrowError("EIO");
+    expectDirectoryRemoved(captureDirectory);
+  });
+
+  test(`Given closing temporary output fails through capture and its immediate cleanup,
+    When the caller retries cleanup,
+    Then it closes the retained descriptor and removes temporary storage`, async () => {
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    let captureDirectory: string | undefined;
+    let closeAttempts = 0;
+    const { TempFileByteOutputCapture } = await importOutputLimitWithFs({
+      openSync: (path, flags, mode) => {
+        captureDirectory = String(path).replace(/[/\\]output\.bin$/u, "");
+        return actualFs.openSync(path, flags, mode);
+      },
+      closeSync: (fd) => {
+        closeAttempts++;
+        if (closeAttempts <= 2) {
+          throw Object.assign(new Error("EIO"), { code: "EIO" });
+        }
+        actualFs.closeSync(fd);
+      },
+    });
+    const output = new TempFileByteOutputCapture(
+      "keel-output-close-retry-",
+      10,
+      1,
+    );
+    output.append(Buffer.from("ab"));
+
+    expect(() => output.capture()).toThrowError("EIO");
+    expect(captureDirectory).toBeDefined();
+    expect(existsSync(captureDirectory ?? "")).toBe(true);
+
+    output.cleanup();
+
+    expect(closeAttempts).toBe(3);
+    expectDirectoryRemoved(captureDirectory);
+  });
+
+  test(`Given removing closed temporary output fails once,
+    When the caller retries capture,
+    Then it returns the retained output and removes storage without closing twice`, async () => {
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    let captureDirectory: string | undefined;
+    let closeAttempts = 0;
+    let removeAttempts = 0;
+    const { TempFileByteOutputCapture } = await importOutputLimitWithFs({
+      openSync: (path, flags, mode) => {
+        captureDirectory = String(path).replace(/[/\\]output\.bin$/u, "");
+        return actualFs.openSync(path, flags, mode);
+      },
+      closeSync: (fd) => {
+        closeAttempts++;
+        actualFs.closeSync(fd);
+      },
+      rmSync: (path, options) => {
+        if (String(path) === captureDirectory) {
+          removeAttempts++;
+          if (removeAttempts === 1) {
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          }
+        }
+        actualFs.rmSync(path, options);
+      },
+    });
+    const output = new TempFileByteOutputCapture(
+      "keel-output-remove-retry-",
+      10,
+      1,
+    );
+    output.append(Buffer.from("ab"));
+
+    expect(() => output.capture()).toThrowError("EACCES");
+    expect(captureDirectory).toBeDefined();
+    expect(existsSync(captureDirectory ?? "")).toBe(true);
+
+    const captured = output.capture();
+
+    expect(captured).toEqual({ text: "ab", truncated: false });
+    expect(closeAttempts).toBe(1);
+    expect(removeAttempts).toBe(2);
     expectDirectoryRemoved(captureDirectory);
   });
 });

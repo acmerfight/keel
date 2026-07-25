@@ -56,6 +56,21 @@ export interface CapturedByteOutput {
   readonly truncated: boolean;
 }
 
+interface OpenTempOutputSpill {
+  readonly state: "open";
+  readonly directory: string;
+  readonly filePath: string;
+  readonly fd: number;
+}
+
+interface ClosedTempOutputSpill {
+  readonly state: "closed";
+  readonly directory: string;
+  readonly filePath: string;
+}
+
+type TempOutputSpill = OpenTempOutputSpill | ClosedTempOutputSpill;
+
 function writeAllSync(fd: number, chunk: Buffer, bytes: number): void {
   let offset = 0;
   while (offset < bytes) {
@@ -71,9 +86,7 @@ export class TempFileByteOutputCapture {
   readonly #prefix: string;
   readonly #maxBytes: number;
   readonly #spillBytes: number;
-  #directory: string | undefined;
-  #filePath: string | undefined;
-  #fd: number | undefined;
+  #spill: TempOutputSpill | undefined;
   #chunks: Buffer[] = [];
   #bytes = 0;
   #truncated = false;
@@ -85,28 +98,33 @@ export class TempFileByteOutputCapture {
     this.#spillBytes = Math.min(spillBytes, maxBytes);
   }
 
-  #spillToFile(): void {
-    if (this.#fd !== undefined) return;
+  #spillToFile(): OpenTempOutputSpill {
+    if (this.#spill?.state === "open") return this.#spill;
 
     const directory = mkdtempSync(join(tmpdir(), this.#prefix));
     const filePath = join(directory, "output.bin");
     let fd: number | undefined;
 
     try {
-      fd = openSync(filePath, "w+", 0o600);
+      const openedFd = openSync(filePath, "w+", 0o600);
+      fd = openedFd;
       for (const chunk of this.#chunks) {
-        writeAllSync(fd, chunk, chunk.length);
+        writeAllSync(openedFd, chunk, chunk.length);
       }
+      const spill: OpenTempOutputSpill = {
+        state: "open",
+        directory,
+        filePath,
+        fd: openedFd,
+      };
+      this.#spill = spill;
+      this.#chunks = [];
+      return spill;
     } catch (error) {
       if (fd !== undefined) closeSync(fd);
       rmSync(directory, { recursive: true, force: true });
       throw error;
     }
-
-    this.#directory = directory;
-    this.#filePath = filePath;
-    this.#fd = fd;
-    this.#chunks = [];
   }
 
   append(chunk: Buffer): void {
@@ -117,7 +135,7 @@ export class TempFileByteOutputCapture {
     }
 
     if (
-      this.#fd === undefined &&
+      this.#spill === undefined &&
       this.#bytes + chunk.length <= this.#spillBytes
     ) {
       this.#chunks.push(chunk);
@@ -132,48 +150,55 @@ export class TempFileByteOutputCapture {
         : chunk.subarray(0, remainingBytes);
     const capturedBytes = capturedChunk.length;
 
-    this.#spillToFile();
-    /* v8 ignore next: #spillToFile either initializes the file descriptor or throws. */
-    if (this.#fd === undefined) return;
-    writeAllSync(this.#fd, capturedChunk, capturedBytes);
+    const spill = this.#spillToFile();
+    writeAllSync(spill.fd, capturedChunk, capturedBytes);
     this.#bytes += capturedBytes;
     if (chunk.length > capturedBytes) this.#truncated = true;
   }
 
-  #close(): void {
-    if (this.#fd === undefined) return;
-    closeSync(this.#fd);
-    this.#fd = undefined;
-  }
-
   cleanup(): void {
-    this.#close();
+    let spill = this.#spill;
+    if (spill?.state === "open") {
+      closeSync(spill.fd);
+      spill = {
+        state: "closed",
+        directory: spill.directory,
+        filePath: spill.filePath,
+      };
+      this.#spill = spill;
+    }
     this.#chunks = [];
     this.#cleanedUp = true;
-    if (this.#directory !== undefined) {
-      rmSync(this.#directory, { recursive: true, force: true });
-      this.#directory = undefined;
-      this.#filePath = undefined;
+    if (spill !== undefined) {
+      rmSync(spill.directory, { recursive: true, force: true });
+      this.#spill = undefined;
     }
   }
 
   capture(): CapturedByteOutput {
-    try {
-      if (this.#fd === undefined) {
+    const spill = this.#spill;
+    if (spill === undefined) {
+      try {
         return {
           text: Buffer.concat(this.#chunks, this.#bytes).toString("utf8"),
           truncated: this.#truncated,
         };
+      } finally {
+        this.cleanup();
       }
+    }
 
-      this.#close();
-      const filePath = this.#filePath;
-      /* v8 ignore next 3: a file descriptor implies a capture file path. */
-      if (filePath === undefined) {
-        throw new Error("temporary output capture file is missing");
+    try {
+      if (spill.state === "open") {
+        closeSync(spill.fd);
+        this.#spill = {
+          state: "closed",
+          directory: spill.directory,
+          filePath: spill.filePath,
+        };
       }
       return {
-        text: readFileSync(filePath, "utf8"),
+        text: readFileSync(spill.filePath, "utf8"),
         truncated: this.#truncated,
       };
     } finally {
@@ -256,22 +281,23 @@ export class TailByteOutputLimit {
 
     this.#chunks.push(chunk);
     this.#bytes += chunk.length;
+    if (this.#bytes <= this.#maxBytes) return;
 
-    while (this.#bytes > this.#maxBytes) {
-      const first = this.#chunks[0];
-      /* v8 ignore next: positive buffered byte count implies at least one chunk. */
-      if (first === undefined) return;
-
-      const excessBytes = this.#bytes - this.#maxBytes;
-      if (first.length <= excessBytes) {
-        this.#chunks.shift();
-        this.#bytes -= first.length;
+    let excessBytes = this.#bytes - this.#maxBytes;
+    let removedChunks = 0;
+    for (const bufferedChunk of this.#chunks) {
+      if (excessBytes <= 0) break;
+      if (bufferedChunk.length <= excessBytes) {
+        excessBytes -= bufferedChunk.length;
+        removedChunks++;
       } else {
-        this.#chunks[0] = first.subarray(excessBytes);
-        this.#bytes -= excessBytes;
+        this.#chunks[removedChunks] = bufferedChunk.subarray(excessBytes);
+        excessBytes = 0;
       }
-      this.#truncated = true;
     }
+    if (removedChunks > 0) this.#chunks.splice(0, removedChunks);
+    this.#bytes = this.#maxBytes;
+    this.#truncated = true;
   }
 
   capture(): CapturedByteOutput {
