@@ -233,9 +233,7 @@ function parseGoalLaunchArgs(
     criterion = {
       kind: "command",
       command: verificationCommand,
-      ...(verificationTimeoutMs !== undefined
-        ? { verificationTimeoutMs }
-        : {}),
+      ...(verificationTimeoutMs !== undefined ? { verificationTimeoutMs } : {}),
     };
   } else if (assertionCriterion !== undefined && assertionCriterion !== "") {
     criterion = { kind: "assertion", assertion: assertionCriterion };
