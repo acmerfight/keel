@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { CostModel } from "./cost.ts";
 import {
-  type KnownModelMetadata,
+  type KnownModelMetadataEntry,
   knownModelMetadataEntries,
   modelMetadata,
 } from "./model-metadata.ts";
@@ -479,7 +479,7 @@ export function parseModelsDevCatalog(raw: unknown): ModelsDevCatalog {
 }
 
 function comparableRegistryMetadata(
-  metadata: KnownModelMetadata,
+  metadata: KnownModelMetadataEntry["metadata"],
 ): ComparableModelMetadata {
   return {
     contextWindowTokens: metadata.contextWindowTokens,
