@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   locateExactEditSpans,
   locateUniqueEditSpan,
+  originalSpan,
   sourcePreservingReplacement,
 } from "../../src/tools/edit-match.ts";
 
@@ -58,6 +59,29 @@ const mismatchedSourceSpanCases: readonly MismatchedSourceSpanCase[] = [
 ];
 
 describe("Edit Match", () => {
+  test(
+    `Given a mapped edit span that starts outside the normalized text,
+    When translating it back to the original CRLF source,
+    Then the source-map invariant rejects the invalid span`,
+    () => {
+      // Given
+      const normalized = {
+        kind: "mapped" as const,
+        text: "a\n",
+        sourceIndexByNormalizedIndex: [0, 1],
+      };
+
+      // When
+      const translate = () =>
+        originalSpan(normalized, { index: 2, length: 0 }, 3);
+
+      // Then
+      expect(translate).toThrow(
+        "source map invariant violated: match is invalid",
+      );
+    },
+  );
+
   test(`Given an empty search string,
     When locating a unique edit span,
     Then it reports not found without scanning forever`, () => {
