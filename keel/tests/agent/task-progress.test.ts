@@ -2029,6 +2029,94 @@ describe("Task Progress", () => {
     }
   });
 
+  test(`Given the assertion completion evaluator fails unexpectedly,
+    When the model proposes completion,
+    Then Keel returns a recoverable tool failure and continues the agent turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-assertion-evaluator-failure-"),
+    );
+    const messages: Message[] = [
+      { role: "user", content: "Complete the release review." },
+    ];
+    const sessionGoal: SessionGoal = {
+      objective: "Complete the release review",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      completion: {
+        kind: "assertion",
+        assertion: "The release review has complete evidence.",
+      },
+    };
+    let agentRequests = 0;
+    const provider: LLMProvider = {
+      id: "goal-assertion-evaluator-failure-provider",
+      async *stream(options) {
+        if (options.toolExposure?.kind === "none") {
+          throw new Error("assertion evaluator unavailable");
+        }
+        agentRequests++;
+        if (agentRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "complete_goal",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "The evaluator is unavailable, so I will keep working.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual({
+        type: "tool_end",
+        toolCall: {
+          id: "complete_goal",
+          tool: "update_goal",
+          status: "completed",
+        },
+        ok: false,
+      });
+      expect(messages.at(-2)).toEqual({
+        role: "tool",
+        toolCallId: "complete_goal",
+        content: expect.stringContaining(
+          "Tool failed: update_goal failed: assertion evaluator unavailable",
+        ),
+      });
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "The evaluator is unavailable, so I will keep working.",
+        toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a user only claims an assertion session goal is complete in chat,
     When the model proposes completion from that claim,
     Then Keel treats the user claim as untrusted context and keeps the goal active`, async () => {

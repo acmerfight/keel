@@ -33,12 +33,10 @@ export function createReadVisibilityState(): ReadVisibilityState {
   const visibleReads = new Map<string, VisibleReadSnapshot>();
   const evictOldestVisibleReads = (): void => {
     while (visibleReads.size > VISIBLE_READS_MAX_ENTRIES) {
-      const [oldestTargetPath] = visibleReads.keys();
-      /* v8 ignore next 3: size is above the cap, so the map has an oldest key. */
-      if (oldestTargetPath === undefined) {
-        return;
+      for (const oldestTargetPath of visibleReads.keys()) {
+        visibleReads.delete(oldestTargetPath);
+        break;
       }
-      visibleReads.delete(oldestTargetPath);
     }
   };
   const applyMutation = (execution: ToolExecution): void => {

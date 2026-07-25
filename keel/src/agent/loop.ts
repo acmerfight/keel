@@ -978,7 +978,6 @@ export async function* runAgentTurn(
               modelOperations: options.modelOperations ?? null,
             });
           } catch (error) {
-            /* v8 ignore else -- non-budget evaluator failures follow the tool layer's existing recoverable-error path. */
             if (error instanceof CostBudgetAdmissionError) {
               toolCostBudgetAdmission = error;
             }
@@ -1131,26 +1130,6 @@ export async function* runAgentTurn(
           }
           const { toolCall, result: execution } = result;
           yield toolEndEvent(toolCall, execution);
-          if (execution.ok) {
-            const skillActivation = toolExecutionEffect(
-              execution,
-              "skill_activation",
-            );
-            /* v8 ignore next 3: skill declares global access and cannot execute in a parallel scheduler batch. */
-            if (skillActivation !== undefined) {
-              yield { type: "skill_activated", ...skillActivation.activation };
-            }
-          }
-          const taskProgressEvent = taskProgressEventFromExecution(execution);
-          /* v8 ignore next 3: update_plan uses global tool access and is never scheduled in a parallel batch. */
-          if (taskProgressEvent !== null) {
-            yield taskProgressEvent;
-          }
-          const sessionGoalEvent = sessionGoalEventFromExecution(execution);
-          /* v8 ignore next 3: update_goal uses global tool access and is never scheduled in a parallel batch. */
-          if (sessionGoalEvent !== null) {
-            yield sessionGoalEvent;
-          }
           recordCompletedToolExecution({ toolCall, execution });
         }
       } else {
@@ -1182,10 +1161,7 @@ export async function* runAgentTurn(
               effects: [],
             },
           });
-          /* v8 ignore next 3 -- the fixed short budget message cannot cross the artifact threshold. */
-          for (const notice of await settlePendingToolExecutions()) {
-            yield { type: "tool_output_artifact", ...notice };
-          }
+          await settlePendingToolExecutions();
           yield {
             type: "end",
             usage: state.accounting.totalUsage,
