@@ -20,13 +20,13 @@ import {
 import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
 import type { WorkflowSkill } from "../../../src/skills/model.ts";
 import {
-  restoredUserMessageId,
-  runtime,
-} from "../../../src/testing/session-store-fixtures.ts";
-import {
   snapshotSessionRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
+import {
+  restoredUserMessageId,
+  runtime,
+} from "../../../src/testing/session-store-fixtures.ts";
 
 function workflowSkill(name: string, digest: string): WorkflowSkill {
   return {
@@ -77,23 +77,18 @@ describe("Session Store Skill Lifecycle", () => {
       workspace: ledgerWorkspace,
       createdAt: "1970-01-01T00:00:00.000Z",
       records: [
-        snapshotSessionRecordLine(
-          "1970-01-01T00:00:00.002Z",
-          [],
-          undefined,
-          {
-            skillStates: [
-              {
-                skillActivations: [review],
-                activeSkillIds: [review.descriptorId],
-              },
-              {
-                skillActivations: [review, qa],
-                activeSkillIds: [qa.descriptorId],
-              },
-            ],
-          },
-        ),
+        snapshotSessionRecordLine("1970-01-01T00:00:00.002Z", [], undefined, {
+          skillStates: [
+            {
+              skillActivations: [review],
+              activeSkillIds: [review.descriptorId],
+            },
+            {
+              skillActivations: [review, qa],
+              activeSkillIds: [qa.descriptorId],
+            },
+          ],
+        }),
       ],
     });
 

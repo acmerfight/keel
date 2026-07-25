@@ -76,9 +76,9 @@ export function snapshotSessionRecordLine(
     ...(options.taskProgressCheckpoints !== undefined
       ? { taskProgressCheckpoints: options.taskProgressCheckpoints }
       : {}),
-    skillStateCheckpoints: (options.skillStates ?? [
-      { skillActivations: [], activeSkillIds: [] },
-    ]).map((state, index) => ({
+    skillStateCheckpoints: (
+      options.skillStates ?? [{ skillActivations: [], activeSkillIds: [] }]
+    ).map((state, index) => ({
       messageOrdinal: index,
       skillActivations: state.skillActivations,
       activeSkillIds: state.activeSkillIds,
