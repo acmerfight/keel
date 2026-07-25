@@ -12,6 +12,7 @@ import type {
   SessionBashPermissionPolicy,
 } from "../permissions/bash.ts";
 import {
+  activeSkillActivations,
   createSkillActivation,
   skillLifecycleStatesEqual,
 } from "../skills/lifecycle.ts";
@@ -141,38 +142,18 @@ type InteractiveRunCliArgs = Extract<
   { readonly command: "run"; readonly mode: "interactive" }
 >;
 
-function activeSkillPackageIdsByDescriptor(
-  state: SkillLifecycleState,
-): ReadonlyMap<string, string> {
-  const packageIds = new Map<string, string>();
-  for (const activation of state.skillActivations) {
-    packageIds.set(activation.descriptorId, activation.packageId);
-  }
-  return packageIds;
-}
-
-function activeSkillPackageId(
-  packageIds: ReadonlyMap<string, string>,
-  descriptorId: string,
-): string {
-  const packageId = packageIds.get(descriptorId);
-  /* v8 ignore next 3 -- validated session lifecycle state requires every active descriptor id to have an activation. */
-  if (packageId === undefined) return "";
-  return packageId;
-}
-
 function skillLifecycleStateForUserPolicy(
   state: SkillLifecycleState,
   disabledPackageIds: readonly string[],
 ): SkillLifecycleState {
   if (disabledPackageIds.length === 0) return state;
   const disabled = new Set(disabledPackageIds);
-  const packageIds = activeSkillPackageIdsByDescriptor(state);
+  const activeIds = activeSkillActivations(state)
+    .filter((activation) => !disabled.has(activation.packageId))
+    .map((activation) => activation.descriptorId);
   return {
     skillActivations: state.skillActivations,
-    activeSkillIds: state.activeSkillIds.filter(
-      (id) => !disabled.has(activeSkillPackageId(packageIds, id)),
-    ),
+    activeSkillIds: activeIds,
   };
 }
 
@@ -183,13 +164,14 @@ function restorePolicyHiddenActiveSkillIds(
 ): SkillLifecycleState {
   if (disabledPackageIds.length === 0) return state;
   const disabled = new Set(disabledPackageIds);
-  const packageIds = activeSkillPackageIdsByDescriptor(persistedState);
   const currentActiveIds = new Set(state.activeSkillIds);
-  const persistedActiveIds = persistedState.activeSkillIds.filter(
-    (id) =>
-      disabled.has(activeSkillPackageId(packageIds, id)) ||
-      currentActiveIds.has(id),
-  );
+  const persistedActiveIds = activeSkillActivations(persistedState)
+    .filter(
+      (activation) =>
+        disabled.has(activation.packageId) ||
+        currentActiveIds.has(activation.descriptorId),
+    )
+    .map((activation) => activation.descriptorId);
   return {
     skillActivations: state.skillActivations,
     activeSkillIds: [
@@ -817,13 +799,9 @@ async function runSessionCli(
         );
       const sessionHasDisabledActiveSkill =
         sessionSkillState !== undefined &&
-        (() => {
-          const packageIds =
-            activeSkillPackageIdsByDescriptor(sessionSkillState);
-          return sessionSkillState.activeSkillIds.some((id) =>
-            disabledPackageIds.has(activeSkillPackageId(packageIds, id)),
-          );
-        })();
+        activeSkillActivations(sessionSkillState).some((activation) =>
+          disabledPackageIds.has(activation.packageId),
+        );
       const sessionHasEnabledActiveSkill =
         (policyFilteredSessionSkillState?.activeSkillIds.length ?? 0) > 0;
       const allRelevantSkillsDisabledByUser =

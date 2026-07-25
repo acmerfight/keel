@@ -1,5 +1,12 @@
 import type { PathLike, Stats } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -18,6 +25,8 @@ class TestNodeError extends Error implements NodeJS.ErrnoException {
 
 async function importSessionStoreWithFs(
   overrides: Partial<{
+    readonly openSync: (path: PathLike) => never;
+    readonly readSync: () => number;
     readonly rmdirSync: (path: PathLike) => void;
     readonly statSync: (path: PathLike) => Stats;
     readonly writeFileSync: () => never;
@@ -29,10 +38,69 @@ async function importSessionStoreWithFs(
   return import("../../../src/cli/session-store.ts");
 }
 
-describe("Session Lock Filesystem Races", () => {
+describe("Session Store Filesystem Races", () => {
   afterEach(() => {
     vi.doUnmock("node:fs");
     vi.resetModules();
+  });
+
+  test(`Given a session ledger disappears after its size is inspected,
+    When the ledger reader opens the file,
+    Then it reports the missing-ledger contract`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-ledger-race-"));
+    const ledgerPath = join(home, "ledger.jsonl");
+    await writeFile(ledgerPath, "{}\n", "utf8");
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actualFs,
+      openSync: (path: PathLike) => {
+        if (String(path) === ledgerPath) {
+          throw new TestNodeError("ENOENT", "open");
+        }
+        return actualFs.openSync(path, "r");
+      },
+    }));
+    const { readSessionRecords } = await import(
+      "../../../src/cli/session-store/ledger.ts"
+    );
+
+    try {
+      // When / Then
+      expect(() => readSessionRecords(ledgerPath)).toThrow(
+        `session ledger not found at ${ledgerPath}`,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a session ledger is truncated after its size is inspected,
+    When the ledger reader reaches an early EOF,
+    Then it reports the incomplete read instead of parsing partial data`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-ledger-race-"));
+    const ledgerPath = join(home, "ledger.jsonl");
+    await writeFile(ledgerPath, "{}\n", "utf8");
+    const actualFs = await vi.importActual<FsModule>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actualFs,
+      readSync: () => 0,
+    }));
+    const { readSessionRecords } = await import(
+      "../../../src/cli/session-store/ledger.ts"
+    );
+
+    try {
+      // When / Then
+      expect(() => readSessionRecords(ledgerPath)).toThrow(
+        `cannot read session ledger ${ledgerPath}: unexpected end of file`,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test(`Given an ownerless lock becomes inaccessible after acquisition detects it,

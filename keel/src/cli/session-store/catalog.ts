@@ -7,7 +7,10 @@ import {
   emptySessionTaskProgress,
 } from "../../core/task-progress.ts";
 import type { Message } from "../../llm/types.ts";
-import { copySkillActivation } from "../../skills/lifecycle.ts";
+import {
+  activeSkillActivations,
+  copySkillActivation,
+} from "../../skills/lifecycle.ts";
 import { redactTextForPersistence } from "../persistence-redaction.ts";
 import {
   formatNestedSessionStoreError,
@@ -320,18 +323,9 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
     createdAt: records.header.createdAt,
     updatedAt: state.updatedAt,
     graph: copySessionGraphRecord(records.header.graph),
-    workflowSkills: state.activeSkillIds.map((id) => {
-      const activation = state.skillActivations.findLast(
-        (candidate) => candidate.descriptorId === id,
-      );
-      /* v8 ignore next 5 -- mutation parsing validates every active id has a persisted activation snapshot. */
-      if (activation === undefined) {
-        sessionStoreError(
-          `Error: session "${records.header.id}" has an active workflow skill without an activation snapshot.`,
-        );
-      }
-      return sessionCatalogWorkflowSkill(activation);
-    }),
+    workflowSkills: activeSkillActivations(state).map(
+      sessionCatalogWorkflowSkill,
+    ),
     ...(state.title !== undefined ? { title: state.title } : {}),
     ...(state.goal !== undefined ? { goal: copySessionGoal(state.goal) } : {}),
     preview: catalogPreviewValue(state.preview),
