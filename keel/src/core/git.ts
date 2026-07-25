@@ -973,10 +973,9 @@ function sameUndoCheckpointFileState(
   first: UndoCheckpointFileState,
   second: UndoCheckpointFileState,
 ): boolean {
-  if (first.status !== second.status) return false;
-  if (first.status === "missing") return true;
-  /* v8 ignore next 1: status equality above makes this unreachable. */
-  if (second.status === "missing") return false;
+  if (first.status === "missing" || second.status === "missing") {
+    return first.status === second.status;
+  }
   if (first.content !== second.content) return false;
   // Undefined means this checkpoint did not own the file mode; it is a
   // wildcard for continuity, while restore validation still checks owned modes.
@@ -1455,7 +1454,6 @@ function writeTextToDescriptor(fileDescriptor: number, content: string): void {
       contentBuffer.length - writeOffset,
       writeOffset,
     );
-    /* v8 ignore next 3: a blocking regular-file write returning zero requires an OS fault; this guard prevents an infinite loop. */
     if (bytesWritten === 0) {
       throw new Error("undo target write made no progress");
     }
@@ -2146,11 +2144,7 @@ export function restoreUndoCheckpointsThrough(
 
   const selectedCheckpoints = checkpoints.slice(-checkpointIndex);
   if (checkpointIndex === 1) {
-    const checkpoint = selectedCheckpoints[0];
-    /* v8 ignore next 3: length and range checks above guarantee one selected checkpoint. */
-    if (checkpoint === undefined) {
-      return { status: "none", message: NO_UNDO_CHECKPOINT_MESSAGE };
-    }
+    const checkpoint = checkpoints.reduce((_previous, current) => current);
     const applied: AppliedBatchRestoreOperation[] = [];
     const result = restoreCheckpoint(checkpoint, gitWorkspace, applied);
     if (result.status === "restored") {

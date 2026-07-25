@@ -80,6 +80,30 @@ interface EditMatchStrategy {
 
 const MAX_ALIGNMENT_CELLS = 1_000_000;
 
+interface AlignmentScores {
+  readonly get: (oldIndex: number, newIndex: number) => number;
+  readonly set: (oldIndex: number, newIndex: number, value: number) => void;
+}
+
+function createAlignmentScores(
+  oldItemCount: number,
+  newItemCount: number,
+): AlignmentScores {
+  const columnCount = newItemCount + 1;
+  const scores = new DataView(
+    new ArrayBuffer(
+      (oldItemCount + 1) * columnCount * Uint32Array.BYTES_PER_ELEMENT,
+    ),
+  );
+  const offset = (oldIndex: number, newIndex: number): number =>
+    (oldIndex * columnCount + newIndex) * Uint32Array.BYTES_PER_ELEMENT;
+  return {
+    get: (oldIndex, newIndex) => scores.getUint32(offset(oldIndex, newIndex)),
+    set: (oldIndex, newIndex, value) =>
+      scores.setUint32(offset(oldIndex, newIndex), value),
+  };
+}
+
 export function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n/gu, "\n");
 }
@@ -164,7 +188,6 @@ export function originalSpan(
     normalizedEnd >= normalized.sourceIndexByNormalizedIndex.length
       ? originalLength
       : normalized.sourceIndexByNormalizedIndex[normalizedEnd];
-  /* v8 ignore next 3: locateUniqueEditSpan only returns spans from normalized text. */
   if (index === undefined || end === undefined) {
     throw new Error("source map invariant violated: match is invalid");
   }
@@ -497,15 +520,6 @@ export function locateExactEditSpans(
   return exactMatches(content, search);
 }
 
-function requiredSequenceItem(items: readonly string[], index: number): string {
-  const item = items[index];
-  /* v8 ignore next 3: LCS callers only request indexes inside bounds checked loops. */
-  if (item === undefined) {
-    throw new Error("edit match invariant violated: sequence index is invalid");
-  }
-  return item;
-}
-
 function alignedOldIndexes(
   oldItems: readonly string[],
   newItems: readonly string[],
@@ -515,67 +529,56 @@ function alignedOldIndexes(
     return null;
   }
 
-  const columnCount = newItems.length + 1;
-  const scoreIndex = (oldIndex: number, newIndex: number): number =>
-    oldIndex * columnCount + newIndex;
-  const scores = new Uint32Array((oldItems.length + 1) * columnCount);
-  const score = (oldIndex: number, newIndex: number): number => {
-    const value = scores[scoreIndex(oldIndex, newIndex)];
-    /* v8 ignore next 3: alignment only asks for initialized score cells. */
-    if (value === undefined) {
-      throw new Error("edit match invariant violated: score index is invalid");
-    }
-    return value;
-  };
+  const scores = createAlignmentScores(oldItems.length, newItems.length);
 
-  for (let oldIndex = oldItems.length - 1; oldIndex >= 0; oldIndex--) {
-    for (let newIndex = newItems.length - 1; newIndex >= 0; newIndex--) {
-      if (
-        itemMatches(
-          requiredSequenceItem(oldItems, oldIndex),
-          requiredSequenceItem(newItems, newIndex),
-        )
-      ) {
-        scores[scoreIndex(oldIndex, newIndex)] =
-          1 + score(oldIndex + 1, newIndex + 1);
+  for (const [oldIndex, oldItem] of [...oldItems.entries()].toReversed()) {
+    for (const [newIndex, newItem] of [...newItems.entries()].toReversed()) {
+      if (itemMatches(oldItem, newItem)) {
+        scores.set(
+          oldIndex,
+          newIndex,
+          1 + scores.get(oldIndex + 1, newIndex + 1),
+        );
       } else {
-        scores[scoreIndex(oldIndex, newIndex)] = Math.max(
-          score(oldIndex + 1, newIndex),
-          score(oldIndex, newIndex + 1),
+        scores.set(
+          oldIndex,
+          newIndex,
+          Math.max(
+            scores.get(oldIndex + 1, newIndex),
+            scores.get(oldIndex, newIndex + 1),
+          ),
         );
       }
     }
   }
 
   const alignedIndexes: (number | null)[] = [];
-  let oldIndex = 0;
-  let newIndex = 0;
-  while (newIndex < newItems.length) {
-    if (oldIndex >= oldItems.length) {
-      alignedIndexes.push(null);
-      newIndex++;
-      continue;
+  const oldEntries = oldItems.entries();
+  let oldEntry = oldEntries.next();
+  for (const [newIndex, newItem] of newItems.entries()) {
+    let alignedNewItem = false;
+    while (!oldEntry.done) {
+      const [oldIndex, oldItem] = oldEntry.value;
+      if (
+        itemMatches(oldItem, newItem) &&
+        scores.get(oldIndex, newIndex) ===
+          1 + scores.get(oldIndex + 1, newIndex + 1)
+      ) {
+        alignedIndexes.push(oldIndex);
+        oldEntry = oldEntries.next();
+        alignedNewItem = true;
+        break;
+      }
+      if (
+        scores.get(oldIndex, newIndex + 1) >= scores.get(oldIndex + 1, newIndex)
+      ) {
+        alignedIndexes.push(null);
+        alignedNewItem = true;
+        break;
+      }
+      oldEntry = oldEntries.next();
     }
-
-    if (
-      itemMatches(
-        requiredSequenceItem(oldItems, oldIndex),
-        requiredSequenceItem(newItems, newIndex),
-      ) &&
-      score(oldIndex, newIndex) === 1 + score(oldIndex + 1, newIndex + 1)
-    ) {
-      alignedIndexes.push(oldIndex);
-      oldIndex++;
-      newIndex++;
-      continue;
-    }
-
-    if (score(oldIndex, newIndex + 1) >= score(oldIndex + 1, newIndex)) {
-      alignedIndexes.push(null);
-      newIndex++;
-    } else {
-      oldIndex++;
-    }
+    if (!alignedNewItem) alignedIndexes.push(null);
   }
 
   return alignedIndexes;
@@ -590,84 +593,69 @@ function alignedOldIndexesWithSubstitutions(
     return null;
   }
 
-  const columnCount = newItems.length + 1;
-  const scoreIndex = (oldIndex: number, newIndex: number): number =>
-    oldIndex * columnCount + newIndex;
-  const scores = new Uint32Array((oldItems.length + 1) * columnCount);
-  const score = (oldIndex: number, newIndex: number): number => {
-    const value = scores[scoreIndex(oldIndex, newIndex)];
-    /* v8 ignore next 3: alignment only asks for initialized score cells. */
-    if (value === undefined) {
-      throw new Error("edit match invariant violated: score index is invalid");
-    }
-    return value;
-  };
+  const scores = createAlignmentScores(oldItems.length, newItems.length);
 
   for (let newIndex = newItems.length - 1; newIndex >= 0; newIndex--) {
-    scores[scoreIndex(oldItems.length, newIndex)] = newItems.length - newIndex;
+    scores.set(oldItems.length, newIndex, newItems.length - newIndex);
   }
   for (let oldIndex = oldItems.length - 1; oldIndex >= 0; oldIndex--) {
-    scores[scoreIndex(oldIndex, newItems.length)] = oldItems.length - oldIndex;
+    scores.set(oldIndex, newItems.length, oldItems.length - oldIndex);
   }
 
-  for (let oldIndex = oldItems.length - 1; oldIndex >= 0; oldIndex--) {
-    for (let newIndex = newItems.length - 1; newIndex >= 0; newIndex--) {
-      const substitutionCost = itemMatches(
-        requiredSequenceItem(oldItems, oldIndex),
-        requiredSequenceItem(newItems, newIndex),
-      )
-        ? 0
-        : 1;
-      scores[scoreIndex(oldIndex, newIndex)] = Math.min(
-        substitutionCost + score(oldIndex + 1, newIndex + 1),
-        1 + score(oldIndex + 1, newIndex),
-        1 + score(oldIndex, newIndex + 1),
+  for (const [oldIndex, oldItem] of [...oldItems.entries()].toReversed()) {
+    for (const [newIndex, newItem] of [...newItems.entries()].toReversed()) {
+      const substitutionCost = itemMatches(oldItem, newItem) ? 0 : 1;
+      scores.set(
+        oldIndex,
+        newIndex,
+        Math.min(
+          substitutionCost + scores.get(oldIndex + 1, newIndex + 1),
+          1 + scores.get(oldIndex + 1, newIndex),
+          1 + scores.get(oldIndex, newIndex + 1),
+        ),
       );
     }
   }
 
   const alignedIndexes: (number | null)[] = [];
-  let oldIndex = 0;
-  let newIndex = 0;
-  while (newIndex < newItems.length) {
-    if (oldIndex >= oldItems.length) {
-      alignedIndexes.push(null);
-      newIndex++;
-      continue;
+  const oldEntries = oldItems.entries();
+  let oldEntry = oldEntries.next();
+  for (const [newIndex, newItem] of newItems.entries()) {
+    let alignedNewItem = false;
+    while (!oldEntry.done) {
+      const [oldIndex, oldItem] = oldEntry.value;
+      const matches = itemMatches(oldItem, newItem);
+      const substitutionCost = matches ? 0 : 1;
+      const diagonalCost =
+        substitutionCost + scores.get(oldIndex + 1, newIndex + 1);
+      const insertCost = 1 + scores.get(oldIndex, newIndex + 1);
+      const deleteCost = 1 + scores.get(oldIndex + 1, newIndex);
+      const currentScore = scores.get(oldIndex, newIndex);
+      if (matches && diagonalCost === currentScore) {
+        alignedIndexes.push(oldIndex);
+        oldEntry = oldEntries.next();
+        alignedNewItem = true;
+        break;
+      }
+      if (
+        !matches &&
+        insertCost === currentScore &&
+        insertCost <= diagonalCost &&
+        insertCost <= deleteCost
+      ) {
+        alignedIndexes.push(null);
+        alignedNewItem = true;
+        break;
+      }
+      if (diagonalCost === currentScore) {
+        alignedIndexes.push(oldIndex);
+        oldEntry = oldEntries.next();
+        alignedNewItem = true;
+        break;
+      }
+      oldEntry = oldEntries.next();
     }
-
-    const matches = itemMatches(
-      requiredSequenceItem(oldItems, oldIndex),
-      requiredSequenceItem(newItems, newIndex),
-    );
-    const substitutionCost = matches ? 0 : 1;
-    const diagonalCost = substitutionCost + score(oldIndex + 1, newIndex + 1);
-    const insertCost = 1 + score(oldIndex, newIndex + 1);
-    const deleteCost = 1 + score(oldIndex + 1, newIndex);
-    const currentScore = score(oldIndex, newIndex);
-    if (matches && diagonalCost === currentScore) {
-      alignedIndexes.push(oldIndex);
-      oldIndex++;
-      newIndex++;
-      continue;
-    }
-    if (
-      !matches &&
-      insertCost === currentScore &&
-      insertCost <= diagonalCost &&
-      insertCost <= deleteCost
-    ) {
-      alignedIndexes.push(null);
-      newIndex++;
-      continue;
-    }
-    if (diagonalCost === currentScore) {
-      alignedIndexes.push(oldIndex);
-      oldIndex++;
-      newIndex++;
-      continue;
-    }
-    oldIndex++;
+    if (!alignedNewItem) alignedIndexes.push(null);
   }
 
   return alignedIndexes;
@@ -748,7 +736,6 @@ function replacementTextFromNormalizedRange(
   end: number,
 ): string {
   const slice = textSliceFromNormalizedRange(normalized, text, start, end);
-  /* v8 ignore next 3: if neither source nor replacement can be sliced at typographic boundaries, the local normalized fallback is the only safe non-corrupting segment. */
   if (slice === null) {
     return normalized.text.slice(start, end);
   }

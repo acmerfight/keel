@@ -609,6 +609,54 @@ describe("Git Checkpoint Race Handling", () => {
     });
   });
 
+  test(`Given an undo target write makes no progress,
+    When restoring an edit checkpoint,
+    Then undo aborts without looping and preserves the file and checkpoint`, async () => {
+    await withGitWorkspace(async (workspace) => {
+      // Given
+      const filePath = join(workspace, "note.txt");
+      await writeFile(filePath, "new\n", "utf8");
+      const actualFs =
+        await vi.importActual<typeof import("node:fs")>("node:fs");
+      let zeroWritePending = false;
+      const {
+        listUndoCheckpoints,
+        recordLastEditCheckpoint,
+        restoreLastEditCheckpoint,
+      } = await importGitWithFs({
+        writeSync: (fd, buffer, offset, length, position) => {
+          const content = Buffer.from(
+            buffer.subarray(offset, offset + length),
+          ).toString("utf8");
+          if (zeroWritePending && content === "old\n") {
+            zeroWritePending = false;
+            return 0;
+          }
+          return actualFs.writeSync(fd, buffer, offset, length, position);
+        },
+      });
+      recordLastEditCheckpoint({
+        workspace,
+        filePath,
+        beforeContent: "old\n",
+        afterContent: "new\n",
+        modeOwnership: { kind: "unowned" },
+      });
+      zeroWritePending = true;
+
+      // When
+      const result = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(result).toMatchObject({
+        status: "blocked",
+        filePath: "note.txt",
+      });
+      expect(await readFile(filePath, "utf8")).toBe("new\n");
+      expect(listUndoCheckpoints(workspace)).toHaveLength(1);
+    });
+  });
+
   test(`Given checkpoint metadata cannot be replaced after a multi-checkpoint restore,
     When consuming both checkpoints,
     Then undo rolls the coalesced file back and preserves both checkpoints`, async () => {
