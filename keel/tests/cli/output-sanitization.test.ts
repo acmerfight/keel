@@ -4,6 +4,7 @@ import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { escapeTerminalText } from "../../src/cli/output.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
 
 function getPort(server: Server): number {
@@ -75,6 +76,14 @@ function createTextReplyServer(text: string): Server {
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 
 describe("CLI Output Sanitization", () => {
+  test(`Given invisible terminal text contains BMP and astral code points,
+    When the shared terminal escaper renders them,
+    Then each full Unicode code point is preserved in its visible escape`, () => {
+    const text = "\u202e\ufeff\u{e0001}";
+
+    expect(escapeTerminalText(text)).toBe("\\u{202e}\\u{feff}\\u{e0001}");
+  });
+
   test(`Given the assistant reply carries terminal control sequences,
     When user runs the CLI,
     Then the reply is shown with visible escapes and the terminal receives no control bytes`, async () => {
