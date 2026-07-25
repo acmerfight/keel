@@ -998,27 +998,27 @@ function undoCheckpointOperationCanRestoreFromMissing(
   return false;
 }
 
-function mergeUndoCheckpointOperations(
+function undoCheckpointOperationsAreContinuous(
   existing: CoalescedUndoCheckpointOperation,
   next: CoalescableUndoCheckpointOperation,
-): CoalescedUndoCheckpointOperation | RestoreLastEditCheckpointResult {
+): boolean {
   const existingAfterState = undoCheckpointOperationAfterState(existing);
   const nextBeforeState = undoCheckpointOperationBeforeState(next);
   const canContinueFromMissing =
     nextBeforeState.status === "missing" &&
     undoCheckpointOperationCanRestoreFromMissing(existing);
-  if (
-    !sameUndoCheckpointFileState(existingAfterState, nextBeforeState) &&
-    !canContinueFromMissing
-  ) {
-    return blockedRestore(next);
-  }
+  return (
+    sameUndoCheckpointFileState(existingAfterState, nextBeforeState) ||
+    canContinueFromMissing
+  );
+}
 
+function mergeUndoCheckpointOperations(
+  existing: CoalescedUndoCheckpointOperation,
+  next: CoalescableUndoCheckpointOperation,
+): CoalescedUndoCheckpointOperation | RestoreLastEditCheckpointResult {
   if (existing.operation === "expect-missing") {
-    /* v8 ignore next 3: continuity rejects non-create operations before this branch. */
-    if (next.operation !== "create") {
-      invalidCheckpointError();
-    }
+    if (next.operation !== "create") return blockedRestore(next);
     return {
       operation: "create",
       relativePath: existing.relativePath,
@@ -1026,6 +1026,50 @@ function mergeUndoCheckpointOperations(
       ...modeState(next.mode),
       currentMissingAllowed: true,
     };
+  }
+
+  if (existing.operation === "delete") {
+    if (next.operation !== "create") return blockedRestore(next);
+    return {
+      operation: "delete-create",
+      relativePath: existing.relativePath,
+      beforeContent: existing.beforeContent,
+      afterContent: next.afterContent,
+      mode: existing.mode,
+      ...afterModeState(next.mode),
+      currentMissingAllowed: true,
+    };
+  }
+
+  if (existing.operation === "edit") {
+    if (
+      next.operation === "create" ||
+      !undoCheckpointOperationsAreContinuous(existing, next)
+    ) {
+      return blockedRestore(next);
+    }
+    if (next.operation === "delete") {
+      return {
+        operation: "delete",
+        relativePath: existing.relativePath,
+        beforeContent: existing.beforeContent,
+        mode: next.mode,
+      };
+    }
+    return {
+      operation: "edit",
+      relativePath: existing.relativePath,
+      beforeContent: existing.beforeContent,
+      afterContent: next.afterContent,
+      modeOwnership: advanceEditModeOwnership(
+        existing.modeOwnership,
+        editModeAfter(next.modeOwnership),
+      ),
+    };
+  }
+
+  if (!undoCheckpointOperationsAreContinuous(existing, next)) {
+    return blockedRestore(next);
   }
 
   if (existing.operation === "create") {
@@ -1046,77 +1090,33 @@ function mergeUndoCheckpointOperations(
     };
   }
 
-  if (existing.operation === "delete") {
-    /* v8 ignore next 3: continuity rejects non-create operations after a delete. */
-    if (next.operation !== "create") {
-      invalidCheckpointError();
-    }
-    return {
-      operation: "delete-create",
-      relativePath: existing.relativePath,
-      beforeContent: existing.beforeContent,
-      afterContent: next.afterContent,
-      mode: existing.mode,
-      ...afterModeState(next.mode),
-      currentMissingAllowed: true,
-    };
-  }
-
-  if (existing.operation === "delete-create") {
-    if (next.operation === "delete") {
-      return {
-        operation: "delete",
-        relativePath: existing.relativePath,
-        beforeContent: existing.beforeContent,
-        mode: existing.mode,
-      };
-    }
-    if (next.operation === "create") {
-      return {
-        operation: "delete-create",
-        relativePath: existing.relativePath,
-        beforeContent: existing.beforeContent,
-        afterContent: next.afterContent,
-        mode: existing.mode,
-        ...afterModeState(next.mode ?? existing.afterMode),
-        currentMissingAllowed: true,
-      };
-    }
-    return {
-      operation: "delete-create",
-      relativePath: existing.relativePath,
-      beforeContent: existing.beforeContent,
-      afterContent: next.afterContent,
-      mode: existing.mode,
-      ...afterModeState(
-        editModeAfter(next.modeOwnership) ?? existing.afterMode,
-      ),
-      currentMissingAllowed: false,
-    };
-  }
-
   if (next.operation === "delete") {
     return {
       operation: "delete",
       relativePath: existing.relativePath,
       beforeContent: existing.beforeContent,
-      mode: next.mode,
+      mode: existing.mode,
     };
   }
-
-  /* v8 ignore next 3: continuity rejects create-after-edit before this merge path. */
-  if (next.operation !== "edit") {
-    invalidCheckpointError();
+  if (next.operation === "create") {
+    return {
+      operation: "delete-create",
+      relativePath: existing.relativePath,
+      beforeContent: existing.beforeContent,
+      afterContent: next.afterContent,
+      mode: existing.mode,
+      ...afterModeState(next.mode ?? existing.afterMode),
+      currentMissingAllowed: true,
+    };
   }
   return {
-    operation: "edit",
+    operation: "delete-create",
     relativePath: existing.relativePath,
     beforeContent: existing.beforeContent,
     afterContent: next.afterContent,
-    modeOwnership: advanceEditModeOwnership(
-      existing.modeOwnership,
-      editModeAfter(next.modeOwnership),
-    ),
+    mode: existing.mode,
+    ...afterModeState(editModeAfter(next.modeOwnership) ?? existing.afterMode),
+    currentMissingAllowed: false,
   };
 }
 

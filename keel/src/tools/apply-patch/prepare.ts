@@ -6,7 +6,6 @@ import { readEditableTextFileWithMetadata } from "../text-file.ts";
 import {
   assertWorkspaceOpenTargetAtAccess,
   assertWorkspaceTargetAtAccess,
-  type FileIdentity,
   fileIdentityFromStats,
   resolveWorkspaceCreateTarget,
   resolveWorkspaceTarget,
@@ -119,9 +118,6 @@ function prepareUpdateOperation(
     operation.path,
   );
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-  let openedMode = validatedTarget.mode;
-  let targetIdentity: FileIdentity | null = null;
-  const needsTargetIdentity = operation.movePath !== null;
   const file = readEditableTextFileWithMetadata(
     validatedTarget.targetPath,
     operation.path,
@@ -146,11 +142,13 @@ function prepareUpdateOperation(
           );
         }
         const openedStat = fstatSync(fd);
-        openedMode = openedStat.mode & 0o7777;
-        if (needsTargetIdentity) {
-          targetIdentity = fileIdentityFromStats(openedStat);
-        }
-        return openedTargetPath;
+        return {
+          targetPath: openedTargetPath,
+          metadata: {
+            mode: openedStat.mode & 0o7777,
+            identity: fileIdentityFromStats(openedStat),
+          },
+        };
       },
     },
   );
@@ -167,10 +165,10 @@ function prepareUpdateOperation(
   );
   const modeChange = preparedModeChange(
     operation.path,
-    openedMode,
+    file.openedMetadata.mode,
     operation.modeChange,
   );
-  const writeMode = modeChange?.afterMode ?? openedMode;
+  const writeMode = modeChange?.afterMode ?? file.openedMetadata.mode;
   if (operation.movePath !== null) {
     const destination = resolveWorkspaceCreateTarget(
       workspace,
@@ -187,9 +185,9 @@ function prepareUpdateOperation(
       beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
       afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
       mode: writeMode,
-      rollbackMode: openedMode,
+      rollbackMode: file.openedMetadata.mode,
       modeChange,
-      targetIdentity: openedFileIdentity(targetIdentity),
+      targetIdentity: file.openedMetadata.identity,
       destinationTargetPath: destination.targetPath,
       destinationResolvedTargetPath: destination.resolvedTargetPath,
       destinationParentPath: destination.parentPath,
@@ -204,17 +202,9 @@ function prepareUpdateOperation(
     beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
     afterContent: withUtf8Bom(updated, file.hasUtf8Bom),
     mode: writeMode,
-    rollbackMode: openedMode,
+    rollbackMode: file.openedMetadata.mode,
     modeChange,
   };
-}
-
-function openedFileIdentity(identity: FileIdentity | null): FileIdentity {
-  /* v8 ignore next 3: readEditableTextFileWithMetadata validates the opened fd before returning. */
-  if (identity === null) {
-    throw new Error("apply_patch opened file identity invariant violated");
-  }
-  return identity;
 }
 
 function prepareDeleteOperation(
@@ -234,8 +224,6 @@ function prepareDeleteOperation(
     operation.path,
   );
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-  let openedMode = validatedTarget.mode;
-  let targetIdentity: FileIdentity | null = null;
   const file = readEditableTextFileWithMetadata(
     validatedTarget.targetPath,
     operation.path,
@@ -260,9 +248,13 @@ function prepareDeleteOperation(
           );
         }
         const openedStat = fstatSync(fd);
-        openedMode = openedStat.mode & 0o7777;
-        targetIdentity = fileIdentityFromStats(openedStat);
-        return openedTargetPath;
+        return {
+          targetPath: openedTargetPath,
+          metadata: {
+            mode: openedStat.mode & 0o7777,
+            identity: fileIdentityFromStats(openedStat),
+          },
+        };
       },
     },
   );
@@ -285,7 +277,7 @@ function prepareDeleteOperation(
   if (operation.mode !== null) {
     assertExpectedGitRegularFileMode(
       operation.path,
-      openedMode,
+      file.openedMetadata.mode,
       operation.mode,
     );
   }
@@ -297,8 +289,8 @@ function prepareDeleteOperation(
     targetPath: file.targetPath,
     fileRevision: file.fileRevision,
     beforeContent: withUtf8Bom(file.content, file.hasUtf8Bom),
-    mode: openedMode,
-    targetIdentity: openedFileIdentity(targetIdentity),
+    mode: file.openedMetadata.mode,
+    targetIdentity: file.openedMetadata.identity,
   };
 }
 
@@ -337,8 +329,6 @@ function prepareCopyOperation(
     operation.sourcePath,
   );
   const projectIgnorePolicy = createProjectIgnorePolicy(workspacePath);
-  let openedMode = validatedTarget.mode;
-  let sourceIdentity: FileIdentity | null = null;
   const file = readEditableTextFileWithMetadata(
     validatedTarget.targetPath,
     operation.sourcePath,
@@ -363,9 +353,13 @@ function prepareCopyOperation(
           );
         }
         const openedStat = fstatSync(fd);
-        openedMode = openedStat.mode & 0o7777;
-        sourceIdentity = fileIdentityFromStats(openedStat);
-        return openedTargetPath;
+        return {
+          targetPath: openedTargetPath,
+          metadata: {
+            mode: openedStat.mode & 0o7777,
+            identity: fileIdentityFromStats(openedStat),
+          },
+        };
       },
     },
   );
@@ -382,10 +376,10 @@ function prepareCopyOperation(
   );
   const modeChange = preparedModeChange(
     operation.sourcePath,
-    openedMode,
+    file.openedMetadata.mode,
     operation.modeChange,
   );
-  const writeMode = modeChange?.afterMode ?? openedMode;
+  const writeMode = modeChange?.afterMode ?? file.openedMetadata.mode;
   const destination = resolveWorkspaceCreateTarget(
     workspace,
     operation.path,
@@ -396,7 +390,7 @@ function prepareCopyOperation(
     sourcePath: operation.sourcePath,
     sourceTargetPath: file.targetPath,
     sourceFileRevision: file.fileRevision,
-    sourceIdentity: openedFileIdentity(sourceIdentity),
+    sourceIdentity: file.openedMetadata.identity,
     path: operation.path,
     workspacePath: destination.workspacePath,
     targetPath: destination.targetPath,

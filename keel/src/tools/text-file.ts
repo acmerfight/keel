@@ -188,40 +188,51 @@ export function decodeUtf8(
   }
 }
 
-export interface EditableTextFile {
+export interface EditableTextFile<OpenedMetadata = undefined> {
   readonly content: string;
   readonly fileRevision: FileRevision;
   readonly hasUtf8Bom: boolean;
   readonly targetPath: string;
+  readonly openedMetadata: OpenedMetadata;
 }
 
-export interface ReadEditableTextFileOptions {
+export interface OpenedFileValidation<OpenedMetadata> {
+  readonly targetPath: string;
+  readonly metadata: OpenedMetadata;
+}
+
+export interface ReadEditableTextFileOptions<OpenedMetadata> {
   readonly command?: EditableTextFileCommand;
   readonly maxBytes: number;
   readonly tooLargeError: (observedBytes: number) => KeelError;
-  readonly validateOpenedFile: (fd: number) => string;
+  readonly validateOpenedFile: (
+    fd: number,
+  ) => OpenedFileValidation<OpenedMetadata>;
 }
 
-interface ReadFileCappedResult {
+interface ReadFileCappedResult<OpenedMetadata> {
   readonly bytes: Buffer;
   readonly targetPath: string;
+  readonly openedMetadata: OpenedMetadata;
 }
 
 function hasUtf8Bom(bytes: Uint8Array): boolean {
   return bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
 }
 
-function readFileCapped(
+function readFileCapped<OpenedMetadata>(
   targetPath: string,
   maxBytes: number,
-  validateOpenedFile: (fd: number) => string,
-): ReadFileCappedResult {
+  validateOpenedFile: (
+    fd: number,
+  ) => OpenedFileValidation<OpenedMetadata>,
+): ReadFileCappedResult<OpenedMetadata> {
   const readLimit = maxBytes + 1;
   const chunks: Buffer[] = [];
   let offset = 0;
   const fd = openSync(targetPath, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
-    const openedTargetPath = validateOpenedFile(fd);
+    const opened = validateOpenedFile(fd);
     const reportedSize = fstatSync(fd).size;
     let nextChunkSize = Math.min(Math.max(reportedSize + 1, 1), readLimit);
     while (offset < readLimit) {
@@ -237,20 +248,25 @@ function readFileCapped(
     }
     return {
       bytes: Buffer.concat(chunks, offset),
-      targetPath: openedTargetPath,
+      targetPath: opened.targetPath,
+      openedMetadata: opened.metadata,
     };
   } finally {
     closeSync(fd);
   }
 }
 
-export function readEditableTextFileWithMetadata(
+export function readEditableTextFileWithMetadata<OpenedMetadata>(
   targetPath: string,
   filePath: string,
-  options: ReadEditableTextFileOptions,
-): EditableTextFile {
+  options: ReadEditableTextFileOptions<OpenedMetadata>,
+): EditableTextFile<OpenedMetadata> {
   const command = options.command ?? "edit";
-  const { bytes, targetPath: openedTargetPath } = readFileCapped(
+  const {
+    bytes,
+    targetPath: openedTargetPath,
+    openedMetadata,
+  } = readFileCapped(
     targetPath,
     options.maxBytes,
     options.validateOpenedFile,
@@ -273,5 +289,6 @@ export function readEditableTextFileWithMetadata(
     fileRevision: fileRevisionFromBytes(bytes),
     hasUtf8Bom: hasUtf8Bom(bytes),
     targetPath: openedTargetPath,
+    openedMetadata,
   };
 }
