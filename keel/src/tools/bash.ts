@@ -4,7 +4,7 @@ import {
   DEFAULT_COMMAND_TIMEOUT_MS,
   MAX_COMMAND_TIMEOUT_MS,
 } from "../core/command-timeout.ts";
-import { KeelError } from "../core/error.ts";
+import { errorMessage, KeelError } from "../core/error.ts";
 import {
   type CapturedByteOutput,
   TailByteOutputLimit,
@@ -266,9 +266,8 @@ function runBashProcess(
         capturedArtifactStdout = artifactStdout.capture();
         capturedArtifactStderr = artifactStderr.capture();
       } catch (error) {
-        /* v8 ignore start: temp output capture failures require filesystem faults after process completion. */
         cleanup();
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         rejectProcess(
           new KeelError(
             "tool_unavailable",
@@ -277,7 +276,6 @@ function runBashProcess(
           ),
         );
         return;
-        /* v8 ignore stop */
       }
       cleanup();
       resolveProcess({
@@ -339,9 +337,8 @@ function runBashProcess(
         preview.append(chunk);
         artifact.append(chunk);
       } catch (error) {
-        /* v8 ignore start: temp output write failures require filesystem faults while streaming. */
         stopChildProcess(child.pid);
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         finish({
           type: "reject",
           error: new KeelError(
@@ -350,7 +347,6 @@ function runBashProcess(
             "Rerun the command with narrower output or inspect specific files directly.",
           ),
         });
-        /* v8 ignore stop */
       }
     };
 

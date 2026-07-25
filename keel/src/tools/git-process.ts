@@ -2,7 +2,7 @@ import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import type { Readable } from "node:stream";
-import { KeelError } from "../core/error.ts";
+import { errorMessage, KeelError } from "../core/error.ts";
 import {
   type CapturedByteOutput,
   HeadByteOutputLimit,
@@ -224,9 +224,8 @@ export function runGitProcess(
         capturedArtifactStdout = artifactStdout.capture();
         capturedArtifactStderr = artifactStderr.capture();
       } catch (error) {
-        /* v8 ignore start: temp output capture failures require filesystem faults after process completion. */
         cleanup();
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         rejectProcess(
           new KeelError(
             "tool_unavailable",
@@ -235,7 +234,6 @@ export function runGitProcess(
           ),
         );
         return;
-        /* v8 ignore stop */
       }
       cleanup();
       resolveProcess({
@@ -277,9 +275,8 @@ export function runGitProcess(
         preview.append(chunk);
         artifact.append(chunk);
       } catch (error) {
-        /* v8 ignore start: temp output write failures require filesystem faults while streaming. */
         stopChildProcess(child.pid);
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         finish({
           type: "reject",
           error: new KeelError(
@@ -288,7 +285,6 @@ export function runGitProcess(
             "Use paths to narrow output or inspect files directly with read/grep.",
           ),
         });
-        /* v8 ignore stop */
       }
     };
 
