@@ -268,6 +268,21 @@ describe("project skills catalog", () => {
     expect(() => unexpectedFailure.activeStatuses()).toThrow("unexpected");
   });
 
+  test(`Given a caller keeps an active Skill list,
+    When a later activation changes lifecycle state,
+    Then the earlier list remains a stable snapshot`, () => {
+    // Given
+    const lifecycle = createSkillActivation(inMemoryCatalog());
+    const beforeActivation = lifecycle.active();
+
+    // When
+    lifecycle.activateExplicit(workflowSkill(), "");
+
+    // Then
+    expect(beforeActivation).toEqual([]);
+    expect(lifecycle.active()).toHaveLength(1);
+  });
+
   test(`Given an active package is rediscovered with a different descriptor digest,
     When ordinary activation tries to replace it,
     Then Keel requires the explicit reload control`, () => {

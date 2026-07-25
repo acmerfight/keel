@@ -232,7 +232,7 @@ export function createSkillActivation(
         (activation) => activation.descriptorId,
       ),
     });
-  const active = (): readonly SkillActivation[] => activeActivations;
+  const active = (): readonly SkillActivation[] => [...activeActivations];
   const activateSkill = (
     skill: WorkflowSkill,
     trigger: SkillActivation["trigger"],
