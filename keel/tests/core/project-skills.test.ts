@@ -301,6 +301,36 @@ describe("project skills catalog", () => {
     });
   });
 
+  test.each([
+    {
+      invocation: "$review",
+      expected: { lookup: "review", arguments: "" },
+    },
+    {
+      invocation: "$repo:review\n  inspect staged changes",
+      expected: {
+        lookup: "repo:review",
+        arguments: "inspect staged changes",
+      },
+    },
+  ])(
+    `Given the explicit invocation $invocation,
+    When the dollar surface parses its lookup and arguments,
+    Then it preserves the supported invocation contract`,
+    ({ invocation, expected }) => {
+      expect(parseExplicitSkillInvocation(invocation)).toEqual(expected);
+    },
+  );
+
+  test(`Given text is not a dollar invocation or has an invalid skill identity,
+    When the explicit skill surface parses it,
+    Then ordinary text is ignored and malformed invocations fail closed`, () => {
+    expect(parseExplicitSkillInvocation("review this")).toBeNull();
+    expect(() => parseExplicitSkillInvocation("$repo:Review")).toThrow(
+      "Error: invalid $skill invocation",
+    );
+  });
+
   test(`Given no project skill root exists,
     When a caller resolves a name from the empty catalog,
     Then the catalog rejects the missing skill`, async () => {
