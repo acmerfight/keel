@@ -18,6 +18,7 @@ import {
 
 const DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY";
 const KEEL_HOME_ENV = "KEEL_HOME";
+const PATH_ENV = "PATH";
 
 describe("Eval Runner", () => {
   test(`Given provider selection is stored in the user's Keel home,
@@ -416,6 +417,41 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
         { taskId: "slow-verifier", pass: false, outcome: "timeout" },
       ]);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given bash is unavailable after an agent trial completes,
+    When the eval runner starts the verifier,
+    Then it records a crashed harness result`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "missing-verifier-shell", FIX_NOTE_TASK);
+    const previousPath = process.env[PATH_ENV];
+    process.env[PATH_ENV] = "";
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry: CLI_ENTRY,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          taskId: "missing-verifier-shell",
+          pass: false,
+          outcome: "crashed",
+        },
+      ]);
+    } finally {
+      if (previousPath === undefined) delete process.env[PATH_ENV];
+      else process.env[PATH_ENV] = previousPath;
       await rm(root, { recursive: true, force: true });
     }
   });

@@ -264,7 +264,6 @@ async function runTrialInWorkspace(
     timeoutMs: task.scriptTimeoutMs,
     env,
   });
-  /* v8 ignore next 3: CI and supported user environments provide bash. */
   if (verify.spawnFailed) {
     return {
       outcome: "crashed",
