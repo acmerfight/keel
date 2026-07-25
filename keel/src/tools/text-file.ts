@@ -223,9 +223,7 @@ function hasUtf8Bom(bytes: Uint8Array): boolean {
 function readFileCapped<OpenedMetadata>(
   targetPath: string,
   maxBytes: number,
-  validateOpenedFile: (
-    fd: number,
-  ) => OpenedFileValidation<OpenedMetadata>,
+  validateOpenedFile: (fd: number) => OpenedFileValidation<OpenedMetadata>,
 ): ReadFileCappedResult<OpenedMetadata> {
   const readLimit = maxBytes + 1;
   const chunks: Buffer[] = [];
@@ -266,11 +264,7 @@ export function readEditableTextFileWithMetadata<OpenedMetadata>(
     bytes,
     targetPath: openedTargetPath,
     openedMetadata,
-  } = readFileCapped(
-    targetPath,
-    options.maxBytes,
-    options.validateOpenedFile,
-  );
+  } = readFileCapped(targetPath, options.maxBytes, options.validateOpenedFile);
   if (bytes.length > options.maxBytes) {
     throw options.tooLargeError(bytes.length);
   }
