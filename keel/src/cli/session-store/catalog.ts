@@ -192,13 +192,9 @@ function applySessionCatalogMutation(
             }),
       };
     case "snapshot": {
-      const snapshotSkillState = record.skillStateCheckpoints.at(-1);
-      /* v8 ignore next 3 -- the snapshot schema requires at least one lifecycle checkpoint. */
-      if (snapshotSkillState === undefined) {
-        sessionStoreError(
-          "Error: session snapshot has no skill lifecycle state.",
-        );
-      }
+      const snapshotSkillState = record.skillStateCheckpoints.reduce(
+        (_previous, checkpoint) => checkpoint,
+      );
       return {
         updatedAt: record.timestamp,
         ...(record.title !== undefined ? { title: record.title } : {}),

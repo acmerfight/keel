@@ -332,10 +332,6 @@ export interface SessionReplayState {
   readonly skillStateCheckpoints: SessionSkillStateCheckpoint[];
 }
 
-export type ObjectValue =
-  | { readonly exists: false }
-  | { readonly exists: true; readonly value: unknown };
-
 export interface SnapshotSearchResult {
   readonly index: number;
   readonly record: SnapshotSessionRecord;

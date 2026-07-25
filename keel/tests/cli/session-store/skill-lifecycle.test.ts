@@ -1,4 +1,11 @@
-import { appendFile, mkdtemp, readFile, rm, truncate } from "node:fs/promises";
+import {
+  appendFile,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  truncate,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -12,6 +19,10 @@ import {
 } from "../../../src/cli/session-store.ts";
 import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
 import type { WorkflowSkill } from "../../../src/skills/model.ts";
+import {
+  snapshotSessionRecordLine,
+  writeSessionLedger,
+} from "../../../src/testing/session-ledger-fixtures.ts";
 import {
   restoredUserMessageId,
   runtime,
@@ -41,6 +52,72 @@ function activation(skill: WorkflowSkill, activatedAt: string) {
 }
 
 describe("Session Store Skill Lifecycle", () => {
+  test(`Given a session snapshot contains multiple Skill lifecycle checkpoints,
+    When the user resumes or lists the session,
+    Then both views restore the latest checkpoint`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-session-skill-snapshot-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-session-skill-snapshot-home-"),
+    );
+    const ledgerWorkspace = await realpath(workspace);
+    const review = activation(
+      workflowSkill("review", "review-digest"),
+      "1970-01-01T00:00:00.000Z",
+    );
+    const qa = activation(
+      workflowSkill("qa", "qa-digest"),
+      "1970-01-01T00:00:00.001Z",
+    );
+    await writeSessionLedger({
+      home,
+      id: "snapshot-skill-history",
+      workspace: ledgerWorkspace,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      records: [
+        snapshotSessionRecordLine("1970-01-01T00:00:00.002Z", [], undefined, {
+          skillStates: [
+            {
+              skillActivations: [review],
+              activeSkillIds: [review.descriptorId],
+            },
+            {
+              skillActivations: [review, qa],
+              activeSkillIds: [qa.descriptorId],
+            },
+          ],
+        }),
+      ],
+    });
+
+    try {
+      // When
+      const resumed = resumeSessionStore({
+        sessionId: "snapshot-skill-history",
+        workspace,
+        runtime: runtime(home),
+      });
+      const catalog = listSessionCatalog({
+        workspace,
+        runtime: runtime(home, 1),
+      });
+
+      // Then
+      expect(resumed.activeSkillIds).toEqual([qa.descriptorId]);
+      expect(catalog.sessions[0]?.workflowSkills).toEqual([
+        {
+          qualifiedName: "repo:qa",
+          relativePath: ".agents/skills/qa/SKILL.md",
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a completed turn model-selects a Skill,
     When transcript and lifecycle state are committed,
     Then one append record durably contains both or neither`, async () => {

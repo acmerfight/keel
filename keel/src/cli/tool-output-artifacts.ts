@@ -16,6 +16,7 @@ import type {
   ToolOutputArtifactSaveResult,
   ToolOutputArtifactStore,
 } from "../agent/tool-output-artifacts.ts";
+import { errorMessage } from "../core/error.ts";
 import { type SessionStoreRuntime, sessionHome } from "./session-store.ts";
 
 const ARTIFACT_SCOPE_PATTERN = /^[A-Za-z0-9._-]+$/u;
@@ -114,16 +115,13 @@ function utf8RoundTrip(content: string): string {
 function parseToolOutputArtifactRef(
   ref: string,
 ): ParsedToolOutputArtifactRef | null {
-  const match = TOOL_OUTPUT_REF_PATTERN.exec(ref);
-  if (match === null) {
+  if (!TOOL_OUTPUT_REF_PATTERN.test(ref)) {
     return null;
   }
-  const scope = match[1];
-  const id = match[2];
-  /* v8 ignore next 3: TOOL_OUTPUT_REF_PATTERN has required capture groups when a match exists. */
-  if (scope === undefined || id === undefined) {
-    return null;
-  }
+  const prefixLength = "tool-output:".length;
+  const separatorIndex = ref.indexOf("/", prefixLength);
+  const scope = ref.slice(prefixLength, separatorIndex);
+  const id = ref.slice(separatorIndex + 1);
   try {
     validateArtifactSegment("scope", scope);
     validateArtifactSegment("id", id);
@@ -266,7 +264,6 @@ export function createToolOutputArtifactStore(
       input: ToolOutputArtifactReuseInput,
     ): Promise<ToolOutputArtifactReuseResult> => {
       const parsed = parseToolOutputArtifactRef(input.ref);
-      /* v8 ignore next 3: generated markers validate refs before verification; malformed direct inputs safely miss. */
       if (parsed === null) {
         return { status: "not_reusable" };
       }
@@ -308,10 +305,7 @@ export function createToolOutputArtifactStore(
           contentSha256: sha256(input.content),
         };
       } catch (error) {
-        /* v8 ignore next 3: fs/promises rejects with Error instances in supported Node runtimes. */
-        const reason =
-          error instanceof Error ? error.message : "unknown storage error";
-        return { status: "failed", reason };
+        return { status: "failed", reason: errorMessage(error) };
       }
     },
     discard: async (ref: string): Promise<void> => {
@@ -348,12 +342,9 @@ export async function showToolOutputArtifact(options: {
       content: await readFile(artifactPath(options.runtime, parsed), "utf8"),
     };
   } catch (error) {
-    /* v8 ignore next 3: fs/promises rejects with Error instances in supported Node runtimes. */
-    const reason =
-      error instanceof Error ? error.message : "unknown storage error";
     return {
       ok: false,
-      message: `Error: cannot read artifact ${options.ref}: ${reason}`,
+      message: `Error: cannot read artifact ${options.ref}: ${errorMessage(error)}`,
     };
   }
 }

@@ -212,7 +212,6 @@ function ownerlessSessionLockIsStale(lockPath: string): boolean {
     const stats = statSync(lockPath);
     return Date.now() - stats.mtimeMs >= OWNERLESS_LOCK_RECLAIM_AFTER_MS;
   } catch (error) {
-    /* v8 ignore next 3: requires a filesystem race or permission change between lock existence detection and stale-owner inspection. */
     sessionStoreError(
       `Error: cannot inspect session lock ${lockPath}: ${errorMessage(error)}`,
     );
@@ -263,20 +262,37 @@ function releaseSessionLock(lockPath: string, token: string): void {
   removeEmptySessionDirectory(lockPath);
 }
 
+function isBenignEmptyDirectoryRemovalError(error: unknown): boolean {
+  return (
+    hasNodeErrorCode(error, "ENOENT") ||
+    hasNodeErrorCode(error, "ENOTEMPTY") ||
+    hasNodeErrorCode(error, "EEXIST")
+  );
+}
+
 function removeEmptySessionDirectory(lockPath: string): void {
   const sessionDirectory = dirname(lockPath);
   try {
     rmdirSync(sessionDirectory);
   } catch (error) {
-    if (
-      hasNodeErrorCode(error, "ENOENT") ||
-      hasNodeErrorCode(error, "ENOTEMPTY") ||
-      hasNodeErrorCode(error, "EEXIST")
-    ) {
+    if (isBenignEmptyDirectoryRemovalError(error)) {
       return;
     }
     sessionStoreError(
       `Error: cannot remove empty session directory ${sessionDirectory}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function removeIncompleteSessionLock(lockPath: string): void {
+  try {
+    rmdirSync(lockPath);
+  } catch (error) {
+    if (isBenignEmptyDirectoryRemovalError(error)) {
+      return;
+    }
+    sessionStoreError(
+      `Error: cannot remove incomplete session lock ${lockPath}: ${errorMessage(error)}`,
     );
   }
 }
@@ -328,9 +344,7 @@ export function acquireSessionLock(options: {
         { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
     } catch (error) {
-      /* v8 ignore next 3: requires a filesystem race after the lock directory is created; mkdir and release failures are covered with real filesystem cases. */
-      rmSync(lockPath, { recursive: true, force: true });
-      /* v8 ignore next 3: same post-mkdir owner-write race as above. */
+      removeIncompleteSessionLock(lockPath);
       sessionStoreError(
         `Error: cannot write session lock ${lockPath}: ${errorMessage(error)}`,
       );
