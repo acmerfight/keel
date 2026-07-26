@@ -11,11 +11,12 @@ import { runCliPty } from "../../../src/testing/cli-pty-harness.ts";
 
 describe("Interactive TUI diff review", () => {
   test(`Given a workspace has staged, unstaged, renamed, deleted, untracked, long, and CJK changes,
-    When the user opens /diff and navigates the review,
-    Then Keel shows a focused change audit and returns to the ready composer`, async () => {
+    When the user opens /diff and navigates by line, page, and file,
+    Then Keel keeps the current file visible and returns to the ready composer`, async () => {
     // Given
     const workspace = await createGitWorkspace("keel-tui-diff-review-");
     const home = await mkdtemp(join(tmpdir(), "keel-tui-diff-home-"));
+    const untrackedPath = "一个很长的未跟踪审阅文件名.txt";
     await commitFile(
       workspace,
       "long.txt",
@@ -45,7 +46,7 @@ describe("Interactive TUI diff review", () => {
     await runGit(workspace, ["mv", "rename-before.txt", "rename-after.txt"]);
     await unlink(join(workspace, "delete-me.txt"));
     await runGit(workspace, ["add", "delete-me.txt"]);
-    await writeFile(join(workspace, "未跟踪.txt"), "新增内容\n");
+    await writeFile(join(workspace, untrackedPath), "新增内容\n");
     const pty = runCliPty(["--ephemeral"], {
       cwd: workspace,
       columns: 100,
@@ -77,14 +78,33 @@ describe("Interactive TUI diff review", () => {
       );
       expect(firstPage).toContain("↑↓");
       expect(firstPage).toContain("PgUp/PgDn");
+      expect(firstPage).toContain("[ ] section");
       expect(firstPage).toContain("Esc/q");
+      expect(firstPage).toContain("Unstaged · data.bin");
+      expect(firstPage).toContain("file 1/6");
       expect(firstPage).toContain("+48");
       expect(firstPage).toContain("-49");
       expect(firstPage).toContain("BINARY data.bin");
 
+      pty.write("]");
+      await pty.waitForScreen(
+        (screen) =>
+          screen.includes("Unstaged · long.txt") && screen.includes("file 2/6"),
+        "next-file navigation did not reach the second file",
+      );
+      pty.write("[");
+      await pty.waitForScreen(
+        (screen) =>
+          screen.includes("Unstaged · data.bin") && screen.includes("file 1/6"),
+        "previous-file navigation did not return to the first file",
+      );
+
       pty.write("\x1b[B");
       await pty.waitForScreen(
-        (screen) => screen.includes("2-20/"),
+        (screen) =>
+          screen.includes("2-20/") &&
+          screen.includes("Unstaged · data.bin") &&
+          screen.includes("file 1/6"),
         "Down did not advance one line",
       );
       pty.write("\x1b[A");
@@ -107,12 +127,26 @@ describe("Interactive TUI diff review", () => {
       pty.write("\x1b[F");
       const lastPage = await pty.waitForScreen(
         (screen) =>
-          screen.includes("Untracked") &&
-          screen.includes("未跟踪.txt") &&
+          screen.includes(`Untracked · ${untrackedPath}`) &&
+          screen.includes("file 6/6") &&
           screen.includes("+新增内容"),
         "End did not reach the final change",
       );
       expect(lastPage).toContain("/");
+
+      pty.write("[");
+      await pty.waitForScreen(
+        (screen) =>
+          screen.includes("Staged · staged.txt") && screen.includes("file 5/6"),
+        "previous-file navigation did not select a short file near the end",
+      );
+      pty.write("]");
+      await pty.waitForScreen(
+        (screen) =>
+          screen.includes(`Untracked · ${untrackedPath}`) &&
+          screen.includes("file 6/6"),
+        "next-file navigation did not restore the final file",
+      );
 
       pty.write("\x1b[5~");
       await pty.waitForScreen(
@@ -130,7 +164,7 @@ describe("Interactive TUI diff review", () => {
       pty.write("\x1b[F");
       await pty.waitForScreen(
         (screen) =>
-          screen.includes("Untracked") && screen.includes("未跟踪.txt"),
+          screen.includes("Untracked") && screen.includes("文件名.txt"),
         "End did not restore the final change",
       );
 
@@ -138,7 +172,10 @@ describe("Interactive TUI diff review", () => {
       const narrow = await pty.waitForScreen(
         (screen) =>
           screen.includes("Workspace changes") &&
-          screen.includes("未跟踪.txt") &&
+          screen.includes("6 files") &&
+          screen.includes("Untracked") &&
+          screen.includes("文件名.txt") &&
+          screen.includes("file 6/6") &&
           screen.includes("Esc/q"),
         "diff review did not survive narrow resize",
       );
@@ -146,6 +183,16 @@ describe("Interactive TUI diff review", () => {
       expect(narrow).toContain("PgUp/PgDn");
       expect(narrow).toContain("Home/End");
       expect(narrow).toMatch(/\d+-\d+\/\d+/u);
+
+      pty.resize(18, 10);
+      await pty.waitForScreen(
+        (screen) =>
+          screen.includes("Untracked") &&
+          screen.includes("文件名.txt") &&
+          screen.includes("file 6/6"),
+        "ultra-narrow review lost its sticky scope, path, or file position",
+      );
+      pty.resize(100, 24);
 
       pty.write("\x1b");
       await pty.waitForScreen(
@@ -252,6 +299,56 @@ describe("Interactive TUI diff review", () => {
       await rm(nonGitWorkspace, { recursive: true, force: true });
       await rm(failedWorkspace, { recursive: true, force: true });
       await rm(emptyPath, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one file has both staged and unstaged changes,
+    When the user navigates between its review sections,
+    Then the sticky context changes scope without inflating the file count`, async () => {
+    const workspace = await createGitWorkspace("keel-tui-diff-two-scopes-");
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-tui-diff-two-scopes-home-"),
+    );
+    await commitFile(workspace, "shared.txt", "base\n");
+    await writeFile(join(workspace, "shared.txt"), "staged\n");
+    await runGit(workspace, ["add", "shared.txt"]);
+    await writeFile(join(workspace, "shared.txt"), "unstaged\n");
+    const pty = runCliPty(["--ephemeral"], {
+      cwd: workspace,
+      columns: 80,
+      rows: 18,
+      env: {
+        KEEL_HOME: home,
+        KEEL_PROVIDER: "fake",
+        NO_COLOR: "1",
+      },
+    });
+
+    try {
+      await pty.waitForScreen(
+        (screen) => screen.includes("keel>"),
+        "two-scope composer did not start",
+      );
+
+      pty.write("/diff\r");
+      await pty.waitForScreen(
+        (screen) =>
+          screen.includes("1 file") &&
+          screen.includes("Unstaged · shared.txt") &&
+          screen.includes("file 1/1"),
+        "unstaged file context was not explicit",
+      );
+      pty.write("]");
+
+      await pty.waitForScreen(
+        (screen) =>
+          screen.includes("Staged · shared.txt") && screen.includes("file 1/1"),
+        "staged section changed the unique file position",
+      );
+    } finally {
+      pty.kill();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 

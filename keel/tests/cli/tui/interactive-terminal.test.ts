@@ -8,7 +8,16 @@ import { runCliMain } from "../../../src/cli/index.ts";
 import { createPromptedBashPermissionPolicy } from "../../../src/cli/interactive-session/bash-approval.ts";
 import type { InteractiveDiffInspection } from "../../../src/cli/interactive-session/diff-inspection.ts";
 import { createLineReader } from "../../../src/cli/interactive-session/line-reader.ts";
-import { diffReviewRange } from "../../../src/cli/tui/diff-review-state.ts";
+import {
+  type DiffReviewFileState,
+  type DiffReviewFileViewport,
+  type DiffReviewScrollState,
+  type DiffReviewViewport,
+  diffReviewFileRange,
+  diffReviewRange,
+  updateDiffReviewFileState,
+  updateDiffReviewState,
+} from "../../../src/cli/tui/diff-review-state.ts";
 import { createInteractiveTerminalDisplay } from "../../../src/cli/tui/interactive-terminal.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -114,6 +123,20 @@ class TestTerminal implements Terminal {
     return lines.join("\n");
   }
 
+  async visibleText(): Promise<string> {
+    await this.writes;
+    const buffer = this.screen.buffer.active;
+    const lines: string[] = [];
+    for (
+      let index = buffer.viewportY;
+      index < buffer.viewportY + this.rows;
+      index++
+    ) {
+      lines.push(buffer.getLine(index)?.translateToString(true) ?? "");
+    }
+    return lines.join("\n");
+  }
+
   async waitForText(text: string): Promise<string> {
     for (let attempt = 0; attempt < 200; attempt++) {
       const screen = await this.text();
@@ -142,6 +165,159 @@ describe("Interactive Terminal Display", () => {
       scrollTop: 0,
       lineFrom: 0,
       lineTo: 0,
+    });
+  });
+
+  test(`Given a file review has more short files than can start at the viewport top,
+    When file navigation selects and revisits them,
+    Then state preserves the selected file independently from its clamped scroll row`, () => {
+    const viewport = {
+      totalRows: 24,
+      visibleRows: 8,
+      files: [
+        { index: 0, row: 0, value: "first" },
+        { index: 1, row: 10, value: "second" },
+        { index: 2, row: 18, value: "third" },
+      ],
+    } satisfies DiffReviewFileViewport<string>;
+    let state: DiffReviewFileState = { kind: "at-top" };
+
+    expect(diffReviewFileRange(state, viewport)).toMatchObject({
+      currentFile: { value: "first" },
+    });
+    state = updateDiffReviewFileState(state, { kind: "next-file" }, viewport);
+    expect(diffReviewFileRange(state, viewport)).toMatchObject({
+      scrollTop: 10,
+      currentFile: { value: "second" },
+    });
+    state = updateDiffReviewFileState(state, { kind: "next-file" }, viewport);
+    expect(diffReviewFileRange(state, viewport)).toMatchObject({
+      scrollTop: 16,
+      currentFile: { value: "third" },
+    });
+    expect(
+      updateDiffReviewFileState(state, { kind: "next-file" }, viewport),
+    ).toEqual(state);
+    state = updateDiffReviewFileState(
+      state,
+      { kind: "previous-file" },
+      viewport,
+    );
+    expect(diffReviewFileRange(state, viewport)).toMatchObject({
+      currentFile: { value: "second" },
+    });
+    state = updateDiffReviewFileState(
+      { kind: "at-file", fileIndex: 0 },
+      { kind: "previous-file" },
+      viewport,
+    );
+    expect(state).toEqual({ kind: "at-top" });
+    state = updateDiffReviewFileState(state, { kind: "end" }, viewport);
+    expect(diffReviewFileRange(state, viewport)).toMatchObject({
+      scrollTop: 16,
+      currentFile: { value: "third" },
+    });
+    state = updateDiffReviewFileState(
+      state,
+      { kind: "previous-file" },
+      viewport,
+    );
+    expect(diffReviewFileRange(state, viewport)).toMatchObject({
+      currentFile: { value: "second" },
+    });
+
+    const reflowed = {
+      ...viewport,
+      totalRows: 34,
+      files: [
+        { index: 0, row: 0, value: "first" },
+        { index: 1, row: 14, value: "second" },
+        { index: 2, row: 28, value: "third" },
+      ],
+    } satisfies DiffReviewFileViewport<string>;
+    expect(diffReviewFileRange(state, reflowed)).toMatchObject({
+      scrollTop: 14,
+      currentFile: { value: "second" },
+    });
+    expect(() =>
+      diffReviewFileRange({ kind: "at-file", fileIndex: 99 }, viewport),
+    ).toThrow("Selected diff review section is not in the viewport.");
+  });
+
+  test(`Given a plain review can scroll or receive file-navigation keys,
+    When every navigation action is reduced,
+    Then its range clamps exactly and file-only actions leave it unchanged`, () => {
+    const viewport = {
+      totalRows: 20,
+      visibleRows: 5,
+    } satisfies DiffReviewViewport;
+    const transitions: readonly {
+      readonly state: DiffReviewScrollState;
+      readonly action: Parameters<typeof updateDiffReviewState>[1];
+      readonly expected: DiffReviewScrollState;
+    }[] = [
+      {
+        state: { kind: "at-top" },
+        action: { kind: "line-up" },
+        expected: { kind: "at-top" },
+      },
+      {
+        state: { kind: "at-top" },
+        action: { kind: "line-down" },
+        expected: { kind: "scrolled", scrollTop: 1 },
+      },
+      {
+        state: { kind: "scrolled", scrollTop: 5 },
+        action: { kind: "page-up" },
+        expected: { kind: "at-top" },
+      },
+      {
+        state: { kind: "at-top" },
+        action: { kind: "page-down" },
+        expected: { kind: "scrolled", scrollTop: 5 },
+      },
+      {
+        state: { kind: "scrolled", scrollTop: 14 },
+        action: { kind: "line-down" },
+        expected: { kind: "at-bottom" },
+      },
+      {
+        state: { kind: "at-bottom" },
+        action: { kind: "page-up" },
+        expected: { kind: "scrolled", scrollTop: 10 },
+      },
+      {
+        state: { kind: "at-top" },
+        action: { kind: "end" },
+        expected: { kind: "at-bottom" },
+      },
+      {
+        state: { kind: "at-bottom" },
+        action: { kind: "home" },
+        expected: { kind: "at-top" },
+      },
+      {
+        state: { kind: "scrolled", scrollTop: 3 },
+        action: { kind: "previous-file" },
+        expected: { kind: "scrolled", scrollTop: 3 },
+      },
+      {
+        state: { kind: "scrolled", scrollTop: 3 },
+        action: { kind: "next-file" },
+        expected: { kind: "scrolled", scrollTop: 3 },
+      },
+    ];
+    for (const transition of transitions) {
+      expect(
+        updateDiffReviewState(transition.state, transition.action, viewport),
+      ).toEqual(transition.expected);
+    }
+    expect(
+      diffReviewRange({ kind: "scrolled", scrollTop: 99 }, viewport),
+    ).toEqual({
+      scrollTop: 15,
+      lineFrom: 16,
+      lineTo: 20,
     });
   });
 
@@ -345,6 +521,13 @@ describe("Interactive Terminal Display", () => {
       "+++ b/added.txt",
       "@@ -0,0 +1 @@",
       "+added",
+      "diff --git a/modified.txt b/modified.txt",
+      "index 2222222..3333333 100644",
+      "--- a/modified.txt",
+      "+++ b/modified.txt",
+      "@@ -1 +1 @@",
+      "-after",
+      "+staged-after",
       "diff --git a/deleted.txt b/deleted.txt",
       "deleted file mode 100644",
       "--- a/deleted.txt",
@@ -412,6 +595,13 @@ describe("Interactive Terminal Display", () => {
     expect(first).toContain("1 conflict");
     expect(first).toContain("M modified.txt");
     expect(first).toContain("PgUp/PgDn");
+
+    terminal.input("\x1b[93u");
+    const secondFile = await terminal.waitForText("Staged · added.txt");
+    expect(secondFile).toContain("file 2/9");
+    terminal.input("\x1b[91u");
+    const firstFile = await terminal.waitForText("Unstaged · modified.txt");
+    expect(firstFile).toContain("file 1/9");
 
     for (const key of [
       "\x1b[B",
@@ -484,6 +674,7 @@ describe("Interactive Terminal Display", () => {
 
       const screen = await terminal.waitForText(scenario.expected);
       expect(screen).toContain("Esc/q");
+      terminal.input("\x1b[B");
       terminal.input(scenario.close);
       display.stop();
     }
@@ -492,11 +683,12 @@ describe("Interactive Terminal Display", () => {
   test(`Given complete, empty, and multiply-conflicted semantic documents,
     When each is rendered in the actual headless terminal,
     Then summaries, fallback content, scope, and narrow footer remain explicit`, async () => {
+    const longPath = "nested/directory/with/a/very-long-review-path/only.txt";
     const completeDiff = [
-      "diff --git a/only.txt b/only.txt",
+      `diff --git a/${longPath} b/${longPath}`,
       "index 1111111..2222222 100644",
-      "--- a/only.txt",
-      "+++ b/only.txt",
+      `--- a/${longPath}`,
+      `+++ b/${longPath}`,
       "@@ -1 +1 @@",
       "-before",
       "+after",
@@ -519,11 +711,7 @@ describe("Interactive Terminal Display", () => {
           plainDiffOutput: completeDiff,
           document: parseGitDiffOutput(completeDiff, false),
         },
-        expected: [
-          "1 file",
-          "Changes",
-          "Current workspace · staged, unstaged, and untracked",
-        ],
+        expected: ["1 file", "Changes", "only.txt", "file 1/1"],
       },
       {
         inspection: {
@@ -533,6 +721,19 @@ describe("Interactive Terminal Display", () => {
           document: parseGitDiffOutput("", false),
         },
         expected: ["0 files", "No reviewable file changes."],
+      },
+      {
+        inspection: {
+          kind: "changes",
+          statusOutput: "Branch: main",
+          plainDiffOutput: "",
+          document: parseGitDiffOutput("", true),
+        },
+        expected: [
+          "0 files",
+          "Current workspace · incomplete output",
+          "No reviewable file changes.",
+        ],
       },
       {
         inspection: {
@@ -567,9 +768,19 @@ describe("Interactive Terminal Display", () => {
       }
       if (index === 0) {
         terminal.resize(18, 10);
+        terminal.input("\x1b[F");
         await delay(25);
-        screen = await terminal.text();
+        screen = await terminal.visibleText();
+        const stickyHeader = screen.split("\n").slice(0, 4).join("\n");
+        expect(stickyHeader).toContain("only.txt");
+        expect(stickyHeader).toContain("file 1/1");
         expect(screen).toContain("Esc/q");
+        terminal.resize(10, 10);
+        await delay(25);
+        screen = await terminal.visibleText();
+        expect(screen.split("\n").slice(0, 4).join("\n")).toContain(
+          "…only.txt",
+        );
       }
       terminal.input("q");
       display.stop();
