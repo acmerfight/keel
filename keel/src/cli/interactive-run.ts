@@ -1395,6 +1395,7 @@ async function runSessionCli(
               setComposerMode: interactiveTerminalDisplay.setComposerMode,
               renderSubmittedInput:
                 interactiveTerminalDisplay.renderSubmittedInput,
+              renderDiffReview: interactiveTerminalDisplay.renderDiffReview,
               setGoalStatus: interactiveTerminalDisplay.setGoalStatus,
             }
           : {}),

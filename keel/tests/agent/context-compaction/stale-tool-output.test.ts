@@ -1170,6 +1170,110 @@ describe("Context Compaction Stale Tool Output", () => {
     expect(compacted.content).toContain("full output artifact: tool-output:");
   });
 
+  test(`Given retained git_diff output contains a combined conflict hunk,
+    When context compaction projects the tool output,
+    Then the preview uses conflict semantics with non-negative changed-line counts`, () => {
+    // Given
+    const diffOutput = [
+      "Unstaged changes:",
+      "diff --cc a/conflict.txt",
+      "index 1111111,2222222..3333333",
+      "--- a/a/conflict.txt",
+      "+++ b/a/conflict.txt",
+      "@@@ -1,1 -1,1 +1,5 @@@",
+      "++<<<<<<< HEAD",
+      "+ main value",
+      " +topic value",
+      "++>>>>>>> topic",
+      "--removed from both parents",
+    ].join("\n");
+
+    // When
+    const projected = projectCompactedToolOutput({
+      text: diffOutput,
+      maxChars: 1_000,
+      context: {
+        toolCall: {
+          id: "combined_conflict_hunk",
+          tool: "git_diff",
+        },
+      },
+    });
+
+    // Then
+    expect(projected.preview).toContain(
+      "- a/conflict.txt: conflicted, 1 hunk, +4/-1",
+    );
+    expect(projected.preview).toContain(
+      "Conflict: a/conflict.txt @@@ -1,1 -1,1 +1,5 @@@",
+    );
+    expect(projected.preview).toContain(
+      "... omitted within conflict hunk: 3 changed lines",
+    );
+    expect(projected.preview).not.toMatch(/\+-\d/u);
+    expect(projected.preview).not.toMatch(/-\d+ changed lines/u);
+  });
+
+  test(`Given combined conflict snippets either fit exactly or exceed each projection budget,
+    When compaction prepares artifact-backed and summary-input previews,
+    Then each projection uses explicit conflict wording without ordinary old/new guidance`, () => {
+    const shortConflict = [
+      "Ref comparison (main -> topic):",
+      "diff --cc conflict.txt",
+      "index 1111111,2222222..3333333",
+      "@@@ -1,1 -1,1 +1,2 @@@",
+      "++<<<<<<< HEAD",
+      "++>>>>>>> topic",
+    ].join("\n");
+    const longConflict = [
+      "Ref comparison (main -> topic):",
+      "diff --cc conflict.txt",
+      "index 1111111,2222222..3333333",
+      "@@@ -1,1 -1,1 +1,3 @@@",
+      `++${"main value ".repeat(40)}`,
+      `+ ${"topic value ".repeat(40)}`,
+      "++another conflict marker",
+    ].join("\n");
+    const context: Parameters<typeof projectCompactedToolOutput>[0]["context"] =
+      {
+        toolCall: {
+          id: "combined_conflict_projection_budget",
+          tool: "git_diff",
+        },
+      };
+
+    const fitting = projectCompactedToolOutput({
+      text: shortConflict,
+      maxChars: 1_000,
+      context,
+    });
+    const artifactBacked = projectCompactedToolOutput({
+      text: longConflict,
+      maxChars: 400,
+      context,
+    });
+    const summaryInput = projectCompactedToolOutput({
+      text: longConflict,
+      maxChars: 400,
+      context,
+      purpose: "summary-input",
+    });
+
+    expect(fitting.preview).toContain("Ref comparison (main -> topic):");
+    expect(fitting.preview).toContain(
+      "Conflict: conflict.txt @@@ -1,1 -1,1 +1,2 @@@",
+    );
+    expect(fitting.preview).not.toContain("omitted within conflict hunk");
+    expect(artifactBacked.preview).toContain(
+      "inspect artifact for full conflict lines",
+    );
+    expect(summaryInput.preview).toContain(
+      "full conflict lines omitted from summary input",
+    );
+    expect(artifactBacked.preview).not.toContain("old/new lines");
+    expect(summaryInput.preview).not.toContain("old/new lines");
+  });
+
   test(`Given retained git_diff add-only and delete-only hunks cannot fit body lines,
     When context compaction projects the tool output,
     Then the preview emits side-specific omission markers`, async () => {

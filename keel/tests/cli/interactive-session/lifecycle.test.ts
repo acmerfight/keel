@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { InteractiveDiffInspection } from "../../../src/cli/interactive-session/diff-inspection.ts";
 import {
   createFakeProvider,
   fakeResponse,
@@ -88,6 +89,65 @@ async function runInteractiveLocalCommand(
   return { stdout, stderr, providerResolved };
 }
 
+async function runInteractiveDiffReviewCommands(
+  workspace: string,
+  commands: string,
+): Promise<{
+  readonly inspections: readonly InteractiveDiffInspection[];
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly providerResolved: boolean;
+}> {
+  const input = new PassThrough();
+  let stdout = "";
+  let stderr = "";
+  let providerResolved = false;
+  const renderedInspections: InteractiveDiffInspection[] = [];
+  const session = runInteractiveSession({
+    cliArgs: { bashMode: "ask" },
+    workspace,
+    platform: process.platform,
+    session: EPHEMERAL_INTERACTIVE_SESSION,
+    input,
+    writeStdout: (text) => {
+      stdout += text;
+    },
+    writeStderr: (text) => {
+      stderr += text;
+    },
+    renderDiffReview: (inspection) => {
+      renderedInspections.push(inspection);
+    },
+    onSigint: () => {},
+    offSigint: () => {},
+    setExitCode: () => {},
+    forceExit: (code) => {
+      throw new ForcedExit(code);
+    },
+    resolveProvider: () => {
+      providerResolved = true;
+      throw new Error("/diff should not resolve a provider");
+    },
+    requireKnownCostModel: () => ZERO_COST_MODEL,
+    printAgentEvents: async () => {
+      throw new Error("/diff should not start a model turn");
+    },
+    formatCostReport: () => "",
+  });
+
+  input.end(commands);
+  await session;
+  if (renderedInspections.length === 0) {
+    throw new Error("/diff did not render a semantic inspection");
+  }
+  return {
+    inspections: renderedInspections,
+    stdout,
+    stderr,
+    providerResolved,
+  };
+}
+
 describe("Interactive Session - Lifecycle", () => {
   test.each(["$review inspect", "/skill review"])(
     `Given explicit activation is unavailable in a direct interactive session,
@@ -133,6 +193,73 @@ describe("Interactive Session - Lifecycle", () => {
         "diff --git a/untracked.txt b/untracked.txt",
       );
       expect(result.stdout).toContain("+untracked");
+      expect(result.stderr).toBe("");
+      expect(result.providerResolved).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a tracked diff exceeds the plain preview budget,
+    When the TUI session handles /diff,
+    Then it renders the complete artifact-backed semantic document without transcript output`, async () => {
+    const workspace = await createGitWorkspace(
+      "keel-interactive-diff-review-artifact-",
+    );
+    await writeFile(
+      join(workspace, "tracked.txt"),
+      `${Array.from({ length: 12_000 }, (_, index) => `after ${index + 1}`).join("\n")}\n`,
+      "utf8",
+    );
+
+    try {
+      const result = await runInteractiveDiffReviewCommands(
+        workspace,
+        "/diff\n",
+      );
+      const inspection = result.inspections[0];
+      if (inspection === undefined) {
+        throw new Error("/diff did not render an inspection");
+      }
+
+      expect(inspection.kind).toBe("changes");
+      if (inspection.kind !== "changes") {
+        return;
+      }
+      expect(inspection.document.text.length).toBeGreaterThan(
+        inspection.plainDiffOutput.length,
+      );
+      expect(inspection.document.completeness).toEqual({
+        kind: "complete",
+      });
+      expect(inspection.document.additions).toBe(12_000);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(result.providerResolved).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two /diff commands are queued before the first inspection completes,
+    When the interactive session renders both semantic results,
+    Then neither command starts a model turn or leaks raw diff output`, async () => {
+    const workspace = await createGitWorkspace(
+      "keel-interactive-diff-review-queued-",
+    );
+    await writeFile(join(workspace, "tracked.txt"), "after\n", "utf8");
+
+    try {
+      const result = await runInteractiveDiffReviewCommands(
+        workspace,
+        "/diff\n/diff\n",
+      );
+
+      expect(result.inspections).toHaveLength(2);
+      expect(
+        result.inspections.every((inspection) => inspection.kind === "changes"),
+      ).toBe(true);
+      expect(result.stdout).toBe("");
       expect(result.stderr).toBe("");
       expect(result.providerResolved).toBe(false);
     } finally {

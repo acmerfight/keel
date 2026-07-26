@@ -103,6 +103,7 @@ export function gitRunOptions(
 function gitConfigArgs(config: readonly string[] | undefined): string[] {
   const configs = [
     "core.fsmonitor=false",
+    "core.quotePath=false",
     `core.hooksPath=${gitNullDevicePath()}`,
     "diff.external=",
     ...(config ?? []),

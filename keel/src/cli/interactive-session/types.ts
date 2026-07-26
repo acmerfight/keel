@@ -38,6 +38,7 @@ import type {
   SessionPersistenceReason,
   SessionQueuedInput,
 } from "../session-store.ts";
+import type { InteractiveDiffInspection } from "./diff-inspection.ts";
 import type { InteractiveLineInput } from "./line-reader.ts";
 
 export type { ProviderSelection } from "../provider-config.ts";
@@ -216,6 +217,7 @@ interface InteractiveSessionOptionsBase {
   readonly lineInput?: InteractiveLineInput;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
+  readonly renderDiffReview?: (inspection: InteractiveDiffInspection) => void;
   readonly renderPrompt?: () => void;
   readonly acceptInput?: () => void;
   readonly closePrompt?: () => void;

@@ -81,8 +81,6 @@ import {
   type WorkflowSkill,
   WorkflowSkillError,
 } from "../skills/model.ts";
-import { executeGitDiff } from "../tools/git-diff.ts";
-import { executeGitStatus } from "../tools/git-status.ts";
 import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
@@ -127,6 +125,12 @@ import {
   type InteractiveCompactionCost,
   shouldTrackInteractiveCost,
 } from "./interactive-session/cost.ts";
+import {
+  failedInteractiveDiff,
+  formatInteractiveDiffOutput,
+  type InteractiveDiffInspection,
+  inspectInteractiveDiff,
+} from "./interactive-session/diff-inspection.ts";
 import { readForkPointPickerSelection } from "./interactive-session/fork-picker.ts";
 import {
   type GoalContinuationToolExecution,
@@ -341,9 +345,6 @@ function formatGoalTurnLimitReason(limit: number): string {
   return `Automatic goal continuation stopped after ${limit} continuation turns without completing the active goal.`;
 }
 
-const NON_GIT_DIFF_MESSAGE =
-  "Not in a git work tree. /diff can only inspect changes inside a Git repository.";
-
 interface PromptTurnRequest {
   readonly userMessage: string;
   readonly userMessageOrigin: UserMessageOrigin;
@@ -372,56 +373,6 @@ type PromptTurnResult =
       readonly kind: "completed";
       readonly stagnationFingerprint: string | null;
     };
-
-type InteractiveDiffInspection =
-  | {
-      readonly kind: "non-git";
-      readonly message: string;
-    }
-  | {
-      readonly kind: "status-only";
-      readonly statusOutput: string;
-    }
-  | {
-      readonly kind: "status-and-diff";
-      readonly statusOutput: string;
-      readonly diffOutput: string;
-    };
-
-function formatInteractiveDiffOutput(
-  inspection: InteractiveDiffInspection,
-): string {
-  switch (inspection.kind) {
-    case "non-git":
-      return `${inspection.message}\n`;
-    case "status-only":
-      return `${inspection.statusOutput}\n`;
-    case "status-and-diff":
-      return `${inspection.statusOutput}\n\n${inspection.diffOutput}\n`;
-  }
-}
-
-async function inspectInteractiveDiff(
-  workspace: string,
-  hiddenPaths: readonly string[],
-): Promise<InteractiveDiffInspection> {
-  const status = await executeGitStatus(workspace, { hiddenPaths });
-  if (!status.inGitWorkTree) {
-    return { kind: "non-git", message: NON_GIT_DIFF_MESSAGE };
-  }
-  const diff = await executeGitDiff(workspace, {
-    mode: "all",
-    hiddenPaths,
-  });
-  if (!diff.hasChanges) {
-    return { kind: "status-only", statusOutput: status.content };
-  }
-  return {
-    kind: "status-and-diff",
-    statusOutput: status.content,
-    diffOutput: diff.content,
-  };
-}
 
 function modelSwitchUnknownContextMessage(
   target: InteractiveResolvedProvider,
@@ -2143,17 +2094,21 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "diff") {
+        let inspection: InteractiveDiffInspection;
         try {
-          options.writeStdout(
-            formatInteractiveDiffOutput(
-              await inspectInteractiveDiff(
-                options.workspace,
-                hiddenWorkspacePaths,
-              ),
-            ),
+          inspection = await inspectInteractiveDiff(
+            options.workspace,
+            hiddenWorkspacePaths,
           );
         } catch (error) {
-          options.writeStderr(formatInteractiveCommandFailure(error));
+          inspection = failedInteractiveDiff(error);
+        }
+        if (options.renderDiffReview !== undefined) {
+          options.renderDiffReview(inspection);
+        } else if (inspection.kind === "failed") {
+          options.writeStderr(formatInteractiveDiffOutput(inspection));
+        } else {
+          options.writeStdout(formatInteractiveDiffOutput(inspection));
         }
         consumeQueuedInputLines([rawInput]);
         continue;

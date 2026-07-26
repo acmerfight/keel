@@ -6,7 +6,9 @@ import xtermHeadless from "@xterm/headless";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { createPromptedBashPermissionPolicy } from "../../../src/cli/interactive-session/bash-approval.ts";
+import type { InteractiveDiffInspection } from "../../../src/cli/interactive-session/diff-inspection.ts";
 import { createLineReader } from "../../../src/cli/interactive-session/line-reader.ts";
+import { diffReviewRange } from "../../../src/cli/tui/diff-review-state.ts";
 import { createInteractiveTerminalDisplay } from "../../../src/cli/tui/interactive-terminal.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -14,28 +16,38 @@ import {
   getPort,
   listen,
 } from "../../../src/testing/provider-sse-fixtures.ts";
+import { parseGitDiffOutput } from "../../../src/tools/git-diff-document.ts";
 
 class TestTerminal implements Terminal {
-  private readonly screen = new xtermHeadless.Terminal({
-    cols: 100,
-    rows: 30,
-    scrollback: 5_000,
-    allowProposedApi: true,
-  });
+  private readonly screen: InstanceType<typeof xtermHeadless.Terminal>;
   private inputHandler: ((data: string) => void) | null = null;
+  private resizeHandler: (() => void) | null = null;
   private writes = Promise.resolve();
-  readonly columns = 100;
-  readonly rows = 30;
+  columns: number;
+  rows: number;
   readonly kittyProtocolActive = false;
   stopCount = 0;
 
-  start(onInput: (data: string) => void, _onResize: () => void): void {
+  constructor(columns = 100, rows = 30) {
+    this.columns = columns;
+    this.rows = rows;
+    this.screen = new xtermHeadless.Terminal({
+      cols: columns,
+      rows,
+      scrollback: 5_000,
+      allowProposedApi: true,
+    });
+  }
+
+  start(onInput: (data: string) => void, onResize: () => void): void {
     this.inputHandler = onInput;
+    this.resizeHandler = onResize;
   }
 
   stop(): void {
     this.stopCount++;
     this.inputHandler = null;
+    this.resizeHandler = null;
   }
 
   async drainInput(): Promise<void> {}
@@ -85,6 +97,13 @@ class TestTerminal implements Terminal {
     this.inputHandler?.(data);
   }
 
+  resize(columns: number, rows: number): void {
+    this.columns = columns;
+    this.rows = rows;
+    this.screen.resize(columns, rows);
+    this.resizeHandler?.();
+  }
+
   async text(): Promise<string> {
     await this.writes;
     const buffer = this.screen.buffer.active;
@@ -108,6 +127,24 @@ class TestTerminal implements Terminal {
 }
 
 describe("Interactive Terminal Display", () => {
+  test(`Given a diff review has no semantic rows,
+    When its independent viewport state is projected,
+    Then the range reports an exact empty position`, () => {
+    expect(
+      diffReviewRange(
+        { kind: "at-top" },
+        {
+          totalRows: 0,
+          visibleRows: 12,
+        },
+      ),
+    ).toEqual({
+      scrollTop: 0,
+      lineFrom: 0,
+      lineTo: 0,
+    });
+  });
+
   test(`Given the TUI receives the authoritative workflow skill catalog,
     When the user types a /skill argument prefix,
     Then autocomplete shows the qualified catalog identity`, async () => {
@@ -283,6 +320,260 @@ describe("Interactive Terminal Display", () => {
     expect(interrupted).toBe(1);
     expect(closedCount).toBe(1);
     expect(terminal.stopCount).toBe(1);
+  });
+
+  test(`Given the diff viewer receives a semantic change document,
+    When the user navigates, resizes, and closes it,
+    Then the actual headless terminal renders every audit variant and restores input`, async () => {
+    const diff = [
+      "Git emitted an informational prelude.",
+      "Unstaged changes:",
+      "diff --git a/modified.txt b/modified.txt",
+      "index 1111111..2222222 100644",
+      "--- a/modified.txt",
+      "+++ b/modified.txt",
+      "@@ -1,2 +1,2 @@",
+      "-before",
+      "+after",
+      " context",
+      "[git_diff output truncated: inspect a narrower path.]",
+      "",
+      "Staged changes:",
+      "diff --git a/added.txt b/added.txt",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/added.txt",
+      "@@ -0,0 +1 @@",
+      "+added",
+      "diff --git a/deleted.txt b/deleted.txt",
+      "deleted file mode 100644",
+      "--- a/deleted.txt",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-deleted",
+      "diff --git a/old.txt b/renamed.txt",
+      "similarity index 100%",
+      "rename from old.txt",
+      "rename to renamed.txt",
+      "diff --git a/source.txt b/copied.txt",
+      "similarity index 100%",
+      "copy from source.txt",
+      "copy to copied.txt",
+      "diff --git a/mode.txt b/mode.txt",
+      "old mode 100644",
+      "new mode 100755",
+      "diff --git a/data.bin b/data.bin",
+      "index 1111111..2222222 100644",
+      "Binary files a/data.bin and b/data.bin differ",
+      "",
+      'Untracked changes ("新文件.txt"):',
+      'diff --git "a/新文件.txt" "b/新文件.txt"',
+      "new file mode 100644",
+      "index 0000000..3333333",
+      "--- /dev/null",
+      '+++ "b/新文件.txt"',
+      "@@ -0,0 +1 @@",
+      "+新增",
+      "",
+      "Ref comparison (main -> topic):",
+      "diff --cc conflict.txt",
+      "index 1111111,2222222..3333333",
+      "--- a/conflict.txt",
+      "+++ b/conflict.txt",
+      "@@@ -1,1 -1,1 +1,5 @@@",
+      "++<<<<<<< HEAD",
+      "+ main",
+      " +other",
+      "++>>>>>>> topic",
+    ].join("\n");
+    const inspection: InteractiveDiffInspection = {
+      kind: "changes",
+      statusOutput: "Branch: main",
+      plainDiffOutput: diff,
+      document: parseGitDiffOutput(diff, true),
+    };
+    const terminal = new TestTerminal(100, 24);
+    const submitted: string[] = [];
+    const display = createInteractiveTerminalDisplay(terminal, {
+      inputEchoesToDisplay: true,
+      colorMode: "plain",
+      session: { kind: "ephemeral" },
+      onInterrupt: () => {},
+    });
+    display.lineInput.on("line", (line) => {
+      submitted.push(line);
+    });
+    display.start();
+
+    display.renderDiffReview(inspection);
+    display.renderDiffReview(inspection);
+    const first = await terminal.waitForText("Workspace changes");
+    expect(first).toContain("9 files");
+    expect(first).toContain("1 conflict");
+    expect(first).toContain("M modified.txt");
+    expect(first).toContain("PgUp/PgDn");
+
+    for (const key of [
+      "\x1b[B",
+      "\x1b[A",
+      "\x1b[6~",
+      "\x1b[5~",
+      "\x1b[F",
+      "\x1b[B",
+      "\x1b[H",
+      "x",
+    ]) {
+      terminal.input(key);
+    }
+    terminal.resize(42, 18);
+    const narrow = await terminal.waitForText("Esc/q close");
+    expect(narrow).toContain("PgUp/PgDn");
+    expect(narrow).toContain("Home/End");
+
+    terminal.input("\x1b[113u");
+    terminal.input("resumed");
+    terminal.input("\r");
+    expect(submitted).toEqual(["resumed"]);
+    display.stop();
+  });
+
+  test(`Given clean, non-Git, and failed diff inspections,
+    When each opens in the focused viewer,
+    Then the actual headless terminal makes every state explicit and closable`, async () => {
+    const scenarios: readonly {
+      readonly inspection: InteractiveDiffInspection;
+      readonly expected: string;
+      readonly close: string;
+    }[] = [
+      {
+        inspection: {
+          kind: "clean",
+          statusOutput: "Branch: main\nNo git changes found.",
+        },
+        expected: "Working tree is clean",
+        close: "q",
+      },
+      {
+        inspection: {
+          kind: "non-git",
+          message: "Not in a Git work tree.",
+        },
+        expected: "Not a Git repository",
+        close: "\x1b",
+      },
+      {
+        inspection: {
+          kind: "failed",
+          message: "Error: git is unavailable",
+        },
+        expected: "Could not load changes",
+        close: "Q",
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const terminal = new TestTerminal(64, 16);
+      const display = createInteractiveTerminalDisplay(terminal, {
+        inputEchoesToDisplay: true,
+        colorMode: "plain",
+        session: { kind: "ephemeral" },
+        onInterrupt: () => {},
+      });
+      display.start();
+      display.renderDiffReview(scenario.inspection);
+
+      const screen = await terminal.waitForText(scenario.expected);
+      expect(screen).toContain("Esc/q");
+      terminal.input(scenario.close);
+      display.stop();
+    }
+  });
+
+  test(`Given complete, empty, and multiply-conflicted semantic documents,
+    When each is rendered in the actual headless terminal,
+    Then summaries, fallback content, scope, and narrow footer remain explicit`, async () => {
+    const completeDiff = [
+      "diff --git a/only.txt b/only.txt",
+      "index 1111111..2222222 100644",
+      "--- a/only.txt",
+      "+++ b/only.txt",
+      "@@ -1 +1 @@",
+      "-before",
+      "+after",
+    ].join("\n");
+    const conflicts = [
+      "Ref comparison (main -> topic):",
+      "diff --cc first.txt",
+      "index 1111111,2222222..3333333",
+      "diff --cc second.txt",
+      "index 4444444,5555555..6666666",
+    ].join("\n");
+    const scenarios: readonly {
+      readonly inspection: InteractiveDiffInspection;
+      readonly expected: readonly string[];
+    }[] = [
+      {
+        inspection: {
+          kind: "changes",
+          statusOutput: "Branch: main",
+          plainDiffOutput: completeDiff,
+          document: parseGitDiffOutput(completeDiff, false),
+        },
+        expected: [
+          "1 file",
+          "Changes",
+          "Current workspace · staged, unstaged, and untracked",
+        ],
+      },
+      {
+        inspection: {
+          kind: "changes",
+          statusOutput: "Branch: main",
+          plainDiffOutput: "",
+          document: parseGitDiffOutput("", false),
+        },
+        expected: ["0 files", "No reviewable file changes."],
+      },
+      {
+        inspection: {
+          kind: "changes",
+          statusOutput: "Branch: main",
+          plainDiffOutput: conflicts,
+          document: parseGitDiffOutput(conflicts, false),
+        },
+        expected: [
+          "2 files · 2 conflicts",
+          "Ref comparison (main -> topic)",
+          "CONFLICT first.txt",
+          "CONFLICT second.txt",
+        ],
+      },
+    ];
+
+    for (const [index, scenario] of scenarios.entries()) {
+      const terminal = new TestTerminal(64, 16);
+      const display = createInteractiveTerminalDisplay(terminal, {
+        inputEchoesToDisplay: true,
+        colorMode: "plain",
+        session: { kind: "ephemeral" },
+        onInterrupt: () => {},
+      });
+      display.start();
+      display.renderDiffReview(scenario.inspection);
+
+      let screen = await terminal.waitForText(scenario.expected[0] ?? "");
+      for (const expected of scenario.expected) {
+        expect(screen).toContain(expected);
+      }
+      if (index === 0) {
+        terminal.resize(18, 10);
+        await delay(25);
+        screen = await terminal.text();
+        expect(screen).toContain("Esc/q");
+      }
+      terminal.input("q");
+      display.stop();
+    }
   });
 
   test(`Given two running tools have the same label and distinct call IDs,

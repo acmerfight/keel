@@ -5,12 +5,14 @@ import {
   type EditorTheme,
   Key,
   matchesKey,
+  type OverlayHandle,
   type SlashCommand,
   type Terminal,
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
 import type { SkillDescriptor } from "../../skills/model.ts";
+import type { InteractiveDiffInspection } from "../interactive-session/diff-inspection.ts";
 import type { StableInteractiveDisplayOptions } from "../interactive-session/display.ts";
 import type { InteractiveLineInput } from "../interactive-session/line-reader.ts";
 import type {
@@ -18,6 +20,7 @@ import type {
   InteractiveInputDisposition,
 } from "../interactive-session/types.ts";
 import type { InteractiveTranscriptEvent } from "../output.ts";
+import { InteractiveDiffReview } from "./diff-review.ts";
 import {
   createInteractiveTerminalTheme,
   type InteractiveTerminalColorMode,
@@ -65,6 +68,7 @@ export interface InteractiveTerminalDisplay {
   readonly closePrompt: () => void;
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
+  readonly renderDiffReview: (inspection: InteractiveDiffInspection) => void;
   readonly lineInput: InteractiveLineInput;
   readonly renderSubmittedInput: (
     value: string,
@@ -149,6 +153,7 @@ export function createInteractiveTerminalDisplay(
   const history: string[] = [];
   let historyState: ComposerHistoryState = { kind: "idle" };
   let composerMode: InteractiveComposerMode = "ready";
+  let diffReviewHandle: OverlayHandle | null = null;
 
   const requestRender = (): void => {
     if (started) {
@@ -198,6 +203,9 @@ export function createInteractiveTerminalDisplay(
   tui.addChild(composerHint);
   tui.setFocus(editor);
   tui.addInputListener((data) => {
+    if (diffReviewHandle !== null) {
+      return undefined;
+    }
     if (matchesKey(data, Key.ctrl("c"))) {
       options.onInterrupt();
       return { consume: true };
@@ -309,6 +317,27 @@ export function createInteractiveTerminalDisplay(
 
   return {
     lineInput,
+    renderDiffReview: (inspection) => {
+      if (diffReviewHandle !== null) {
+        diffReviewHandle.hide();
+      }
+      let handle: OverlayHandle;
+      const review = new InteractiveDiffReview(
+        inspection,
+        terminal,
+        theme,
+        () => {
+          diffReviewHandle = null;
+          handle.hide();
+        },
+      );
+      handle = tui.showOverlay(review, {
+        width: "100%",
+        maxHeight: "100%",
+        anchor: "top-left",
+      });
+      diffReviewHandle = handle;
+    },
     renderSubmittedInput: (value, disposition) => {
       transcript.appendSubmittedInput(value, disposition);
       requestRender();

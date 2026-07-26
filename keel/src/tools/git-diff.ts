@@ -665,7 +665,7 @@ async function appendUntrackedDiffs(
       appendProcessSections(
         sections,
         artifactSections,
-        `Untracked changes (${file})`,
+        `Untracked changes (${JSON.stringify(file)})`,
         expectGitExitCode(
           "git_diff",
           "diff --no-index",
