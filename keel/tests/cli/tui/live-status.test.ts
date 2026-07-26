@@ -55,7 +55,7 @@ describe("Interactive TUI live status", () => {
       // When / Then
       const active = await pty.waitForScreen(
         (screen) =>
-          screen.includes("activity: Tool: bash") &&
+          screen.includes("◦ Running bash sleep 1") &&
           screen.includes("draft survives activity"),
         "live tool activity or draft was not visible",
       );
@@ -100,7 +100,7 @@ describe("Interactive TUI live status", () => {
       // Then
       const screen = await pty.waitForScreen(
         (current) =>
-          current.includes("goal · budget_limited") &&
+          current.includes("◎ budget_limited") &&
           current.includes("Track live Goal"),
         "durable live Goal status did not render",
       );
@@ -108,7 +108,8 @@ describe("Interactive TUI live status", () => {
       pty.write("/goal clear\r");
       await pty.waitForScreen(
         (current) =>
-          current.includes("Goal cleared") && !current.includes("goal ·"),
+          current.includes("Goal cleared") &&
+          !current.includes("◎ budget_limited"),
         "cleared Goal remained in the live region",
       );
       pty.write("\x03");

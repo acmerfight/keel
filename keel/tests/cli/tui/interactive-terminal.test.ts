@@ -115,6 +115,7 @@ describe("Interactive Terminal Display", () => {
     const terminal = new TestTerminal();
     const display = createInteractiveTerminalDisplay(terminal, {
       inputEchoesToDisplay: true,
+      colorMode: "plain",
       session: { kind: "ephemeral" },
       workspace: process.cwd(),
       skillCompletions: [
@@ -152,6 +153,7 @@ describe("Interactive Terminal Display", () => {
     const terminal = new TestTerminal();
     const display = createInteractiveTerminalDisplay(terminal, {
       inputEchoesToDisplay: true,
+      colorMode: "plain",
       session: { kind: "ephemeral" },
       workspace: process.cwd(),
       onInterrupt: () => {},
@@ -170,7 +172,7 @@ describe("Interactive Terminal Display", () => {
     const input = new PassThrough();
     const terminal = new TestTerminal();
     const fixture = createRuntime(["--ephemeral"], {
-      env: { KEEL_PROVIDER: "fake" },
+      env: { KEEL_PROVIDER: "fake", NO_COLOR: "1" },
       input,
       inputIsTTY: true,
       stdoutIsTTY: true,
@@ -234,6 +236,7 @@ describe("Interactive Terminal Display", () => {
     let interrupted = 0;
     const display = createInteractiveTerminalDisplay(terminal, {
       inputEchoesToDisplay: true,
+      colorMode: "plain",
       session: { kind: "ephemeral" },
       onInterrupt: () => {
         interrupted++;
@@ -249,9 +252,15 @@ describe("Interactive Terminal Display", () => {
 
     // When
     display.writeStderr("notice\n");
-    display.writeAssistantHeader();
-    display.writeStdout("answer\n");
-    display.writeStatusLine("working");
+    display.renderAgentEvent({
+      type: "assistant_delta",
+      text: "answer\n",
+    });
+    display.renderAgentEvent({
+      type: "notice",
+      tone: "info",
+      text: "working",
+    });
     display.renderPrompt();
     display.acceptInput();
     terminal.input("\x03");
@@ -260,7 +269,7 @@ describe("Interactive Terminal Display", () => {
     expect(closedCount).toBe(0);
     terminal.input("\x15");
     terminal.input("\x04");
-    const screen = await terminal.waitForText("status: working");
+    const screen = await terminal.waitForText("· working");
     display.setActivityStatus(null);
     display.setGoalStatus(null);
     display.closePrompt();
@@ -268,13 +277,55 @@ describe("Interactive Terminal Display", () => {
 
     // Then
     expect(screen).toContain("notice");
-    expect(screen).toContain("assistant:");
     expect(screen).toContain("answer");
-    expect(screen).toContain("activity: Preparing");
-    expect(screen).toContain("goal · active - Verify terminal status");
+    expect(screen).toContain("◦ Preparing");
+    expect(screen).toContain("◎ active - Verify terminal status");
     expect(interrupted).toBe(1);
     expect(closedCount).toBe(1);
     expect(terminal.stopCount).toBe(1);
+  });
+
+  test(`Given two running tools have the same label and distinct call IDs,
+    When their completion events arrive in reverse order,
+    Then each audit row settles by call ID`, async () => {
+    // Given
+    const terminal = new TestTerminal();
+    const display = createInteractiveTerminalDisplay(terminal, {
+      inputEchoesToDisplay: true,
+      colorMode: "plain",
+      session: { kind: "ephemeral" },
+      onInterrupt: () => {},
+    });
+    display.start();
+    display.renderAgentEvent({
+      type: "tool_started",
+      toolCallId: "first",
+      label: "read same.md",
+    });
+    display.renderAgentEvent({
+      type: "tool_started",
+      toolCallId: "second",
+      label: "read same.md",
+    });
+
+    // When
+    display.renderAgentEvent({
+      type: "tool_succeeded",
+      toolCallId: "second",
+      label: "read same.md",
+    });
+    display.renderAgentEvent({
+      type: "tool_failed",
+      toolCallId: "first",
+      label: "read same.md",
+    });
+
+    // Then
+    const screen = await terminal.waitForText("✗ read same.md");
+    expect(screen.match(/✓ read same\.md/gu)).toHaveLength(1);
+    expect(screen.match(/✗ read same\.md/gu)).toHaveLength(1);
+    expect(screen).not.toContain("◦ read same.md");
+    display.stop();
   });
 
   test(`Given the composer has submitted history and an unsent draft,
@@ -285,6 +336,7 @@ describe("Interactive Terminal Display", () => {
     const submitted: string[] = [];
     const display = createInteractiveTerminalDisplay(terminal, {
       inputEchoesToDisplay: true,
+      colorMode: "plain",
       session: { kind: "ephemeral" },
       onInterrupt: () => {},
     });
@@ -339,6 +391,7 @@ describe("Interactive Terminal Display", () => {
     const terminal = new TestTerminal();
     const display = createInteractiveTerminalDisplay(terminal, {
       inputEchoesToDisplay: true,
+      colorMode: "plain",
       session: { kind: "ephemeral" },
       onInterrupt: () => {},
     });
@@ -392,12 +445,13 @@ describe("Interactive Terminal Display", () => {
     display.setComposerMode("ready");
     terminal.input("/help");
     terminal.input("\r");
-    const ready = await terminal.waitForText("keel> /help");
-    expect(ready).toContain("steer/next> guide this turn");
-    expect(ready).toContain("queue> /status");
-    expect(ready).toContain("queue> after");
-    expect(ready).toContain("       compaction");
-    expect(ready).toContain("approve> y");
+    const ready = await terminal.waitForText("› /help");
+    expect(ready).toContain("› [steer] guide this turn");
+    expect(ready).toContain("› [queued] /status");
+    expect(ready).toContain("› [queued] after");
+    expect(ready).toContain("  compaction");
+    expect(ready).toContain("› [approval] y");
+    expect(ready).toContain("keel>");
     display.stop();
   });
 
@@ -408,6 +462,7 @@ describe("Interactive Terminal Display", () => {
     const terminal = new TestTerminal();
     const display = createInteractiveTerminalDisplay(terminal, {
       inputEchoesToDisplay: true,
+      colorMode: "plain",
       session: { kind: "ephemeral" },
       onInterrupt: () => {},
     });

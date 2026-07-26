@@ -24,6 +24,42 @@ interface StableInteractiveOutputRuntime {
   readonly setActivityStatus?: (text: string | null) => void;
 }
 
+export type InteractiveTranscriptEvent =
+  | {
+      readonly type: "assistant_delta";
+      readonly text: string;
+    }
+  | {
+      readonly type: "tool_started";
+      readonly toolCallId: string;
+      readonly label: string;
+    }
+  | {
+      readonly type: "tool_succeeded";
+      readonly toolCallId: string;
+      readonly label: string;
+    }
+  | {
+      readonly type: "tool_failed";
+      readonly toolCallId: string;
+      readonly label: string;
+    }
+  | {
+      readonly type: "tool_interrupted";
+      readonly toolCallId: string;
+      readonly label: string;
+    }
+  | {
+      readonly type: "notice";
+      readonly tone: "error" | "info" | "warning";
+      readonly text: string;
+    };
+
+interface InteractiveTerminalOutputRuntime {
+  readonly renderAgentEvent: (event: InteractiveTranscriptEvent) => void;
+  readonly setActivityStatus: (text: string | null) => void;
+}
+
 export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
 function formatMemoryOperation(operation: AgentMemoryOperation): string {
@@ -423,6 +459,140 @@ export async function printStableInteractiveAgentEvents(
     }
   } finally {
     runtime.setActivityStatus?.(null);
+  }
+  return finalEnd;
+}
+
+export async function printInteractiveTerminalAgentEvents(
+  stream: AsyncIterable<AgentEvent>,
+  runtime: InteractiveTerminalOutputRuntime,
+): Promise<EndEvent | undefined> {
+  let finalEnd: EndEvent | undefined;
+  const activeTools = new Map<string, string>();
+  runtime.setActivityStatus("Thinking");
+  try {
+    for await (const event of stream) {
+      switch (event.type) {
+        case "text":
+          runtime.setActivityStatus("Responding");
+          runtime.renderAgentEvent({
+            type: "assistant_delta",
+            text: sanitizeAssistantText(event.text),
+          });
+          break;
+        case "context_compacted":
+          runtime.setActivityStatus("Context compacted");
+          runtime.renderAgentEvent({
+            type: "notice",
+            tone: "info",
+            text: formatContextCompactionReport({
+              ...event,
+              reasonLabel: contextCompactionReasonLabel(event.reason),
+            }).trimEnd(),
+          });
+          break;
+        case "provider_retry":
+          runtime.setActivityStatus("Waiting to retry provider");
+          runtime.renderAgentEvent({
+            type: "notice",
+            tone: "warning",
+            text: `Provider retry: ${sanitizeToolLabel(event.provider)} ${providerRetryReasonLabel(event.reason)} (attempt ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)}ms)`,
+          });
+          break;
+        case "tool_start": {
+          const label = sanitizeToolLabel(toolCallLabel(event.toolCall));
+          activeTools.set(event.toolCall.id, label);
+          runtime.setActivityStatus(`Running ${label}`);
+          runtime.renderAgentEvent({
+            type: "tool_started",
+            toolCallId: event.toolCall.id,
+            label,
+          });
+          break;
+        }
+        case "tool_end": {
+          const label = sanitizeToolLabel(toolCallLabel(event.toolCall));
+          activeTools.delete(event.toolCall.id);
+          runtime.setActivityStatus(
+            event.ok ? "Thinking" : `Tool failed: ${label}`,
+          );
+          runtime.renderAgentEvent({
+            type: event.ok ? "tool_succeeded" : "tool_failed",
+            toolCallId: event.toolCall.id,
+            label,
+          });
+          if (event.ok && event.memoryOperation !== undefined) {
+            runtime.renderAgentEvent({
+              type: "notice",
+              tone: "info",
+              text: formatMemoryOperation(event.memoryOperation),
+            });
+          }
+          break;
+        }
+        case "task_progress_updated":
+          runtime.setActivityStatus("Task progress updated");
+          runtime.renderAgentEvent({
+            type: "notice",
+            tone: "info",
+            text: `Task progress: ${sanitizeStatusLineText(formatSessionTaskProgressSummary(event.taskProgress))}`,
+          });
+          break;
+        case "session_goal_updated": {
+          const evidence = formatSessionGoalCompletionEvidenceSummary(
+            event.goal,
+          );
+          const outcome = formatSessionGoalRuntimeOutcomeSummary(event.goal);
+          runtime.renderAgentEvent({
+            type: "notice",
+            tone: "info",
+            text: `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(event.goal, { includeCompletionEvidence: false }))}`,
+          });
+          if (outcome !== null) {
+            runtime.renderAgentEvent({
+              type: "notice",
+              tone: "info",
+              text: `Session goal outcome: ${sanitizeStatusLineText(outcome)}`,
+            });
+          }
+          if (evidence !== null) {
+            runtime.renderAgentEvent({
+              type: "notice",
+              tone: "info",
+              text: `Session goal evidence: ${sanitizeStatusLineText(evidence)}`,
+            });
+          }
+          break;
+        }
+        case "tool_output_artifact":
+          runtime.setActivityStatus(
+            event.status === "stored"
+              ? "Stored tool output artifact"
+              : "Tool output artifact failed",
+          );
+          runtime.renderAgentEvent({
+            type: "notice",
+            tone: event.status === "stored" ? "info" : "error",
+            text: formatToolOutputArtifactNotice(event),
+          });
+          break;
+        case "end":
+          finalEnd = event;
+          break;
+        case "skill_activated":
+        case "undo_checkpoint":
+          break;
+      }
+    }
+  } finally {
+    for (const [toolCallId, label] of activeTools) {
+      runtime.renderAgentEvent({
+        type: "tool_interrupted",
+        toolCallId,
+        label,
+      });
+    }
+    runtime.setActivityStatus(null);
   }
   return finalEnd;
 }

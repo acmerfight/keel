@@ -27,7 +27,7 @@ export interface StableInteractiveDisplayOptions {
       };
 }
 
-export function formatInteractiveIntro(
+function formatInteractiveIntro(
   session: StableInteractiveDisplayOptions["session"],
 ): string {
   if (session.kind === "ephemeral") {
