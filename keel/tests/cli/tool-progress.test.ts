@@ -6,7 +6,9 @@ import type { AgentEvent } from "../../src/agent/events.ts";
 import {
   formatCostReport,
   formatLiveSessionGoalStatus,
+  type InteractiveTranscriptEvent,
   printAgentEvents,
+  printInteractiveTerminalAgentEvents,
   printStableInteractiveAgentEvents,
 } from "../../src/cli/output.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
@@ -678,6 +680,277 @@ describe("CLI Tool Progress", () => {
       "Tool failed: read README.md",
       "Responding",
       "Responding",
+      null,
+    ]);
+  });
+
+  test(`Given the agent emits every interactive event family,
+    When the semantic terminal adapter consumes the stream,
+    Then it produces one typed audit trail and settles unfinished tools`, async () => {
+    // Given
+    const successfulRead = {
+      id: "read-success",
+      tool: "read",
+      path: "success.md",
+    } as const;
+    const rememberedRead = {
+      id: "read-memory",
+      tool: "read",
+      path: "memory.md",
+    } as const;
+    const failedRead = {
+      id: "read-failure",
+      tool: "read",
+      path: "failure.md",
+    } as const;
+    const interruptedBash = {
+      id: "bash-interrupted",
+      tool: "bash",
+      command: "sleep 10",
+    } as const;
+    const endEvent = {
+      type: "end",
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 10,
+        outputTokens: 2,
+      },
+      turns: 2,
+      stopReason: "completed",
+    } as const satisfies AgentEvent;
+    const sourceEvents = [
+      { type: "text", text: "\u001banswer" },
+      {
+        type: "context_compacted",
+        reason: "proactive",
+        historyCompacted: true,
+        artifacts: [],
+        beforeMessageCount: 8,
+        afterMessageCount: 3,
+        beforeEstimatedTokens: 1_000,
+        afterEstimatedTokens: 400,
+        toolOutputsCompacted: 0,
+        staleToolOutputsCompacted: 0,
+        currentToolOutputsCompacted: 0,
+        toolOutputCharsBefore: 0,
+        toolOutputCharsAfter: 0,
+        toolOutputEstimatedTokensBefore: 0,
+        toolOutputEstimatedTokensAfter: 0,
+      },
+      {
+        type: "provider_retry",
+        provider: "deepseek",
+        reason: "provider_network_error",
+        attempt: 2,
+        maxRetries: 3,
+        delayMs: 125.4,
+      },
+      { type: "tool_start", toolCall: successfulRead },
+      { type: "tool_end", toolCall: successfulRead, ok: true },
+      { type: "tool_start", toolCall: rememberedRead },
+      {
+        type: "tool_end",
+        toolCall: rememberedRead,
+        ok: true,
+        memoryOperation: {
+          operation: "add",
+          id: "mem-release",
+          scope: { kind: "project", id: "project-release" },
+          outcome: "saved",
+        },
+      },
+      { type: "tool_start", toolCall: failedRead },
+      { type: "tool_end", toolCall: failedRead, ok: false },
+      { type: "tool_start", toolCall: interruptedBash },
+      {
+        type: "task_progress_updated",
+        messageOrdinal: 2,
+        taskProgress: {
+          tasks: [{ step: "Inspect TUI", status: "in_progress" }],
+        },
+      },
+      {
+        type: "session_goal_updated",
+        messageOrdinal: 2,
+        goal: {
+          objective: "Finish TUI",
+          status: "completed",
+          budget: {},
+          usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
+          completionEvidence: { kind: "user_override" },
+          latestRuntimeOutcome: {
+            kind: "completed",
+            reason: "The user explicitly completed the goal.",
+          },
+        },
+      },
+      {
+        type: "session_goal_updated",
+        messageOrdinal: 3,
+        goal: {
+          objective: "Continue TUI",
+          status: "active",
+          budget: {},
+          usage: { turns: 1, tokens: 20, activeTimeMs: 50 },
+          completion: {
+            kind: "assertion",
+            assertion: "The audit trail remains readable",
+          },
+        },
+      },
+      {
+        type: "tool_output_artifact",
+        status: "stored",
+        ref: "artifact://tool-output/read-success",
+        toolCallId: "read-success",
+        toolName: "read",
+        sourceStatus: "complete",
+        omittedChars: 200,
+      },
+      {
+        type: "tool_output_artifact",
+        status: "failed",
+        reason: "disk full",
+        toolCallId: "read-failure",
+        toolName: "read",
+        omittedChars: 200,
+      },
+      { type: "undo_checkpoint", written: true },
+      {
+        type: "skill_activated",
+        name: "repo:review",
+        relativePath: ".agents/skills/review/SKILL.md",
+        trigger: "model_selected",
+      },
+      endEvent,
+    ] as const satisfies readonly AgentEvent[];
+    async function* events(): AsyncIterable<AgentEvent> {
+      yield* sourceEvents;
+    }
+    const activities: Array<string | null> = [];
+    const transcriptEvents: InteractiveTranscriptEvent[] = [];
+
+    // When
+    const returnedEnd = await printInteractiveTerminalAgentEvents(events(), {
+      renderAgentEvent(event) {
+        transcriptEvents.push(event);
+      },
+      setActivityStatus(text) {
+        activities.push(text);
+      },
+    });
+
+    // Then
+    expect(returnedEnd).toEqual(endEvent);
+    expect(transcriptEvents).toEqual([
+      { type: "assistant_delta", text: "\\x1banswer" },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Context compacted: proactive (8 -> 3 messages, ~1000 -> ~400 tokens)",
+      },
+      {
+        type: "notice",
+        tone: "warning",
+        text: "Provider retry: deepseek network error (attempt 2/3 in 125ms)",
+      },
+      {
+        type: "tool_started",
+        toolCallId: "read-success",
+        label: "read success.md",
+      },
+      {
+        type: "tool_succeeded",
+        toolCallId: "read-success",
+        label: "read success.md",
+      },
+      {
+        type: "tool_started",
+        toolCallId: "read-memory",
+        label: "read memory.md",
+      },
+      {
+        type: "tool_succeeded",
+        toolCallId: "read-memory",
+        label: "read memory.md",
+      },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Saved project memory mem-release for project-release.",
+      },
+      {
+        type: "tool_started",
+        toolCallId: "read-failure",
+        label: "read failure.md",
+      },
+      {
+        type: "tool_failed",
+        toolCallId: "read-failure",
+        label: "read failure.md",
+      },
+      {
+        type: "tool_started",
+        toolCallId: "bash-interrupted",
+        label: "bash sleep 10",
+      },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Task progress: 0/1 completed; current: Inspect TUI",
+      },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Session goal: completed - Finish TUI; criterion: missing",
+      },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Session goal outcome: completed - The user explicitly completed the goal.",
+      },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Session goal evidence: user explicitly completed the goal with /goal complete",
+      },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Session goal: active - Continue TUI; criterion(assertion): The audit trail remains readable",
+      },
+      {
+        type: "notice",
+        tone: "info",
+        text: "Tool output artifact: artifact://tool-output/read-success (keel artifacts show artifact://tool-output/read-success)",
+      },
+      {
+        type: "notice",
+        tone: "error",
+        text: "Tool output artifact failed: disk full; output is lossy; rerun with narrower parameters if needed",
+      },
+      {
+        type: "tool_interrupted",
+        toolCallId: "bash-interrupted",
+        label: "bash sleep 10",
+      },
+    ]);
+    expect(activities).toEqual([
+      "Thinking",
+      "Responding",
+      "Context compacted",
+      "Waiting to retry provider",
+      "Running read success.md",
+      "Thinking",
+      "Running read memory.md",
+      "Thinking",
+      "Running read failure.md",
+      "Tool failed: read failure.md",
+      "Running bash sleep 10",
+      "Task progress updated",
+      "Stored tool output artifact",
+      "Tool output artifact failed",
       null,
     ]);
   });

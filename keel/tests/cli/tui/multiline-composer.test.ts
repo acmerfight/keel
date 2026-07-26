@@ -62,15 +62,15 @@ describe("Interactive TUI Composer", () => {
       // Then
       const screen = await pty.waitForScreen(
         (current) =>
-          current.includes("steer/next> /tmp/output is relevant") &&
-          current.includes("steer/next> focus on queue visibility") &&
-          current.includes("queue> /status") &&
-          current.includes("queue> after the status barrier") &&
-          current.includes("runs next"),
+          current.includes("› [steer] /tmp/output is relevant") &&
+          current.includes("› [steer] focus on queue visibility") &&
+          current.includes("› [queued] /status") &&
+          current.includes("› [queued] after the status barrier") &&
+          current.includes("Steers at the next tool boundary"),
         "steering and queued command dispositions were not visible",
       );
       expect(screen).toContain("steer/next>");
-      expect(screen).toContain("queue>");
+      expect(screen).toContain("[queued]");
     } finally {
       pty.kill();
       server.closeAllConnections();

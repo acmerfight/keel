@@ -49,6 +49,7 @@ import {
 import {
   formatCostReport,
   printAgentEvents,
+  printInteractiveTerminalAgentEvents,
   printStableInteractiveAgentEvents,
 } from "./output.ts";
 import {
@@ -1177,6 +1178,8 @@ async function runSessionCli(
               {
                 inputEchoesToDisplay: true,
                 session: displaySession,
+                colorMode:
+                  runtime.env("NO_COLOR") === undefined ? "ansi" : "plain",
                 workspace,
                 skillCompletions: skillCatalog?.skills ?? [],
                 onInterrupt: () => {
@@ -1185,14 +1188,17 @@ async function runSessionCli(
               },
             )
           : undefined;
-      const interactiveDisplay =
-        interactiveTerminalDisplay ??
-        (mode.kind === "interactive" && runtime.input.isTTY === true
+      const stableInteractiveDisplay =
+        interactiveTerminalDisplay === undefined &&
+        mode.kind === "interactive" &&
+        runtime.input.isTTY === true
           ? createStableInteractiveDisplay(runtime, {
               inputEchoesToDisplay: runtime.stderrIsTTY === true,
               session: displaySession,
             })
-          : undefined);
+          : undefined;
+      const interactiveDisplay =
+        interactiveTerminalDisplay ?? stableInteractiveDisplay;
       const reportRecorder = createAgentEventReportRecorder();
       let loadedMemory: RenderedProjectMemory | undefined;
       let memoryLoadError: string | undefined;
@@ -1419,10 +1425,21 @@ async function runSessionCli(
             },
           ),
         requireKnownCostModel,
-        printAgentEvents: (stream) =>
-          interactiveDisplay === undefined
-            ? printAgentEvents(stream, runtime)
-            : printStableInteractiveAgentEvents(stream, interactiveDisplay),
+        printAgentEvents: (stream) => {
+          if (interactiveTerminalDisplay !== undefined) {
+            return printInteractiveTerminalAgentEvents(
+              stream,
+              interactiveTerminalDisplay,
+            );
+          }
+          if (stableInteractiveDisplay !== undefined) {
+            return printStableInteractiveAgentEvents(
+              stream,
+              stableInteractiveDisplay,
+            );
+          }
+          return printAgentEvents(stream, runtime);
+        },
         formatCostReport,
       };
       const interactiveResult = await runInteractiveSessionWithTerminalDisplay(

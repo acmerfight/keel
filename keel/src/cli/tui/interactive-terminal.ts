@@ -11,32 +11,36 @@ import {
   TUI,
 } from "@earendil-works/pi-tui";
 import type { SkillDescriptor } from "../../skills/model.ts";
-import type {
-  StableInteractiveDisplay,
-  StableInteractiveDisplayOptions,
-} from "../interactive-session/display.ts";
-import { formatInteractiveIntro } from "../interactive-session/display.ts";
+import type { StableInteractiveDisplayOptions } from "../interactive-session/display.ts";
 import type { InteractiveLineInput } from "../interactive-session/line-reader.ts";
 import type {
   InteractiveComposerMode,
   InteractiveInputDisposition,
 } from "../interactive-session/types.ts";
+import type { InteractiveTranscriptEvent } from "../output.ts";
+import {
+  createInteractiveTerminalTheme,
+  type InteractiveTerminalColorMode,
+  type InteractiveTerminalTheme,
+  InteractiveTranscript,
+} from "./interactive-transcript.ts";
 
-const plainText = (text: string): string => text;
 const graphemeSegmenter = new Intl.Segmenter(undefined, {
   granularity: "grapheme",
 });
 
-const EDITOR_THEME: EditorTheme = {
-  borderColor: plainText,
-  selectList: {
-    selectedPrefix: plainText,
-    selectedText: plainText,
-    description: plainText,
-    scrollInfo: plainText,
-    noMatch: plainText,
-  },
-};
+function editorTheme(theme: InteractiveTerminalTheme): EditorTheme {
+  return {
+    borderColor: theme.accent,
+    selectList: {
+      selectedPrefix: theme.accent,
+      selectedText: theme.accentStrong,
+      description: theme.muted,
+      scrollInfo: theme.muted,
+      noMatch: theme.warning,
+    },
+  };
+}
 
 class TerminalLineInput extends EventEmitter implements InteractiveLineInput {
   private closed = false;
@@ -54,12 +58,19 @@ class TerminalLineInput extends EventEmitter implements InteractiveLineInput {
   };
 }
 
-export interface InteractiveTerminalDisplay extends StableInteractiveDisplay {
+export interface InteractiveTerminalDisplay {
+  readonly writeIntro: () => void;
+  readonly renderPrompt: () => void;
+  readonly acceptInput: () => void;
+  readonly closePrompt: () => void;
+  readonly writeStdout: (text: string) => void;
+  readonly writeStderr: (text: string) => void;
   readonly lineInput: InteractiveLineInput;
   readonly renderSubmittedInput: (
     value: string,
     disposition: InteractiveInputDisposition,
   ) => void;
+  readonly renderAgentEvent: (event: InteractiveTranscriptEvent) => void;
   readonly setActivityStatus: (text: string | null) => void;
   readonly setGoalStatus: (text: string | null) => void;
   readonly setComposerMode: (mode: InteractiveComposerMode) => void;
@@ -80,34 +91,22 @@ type ComposerHistoryState =
       };
     };
 
-function formatSubmittedInput(
-  value: string,
-  label: InteractiveInputDisposition,
-): string {
-  const continuationPrefix = " ".repeat(label.length + 1);
-  return value
-    .split("\n")
-    .map(
-      (line, index) =>
-        `${index === 0 ? `${label}>` : continuationPrefix} ${line}`,
-    )
-    .join("\n");
-}
-
 export function createInteractiveTerminalDisplay(
   terminal: Terminal,
   options: StableInteractiveDisplayOptions & {
+    readonly colorMode: InteractiveTerminalColorMode;
     readonly onInterrupt: () => void;
     readonly workspace?: string;
     readonly skillCompletions?: readonly SkillDescriptor[];
   },
 ): InteractiveTerminalDisplay {
   const tui = new TUI(terminal, true);
-  const transcript = new Text();
-  const activityStatus = new Text();
-  const goalStatus = new Text();
-  const prompt = new Text("keel>");
-  const editor = new Editor(tui, EDITOR_THEME);
+  const theme = createInteractiveTerminalTheme(options.colorMode);
+  const transcript = new InteractiveTranscript(theme);
+  const activityStatus = new Text("", 0, 0);
+  const goalStatus = new Text("", 0, 0);
+  const prompt = new Text(theme.accentStrong("keel>"), 0, 0);
+  const editor = new Editor(tui, editorTheme(theme));
   const commands: SlashCommand[] = [
     { name: "help", description: "Show interactive help." },
     { name: "undo", description: "Restore an undo checkpoint." },
@@ -143,18 +142,15 @@ export function createInteractiveTerminalDisplay(
   editor.setAutocompleteProvider(
     new CombinedAutocompleteProvider(commands, options.workspace ?? "."),
   );
-  const composerHint = new Text();
+  const composerHint = new Text("", 0, 0);
   const lineInput = new TerminalLineInput();
-  let transcriptText = "";
   let started = false;
   let stopped = false;
   const history: string[] = [];
   let historyState: ComposerHistoryState = { kind: "idle" };
   let composerMode: InteractiveComposerMode = "ready";
 
-  const append = (text: string): void => {
-    transcriptText += text;
-    transcript.setText(transcriptText);
+  const requestRender = (): void => {
     if (started) {
       tui.requestRender();
     }
@@ -280,45 +276,58 @@ export function createInteractiveTerminalDisplay(
     composerMode = mode;
     switch (mode) {
       case "approval":
-        prompt.setText("approve>");
+        prompt.setText(theme.warning("approve>"));
+        editor.borderColor = theme.warning;
         composerHint.setText(
-          "Answer the approval prompt; any other input denies.",
+          theme.warning("Answer the approval prompt; any other input denies."),
         );
         break;
       case "queue":
-        prompt.setText("queue>");
+        prompt.setText(theme.warning("queue>"));
+        editor.borderColor = theme.warning;
         composerHint.setText(
-          "Input runs after the current operation finishes.",
+          theme.muted("Runs after the current operation finishes."),
         );
         break;
       case "ready":
-        prompt.setText("keel>");
+        prompt.setText(theme.accentStrong("keel>"));
+        editor.borderColor = theme.accent;
         composerHint.setText("");
         break;
       case "steer":
-        prompt.setText("steer/next>");
+        prompt.setText(theme.warning("steer/next>"));
+        editor.borderColor = theme.warning;
         composerHint.setText(
-          "Steers at the next tool boundary; if this turn finishes first, it runs next. /commands run after the turn.",
+          theme.muted(
+            "Steers at the next tool boundary, or runs next if the turn finishes.",
+          ),
         );
         break;
     }
-    if (started) {
-      tui.requestRender();
-    }
+    requestRender();
   };
 
   return {
     lineInput,
     renderSubmittedInput: (value, disposition) => {
-      append(`${formatSubmittedInput(value, disposition)}\n`);
+      transcript.appendSubmittedInput(value, disposition);
+      requestRender();
+    },
+    renderAgentEvent: (event) => {
+      transcript.renderAgentEvent(event);
+      requestRender();
     },
     setActivityStatus: (text) => {
-      activityStatus.setText(text === null ? "" : `activity: ${text}`);
-      if (started) tui.requestRender();
+      activityStatus.setText(
+        text === null ? "" : `${theme.accent("◦")} ${theme.muted(text)}`,
+      );
+      requestRender();
     },
     setGoalStatus: (text) => {
-      goalStatus.setText(text === null ? "" : `goal · ${text}`);
-      if (started) tui.requestRender();
+      goalStatus.setText(
+        text === null ? "" : `${theme.warning("◎")} ${theme.muted(text)}`,
+      );
+      requestRender();
     },
     setComposerMode,
     start: () => {
@@ -327,18 +336,18 @@ export function createInteractiveTerminalDisplay(
     },
     stop,
     writeIntro: () => {
-      append(formatInteractiveIntro(options.session));
+      transcript.writeIntro(options.session);
     },
     renderPrompt: () => {},
     acceptInput: () => {},
     closePrompt: () => {},
-    writeStdout: append,
-    writeStderr: append,
-    writeAssistantHeader: () => {
-      append("assistant:\n");
+    writeStdout: (text) => {
+      transcript.appendPlain(text);
+      requestRender();
     },
-    writeStatusLine: (text) => {
-      append(`status: ${text}\n`);
+    writeStderr: (text) => {
+      transcript.appendPlain(text);
+      requestRender();
     },
   };
 }
