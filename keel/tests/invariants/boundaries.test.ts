@@ -37,6 +37,7 @@ const layerRules: readonly LayerRule[] = [
     forbidden: [/\/agent\//, /\/llm\//, /\/cli\//, /\/testing\//],
   },
 ];
+const MCP_SDK_IMPORT = /^@modelcontextprotocol(?:\/|$)/u;
 
 const providerConfigFacade = "src/cli/provider-config.ts";
 const providerConfigOwnedFiles = [
@@ -227,6 +228,22 @@ describe("module boundaries", () => {
       }
     });
   }
+
+  test(`Given the MCP SDK is an external protocol implementation,
+    When source imports are inspected,
+    Then only the Keel-owned MCP adapter imports it`, () => {
+    const violations: string[] = [];
+    for (const file of sourceFiles()) {
+      if (file.startsWith("src/mcp/")) continue;
+      const source = readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(file, source)) {
+        if (MCP_SDK_IMPORT.test(specifier)) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
 
   test(`Given the CLI entrypoint routes commands,
     When its provider dependencies are inspected,

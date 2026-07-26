@@ -1,0 +1,190 @@
+import {
+  discoverMcpServer,
+  type McpDiscoveryStatus,
+} from "../mcp/discovery.ts";
+import { McpNetworkPolicyError, validateMcpServerUrl } from "../mcp/network.ts";
+import type { CliArgs } from "./args.ts";
+import {
+  addMcpServer,
+  deriveMcpServerId,
+  findMcpServer,
+  listMcpServers,
+  McpConfigError,
+  type McpServerConfig,
+  validateMcpServerId,
+} from "./mcp-config.ts";
+import type { CliRuntime } from "./runtime.ts";
+
+type McpCliArgs = Extract<CliArgs, { readonly command: "mcp" }>;
+
+function displayMcpEndpoint(raw: string): string {
+  const url = new URL(raw);
+  const hasQuery = url.search !== "";
+  url.search = "";
+  return `${url.href}${hasQuery ? "?<redacted>" : ""}`;
+}
+
+function formatReadyStatus(
+  server: McpServerConfig,
+  status: Extract<McpDiscoveryStatus, { readonly status: "ready" }>,
+  includeIssues: boolean,
+): string {
+  return [
+    `MCP server: ${server.id}`,
+    `origin: ${new URL(server.url).origin}`,
+    `endpoint: ${displayMcpEndpoint(server.url)}`,
+    "status: ready",
+    `protocol: ${status.protocolEra} (${status.protocolVersion})`,
+    `server identity: ${status.serverIdentity ?? "anonymous"}`,
+    `tools: ${status.catalog.usable} usable, ${status.catalog.quarantined} quarantined, ${status.catalog.total} total`,
+    `catalog: sha256:${status.catalog.digest}`,
+    `latency: ${status.latencyMs}ms`,
+    ...(includeIssues && status.catalog.issues.length > 0
+      ? [
+          "quarantined tools:",
+          ...status.catalog.issues.map(
+            (issue) => `- ${issue.tool}: ${issue.reason}`,
+          ),
+        ]
+      : []),
+  ].join("\n");
+}
+
+function formatDiscoveryStatus(
+  server: McpServerConfig,
+  status: McpDiscoveryStatus,
+  includeIssues: boolean,
+): string {
+  if (status.status === "ready") {
+    return formatReadyStatus(server, status, includeIssues);
+  }
+  const common = [
+    `MCP server: ${server.id}`,
+    `origin: ${new URL(server.url).origin}`,
+    `endpoint: ${displayMcpEndpoint(server.url)}`,
+    `status: ${status.status}`,
+  ];
+  if (status.status === "needs-auth") {
+    return [
+      ...common,
+      "authorization: required",
+      `latency: ${status.latencyMs}ms`,
+    ].join("\n");
+  }
+  return [
+    ...common,
+    `error: ${status.error}`,
+    `latency: ${status.latencyMs}ms`,
+  ].join("\n");
+}
+
+async function selectedServers(
+  runtime: CliRuntime,
+  serverId: string | undefined,
+): Promise<readonly McpServerConfig[]> {
+  if (serverId !== undefined) {
+    return [await findMcpServer(runtime, serverId)];
+  }
+  return await listMcpServers(runtime);
+}
+
+async function writeServerStatuses(
+  runtime: CliRuntime,
+  servers: readonly McpServerConfig[],
+  includeIssues: boolean,
+): Promise<readonly McpDiscoveryStatus[]> {
+  const statuses: McpDiscoveryStatus[] = [];
+  for (const [index, server] of servers.entries()) {
+    const status = await discoverMcpServer(server, runtime.now);
+    statuses.push(status);
+    if (index > 0) runtime.writeStdout("\n");
+    runtime.writeStdout(
+      `${formatDiscoveryStatus(server, status, includeIssues)}\n`,
+    );
+  }
+  return statuses;
+}
+
+async function runMcpAdd(
+  cliArgs: Extract<McpCliArgs, { readonly mode: "add" }>,
+  runtime: CliRuntime,
+): Promise<number> {
+  const validated = validateMcpServerUrl(
+    cliArgs.url,
+    cliArgs.allowPrivateNetwork,
+  );
+  const id = cliArgs.name ?? deriveMcpServerId(validated.url);
+  validateMcpServerId(id);
+  const server: McpServerConfig = {
+    id,
+    url: validated.url.href,
+    allowPrivateNetwork: cliArgs.allowPrivateNetwork,
+  };
+  await addMcpServer(runtime, server);
+  runtime.writeStdout(`Added MCP server "${id}".\n`);
+  const status = await discoverMcpServer(server, runtime.now);
+  runtime.writeStdout(`${formatDiscoveryStatus(server, status, true)}\n`);
+  return status.status === "failed" ? 1 : 0;
+}
+
+async function runMcpCommandUnsafe(
+  cliArgs: McpCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  if (cliArgs.mode === "add") {
+    return await runMcpAdd(cliArgs, runtime);
+  }
+  if (cliArgs.mode === "list") {
+    const servers = await listMcpServers(runtime);
+    if (servers.length === 0) {
+      runtime.writeStdout("No MCP servers configured.\n");
+      return 0;
+    }
+    runtime.writeStdout(
+      `${[
+        "MCP servers:",
+        ...servers.map(
+          (server) =>
+            `${server.id}: ${displayMcpEndpoint(server.url)}${server.allowPrivateNetwork ? " (private network allowed)" : ""}`,
+        ),
+      ].join("\n")}\n`,
+    );
+    return 0;
+  }
+
+  const servers = await selectedServers(runtime, cliArgs.serverId);
+  if (servers.length === 0) {
+    runtime.writeStdout("No MCP servers configured.\n");
+    return 0;
+  }
+  const statuses = await writeServerStatuses(
+    runtime,
+    servers,
+    cliArgs.mode === "doctor",
+  );
+  return cliArgs.mode === "doctor" &&
+    statuses.some(
+      (status) => status.status !== "ready" || status.catalog.quarantined > 0,
+    )
+    ? 1
+    : 0;
+}
+
+export async function runMcpCommand(
+  cliArgs: McpCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  try {
+    return await runMcpCommandUnsafe(cliArgs, runtime);
+  } catch (error) {
+    if (
+      error instanceof McpConfigError ||
+      error instanceof McpNetworkPolicyError
+    ) {
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+    /* v8 ignore next -- unexpected implementation faults must retain their identity for the outer CLI boundary. */
+    throw error;
+  }
+}

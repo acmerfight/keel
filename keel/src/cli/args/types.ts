@@ -60,6 +60,24 @@ export type ConfigCliArgs =
       readonly mode: "show";
     };
 
+export type McpCliArgs =
+  | {
+      readonly command: "mcp";
+      readonly mode: "add";
+      readonly url: string;
+      readonly name?: string;
+      readonly allowPrivateNetwork: boolean;
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "list";
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "status" | "doctor";
+      readonly serverId?: string;
+    };
+
 export interface SetupCliArgs {
   readonly command: "setup";
   readonly providerId: ApiKeyProviderId;
@@ -351,6 +369,7 @@ export type CliArgs =
   | { readonly command: "help" }
   | AuthCliArgs
   | ConfigCliArgs
+  | McpCliArgs
   | SetupCliArgs
   | DoctorCliArgs
   | UndoCliArgs

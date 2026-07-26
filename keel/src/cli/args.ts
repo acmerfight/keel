@@ -7,6 +7,7 @@ import { parseConfigArgs } from "./args/config.ts";
 import { parseDoctorArgs } from "./args/doctor.ts";
 import { parseEvalArgs } from "./args/eval.ts";
 import { parseGoalArgs } from "./args/goal.ts";
+import { parseMcpArgs } from "./args/mcp.ts";
 import { parseMemoryArgs } from "./args/memory.ts";
 import { parseRunArgs } from "./args/run.ts";
 import { parseSessionsArgs } from "./args/sessions.ts";
@@ -46,6 +47,10 @@ export function parseCliArgs(args: readonly string[]): CliArgsParseResult {
 
   if (args[0] === "config") {
     return parseConfigArgs(args.slice(1));
+  }
+
+  if (args[0] === "mcp") {
+    return parseMcpArgs(args.slice(1));
   }
 
   if (args[0] === "setup") {
