@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   type GitDiffDocument,
+  type GitDiffFile,
   type GitDiffFileStatus,
   type GitDiffLine,
   gitDiffScopeLabel,
@@ -18,11 +19,17 @@ import type { InteractiveDiffInspection } from "../interactive-session/diff-insp
 import { escapeTerminalText } from "../output.ts";
 import {
   type DiffReviewAction,
+  type DiffReviewFileRange,
+  type DiffReviewFileState,
+  type DiffReviewFileTarget,
   type DiffReviewRange,
-  type DiffReviewState,
+  type DiffReviewScrollState,
   type DiffReviewViewport,
+  diffReviewFileRange,
   diffReviewRange,
-  INITIAL_DIFF_REVIEW_STATE,
+  INITIAL_DIFF_REVIEW_FILE_STATE,
+  INITIAL_DIFF_REVIEW_SCROLL_STATE,
+  updateDiffReviewFileState,
   updateDiffReviewState,
 } from "./diff-review-state.ts";
 import type { InteractiveTerminalTheme } from "./interactive-transcript.ts";
@@ -37,7 +44,25 @@ type DiffReviewRowsCache =
   | {
       readonly kind: "ready";
       readonly width: number;
+      readonly body: DiffReviewBody;
+    };
+
+interface DiffReviewFileContext {
+  readonly scope: string;
+  readonly path: string;
+  readonly fileNumber: number;
+  readonly fileCount: number;
+}
+
+type DiffReviewBody =
+  | { readonly kind: "plain"; readonly rows: readonly string[] }
+  | {
+      readonly kind: "files";
       readonly rows: readonly string[];
+      readonly files: readonly [
+        DiffReviewFileTarget<DiffReviewFileContext>,
+        ...DiffReviewFileTarget<DiffReviewFileContext>[],
+      ];
     };
 
 function fileStatusLabel(status: GitDiffFileStatus): string {
@@ -90,21 +115,41 @@ function wrappedLine(text: string, width: number): readonly string[] {
   );
 }
 
-function changedBodyLines(
+function changedBody(
   document: GitDiffDocument,
   width: number,
   theme: InteractiveTerminalTheme,
-): readonly string[] {
+): DiffReviewBody {
+  const [firstFile, ...remainingFiles] = document.files;
+  if (firstFile === undefined) {
+    return {
+      kind: "plain",
+      rows: wrappedLine(theme.muted("No reviewable file changes."), width),
+    };
+  }
   const lines: string[] = [];
   let activeScope = "";
-  for (const file of document.files) {
+  const reviewedFileNumbers = new Map<string, number>();
+  const appendFile = (
+    file: GitDiffFile,
+    fileIndex: number,
+  ): DiffReviewFileTarget<DiffReviewFileContext> => {
     const scope = gitDiffScopeLabel(file.scope);
-    if (scope !== activeScope) {
+    const scopeChanged = scope !== activeScope;
+    if (scopeChanged) {
       if (lines.length > 0) {
         lines.push("");
       }
       activeScope = scope;
+    }
+    const row = lines.length;
+    if (scopeChanged) {
       lines.push(...wrappedLine(theme.accentStrong(scope), width));
+    }
+    const knownFileNumber = reviewedFileNumbers.get(file.path);
+    const fileNumber = knownFileNumber ?? reviewedFileNumbers.size + 1;
+    if (knownFileNumber === undefined) {
+      reviewedFileNumbers.set(file.path, fileNumber);
     }
     const fileSummary = `${fileStatusLabel(file.status)} ${escapeTerminalText(
       file.path,
@@ -113,6 +158,24 @@ function changedBodyLines(
     for (const line of file.lines) {
       lines.push(...wrappedLine(styledDiffLine(line, theme), width));
     }
+    return {
+      index: fileIndex,
+      row,
+      value: {
+        scope,
+        path: file.path,
+        fileNumber,
+        fileCount: document.changedFileCount,
+      },
+    };
+  };
+  const firstTarget = appendFile(firstFile, 0);
+  const files: [
+    DiffReviewFileTarget<DiffReviewFileContext>,
+    ...DiffReviewFileTarget<DiffReviewFileContext>[],
+  ] = [firstTarget];
+  for (const [index, file] of remainingFiles.entries()) {
+    files.push(appendFile(file, index + 1));
   }
   for (const line of document.preludeLines) {
     lines.push(...wrappedLine(theme.warning(escapeTerminalText(line)), width));
@@ -127,36 +190,50 @@ function changedBodyLines(
       ),
     );
   }
-  return lines.length === 0
-    ? wrappedLine(theme.muted("No reviewable file changes."), width)
-    : lines;
+  return { kind: "files", rows: lines, files };
 }
 
-function inspectionBodyLines(
+function inspectionBody(
   inspection: InteractiveDiffInspection,
   width: number,
   theme: InteractiveTerminalTheme,
-): readonly string[] {
+): DiffReviewBody {
   switch (inspection.kind) {
     case "changes":
-      return changedBodyLines(inspection.document, width, theme);
+      return changedBody(inspection.document, width, theme);
     case "clean":
-      return inspection.statusOutput
-        .split("\n")
-        .flatMap((line) =>
-          wrappedLine(theme.muted(escapeTerminalText(line)), width),
-        );
+      return {
+        kind: "plain",
+        rows: inspection.statusOutput
+          .split("\n")
+          .flatMap((line) =>
+            wrappedLine(theme.muted(escapeTerminalText(line)), width),
+          ),
+      };
     case "non-git":
-      return wrappedLine(
-        theme.warning(escapeTerminalText(inspection.message)),
-        width,
-      );
+      return {
+        kind: "plain",
+        rows: wrappedLine(
+          theme.warning(escapeTerminalText(inspection.message)),
+          width,
+        ),
+      };
     case "failed":
-      return wrappedLine(
-        theme.error(escapeTerminalText(inspection.message)),
-        width,
-      );
+      return {
+        kind: "plain",
+        rows: wrappedLine(
+          theme.error(escapeTerminalText(inspection.message)),
+          width,
+        ),
+      };
   }
+}
+
+function inspectionCompleteness(inspection: InteractiveDiffInspection): string {
+  return inspection.kind === "changes" &&
+    inspection.document.completeness.kind === "truncated"
+    ? " · incomplete output"
+    : "";
 }
 
 function inspectionSummary(
@@ -201,6 +278,20 @@ function paddedLine(text: string, width: number): string {
   return truncateToWidth(text, width, "…", true);
 }
 
+function truncateStartToWidth(text: string, width: number): string {
+  if (visibleWidth(text) <= width) {
+    return text;
+  }
+  let suffix = "";
+  for (const character of Array.from(text).reverse()) {
+    if (visibleWidth(`…${character}${suffix}`) > width) {
+      break;
+    }
+    suffix = `${character}${suffix}`;
+  }
+  return `…${suffix}`;
+}
+
 function headerLine(
   summary: string,
   width: number,
@@ -213,6 +304,66 @@ function headerLine(
     gap >= 2 ? `${title}${" ".repeat(gap)}${right}` : `${title} · ${summary}`,
     width,
   );
+}
+
+function plainContextLine(
+  inspection: InteractiveDiffInspection,
+  width: number,
+  theme: InteractiveTerminalTheme,
+): string {
+  return paddedLine(` ${theme.muted(inspectionSubtitle(inspection))}`, width);
+}
+
+function fileContextLines(
+  inspection: InteractiveDiffInspection,
+  range: DiffReviewFileRange<DiffReviewFileContext>,
+  width: number,
+  theme: InteractiveTerminalTheme,
+): readonly string[] {
+  const context = range.currentFile.value;
+  const path = escapeTerminalText(context.path);
+  const right = `${theme.muted(
+    `file ${context.fileNumber}/${context.fileCount}${inspectionCompleteness(
+      inspection,
+    )}`,
+  )} `;
+  if (width < 24) {
+    return [
+      paddedLine(` ${theme.accentStrong(context.scope)}`, width),
+      paddedLine(
+        ` ${theme.strong(truncateStartToWidth(path, Math.max(1, width - 1)))}`,
+        width,
+      ),
+      paddedLine(
+        `${" ".repeat(Math.max(0, width - visibleWidth(right)))}${right}`,
+        width,
+      ),
+    ];
+  }
+  if (width < 76) {
+    const fullPrefix = ` ${theme.accentStrong(context.scope)} · `;
+    const pathWidth = Math.max(1, width - visibleWidth(fullPrefix));
+    const pathLine = `${fullPrefix}${theme.strong(
+      truncateStartToWidth(path, pathWidth),
+    )}`;
+    return [
+      paddedLine(pathLine, width),
+      paddedLine(
+        `${" ".repeat(Math.max(0, width - visibleWidth(right)))}${right}`,
+        width,
+      ),
+    ];
+  }
+  const prefix = ` ${theme.accentStrong(context.scope)} · `;
+  const availablePathWidth = Math.max(
+    1,
+    width - visibleWidth(prefix) - visibleWidth(right),
+  );
+  const left = `${prefix}${theme.strong(
+    truncateStartToWidth(path, availablePathWidth),
+  )}`;
+  const gap = width - visibleWidth(left) - visibleWidth(right);
+  return [paddedLine(`${left}${" ".repeat(Math.max(0, gap))}${right}`, width)];
 }
 
 function footerLines(
@@ -232,30 +383,47 @@ function footerLines(
     );
   };
   if (width >= 76) {
-    return [rightAligned("↑↓ line · PgUp/PgDn page · Home/End · Esc/q close")];
+    return [
+      rightAligned(
+        "↑↓ line · PgUp/PgDn page · [ ] section · Home/End · Esc/q close",
+      ),
+    ];
+  }
+  if (width >= 36) {
+    return [
+      paddedLine(` ${theme.strong("↑↓ line · PgUp/PgDn · Home/End")}`, width),
+      rightAligned("[ ] section · Esc/q close"),
+    ];
   }
   return [
-    paddedLine(` ${theme.strong("↑↓ line · PgUp/PgDn · Home/End")}`, width),
+    paddedLine(` ${theme.strong("↑↓ line · PgUp/PgDn")}`, width),
+    paddedLine(` ${theme.strong("[ ] section · Home/End")}`, width),
     rightAligned("Esc/q close"),
   ];
 }
 
 function footerHeight(width: number): number {
-  return width >= 76 ? 1 : 2;
+  return width >= 76 ? 1 : width >= 36 ? 2 : 3;
 }
 
-function bodyHeight(terminalHeight: number, width: number): number {
-  return Math.max(1, terminalHeight - 4 - footerHeight(width));
+function contextHeight(body: DiffReviewBody, width: number): number {
+  if (body.kind === "plain" || width >= 76) {
+    return 1;
+  }
+  return width < 24 ? 3 : 2;
 }
 
 function diffReviewViewport(
-  totalRows: number,
+  body: DiffReviewBody,
   terminalHeight: number,
   width: number,
 ): DiffReviewViewport {
   return {
-    totalRows,
-    visibleRows: bodyHeight(terminalHeight, width),
+    totalRows: body.rows.length,
+    visibleRows: Math.max(
+      1,
+      terminalHeight - 3 - contextHeight(body, width) - footerHeight(width),
+    ),
   };
 }
 
@@ -279,6 +447,12 @@ function diffReviewInput(data: string): DiffReviewInput {
   if (matchesKey(data, Key.pageDown)) {
     return { kind: "navigate", action: { kind: "page-down" } };
   }
+  if (matchesKey(data, "[")) {
+    return { kind: "navigate", action: { kind: "previous-file" } };
+  }
+  if (matchesKey(data, "]")) {
+    return { kind: "navigate", action: { kind: "next-file" } };
+  }
   if (matchesKey(data, Key.home)) {
     return { kind: "navigate", action: { kind: "home" } };
   }
@@ -290,22 +464,35 @@ function diffReviewInput(data: string): DiffReviewInput {
 
 function renderDiffReview(
   inspection: InteractiveDiffInspection,
-  state: DiffReviewState,
-  body: readonly string[],
+  scrollState: DiffReviewScrollState,
+  fileState: DiffReviewFileState,
+  body: DiffReviewBody,
   terminalHeight: number,
   width: number,
   theme: InteractiveTerminalTheme,
 ): string[] {
   const height = Math.max(1, terminalHeight);
-  const viewport = diffReviewViewport(body.length, height, width);
-  const range = diffReviewRange(state, viewport);
+  const viewport = diffReviewViewport(body, height, width);
+  let range: DiffReviewRange;
+  let context: readonly string[];
+  if (body.kind === "files") {
+    const fileRange = diffReviewFileRange(fileState, {
+      ...viewport,
+      files: body.files,
+    });
+    range = fileRange;
+    context = fileContextLines(inspection, fileRange, width, theme);
+  } else {
+    range = diffReviewRange(scrollState, viewport);
+    context = [plainContextLine(inspection, width, theme)];
+  }
   const divider = theme.muted("─".repeat(Math.max(1, width)));
-  const footer = footerLines(range, body.length, width, theme);
+  const footer = footerLines(range, body.rows.length, width, theme);
   const lines = [
     headerLine(inspectionSummary(inspection, theme), width, theme),
-    paddedLine(` ${theme.muted(inspectionSubtitle(inspection))}`, width),
+    ...context,
     paddedLine(divider, width),
-    ...body
+    ...body.rows
       .slice(range.scrollTop, range.scrollTop + viewport.visibleRows)
       .map((line) => paddedLine(line, width)),
   ];
@@ -323,7 +510,8 @@ export class InteractiveDiffReview implements Component, Focusable {
   private readonly onClose: () => void;
   private readonly terminal: Terminal;
   private readonly theme: InteractiveTerminalTheme;
-  private state = INITIAL_DIFF_REVIEW_STATE;
+  private scrollState = INITIAL_DIFF_REVIEW_SCROLL_STATE;
+  private fileState = INITIAL_DIFF_REVIEW_FILE_STATE;
   private rowsCache: DiffReviewRowsCache = { kind: "empty" };
 
   constructor(
@@ -340,13 +528,13 @@ export class InteractiveDiffReview implements Component, Focusable {
 
   invalidate(): void {}
 
-  private bodyRows(width: number): readonly string[] {
+  private body(width: number): DiffReviewBody {
     if (this.rowsCache.kind === "ready" && this.rowsCache.width === width) {
-      return this.rowsCache.rows;
+      return this.rowsCache.body;
     }
-    const rows = inspectionBodyLines(this.inspection, width, this.theme);
-    this.rowsCache = { kind: "ready", width, rows };
-    return rows;
+    const body = inspectionBody(this.inspection, width, this.theme);
+    this.rowsCache = { kind: "ready", width, body };
+    return body;
   }
 
   handleInput(data: string): void {
@@ -356,16 +544,25 @@ export class InteractiveDiffReview implements Component, Focusable {
         this.onClose();
         break;
       case "navigate": {
-        const totalRows = this.bodyRows(this.terminal.columns).length;
-        this.state = updateDiffReviewState(
-          this.state,
-          input.action,
-          diffReviewViewport(
-            totalRows,
-            this.terminal.rows,
-            this.terminal.columns,
-          ),
+        const body = this.body(this.terminal.columns);
+        const viewport = diffReviewViewport(
+          body,
+          this.terminal.rows,
+          this.terminal.columns,
         );
+        if (body.kind === "files") {
+          this.fileState = updateDiffReviewFileState(
+            this.fileState,
+            input.action,
+            { ...viewport, files: body.files },
+          );
+        } else {
+          this.scrollState = updateDiffReviewState(
+            this.scrollState,
+            input.action,
+            viewport,
+          );
+        }
         break;
       }
       case "ignored":
@@ -376,8 +573,9 @@ export class InteractiveDiffReview implements Component, Focusable {
   render(width: number): string[] {
     return renderDiffReview(
       this.inspection,
-      this.state,
-      this.bodyRows(width),
+      this.scrollState,
+      this.fileState,
+      this.body(width),
       this.terminal.rows,
       width,
       this.theme,
