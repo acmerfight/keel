@@ -24,6 +24,11 @@ function configRuntime(home: string) {
   };
 }
 
+const noToolFilter = {
+  allow: null,
+  deny: [],
+};
+
 describe("MCP config", () => {
   test(`Given no MCP config exists,
     When configuration is read,
@@ -67,6 +72,7 @@ describe("MCP config", () => {
       id: "catalog",
       url: "https://example.com/mcp",
       allowPrivateNetwork: false,
+      toolFilter: noToolFilter,
     };
 
     try {
@@ -97,10 +103,11 @@ describe("MCP config", () => {
       id: `server-${index}`,
       url: `https://server-${index}.example/mcp`,
       allowPrivateNetwork: false,
+      toolFilter: noToolFilter,
     }));
     await writeFile(
       join(home, "mcp.json"),
-      `${JSON.stringify({ schemaVersion: 1, servers })}\n`,
+      `${JSON.stringify({ schemaVersion: 2, servers })}\n`,
       "utf8",
     );
 
@@ -111,6 +118,7 @@ describe("MCP config", () => {
           id: "overflow",
           url: "https://overflow.example/mcp",
           allowPrivateNetwork: false,
+          toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("supports at most 128 servers");
       await expect(listMcpServers(configRuntime(home))).resolves.toHaveLength(
@@ -126,17 +134,19 @@ describe("MCP config", () => {
     [
       "duplicate records",
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         servers: [
           {
             id: "same",
             url: "https://example.com:443/mcp",
             allowPrivateNetwork: false,
+            toolFilter: noToolFilter,
           },
           {
             id: "same",
             url: "https://example.com/mcp",
             allowPrivateNetwork: false,
+            toolFilter: noToolFilter,
           },
         ],
       })}\n`,
@@ -220,6 +230,7 @@ describe("MCP config", () => {
         id: "catalog",
         url: "https://example.com/mcp",
         allowPrivateNetwork: false,
+        toolFilter: noToolFilter,
       });
 
       // Then
@@ -247,6 +258,7 @@ describe("MCP config", () => {
           id: "catalog",
           url: "https://example.com/mcp",
           allowPrivateNetwork: false,
+          toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("MCP config is busy");
       await expect(stat(lockPath)).resolves.toBeDefined();
@@ -270,6 +282,7 @@ describe("MCP config", () => {
           id: "catalog",
           url: "https://example.com/mcp",
           allowPrivateNetwork: false,
+          toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("cannot inspect MCP config lock");
     } finally {

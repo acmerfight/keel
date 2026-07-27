@@ -15,8 +15,138 @@ import {
   headerLine,
   runtime,
 } from "../../../src/testing/session-store-fixtures.ts";
+import type { McpToolCall } from "../../../src/tools/tool-call.ts";
 
 describe("Session Store Tool Call Ledger", () => {
+  test(`Given compaction records that its checkpoint contains untrusted MCP content,
+    When the interactive session is persisted and resumed,
+    Then the typed authority provenance survives the disk boundary`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const messages: readonly Message[] = [
+      {
+        role: "user",
+        content:
+          "<conversation-checkpoint>remote summary</conversation-checkpoint>",
+        origin: { type: "compaction_checkpoint" },
+        contextCompaction: {
+          evidence: [],
+          untrustedMcpContent: true,
+        },
+      },
+    ];
+    try {
+      const session = createSessionStore({
+        sessionId: "mcp-checkpoint-provenance",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: messages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+
+      // When
+      const resumed = resumeSessionStore({
+        sessionId: "mcp-checkpoint-provenance",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.messages).toEqual(messages);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a dynamic MCP call is persisted in an interactive transcript,
+    When the session is resumed,
+    Then its typed reference survives and secret-like JSON arguments are redacted`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const mcpToolCall: McpToolCall = {
+      kind: "mcp",
+      id: "remote_search",
+      tool: "mcp__catalog__search",
+      reference: {
+        kind: "mcp",
+        serverId: "catalog",
+        serverOrigin: "https://catalog.example",
+        rawToolName: "search",
+        configurationDigest: "a".repeat(64),
+        catalogGeneration: `catalog:${"b".repeat(64)}`,
+        descriptorDigest: "c".repeat(64),
+      },
+      arguments: {
+        query: "otters",
+        authorization: "Bearer live-secret-token-270",
+        nested: ["safe", { token: "Bearer another-secret-token-270" }],
+      },
+    };
+    const messages: readonly Message[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [mcpToolCall],
+      },
+      {
+        role: "tool",
+        toolCallId: "remote_search",
+        content: "remote result",
+      },
+    ];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "mcp-tool-shape",
+        workspace,
+        runtime: runtime(home),
+      });
+      persistSessionMessages({
+        session,
+        previousMessages: [],
+        currentMessages: messages,
+        runtime: runtime(home, 1),
+        reason: "turn",
+      });
+
+      // When
+      const resumed = resumeSessionStore({
+        sessionId: "mcp-tool-shape",
+        workspace,
+        runtime: runtime(home, 2),
+      });
+
+      // Then
+      expect(resumed.messages).toEqual([
+        {
+          ...messages[0],
+          toolCalls: [
+            {
+              ...mcpToolCall,
+              arguments: {
+                query: "otters",
+                authorization: "Bearer [REDACTED_SECRET]",
+                nested: ["safe", { token: "Bearer [REDACTED_SECRET]" }],
+              },
+            },
+          ],
+        },
+        messages[1],
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a persisted transcript contains tool-call shapes and a read observation,
     When the session is resumed,
     Then optional tool-call fields and resource evidence survive the disk boundary`, async () => {

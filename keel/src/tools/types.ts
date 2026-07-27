@@ -1,5 +1,6 @@
 export interface ToolOutputArtifact {
   readonly content: string;
+  readonly previewContent?: string;
   readonly sourceTruncated: boolean;
 }
 

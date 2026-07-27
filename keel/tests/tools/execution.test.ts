@@ -31,7 +31,7 @@ type FailedToolExecutionEffectKind = Extract<
 type FailedToolExecutionEffectsAreRestricted = Expect<
   Equal<
     FailedToolExecutionEffectKind,
-    "visible_project_instructions" | "session_goal"
+    "external_tool_result" | "visible_project_instructions" | "session_goal"
   >
 >;
 const failedToolExecutionEffectsAreRestricted: FailedToolExecutionEffectsAreRestricted = true;

@@ -26,6 +26,10 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressFromPlan,
 } from "../core/task-progress.ts";
+import type {
+  McpPreservedToolResult,
+  McpRuntime,
+} from "../mcp/runtime-types.ts";
 import type { BashRuntime } from "../permissions/bash.ts";
 import type {
   SkillActivationCapability,
@@ -57,6 +61,7 @@ import {
   builtinToolCallSchema,
   type InvalidToolCall,
   isInvalidToolCall,
+  isMcpToolCall,
   type ToolCall,
   type ValidToolCall,
 } from "./tool-call.ts";
@@ -73,6 +78,10 @@ type SkillToolCall = Extract<ValidToolCall, { readonly tool: "skill" }>;
 type SkillSearchToolCall = Extract<
   ValidToolCall,
   { readonly tool: "skill_search" }
+>;
+type McpSearchToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "mcp_search" }
 >;
 type SkillResourceToolCall = Extract<
   ValidToolCall,
@@ -124,6 +133,7 @@ interface BuiltinToolExecutionContext {
     "activate" | "search" | "readResource"
   >;
   readonly memory?: AgentMemoryToolContext;
+  readonly mcp?: McpRuntime;
   readonly recordCheckpoints?: boolean;
   readonly readBeforeEdit?: ReadBeforeEdit;
   readonly projectInstructions?: ProjectInstructionVisibilityState;
@@ -189,6 +199,11 @@ interface MemoryOperationToolExecutionEffect {
   readonly operation: AgentMemoryOperation;
 }
 
+interface ExternalToolResultExecutionEffect {
+  readonly kind: "external_tool_result";
+  readonly result: McpPreservedToolResult;
+}
+
 type ToolExecutionEffect =
   | ReadToolExecutionEffect
   | MutationToolExecutionEffect
@@ -198,11 +213,13 @@ type ToolExecutionEffect =
   | BashCommandToolExecutionEffect
   | OpaqueWorkspaceMutationToolExecutionEffect
   | SkillActivationToolExecutionEffect
-  | MemoryOperationToolExecutionEffect;
+  | MemoryOperationToolExecutionEffect
+  | ExternalToolResultExecutionEffect;
 
 type FailedToolExecutionEffect =
   | VisibleProjectInstructionsToolExecutionEffect
-  | SessionGoalToolExecutionEffect;
+  | SessionGoalToolExecutionEffect
+  | ExternalToolResultExecutionEffect;
 
 interface ToolExecutionBase {
   readonly content: string;
@@ -565,6 +582,35 @@ function executeSkillSearchTool(
             ),
           ].join("\n"),
     ok: true,
+    effects: NO_TOOL_EXECUTION_EFFECTS,
+  };
+}
+
+async function executeMcpSearchTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: McpSearchToolCall,
+): Promise<ToolExecution> {
+  if (context.mcp === undefined) {
+    return {
+      content:
+        "Tool failed: MCP search is unavailable because no MCP servers are configured.",
+      ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
+    };
+  }
+  const result = await context.mcp.search(
+    {
+      query: toolCall.query,
+      ...(toolCall.server !== undefined ? { server: toolCall.server } : {}),
+      ...(toolCall.toolName !== undefined ? { tool: toolCall.toolName } : {}),
+      ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+      ...(toolCall.refresh !== undefined ? { refresh: toolCall.refresh } : {}),
+    },
+    context.signal,
+  );
+  return {
+    content: result.content,
+    ok: result.ok,
     effects: NO_TOOL_EXECUTION_EFFECTS,
   };
 }
@@ -1224,6 +1270,8 @@ function executeBuiltinToolCall(
       return executeMemoryForgetTool(context, parsed.data);
     case "memory_propose":
       return executeMemoryProposeTool(context, parsed.data);
+    case "mcp_search":
+      return executeMcpSearchTool(context, parsed.data);
     case "skill_resource":
       return executeSkillResourceTool(context, parsed.data);
     case "skill_search":
@@ -1263,6 +1311,38 @@ export async function executeToolCall(
   options: ExecuteToolCallOptions,
 ): Promise<ToolExecution> {
   const { toolCall, ...context } = options;
+  if (isMcpToolCall(toolCall)) {
+    if (context.mcp === undefined) {
+      return {
+        content:
+          "MCP tool call rejected: the MCP runtime is unavailable. Search again in a run with configured MCP servers.",
+        ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
+      };
+    }
+    try {
+      const result = await context.mcp.execute(toolCall, context.signal);
+      return {
+        content: result.content,
+        ok: result.ok,
+        ...(result.sourceTruncated === true ? { sourceTruncated: true } : {}),
+        ...(result.artifact !== undefined ? { artifact: result.artifact } : {}),
+        effects: [
+          {
+            kind: "external_tool_result",
+            result: result.preserved,
+          },
+        ],
+      };
+    } catch (error) {
+      if (isAbortThrow(error, context.signal)) throw error;
+      return {
+        content: unhandledToolFailureMessage(toolCall.tool, error),
+        ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
+      };
+    }
+  }
   if (isInvalidToolCall(toolCall)) {
     return {
       content: invalidToolCallFailureMessage(toolCall),

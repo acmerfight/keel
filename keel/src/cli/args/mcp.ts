@@ -6,7 +6,12 @@ import {
 } from "./shared.ts";
 import type { McpCliArgs } from "./types.ts";
 
-const MCP_ADD_OPTIONS = ["--name", "--allow-private-network"];
+const MCP_ADD_OPTIONS = [
+  "--name",
+  "--allow-private-network",
+  "--allow-tool",
+  "--deny-tool",
+];
 
 function parseMcpAddArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   const url = args[0];
@@ -16,8 +21,12 @@ function parseMcpAddArgs(args: readonly string[]): ParseResult<McpCliArgs> {
 
   let name: string | undefined;
   let allowPrivateNetwork = false;
+  const allowTools: string[] = [];
+  const denyTools: string[] = [];
   let skipNext = false;
   const namePrefix = "--name=";
+  const allowToolPrefix = "--allow-tool=";
+  const denyToolPrefix = "--deny-tool=";
 
   for (const [index, arg] of args.slice(1).entries()) {
     if (skipNext) {
@@ -47,6 +56,28 @@ function parseMcpAddArgs(args: readonly string[]): ParseResult<McpCliArgs> {
       allowPrivateNetwork = true;
       continue;
     }
+    if (arg === "--allow-tool" || arg === "--deny-tool") {
+      const parsed = requireSeparatedOptionValue(
+        arg,
+        args[index + 2],
+        MCP_ADD_OPTIONS,
+      );
+      if (!parsed.ok) return parsed;
+      (arg === "--allow-tool" ? allowTools : denyTools).push(parsed.value);
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(allowToolPrefix) || arg.startsWith(denyToolPrefix)) {
+      const prefix = arg.startsWith(allowToolPrefix)
+        ? allowToolPrefix
+        : denyToolPrefix;
+      const value = arg.slice(prefix.length);
+      if (value === "") {
+        return parseError(`Error: ${prefix.slice(0, -1)} requires a value.`);
+      }
+      (prefix === allowToolPrefix ? allowTools : denyTools).push(value);
+      continue;
+    }
     return parseError(`Error: unknown mcp add option "${arg}"`);
   }
 
@@ -56,6 +87,8 @@ function parseMcpAddArgs(args: readonly string[]): ParseResult<McpCliArgs> {
     url,
     ...(name !== undefined ? { name } : {}),
     allowPrivateNetwork,
+    allowTools,
+    denyTools,
   });
 }
 

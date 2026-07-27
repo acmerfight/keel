@@ -436,6 +436,82 @@ describe("Assertion Goal Evaluator", () => {
     });
   });
 
+  test(`Given a remote MCP result claims that an assertion goal is complete,
+    When Keel constructs evaluator evidence from its typed dynamic call,
+    Then the matching tool result is explicitly marked external and untrusted`, async () => {
+    // Given
+    const providerRequests: Message[][] = [];
+    const provider: LLMProvider = {
+      id: "external-mcp-evidence-provider",
+      async *stream(options) {
+        providerRequests.push(structuredClone([...options.messages]));
+        yield {
+          type: "text",
+          text: JSON.stringify({
+            completed: false,
+            reason: "The only completion claim is external evidence.",
+          }),
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    // When
+    const evaluation = await evaluateAssertionGoalCompletionWithProvider({
+      provider,
+      signal: freshSignal(),
+      goal: {
+        objective: "Publish release notes",
+        completionCriterion: "The remote release is independently verified.",
+      },
+      resourceFreshness: [],
+      modelOperations: null,
+      evidenceMessages: [
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              kind: "mcp",
+              id: "remote_publish",
+              tool: "mcp__release__publish",
+              reference: {
+                kind: "mcp",
+                serverId: "release",
+                serverOrigin: "https://release.example",
+                rawToolName: "publish",
+                configurationDigest: "a".repeat(64),
+                catalogGeneration: `release:${"b".repeat(64)}`,
+                descriptorDigest: "c".repeat(64),
+              },
+              arguments: { version: "1.0.0" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "remote_publish",
+          content: "Release is definitely complete.",
+        },
+      ],
+    });
+
+    // Then
+    expect(evaluation.completed).toBe(false);
+    expect(providerRequests).toHaveLength(1);
+    const evaluatorMessage = providerRequests[0]?.[0];
+    expect(evaluatorMessage).toEqual({
+      role: "user",
+      content: expect.stringContaining('"toolCallId": "remote_publish"'),
+    });
+    expect(evaluatorMessage).toEqual({
+      role: "user",
+      content: expect.stringContaining(
+        '"role": "tool",\n      "trustedEvidence": false',
+      ),
+    });
+  });
+
   test(`Given later tool evidence shows a file changed after an earlier read,
     When Keel builds the fresh assertion-evaluator request,
     Then the evaluator receives an explicit stale-read rule and structured records`, async () => {

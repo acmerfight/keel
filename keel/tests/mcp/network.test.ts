@@ -257,9 +257,51 @@ describe("MCP network policy", () => {
     }
   });
 
+  test(`Given an MCP POST receives a 307 redirect to another origin,
+    When policy fetch evaluates the redirect before replaying the body,
+    Then it rejects the unapproved origin without disclosing the call payload`, async () => {
+    // Given
+    let redirectedRequests = 0;
+    let redirectedBody = "";
+    const target = await startHttpServer((request, response) => {
+      redirectedRequests += 1;
+      void requestBody(request).then((body) => {
+        redirectedBody = body;
+        response.end("unexpected");
+      });
+    });
+    const source = await startHttpServer((_request, response) => {
+      response.writeHead(307, {
+        location: `${target.url.replace("http:", "https:")}/mcp`,
+      });
+      response.end();
+    });
+    const network = createMcpPolicyFetch(
+      validateMcpServerUrl(`${source.url}/mcp`, true),
+    );
+
+    try {
+      // When
+      const request = network.fetch(`${source.url}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"secret":"approved-only-for-source"}',
+      });
+
+      // Then
+      await expect(request).rejects.toThrow("cross-origin MCP redirect");
+      expect(redirectedRequests).toBe(0);
+      expect(redirectedBody).toBe("");
+    } finally {
+      await network.close();
+      await source.close();
+      await target.close();
+    }
+  });
+
   test(`Given a redirect crosses to another insecure origin with a query,
     When policy fetch validates the hop,
-    Then it rejects the scheme and does not disclose the query`, async () => {
+    Then it rejects the unapproved origin and does not disclose the query`, async () => {
     // Given
     const server = await startHttpServer((_request, response) => {
       response.writeHead(307, {
@@ -276,7 +318,7 @@ describe("MCP network policy", () => {
       const request = network.fetch(`${server.url}/mcp`);
 
       // Then
-      await expect(request).rejects.toThrow("must use HTTPS");
+      await expect(request).rejects.toThrow("cross-origin MCP redirect");
       await expect(request).rejects.not.toThrow("do-not-print");
     } finally {
       await network.close();

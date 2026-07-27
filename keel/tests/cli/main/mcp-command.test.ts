@@ -358,9 +358,22 @@ describe("CLI Main - MCP", () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-home-"));
     const server = await startModernMcpServer();
-    const add = createRuntime(["mcp", "add", server.url, "--name", "catalog"], {
-      env: { KEEL_HOME: home },
-    });
+    const add = createRuntime(
+      [
+        "mcp",
+        "add",
+        server.url,
+        "--name",
+        "catalog",
+        "--allow-tool",
+        "search",
+        "--deny-tool",
+        "delete",
+      ],
+      {
+        env: { KEEL_HOME: home },
+      },
+    );
 
     try {
       // When
@@ -369,6 +382,10 @@ describe("CLI Main - MCP", () => {
         env: { KEEL_HOME: home },
       });
       const statusExitCode = await runCliMain(status.runtime);
+      const list = createRuntime(["mcp", "list"], {
+        env: { KEEL_HOME: home },
+      });
+      const listExitCode = await runCliMain(list.runtime);
 
       // Then
       expect(addExitCode).toBe(0);
@@ -388,6 +405,10 @@ describe("CLI Main - MCP", () => {
       );
       expect(status.stdout()).toMatch(/catalog: sha256:[a-f0-9]{64}\n/u);
       expect(status.stdout()).not.toContain("Search the test catalog");
+      expect(listExitCode).toBe(0);
+      expect(list.stdout()).toContain(
+        "allow tools: search; deny tools: delete",
+      );
       if (process.platform !== "win32") {
         expect((await stat(join(home, "mcp.json"))).mode & 0o777).toBe(0o600);
         expect((await stat(home)).mode & 0o777).toBe(0o700);
@@ -1024,7 +1045,7 @@ describe("CLI Main - MCP", () => {
 
   test(`Given a loopback MCP server redirects to cloud metadata,
     When the user adds it,
-    Then Keel persists the explicit server but blocks the redirected connection`, async () => {
+    Then Keel persists the explicit server but rejects the unapproved origin before connection`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-redirect-home-"));
     const server = await startMcpServer({
@@ -1054,7 +1075,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stderr()).toBe("");
       expect(add.stdout()).toContain("status: failed\n");
       expect(add.stdout()).toContain(
-        "MCP network policy denied resolved address 169.254.169.254",
+        "cross-origin MCP redirect rejected because the destination was not approved",
       );
       expect(listExitCode).toBe(0);
       expect(list.stdout()).toContain(`redirecting: ${server.url}\n`);

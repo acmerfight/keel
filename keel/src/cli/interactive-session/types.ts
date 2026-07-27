@@ -26,6 +26,7 @@ import type {
   AgentMemoryRuntime,
 } from "../../tools/memory.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
+import type { McpServerConfig } from "../mcp-config.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
 import type { RunReportMemory } from "../report.ts";
 import type {
@@ -192,6 +193,8 @@ interface InteractiveSessionOptionsBase {
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;
   readonly skills: InteractiveSkillRuntime;
+  readonly mcpServers?: readonly McpServerConfig[];
+  readonly mcpCanPrompt?: boolean;
   readonly initialSessionTitle?: string;
   readonly initialSessionGoal?: SessionGoal;
   readonly initialMessages?: readonly Message[];

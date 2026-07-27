@@ -49,6 +49,7 @@ export interface UserMessageContextCompactionEvidence {
 
 export interface UserMessageContextCompactionMetadata {
   readonly evidence: readonly UserMessageContextCompactionEvidence[];
+  readonly untrustedMcpContent?: true;
 }
 
 export type { ToolCall } from "../tools/tool-call.ts";

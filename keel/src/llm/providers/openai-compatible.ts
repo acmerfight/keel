@@ -116,7 +116,9 @@ export function createOpenAICompatibleProvider<
           attemptFinished = true;
           response.attempt.finish(result);
         };
-        const state = createStreamState();
+        const state = createStreamState(
+          options.toolExposure ?? { kind: "auto" },
+        );
         try {
           const reader = getResponseReader(
             response.response,

@@ -10,7 +10,7 @@ export const USAGE = [
   "       keel setup <deepseek|kimi|qwen> --with-api-key [--model <id>] [--base-url <url>] [--offline]",
   "       keel config set-provider <fake|deepseek|kimi|qwen> [--model <id>] [--base-url <url>]",
   "       keel config show",
-  "       keel mcp add <url> [--name <id>] [--allow-private-network]",
+  "       keel mcp add <url> [--name <id>] [--allow-private-network] [--allow-tool <name>]... [--deny-tool <name>]...",
   "       keel mcp list",
   "       keel mcp status [server]",
   "       keel mcp doctor [server]",

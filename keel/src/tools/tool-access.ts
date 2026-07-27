@@ -1,7 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { type ParsedPatchOperation, parsePatch } from "./apply-patch.ts";
-import type { ToolCall } from "./tool-call.ts";
+import { isMcpToolCall, type ToolCall } from "./tool-call.ts";
 import {
   type FileToolName,
   isInsideWorkspace,
@@ -271,12 +271,14 @@ export function toolCallAccesses(
   workspace: string,
   toolCall: ToolCall,
 ): ToolAccesses {
+  if (isMcpToolCall(toolCall)) return ToolAccesses.all();
   switch (toolCall.tool) {
     case "update_plan":
     case "update_goal":
     case "memory_add":
     case "memory_forget":
     case "memory_propose":
+    case "mcp_search":
     case "skill_resource":
     case "skill_search":
     case "skill":

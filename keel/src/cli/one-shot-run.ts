@@ -9,6 +9,9 @@ import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import type { Message } from "../llm/types.ts";
+import { connectMcpServer } from "../mcp/discovery.ts";
+import { createMcpRuntime } from "../mcp/runtime.ts";
+import type { McpRuntime } from "../mcp/runtime-types.ts";
 import {
   type BashMode,
   type BashPermissionDecision,
@@ -35,7 +38,15 @@ import {
   saveBashProjectApprovalGrant,
 } from "./bash-project-approvals.ts";
 import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
-import { createLineReader } from "./interactive-session/line-reader.ts";
+import {
+  createLineReader,
+  type LineReader,
+} from "./interactive-session/line-reader.ts";
+import {
+  createPromptedMcpPermissionPolicy,
+  denyMcpPermissionPolicy,
+} from "./mcp-approval.ts";
+import { listMcpServers } from "./mcp-config.ts";
 import {
   formatCostReport,
   formatUndoCheckpointWarning,
@@ -104,15 +115,13 @@ function oneShotBashRuntime(
   bashMode: BashMode,
   runtime: CliRuntime,
   workspace: string,
-): {
-  readonly bash: BashRuntime;
-  readonly close?: () => void;
-} {
+  lineReader: LineReader | undefined,
+): BashRuntime {
   if (bashMode === "disabled") {
-    return { bash: { kind: "disabled" } };
+    return { kind: "disabled" };
   }
   if (bashMode === "trusted") {
-    return { bash: { kind: "trusted" } };
+    return { kind: "trusted" };
   }
   const projectRoot = bashApprovalProjectRoot(workspace);
   const initialProjectGrants = listBashProjectApprovalGrants(
@@ -121,22 +130,18 @@ function oneShotBashRuntime(
   );
   if (runtime.input.isTTY !== true) {
     return {
-      bash: {
-        kind: "reviewed",
-        permission: createSessionBashPermissionPolicy({
-          projectRoot,
-          initialProjectGrants,
-          prompt: () => denyOneShotBashPermissionDecision(),
-        }),
-      },
+      kind: "reviewed",
+      permission: createSessionBashPermissionPolicy({
+        projectRoot,
+        initialProjectGrants,
+        prompt: () => denyOneShotBashPermissionDecision(),
+      }),
     };
   }
 
-  const input = createInterface({
-    input: runtime.input,
-    crlfDelay: Number.POSITIVE_INFINITY,
-  });
-  const lineReader = createLineReader(input, {});
+  if (lineReader === undefined) {
+    throw new Error("TTY bash approval requires an approval line reader");
+  }
   const policy = createPromptedBashPermissionPolicy(
     lineReader,
     runtime.writeStderr,
@@ -149,10 +154,7 @@ function oneShotBashRuntime(
       },
     },
   );
-  return {
-    bash: { kind: "reviewed", permission: policy },
-    close: () => input.close(),
-  };
+  return { kind: "reviewed", permission: policy };
 }
 
 export async function runOneShotCli(
@@ -164,7 +166,8 @@ export async function runOneShotCli(
   const abort = () => {
     abortController.abort();
   };
-  let closeBashApprovalInput: (() => void) | undefined;
+  let closeApprovalInput: (() => void) | undefined;
+  let mcpRuntime: McpRuntime | undefined;
   try {
     const workspace = runtime.cwd();
     const projectInstructions = loadProjectInstructions(workspace);
@@ -244,12 +247,43 @@ export async function runOneShotCli(
     runtime.onSigint(abort);
 
     const startedAt = runtime.now();
+    const mcpServers = await listMcpServers(runtime);
+    const needsApprovalInput =
+      runtime.input.isTTY === true &&
+      (cliArgs.bashMode === "ask" || mcpServers.length > 0);
+    const approvalInput = needsApprovalInput
+      ? createInterface({
+          input: runtime.input,
+          crlfDelay: Number.POSITIVE_INFINITY,
+        })
+      : undefined;
+    closeApprovalInput = () => approvalInput?.close();
+    const approvalLineReader =
+      approvalInput === undefined
+        ? undefined
+        : createLineReader(approvalInput, {});
     const bashRuntime = oneShotBashRuntime(
       cliArgs.bashMode,
       runtime,
       workspace,
+      approvalLineReader,
     );
-    closeBashApprovalInput = bashRuntime.close;
+    if (mcpServers.length > 0) {
+      mcpRuntime = createMcpRuntime({
+        servers: mcpServers,
+        connectionFactory: { connect: connectMcpServer },
+        permission:
+          approvalLineReader === undefined
+            ? denyMcpPermissionPolicy(
+                "MCP calls require terminal approval; non-TTY one-shot runs fail closed.",
+              )
+            : createPromptedMcpPermissionPolicy(
+                approvalLineReader,
+                runtime.writeStderr,
+              ),
+        now: runtime.now,
+      });
+    }
     await cleanupExpiredToolOutputArtifacts({ runtime });
     const toolOutputArtifacts = {
       store: createToolOutputArtifactStore({
@@ -337,7 +371,8 @@ export async function runOneShotCli(
           }
         : {}),
       signal: abortController.signal,
-      bash: bashRuntime.bash,
+      bash: bashRuntime,
+      ...(mcpRuntime !== undefined ? { mcp: mcpRuntime } : {}),
       ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
       ...(skillActivation !== undefined ? { skillActivation } : {}),
       stopPolicy: defaultStopPolicy(),
@@ -476,7 +511,8 @@ export async function runOneShotCli(
     runtime.writeStderr(formatCliRuntimeError(error));
     return 1;
   } finally {
-    closeBashApprovalInput?.();
+    await mcpRuntime?.close().catch(() => undefined);
+    closeApprovalInput?.();
     runtime.offSigint(abort);
   }
   return 0;

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { WorkflowSkillError } from "../../src/skills/model.ts";
 import { executeToolCall } from "../../src/tools/execution.ts";
 import type {
+  ModelToolExposure,
   OpenAICompatibleToolDefinition,
   OpenAICompatibleToolParameter,
 } from "../../src/tools/registry.ts";
@@ -13,11 +14,18 @@ import {
   isToolName,
   normalizeProviderToolCall,
   openAICompatibleTools,
+  providerToolCallFromParsedArguments,
   type ToolName,
   toolCallArguments,
   toolCallCanonicalArguments,
   toolCallFromParsedArguments,
 } from "../../src/tools/registry.ts";
+
+const emptyMcpExposure = {
+  snapshotId: "test-empty",
+  tools: [],
+} as const;
+
 import {
   builtinToolRegistry,
   builtinTools,
@@ -517,6 +525,7 @@ describe("tool registry", () => {
       "memory_add",
       "memory_forget",
       "memory_propose",
+      "mcp_search",
       "skill_resource",
       "skill_search",
       "skill",
@@ -579,6 +588,13 @@ describe("tool registry", () => {
       },
       {
         name: "memory_propose",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "mcp_search",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -864,6 +880,7 @@ describe("tool registry", () => {
         bash: true,
         skill: true,
         memory: "reviewed",
+        mcp: emptyMcpExposure,
       }).map((tool) => [
         tool.function.name,
         {
@@ -899,6 +916,10 @@ describe("tool registry", () => {
           "sourceQuote",
           "conflictMemoryIds",
         ],
+      },
+      mcp_search: {
+        fields: ["query", "server", "toolName", "limit", "refresh"],
+        required: ["query"],
       },
       skill_resource: {
         fields: ["skill", "path"],
@@ -936,6 +957,7 @@ describe("tool registry", () => {
       bash: true,
       skill: true,
       memory: "reviewed",
+      mcp: emptyMcpExposure,
     });
 
     for (const tool of builtinTools) {
@@ -1004,6 +1026,7 @@ describe("tool registry", () => {
         (tool) =>
           tool.risk.kind !== "trusted-shell" &&
           tool.availability !== "skill-catalog" &&
+          tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
           tool.availability !== "memory-proposal",
       )
@@ -1012,6 +1035,7 @@ describe("tool registry", () => {
       .filter(
         (tool) =>
           tool.risk.kind !== "trusted-shell" &&
+          tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
           tool.availability !== "memory-proposal",
       )
@@ -1031,6 +1055,7 @@ describe("tool registry", () => {
         bash: true,
         skill: true,
         memory: "reviewed",
+        mcp: emptyMcpExposure,
       }).map((tool) => tool.function.name),
     ).toEqual(allBuiltinToolNames);
   });
@@ -1077,6 +1102,7 @@ describe("tool registry", () => {
       bash: true,
       skill: true,
       memory: "reviewed",
+      mcp: emptyMcpExposure,
     });
 
     expect(
@@ -1104,6 +1130,77 @@ describe("tool registry", () => {
         parameters: { type: "object", additionalProperties: false },
       })),
     );
+  });
+
+  test(`Given a frozen turn exposes one dynamic MCP definition,
+    When provider schemas and a returned tool call are adapted,
+    Then the exact provider schema is preserved and raw identity comes only from the snapshot`, () => {
+    // Given
+    const exposure: ModelToolExposure = {
+      kind: "auto",
+      mcp: {
+        snapshotId: "snapshot",
+        tools: [
+          {
+            kind: "mcp",
+            modelName: "mcp__catalog__search",
+            description: "External catalog search",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+              required: ["query"],
+              additionalProperties: false,
+            },
+            reference: {
+              kind: "mcp",
+              serverId: "catalog",
+              serverOrigin: "https://catalog.example",
+              rawToolName: "search/raw",
+              configurationDigest: "a".repeat(64),
+              catalogGeneration: `catalog:${"b".repeat(64)}`,
+              descriptorDigest: "c".repeat(64),
+            },
+          },
+        ],
+      },
+    };
+
+    // When
+    const definition = openAICompatibleTools(exposure).find(
+      (tool) => tool.function.name === "mcp__catalog__search",
+    );
+    const toolCall = providerToolCallFromParsedArguments(
+      "remote_1",
+      "mcp__catalog__search",
+      { query: "otters" },
+      exposure,
+    );
+    const guessedCall = providerToolCallFromParsedArguments(
+      "remote_2",
+      "mcp__catalog__other",
+      { query: "otters" },
+      exposure,
+    );
+
+    // Then
+    expect(definition?.function.parameters).toEqual({
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+      additionalProperties: false,
+    });
+    expect(toolCall).toMatchObject({
+      kind: "mcp",
+      tool: "mcp__catalog__search",
+      reference: {
+        serverId: "catalog",
+        rawToolName: "search/raw",
+      },
+      arguments: { query: "otters" },
+    });
+    expect(guessedCall).toBeNull();
   });
 
   test(`Given provider tool names arrive as strings,

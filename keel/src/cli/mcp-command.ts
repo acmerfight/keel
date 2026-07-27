@@ -4,6 +4,7 @@ import {
 } from "../mcp/discovery.ts";
 import { McpNetworkPolicyError, validateMcpServerUrl } from "../mcp/network.ts";
 import type { CliArgs } from "./args.ts";
+import { escapeApprovalText } from "./bash-approval-text.ts";
 import {
   addMcpServer,
   deriveMcpServerId,
@@ -22,6 +23,10 @@ function displayMcpEndpoint(raw: string): string {
   const hasQuery = url.search !== "";
   url.search = "";
   return `${url.href}${hasQuery ? "?<redacted>" : ""}`;
+}
+
+function displayMcpToolNames(names: readonly string[]): string {
+  return names.map(escapeApprovalText).join(", ");
 }
 
 function formatReadyStatus(
@@ -119,6 +124,13 @@ async function runMcpAdd(
     id,
     url: validated.url.href,
     allowPrivateNetwork: cliArgs.allowPrivateNetwork,
+    toolFilter: {
+      allow:
+        cliArgs.allowTools.length === 0
+          ? null
+          : [...new Set(cliArgs.allowTools)],
+      deny: [...new Set(cliArgs.denyTools)],
+    },
   };
   await addMcpServer(runtime, server);
   runtime.writeStdout(`Added MCP server "${id}".\n`);
@@ -143,10 +155,20 @@ async function runMcpCommandUnsafe(
     runtime.writeStdout(
       `${[
         "MCP servers:",
-        ...servers.map(
-          (server) =>
-            `${server.id}: ${displayMcpEndpoint(server.url)}${server.allowPrivateNetwork ? " (private network allowed)" : ""}`,
-        ),
+        ...servers.map((server) => {
+          const policies = [
+            ...(server.allowPrivateNetwork ? ["private network allowed"] : []),
+            ...(server.toolFilter.allow === null
+              ? []
+              : [
+                  `allow tools: ${displayMcpToolNames(server.toolFilter.allow)}`,
+                ]),
+            ...(server.toolFilter.deny.length === 0
+              ? []
+              : [`deny tools: ${displayMcpToolNames(server.toolFilter.deny)}`]),
+          ];
+          return `${server.id}: ${displayMcpEndpoint(server.url)}${policies.length === 0 ? "" : ` (${policies.join("; ")})`}`;
+        }),
       ].join("\n")}\n`,
     );
     return 0;

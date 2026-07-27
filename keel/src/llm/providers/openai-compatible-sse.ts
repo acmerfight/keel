@@ -1,9 +1,14 @@
 import { KeelError } from "../../core/error.ts";
 import {
   isToolName,
-  toolCallFromParsedArguments,
+  providerToolCallFromParsedArguments,
 } from "../../tools/tool-call.ts";
-import type { LLMEvent, LLMStopReason, Usage } from "../types.ts";
+import type {
+  LLMEvent,
+  LLMStopReason,
+  ModelToolExposure,
+  Usage,
+} from "../types.ts";
 import {
   type ProviderInactivityControl,
   readWithProviderInactivityDeadline,
@@ -58,6 +63,7 @@ export interface OpenAICompatibleStreamState {
   finishReason: string | undefined;
   toolCalls: Map<number, PendingToolCall>;
   pendingToolCalls: readonly ToolCallEvent[];
+  readonly toolExposure: ModelToolExposure;
 }
 
 export interface OpenAICompatibleStreamConfig<
@@ -114,7 +120,9 @@ export function getResponseReader(
   return reader;
 }
 
-export function createStreamState(): OpenAICompatibleStreamState {
+export function createStreamState(
+  toolExposure: ModelToolExposure = { kind: "auto" },
+): OpenAICompatibleStreamState {
   return {
     usage: null,
     receivedDone: false,
@@ -122,12 +130,14 @@ export function createStreamState(): OpenAICompatibleStreamState {
     finishReason: undefined,
     toolCalls: new Map(),
     pendingToolCalls: [],
+    toolExposure,
   };
 }
 
 function parseToolCall(
   toolCall: PendingToolCall,
   providerName: string,
+  toolExposure: ModelToolExposure,
 ): ToolCallEvent {
   const toolCallId = toolCall.id;
   if (toolCallId === null || toolCallId === "") {
@@ -138,7 +148,7 @@ function parseToolCall(
   }
 
   const toolCallName = toolCall.name;
-  if (toolCallName === null || !isToolName(toolCallName)) {
+  if (toolCallName === null) {
     throw new KeelError(
       "provider_protocol_error",
       `${providerName} returned unsupported tool call: ${toolCallName ?? "none"}`,
@@ -159,12 +169,25 @@ function parseToolCall(
     );
   }
 
-  const parsedToolCall = toolCallFromParsedArguments(
+  const parsedToolCall = providerToolCallFromParsedArguments(
     toolCallId,
     toolCallName,
     parsedArguments,
+    toolExposure,
   );
   if (parsedToolCall === null) {
+    const isExposedMcpTool =
+      toolExposure.kind === "auto"
+        ? (toolExposure.mcp?.tools.some(
+            (tool) => tool.modelName === toolCallName,
+          ) ?? false)
+        : false;
+    if (!isToolName(toolCallName) && !isExposedMcpTool) {
+      throw new KeelError(
+        "provider_protocol_error",
+        `${providerName} returned unsupported tool call: ${toolCallName}`,
+      );
+    }
     throw new KeelError(
       "provider_protocol_error",
       `${providerName} ${toolCallName} tool call has invalid arguments`,
@@ -223,7 +246,9 @@ function completePendingToolCall(
   }
   state.pendingToolCalls = [...state.toolCalls.entries()]
     .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
-    .map(([, toolCall]) => parseToolCall(toolCall, providerName));
+    .map(([, toolCall]) =>
+      parseToolCall(toolCall, providerName, state.toolExposure),
+    );
 }
 
 function finishReasonToStopReason(

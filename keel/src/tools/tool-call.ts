@@ -13,11 +13,64 @@ import {
 export interface OpenAICompatibleToolDefinition {
   readonly type: "function";
   readonly function: {
-    readonly name: ToolName;
+    readonly name: string;
     readonly description: string;
     readonly parameters: OpenAICompatibleToolParameters;
   };
 }
+
+export type ToolJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | ToolJsonValue[]
+  | { [key: string]: ToolJsonValue };
+
+export type McpToolArguments = Readonly<Record<string, ToolJsonValue>>;
+
+const mcpServerIdSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/u);
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const mcpToolReferenceSchema = z
+  .object({
+    kind: z.literal("mcp"),
+    serverId: mcpServerIdSchema,
+    serverOrigin: z.url().refine((raw) => new URL(raw).origin === raw, {
+      message: "must be a canonical URL origin",
+    }),
+    rawToolName: z.string().min(1).max(128),
+    configurationDigest: sha256Schema,
+    catalogGeneration: z.string().min(1).max(256),
+    descriptorDigest: sha256Schema,
+  })
+  .strict();
+
+export type McpToolReference = z.infer<typeof mcpToolReferenceSchema>;
+
+export interface McpModelToolDefinition {
+  readonly kind: "mcp";
+  readonly modelName: string;
+  readonly description: string;
+  readonly parameters: OpenAICompatibleToolParameters;
+  readonly reference: McpToolReference;
+}
+
+export interface McpToolExposureSnapshot {
+  readonly snapshotId: string;
+  readonly tools: readonly McpModelToolDefinition[];
+}
+
+const mcpToolCallSchema = z
+  .object({
+    kind: z.literal("mcp"),
+    id: z.string().min(1),
+    tool: z.string().regex(/^[A-Za-z0-9_]{1,64}$/u),
+    reference: mcpToolReferenceSchema,
+    arguments: z.record(z.string(), z.json()),
+  })
+  .strict();
+
+export type McpToolCall = z.infer<typeof mcpToolCallSchema>;
 
 export type ModelToolExposure =
   | { readonly kind: "none" }
@@ -26,6 +79,7 @@ export type ModelToolExposure =
       readonly bash?: true;
       readonly skill?: true;
       readonly memory?: "direct" | "reviewed";
+      readonly mcp?: McpToolExposureSnapshot;
     };
 
 export type ResolvedModelToolExposure =
@@ -35,6 +89,7 @@ export type ResolvedModelToolExposure =
       readonly bash: boolean;
       readonly skill: boolean;
       readonly memory: "disabled" | "direct" | "reviewed";
+      readonly mcpSnapshotId: string | null;
     };
 
 export interface ModelToolExposureAccounting {
@@ -81,9 +136,10 @@ export type InvalidToolCall = z.infer<typeof invalidAgentStateToolCallSchema>;
 export const toolCallSchema = z.union([
   builtinToolCallSchema,
   invalidAgentStateToolCallSchema,
+  mcpToolCallSchema,
 ]);
 
-export type ToolCall = ValidToolCall | InvalidToolCall;
+export type ToolCall = ValidToolCall | InvalidToolCall | McpToolCall;
 
 export interface ToolCallInput {
   readonly id: string;
@@ -188,20 +244,37 @@ function toOpenAICompatibleToolDefinition(
   };
 }
 
+function mcpOpenAICompatibleToolDefinition(
+  tool: McpModelToolDefinition,
+): OpenAICompatibleToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name: tool.modelName,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  };
+}
+
 export function openAICompatibleTools(
   exposure: ModelToolExposure,
 ): readonly OpenAICompatibleToolDefinition[] {
   if (exposure.kind === "none") return [];
-  return builtinTools
+  const builtins = builtinTools
     .filter(
       (tool) =>
         (exposure.bash === true || tool.risk.kind !== "trusted-shell") &&
         (exposure.skill === true || tool.availability !== "skill-catalog") &&
+        (exposure.mcp !== undefined || tool.availability !== "mcp-catalog") &&
         (exposure.memory !== undefined || tool.availability !== "memory") &&
         (exposure.memory === "reviewed" ||
           tool.availability !== "memory-proposal"),
     )
     .map(toOpenAICompatibleToolDefinition);
+  const mcpTools =
+    exposure.mcp?.tools.map(mcpOpenAICompatibleToolDefinition) ?? [];
+  return [...builtins, ...mcpTools];
 }
 
 export function resolveModelToolExposure(
@@ -213,6 +286,7 @@ export function resolveModelToolExposure(
     bash: exposure?.bash === true,
     skill: exposure?.skill === true,
     memory: exposure?.memory ?? "disabled",
+    mcpSnapshotId: exposure?.mcp?.snapshotId ?? null,
   };
 }
 
@@ -225,7 +299,8 @@ export function modelToolExposuresEqual(
   return (
     left.bash === right.bash &&
     left.skill === right.skill &&
-    left.memory === right.memory
+    left.memory === right.memory &&
+    left.mcpSnapshotId === right.mcpSnapshotId
   );
 }
 
@@ -257,6 +332,43 @@ export function toolCallFromParsedArguments(
 ): ToolCall | null {
   const parsed = parseToolCallFromParsedArguments(id, name, parsedArguments);
   return parsed.success ? parsed.data : null;
+}
+
+function mcpToolCallFromParsedArguments(
+  id: string,
+  name: string,
+  parsedArguments: unknown,
+  exposure: Extract<ModelToolExposure, { readonly kind: "auto" }>,
+): McpToolCall | null {
+  const definition = exposure.mcp?.tools.find(
+    (candidate) => candidate.modelName === name,
+  );
+  if (definition === undefined) return null;
+  const argumentsResult = z
+    .record(z.string(), z.json())
+    .safeParse(parsedArguments);
+  if (!argumentsResult.success) return null;
+  return {
+    kind: "mcp",
+    id,
+    tool: definition.modelName,
+    reference: definition.reference,
+    arguments: argumentsResult.data,
+  };
+}
+
+export function providerToolCallFromParsedArguments(
+  id: string,
+  name: string,
+  parsedArguments: unknown,
+  exposure: ModelToolExposure,
+): ToolCall | null {
+  if (isToolName(name)) {
+    return toolCallFromParsedArguments(id, name, parsedArguments);
+  }
+  return exposure.kind === "auto"
+    ? mcpToolCallFromParsedArguments(id, name, parsedArguments, exposure)
+    : null;
 }
 
 function parseToolCallFromParsedArguments(
@@ -313,6 +425,9 @@ export function normalizeProviderToolCall(toolCall: ToolCallInput): ToolCall {
 }
 
 export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
+  if (isMcpToolCall(toolCall)) {
+    return { ...toolCall.arguments };
+  }
   if (isInvalidToolCall(toolCall)) {
     return toolCall.invalidArguments;
   }
@@ -323,6 +438,9 @@ export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
 export function toolCallCanonicalArguments(
   toolCall: ToolCall,
 ): Record<string, unknown> {
+  if (isMcpToolCall(toolCall)) {
+    return { ...toolCall.arguments };
+  }
   if (isInvalidToolCall(toolCall)) {
     return toolCall.invalidArguments;
   }
@@ -331,6 +449,9 @@ export function toolCallCanonicalArguments(
 }
 
 export function toolCallLabel(toolCall: ToolCall): string {
+  if (isMcpToolCall(toolCall)) {
+    return `${toolCall.reference.serverId}/${toolCall.reference.rawToolName}`;
+  }
   if (isInvalidToolCall(toolCall)) {
     return toolCall.tool;
   }
@@ -341,7 +462,15 @@ export function toolCallLabel(toolCall: ToolCall): string {
 export function isInvalidToolCall(
   toolCall: ToolCall,
 ): toolCall is InvalidToolCall {
-  return "invalidArguments" in toolCall;
+  return !isMcpToolCall(toolCall) && "invalidArguments" in toolCall;
+}
+
+export function isMcpToolCall(toolCall: ToolCall): toolCall is McpToolCall {
+  return "kind" in toolCall && toolCall.kind === "mcp";
+}
+
+export function isUntrustedMcpContentToolCall(toolCall: ToolCall): boolean {
+  return isMcpToolCall(toolCall) || toolCall.tool === "mcp_search";
 }
 
 export { builtinToolCallSchema };

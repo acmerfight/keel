@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import {
   chmod,
@@ -14,18 +15,48 @@ import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import { sessionHome } from "./session-store.ts";
 
-const MCP_CONFIG_SCHEMA_VERSION = 1;
+const MCP_CONFIG_SCHEMA_VERSION = 2;
 const MCP_CONFIG_MAX_BYTES = 1024 * 1024;
 const MCP_CONFIG_MAX_SERVERS = 128;
 const MCP_CONFIG_LOCK_TIMEOUT_MS = 5_000;
 const MCP_CONFIG_STALE_LOCK_MS = 30_000;
 const MCP_SERVER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+const MCP_TOOL_FILTER_MAX_ENTRIES = 256;
+const mcpToolFilterNameSchema = z.string().min(1).max(128);
+const mcpToolFilterSchema = z
+  .object({
+    allow: z
+      .array(mcpToolFilterNameSchema)
+      .max(MCP_TOOL_FILTER_MAX_ENTRIES)
+      .nullable(),
+    deny: z.array(mcpToolFilterNameSchema).max(MCP_TOOL_FILTER_MAX_ENTRIES),
+  })
+  .strict()
+  .superRefine((filter, context) => {
+    for (const [field, names] of [
+      ["allow", filter.allow ?? []],
+      ["deny", filter.deny],
+    ] as const) {
+      const seen = new Set<string>();
+      for (const [index, name] of names.entries()) {
+        if (seen.has(name)) {
+          context.addIssue({
+            code: "custom",
+            path: [field, index],
+            message: `duplicate MCP tool filter "${name}"`,
+          });
+        }
+        seen.add(name);
+      }
+    }
+  });
 
 const mcpServerConfigSchema = z
   .object({
     id: z.string().regex(MCP_SERVER_ID_PATTERN),
     url: z.url().transform((raw) => new URL(raw).href),
     allowPrivateNetwork: z.boolean(),
+    toolFilter: mcpToolFilterSchema,
   })
   .strict();
 const mcpConfigFileSchema = z
@@ -111,6 +142,10 @@ async function readMcpConfigFile(
       `Error: cannot read MCP config ${filePath}: ${errorMessage(error)}`,
     );
   }
+  return parseMcpConfigFile(raw, filePath);
+}
+
+function parseMcpConfigFile(raw: string, filePath: string): McpConfigFile {
   let json: unknown;
   try {
     json = JSON.parse(raw);
@@ -124,6 +159,36 @@ async function readMcpConfigFile(
     );
   }
   return parsed.data;
+}
+
+function readMcpConfigFileSync(runtime: McpConfigRuntime): McpConfigFile {
+  const filePath = configPath(runtime);
+  let fileStat: ReturnType<typeof statSync>;
+  try {
+    fileStat = statSync(filePath);
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return { schemaVersion: MCP_CONFIG_SCHEMA_VERSION, servers: [] };
+    }
+    configError(
+      `Error: cannot read MCP config ${filePath}: ${errorMessage(error)}`,
+    );
+  }
+  if (fileStat.size > MCP_CONFIG_MAX_BYTES) {
+    configError(
+      `Error: cannot read MCP config ${filePath}: file exceeds ${MCP_CONFIG_MAX_BYTES} bytes.`,
+    );
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch (error) {
+    configError(
+      `Error: cannot read MCP config ${filePath}: ${errorMessage(error)}`,
+    );
+  }
+  return parseMcpConfigFile(raw, filePath);
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -258,6 +323,12 @@ export async function listMcpServers(
   runtime: McpConfigRuntime,
 ): Promise<readonly McpServerConfig[]> {
   return (await readMcpConfigFile(runtime)).servers;
+}
+
+export function listMcpServersSync(
+  runtime: McpConfigRuntime,
+): readonly McpServerConfig[] {
+  return readMcpConfigFileSync(runtime).servers;
 }
 
 export async function findMcpServer(
