@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { Message } from "../../src/llm/types.ts";
+import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import {
   executeToolCall,
   type ToolExecution,
@@ -31,7 +32,7 @@ type FailedToolExecutionEffectKind = Extract<
 type FailedToolExecutionEffectsAreRestricted = Expect<
   Equal<
     FailedToolExecutionEffectKind,
-    "visible_project_instructions" | "session_goal"
+    "external_tool_result" | "visible_project_instructions" | "session_goal"
   >
 >;
 const failedToolExecutionEffectsAreRestricted: FailedToolExecutionEffectsAreRestricted = true;
@@ -1069,5 +1070,224 @@ describe("Tool Execution", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given MCP control or dynamic tools are called without an active runtime,
+    When the execution boundary routes their typed discriminants,
+    Then both calls fail closed without attempting a fallback capability`, async () => {
+    const workspace = process.cwd();
+    const reference = {
+      kind: "mcp" as const,
+      serverId: "catalog",
+      serverOrigin: "https://catalog.example",
+      rawToolName: "search",
+      configurationDigest: "a".repeat(64),
+      catalogGeneration: `catalog:${"b".repeat(64)}`,
+      descriptorDigest: "c".repeat(64),
+    };
+
+    const search = await executeToolCall({
+      workspace,
+      toolCall: { id: "search_1", tool: "mcp_search", query: "otters" },
+      signal: new AbortController().signal,
+      bash: { kind: "disabled" },
+    });
+    const dynamic = await executeToolCall({
+      workspace,
+      toolCall: {
+        kind: "mcp",
+        id: "remote_1",
+        tool: "mcp__catalog__search",
+        reference,
+        arguments: { query: "otters" },
+      },
+      signal: new AbortController().signal,
+      bash: { kind: "disabled" },
+    });
+
+    expect(search).toMatchObject({ ok: false });
+    expect(search.content).toContain("no MCP servers are configured");
+    expect(dynamic).toMatchObject({ ok: false });
+    expect(dynamic.content).toContain("MCP runtime is unavailable");
+  });
+
+  test(`Given an active MCP runtime receives searches, resolved output, and an unresolved name,
+    When the execution boundary delegates them,
+    Then only identified output receives external provenance`, async () => {
+    const searches: unknown[] = [];
+    const mcp: McpRuntime = {
+      prepareTurn: async () => {},
+      exposureSnapshot: () => ({ snapshotId: "empty", tools: [] }),
+      search: async (request) => {
+        searches.push(request);
+        return { ok: true, content: "activated" };
+      },
+      execute: async (toolCall) => {
+        if (toolCall.kind === "mcp_unresolved") {
+          return {
+            identity: "unidentified",
+            content: "unresolved MCP tool",
+            ok: false,
+          };
+        }
+        return {
+          identity: "identified",
+          content: "remote result",
+          ok: true,
+          sourceTruncated: true,
+          artifact: {
+            content: '{"result":"complete"}',
+            previewContent: "remote result",
+            sourceTruncated: false,
+          },
+          preserved: {
+            origin: "external",
+            trustedEvidence: false,
+            serverId: toolCall.reference.serverId,
+            rawToolName: toolCall.reference.rawToolName,
+            value: { result: "complete" },
+            valueBytes: 21,
+            valueSha256: "d".repeat(64),
+          },
+        };
+      },
+      close: async () => {},
+    };
+    const workspace = process.cwd();
+    const signal = new AbortController().signal;
+
+    await executeToolCall({
+      workspace,
+      toolCall: { id: "search_sparse", tool: "mcp_search", query: "otters" },
+      signal,
+      bash: { kind: "disabled" },
+      mcp,
+    });
+    await executeToolCall({
+      workspace,
+      toolCall: {
+        id: "search_full",
+        tool: "mcp_search",
+        query: "otters",
+        server: "catalog",
+        toolName: "search",
+        limit: 3,
+        refresh: true,
+      },
+      signal,
+      bash: { kind: "disabled" },
+      mcp,
+    });
+    const dynamic = await executeToolCall({
+      workspace,
+      toolCall: {
+        kind: "mcp",
+        id: "remote_1",
+        tool: "mcp__catalog__search",
+        reference: {
+          kind: "mcp",
+          serverId: "catalog",
+          serverOrigin: "https://catalog.example",
+          rawToolName: "search",
+          configurationDigest: "a".repeat(64),
+          catalogGeneration: `catalog:${"b".repeat(64)}`,
+          descriptorDigest: "c".repeat(64),
+        },
+        arguments: { query: "otters" },
+      },
+      signal,
+      bash: { kind: "disabled" },
+      mcp,
+    });
+    const unresolved = await executeToolCall({
+      workspace,
+      toolCall: {
+        kind: "mcp_unresolved",
+        id: "remote_stale",
+        tool: "mcp__catalog__removed",
+        arguments: { query: "otters" },
+      },
+      signal,
+      bash: { kind: "disabled" },
+      mcp,
+    });
+
+    expect(searches).toEqual([
+      { query: "otters" },
+      {
+        query: "otters",
+        server: "catalog",
+        tool: "search",
+        limit: 3,
+        refresh: true,
+      },
+    ]);
+    expect(dynamic).toMatchObject({
+      ok: true,
+      sourceTruncated: true,
+      artifact: { content: '{"result":"complete"}' },
+      effects: [{ kind: "external_tool_result" }],
+    });
+    expect(unresolved).toEqual({
+      content: "unresolved MCP tool",
+      ok: false,
+      effects: [],
+    });
+  });
+
+  test(`Given an MCP adapter throws implementation failure or cancellation,
+    When dynamic execution normalizes the boundary,
+    Then faults become recoverable while typed cancellation still propagates`, async () => {
+    const baseRuntime: McpRuntime = {
+      prepareTurn: async () => {},
+      exposureSnapshot: () => ({ snapshotId: "empty", tools: [] }),
+      search: async () => ({ ok: true, content: "unused" }),
+      execute: async () => {
+        throw new Error("adapter exploded");
+      },
+      close: async () => {},
+    };
+    const toolCall = {
+      kind: "mcp" as const,
+      id: "remote_failure",
+      tool: "mcp__catalog__search",
+      reference: {
+        kind: "mcp" as const,
+        serverId: "catalog",
+        serverOrigin: "https://catalog.example",
+        rawToolName: "search",
+        configurationDigest: "a".repeat(64),
+        catalogGeneration: `catalog:${"b".repeat(64)}`,
+        descriptorDigest: "c".repeat(64),
+      },
+      arguments: { query: "otters" },
+    };
+    const failed = await executeToolCall({
+      workspace: process.cwd(),
+      toolCall,
+      signal: new AbortController().signal,
+      bash: { kind: "disabled" },
+      mcp: baseRuntime,
+    });
+    const controller = new AbortController();
+    const cancellation = new Error("cancelled");
+    controller.abort(cancellation);
+
+    expect(failed).toMatchObject({ ok: false });
+    expect(failed.content).toContain("adapter exploded");
+    await expect(
+      executeToolCall({
+        workspace: process.cwd(),
+        toolCall,
+        signal: controller.signal,
+        bash: { kind: "disabled" },
+        mcp: {
+          ...baseRuntime,
+          execute: async () => {
+            throw cancellation;
+          },
+        },
+      }),
+    ).rejects.toBe(cancellation);
   });
 });

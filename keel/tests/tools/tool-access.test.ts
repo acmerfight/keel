@@ -696,4 +696,33 @@ describe("Tool Access", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given an external MCP call has no trusted effect metadata,
+    When scheduling access is derived,
+    Then it conflicts with every local operation by default`, () => {
+    const workspace = "/workspace";
+    const external = toolCallAccesses(workspace, {
+      kind: "mcp",
+      id: "remote_1",
+      tool: "mcp__catalog__search",
+      reference: {
+        kind: "mcp",
+        serverId: "catalog",
+        serverOrigin: "https://catalog.example",
+        rawToolName: "search",
+        configurationDigest: "a".repeat(64),
+        catalogGeneration: `catalog:${"b".repeat(64)}`,
+        descriptorDigest: "c".repeat(64),
+      },
+      arguments: { query: "otters" },
+    });
+
+    expect(external).toEqual(ToolAccesses.all());
+    expect(
+      ToolAccesses.conflict(
+        external,
+        ToolAccesses.readFile("/workspace/README.md"),
+      ),
+    ).toBe(true);
+  });
 });

@@ -7,12 +7,6 @@ import { z } from "zod";
 const MCP_MAX_REDIRECTS = 5;
 const MCP_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MCP_NETWORK_TIMEOUT_MS = 10_000;
-const SECRET_REDIRECT_HEADERS = [
-  "authorization",
-  "cookie",
-  "proxy-authorization",
-  "mcp-session-id",
-] as const;
 const BODY_REDIRECT_HEADERS = [
   "content-encoding",
   "content-language",
@@ -88,15 +82,6 @@ function networkPolicyCause(error: unknown): McpNetworkPolicyError | null {
 
 function networkPolicyError(message: string): never {
   throw new McpNetworkPolicyError(message);
-}
-
-function diagnosticUrl(url: URL): string {
-  const safe = new URL(url);
-  safe.username = "";
-  safe.password = "";
-  safe.search = "";
-  safe.hash = "";
-  return safe.href;
 }
 
 function hostnameWithoutBrackets(hostname: string): string {
@@ -190,13 +175,12 @@ function validateRedirectTarget(
   base: ValidatedMcpServerUrl,
 ): NetworkAccess {
   const parsed = parseMcpUrl(target.href);
-  const sameOrigin = parsed.origin === base.url.origin;
-  if (parsed.protocol === "http:" && !sameOrigin) {
+  if (parsed.origin !== base.url.origin) {
     networkPolicyError(
-      `Error: MCP redirect target "${diagnosticUrl(parsed)}" must use HTTPS.`,
+      "Error: cross-origin MCP redirect rejected because the destination was not approved as this server origin.",
     );
   }
-  return sameOrigin ? base.access : "public";
+  return base.access;
 }
 
 function requestBodyRedirectsToGet(status: number, method: string): boolean {
@@ -350,11 +334,11 @@ class PolicyFetch implements McpPolicyFetch {
       }
 
       const next = new URL(location, target);
-      validateRedirectTarget(next, this.base);
-      if (next.origin !== target.origin) {
-        for (const header of SECRET_REDIRECT_HEADERS) {
-          headers.delete(header);
-        }
+      try {
+        validateRedirectTarget(next, this.base);
+      } catch (error) {
+        await response.body?.cancel();
+        throw error;
       }
       if (requestBodyRedirectsToGet(response.status, method)) {
         method = "GET";

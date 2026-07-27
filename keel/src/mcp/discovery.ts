@@ -2,13 +2,16 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type CallToolResult,
   Client,
   fromJsonSchema,
+  type JsonSchemaType,
   type ProtocolEra,
   SdkError,
   SdkErrorCode,
   StreamableHTTPClientTransport,
   specTypeSchemas,
+  type Tool,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import { z } from "zod";
@@ -18,8 +21,11 @@ import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 const MCP_CLIENT_NAME = "keel";
 const MCP_CONNECT_TIMEOUT_MS = 10_000;
 const MCP_DISCOVERY_TIMEOUT_MS = 10_000;
+const MCP_CALL_TIMEOUT_MS = 30_000;
+const MCP_CALL_MAX_TOTAL_TIMEOUT_MS = 60_000;
 const MCP_MAX_CATALOG_TOOLS = 1_000;
 const MCP_MAX_CATALOG_PAGES = 64;
+const MCP_MAX_CATALOG_BYTES = 8 * 1024 * 1024;
 const MCP_MAX_CURSOR_LENGTH = 1_024;
 const MCP_MAX_TOOL_DESCRIPTOR_BYTES = 64 * 1024;
 const MCP_MAX_JSON_DEPTH = 32;
@@ -108,7 +114,11 @@ const wrappedCauseSchema = z
   })
   .passthrough();
 const packageJsonSchema = z.object({ version: z.string().min(1) });
-type JsonValue = z.infer<ReturnType<typeof z.json>>;
+const sdkJsonSchemaBoundarySchema = z.custom<JsonSchemaType>((value) => {
+  const parsed = jsonObjectSchema.safeParse(value);
+  return parsed.success && jsonSchemaIssue(parsed.data) === null;
+});
+export type McpJsonValue = z.infer<ReturnType<typeof z.json>>;
 
 export interface McpServerEndpoint {
   readonly url: string;
@@ -126,6 +136,20 @@ interface McpCatalogSummary {
   readonly quarantined: number;
   readonly digest: string;
   readonly issues: readonly McpCatalogIssue[];
+}
+
+export interface McpCatalogTool {
+  readonly descriptor: Tool;
+  readonly descriptorDigest: string;
+  readonly validateArguments: (value: unknown) => Promise<readonly string[]>;
+  readonly validateOutput:
+    | ((value: unknown) => Promise<readonly string[]>)
+    | null;
+}
+
+export interface McpCatalog {
+  readonly summary: McpCatalogSummary;
+  readonly tools: readonly McpCatalogTool[];
 }
 
 export type McpDiscoveryStatus =
@@ -159,7 +183,7 @@ function boundedDiagnosticText(value: string, maxLength: number): string {
     .slice(0, maxLength);
 }
 
-function canonicalJson(value: JsonValue, depth = 0): string {
+function canonicalJson(value: McpJsonValue, depth = 0): string {
   if (depth >= MCP_MAX_JSON_DEPTH) {
     return JSON.stringify("<depth-limit>");
   }
@@ -178,7 +202,7 @@ function canonicalJson(value: JsonValue, depth = 0): string {
     .join(",")}}`;
 }
 
-function exceedsJsonDepth(value: JsonValue, depth = 0): boolean {
+function exceedsJsonDepth(value: McpJsonValue, depth = 0): boolean {
   if (value === null || typeof value !== "object") return false;
   if (depth >= MCP_MAX_JSON_DEPTH) return true;
   return Array.isArray(value)
@@ -214,11 +238,11 @@ function schemaPath(path: readonly string[]): string {
   return path.length === 0 ? "<root>" : path.join(".");
 }
 
-function xMcpHeaderIssue(inputSchema: JsonValue): string | null {
+function xMcpHeaderIssue(inputSchema: McpJsonValue): string | null {
   const seenHeaders = new Map<string, string>();
 
   function visit(
-    value: JsonValue,
+    value: McpJsonValue,
     path: readonly string[],
     reachable: boolean,
   ): string | null {
@@ -302,12 +326,12 @@ function appendCatalogIssue(
   issues.push(issue);
 }
 
-async function summarizeCatalog(
-  tools: readonly JsonValue[],
+export async function buildMcpCatalog(
+  tools: readonly McpJsonValue[],
   protocolEra: ProtocolEra,
-): Promise<McpCatalogSummary> {
+): Promise<McpCatalog> {
   const issues: McpCatalogIssue[] = [];
-  let usable = 0;
+  const validated: McpCatalogTool[] = [];
   for (const [index, tool] of tools.entries()) {
     if (exceedsJsonDepth(tool)) {
       appendCatalogIssue(issues, {
@@ -368,25 +392,74 @@ async function summarizeCatalog(
       });
       continue;
     }
-    usable += 1;
+    const inputValidator = fromJsonSchema(
+      sdkJsonSchemaBoundarySchema.parse(parsed.data.inputSchema),
+    )["~standard"];
+    const outputValidator =
+      parsed.data.outputSchema === undefined
+        ? null
+        : fromJsonSchema(
+            sdkJsonSchemaBoundarySchema.parse(parsed.data.outputSchema),
+          )["~standard"];
+    validated.push({
+      descriptor: sdkParsed.value,
+      descriptorDigest: createHash("sha256")
+        .update(canonicalJson(tool))
+        .digest("hex"),
+      validateArguments: async (value) => {
+        const validation = await inputValidator.validate(value);
+        return validation.issues?.map((issue) => issue.message) ?? [];
+      },
+      validateOutput:
+        outputValidator === null
+          ? null
+          : async (value) => {
+              const validation = await outputValidator.validate(value);
+              return validation.issues?.map((issue) => issue.message) ?? [];
+            },
+    });
   }
+  const duplicateNames = new Set<string>();
+  const seenNames = new Set<string>();
+  for (const tool of validated) {
+    if (seenNames.has(tool.descriptor.name)) {
+      duplicateNames.add(tool.descriptor.name);
+    }
+    seenNames.add(tool.descriptor.name);
+  }
+  for (const name of duplicateNames) {
+    appendCatalogIssue(issues, {
+      tool: boundedDiagnosticText(name, 160),
+      reason: "duplicate raw tool name",
+    });
+  }
+  const usableTools = validated.filter(
+    (tool) => !duplicateNames.has(tool.descriptor.name),
+  );
   const digest = createHash("sha256")
     .update(canonicalJson([...tools]))
     .digest("hex");
   return {
-    total: tools.length,
-    usable,
-    quarantined: tools.length - usable,
-    digest,
-    issues,
+    summary: {
+      total: tools.length,
+      usable: usableTools.length,
+      quarantined: tools.length - usableTools.length,
+      digest,
+      issues,
+    },
+    tools: usableTools,
   };
 }
 
-async function listCatalogTools(client: Client): Promise<readonly JsonValue[]> {
+async function listCatalogTools(
+  client: Client,
+  signal?: AbortSignal,
+): Promise<readonly McpJsonValue[]> {
   if (client.getServerCapabilities()?.tools === undefined) return [];
 
-  const tools: JsonValue[] = [];
+  const tools: McpJsonValue[] = [];
   const seenCursors = new Set<string>();
+  let catalogBytes = 0;
   let cursor: string | undefined;
   for (let page = 1; page <= MCP_MAX_CATALOG_PAGES; page += 1) {
     const result = await client.request(
@@ -395,12 +468,23 @@ async function listCatalogTools(client: Client): Promise<readonly JsonValue[]> {
         params: cursor === undefined ? {} : { cursor },
       },
       catalogPageSchema,
-      { timeout: MCP_DISCOVERY_TIMEOUT_MS },
+      {
+        timeout: MCP_DISCOVERY_TIMEOUT_MS,
+        ...(signal !== undefined ? { signal } : {}),
+      },
     );
     if (tools.length + result.tools.length > MCP_MAX_CATALOG_TOOLS) {
       throw new Error(
         `catalog contains more than ${MCP_MAX_CATALOG_TOOLS} tools`,
       );
+    }
+    for (const tool of result.tools) {
+      catalogBytes += Buffer.byteLength(JSON.stringify(tool), "utf8");
+      if (catalogBytes > MCP_MAX_CATALOG_BYTES) {
+        throw new Error(
+          `catalog descriptors exceed ${MCP_MAX_CATALOG_BYTES} bytes`,
+        );
+      }
     }
     tools.push(...result.tools);
     if (result.nextCursor === undefined) return tools;
@@ -413,6 +497,108 @@ async function listCatalogTools(client: Client): Promise<readonly JsonValue[]> {
     cursor = result.nextCursor;
   }
   throw new Error(`tools/list exceeded ${MCP_MAX_CATALOG_PAGES} pages`);
+}
+
+export interface McpConnection {
+  readonly protocolEra: ProtocolEra;
+  readonly protocolVersion: string;
+  readonly serverIdentity: string | null;
+  readonly listCatalog: (signal?: AbortSignal) => Promise<McpCatalog>;
+  readonly callTool: (
+    tool: McpCatalogTool,
+    arguments_: Readonly<Record<string, McpJsonValue>>,
+    signal: AbortSignal,
+  ) => Promise<CallToolResult>;
+  readonly close: () => Promise<void>;
+}
+
+export async function connectMcpServer(
+  server: McpServerEndpoint,
+  signal?: AbortSignal,
+): Promise<McpConnection> {
+  const validated = validateMcpServerUrl(
+    server.url,
+    server.allowPrivateNetwork,
+  );
+  const network = createMcpPolicyFetch(validated);
+  const transport = new StreamableHTTPClientTransport(validated.url, {
+    authProvider: {
+      token: async () => undefined,
+    },
+    fetch: network.fetch,
+  });
+  const client = new Client(
+    { name: MCP_CLIENT_NAME, version: keelVersion() },
+    {
+      listMaxPages: MCP_MAX_CATALOG_PAGES,
+      versionNegotiation: {
+        mode: "auto",
+        probe: {
+          timeoutMs: MCP_DISCOVERY_TIMEOUT_MS,
+          maxRetries: 0,
+        },
+      },
+    },
+  );
+  try {
+    await client.connect(transport, {
+      timeout: MCP_CONNECT_TIMEOUT_MS,
+      ...(signal !== undefined ? { signal } : {}),
+    });
+    const protocolEra = client.getProtocolEra();
+    const protocolVersion = client.getNegotiatedProtocolVersion();
+    /* v8 ignore next 3 -- the SDK connect contract sets both values before resolving; fail closed if a future SDK violates it. */
+    if (protocolEra === undefined || protocolVersion === undefined) {
+      throw new Error("MCP SDK connected without a negotiated protocol");
+    }
+    const identity = client.getServerVersion();
+    let closed = false;
+    return {
+      protocolEra,
+      protocolVersion,
+      serverIdentity:
+        identity === undefined
+          ? null
+          : boundedDiagnosticText(
+              `${identity.name}@${identity.version}`,
+              MCP_IDENTITY_MAX_LENGTH,
+            ),
+      listCatalog: async (listSignal) =>
+        await buildMcpCatalog(
+          await listCatalogTools(client, listSignal),
+          protocolEra,
+        ),
+      callTool: async (tool, arguments_, signal) =>
+        await client.callTool(
+          { name: tool.descriptor.name, arguments: arguments_ },
+          {
+            signal,
+            timeout: MCP_CALL_TIMEOUT_MS,
+            maxTotalTimeout: MCP_CALL_MAX_TOTAL_TIMEOUT_MS,
+            resetTimeoutOnProgress: false,
+            toolDefinition: tool.descriptor,
+          },
+        ),
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        const cleanup = await Promise.allSettled([
+          client.close(),
+          network.close(),
+        ]);
+        const cleanupFailure = cleanup.find(
+          (result) => result.status === "rejected",
+        );
+        /* v8 ignore next 3 -- third-party client/transport cleanup faults are nondeterministic; close still surfaces the first failure. */
+        if (cleanupFailure !== undefined) {
+          throw cleanupFailure.reason;
+        }
+      },
+    };
+  } catch (error) {
+    await Promise.allSettled([client.close(), network.close()]);
+    throw error;
+  }
 }
 
 function isUnauthorized(error: unknown): boolean {
@@ -452,54 +638,17 @@ export async function discoverMcpServer(
   now: () => number = () => Date.now(),
 ): Promise<McpDiscoveryStatus> {
   const startedAt = now();
-  const validated = validateMcpServerUrl(
-    server.url,
-    server.allowPrivateNetwork,
-  );
-  const network = createMcpPolicyFetch(validated);
-  const transport = new StreamableHTTPClientTransport(validated.url, {
-    authProvider: {
-      token: async () => undefined,
-    },
-    fetch: network.fetch,
-  });
-  const client = new Client(
-    { name: MCP_CLIENT_NAME, version: keelVersion() },
-    {
-      listMaxPages: MCP_MAX_CATALOG_PAGES,
-      versionNegotiation: {
-        mode: "auto",
-        probe: {
-          timeoutMs: MCP_DISCOVERY_TIMEOUT_MS,
-          maxRetries: 0,
-        },
-      },
-    },
-  );
-
+  let connection: McpConnection | null = null;
   let status: McpDiscoveryStatus;
   try {
-    await client.connect(transport, { timeout: MCP_CONNECT_TIMEOUT_MS });
-    const protocolEra = client.getProtocolEra();
-    const protocolVersion = client.getNegotiatedProtocolVersion();
-    /* v8 ignore next 3 -- the SDK connect contract sets both values before resolving; fail closed if a future SDK violates it. */
-    if (protocolEra === undefined || protocolVersion === undefined) {
-      throw new Error("MCP SDK connected without a negotiated protocol");
-    }
-    const tools = await listCatalogTools(client);
-    const identity = client.getServerVersion();
+    connection = await connectMcpServer(server);
+    const catalog = await connection.listCatalog();
     status = {
       status: "ready",
-      protocolEra,
-      protocolVersion,
-      serverIdentity:
-        identity === undefined
-          ? null
-          : boundedDiagnosticText(
-              `${identity.name}@${identity.version}`,
-              MCP_IDENTITY_MAX_LENGTH,
-            ),
-      catalog: await summarizeCatalog(tools, protocolEra),
+      protocolEra: connection.protocolEra,
+      protocolVersion: connection.protocolVersion,
+      serverIdentity: connection.serverIdentity,
+      catalog: catalog.summary,
       latencyMs: Math.max(0, now() - startedAt),
     };
   } catch (error) {
@@ -517,10 +666,12 @@ export async function discoverMcpServer(
     }
   }
 
-  const cleanup = await Promise.allSettled([client.close(), network.close()]);
+  const cleanup = await Promise.allSettled(
+    connection === null ? [] : [connection.close()],
+  );
   const cleanupFailure = cleanup.find((result) => result.status === "rejected");
   /* v8 ignore next 7 -- third-party transport/agent close failures are nondeterministic cleanup faults; discovery must still report them. */
-  if (cleanupFailure !== undefined) {
+  if (cleanupFailure?.status === "rejected") {
     return {
       status: "failed",
       error: `MCP cleanup failed: ${sanitizedError(cleanupFailure.reason)}`,

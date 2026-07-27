@@ -95,6 +95,7 @@ const userMessageContextCompactionEvidenceSchema = z
 const userMessageContextCompactionSchema = z
   .object({
     evidence: z.array(userMessageContextCompactionEvidenceSchema),
+    untrustedMcpContent: z.literal(true).optional(),
   })
   .strict();
 
@@ -519,6 +520,9 @@ function copyUserContextCompactionMetadata(
         ? {}
         : { inspectCommand: evidence.inspectCommand }),
     })),
+    ...(metadata.untrustedMcpContent === true
+      ? { untrustedMcpContent: true }
+      : {}),
   };
 }
 
@@ -551,6 +555,9 @@ function toUserContextCompactionMetadata(
             inspectCommand,
           };
     }),
+    ...(metadata.untrustedMcpContent === true
+      ? { untrustedMcpContent: true }
+      : {}),
   };
 }
 

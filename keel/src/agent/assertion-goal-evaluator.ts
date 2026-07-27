@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
+import { isMcpToolCall } from "../tools/tool-call.ts";
 import type { AssertionEvidenceResourceFreshness } from "./assertion-evidence-freshness.ts";
 import type { AgentEvent } from "./events.ts";
 import type {
@@ -79,6 +80,14 @@ type AssertionGoalEvidenceRecord = AssertionGoalEvidenceRecordBase &
         >;
         readonly toolCalls?: never;
       }
+    | {
+        readonly role: "tool";
+        readonly trustedEvidence: false;
+        readonly toolCallId: string;
+        readonly sourceTruncated?: true;
+        readonly resourceFreshness?: never;
+        readonly toolCalls?: never;
+      }
   );
 
 interface AssertionGoalEvaluatorOptions {
@@ -107,6 +116,7 @@ function evidenceRecord(
     string,
     AssertionEvidenceResourceFreshness
   >,
+  externalToolCallIds: ReadonlySet<string>,
 ): AssertionGoalEvidenceRecord {
   const messageNumber = index + 1;
   switch (message.role) {
@@ -128,6 +138,18 @@ function evidenceRecord(
           : {}),
       };
     case "tool": {
+      if (externalToolCallIds.has(message.toolCallId)) {
+        return {
+          messageNumber,
+          role: "tool",
+          trustedEvidence: false,
+          toolCallId: message.toolCallId,
+          content: message.content,
+          ...(message.sourceTruncated === true
+            ? { sourceTruncated: true }
+            : {}),
+        };
+      }
       const resourceFreshness = resourceFreshnessByToolCallId.get(
         message.toolCallId,
       );
@@ -159,10 +181,22 @@ function formatEvidenceRecordsJson(
   const resourceFreshnessByToolCallId = new Map(
     resourceFreshness.map((freshness) => [freshness.toolCallId, freshness]),
   );
+  const externalToolCallIds = new Set(
+    evidenceMessages.flatMap((message) =>
+      message.role === "assistant"
+        ? message.toolCalls.filter(isMcpToolCall).map((toolCall) => toolCall.id)
+        : [],
+    ),
+  );
   return JSON.stringify(
     {
       records: evidenceMessages.map((message, index) =>
-        evidenceRecord(message, index, resourceFreshnessByToolCallId),
+        evidenceRecord(
+          message,
+          index,
+          resourceFreshnessByToolCallId,
+          externalToolCallIds,
+        ),
       ),
     },
     null,

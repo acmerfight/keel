@@ -54,6 +54,8 @@ import {
   undoCheckpointUnavailable,
 } from "../core/undo-protection.ts";
 import type { Message, Usage, UserMessageOrigin } from "../llm/types.ts";
+import { connectMcpServer } from "../mcp/discovery.ts";
+import { createMcpRuntime } from "../mcp/runtime.ts";
 import {
   type BashApprovalGrant,
   type BashProjectApprovalGrant,
@@ -83,6 +85,7 @@ import {
 } from "../skills/model.ts";
 import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
+import { isMcpToolInvocation } from "../tools/tool-call.ts";
 import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
   formatInteractiveForkPicker,
@@ -163,6 +166,10 @@ import type {
   ReviewedInteractiveSessionMemoryBinding,
   SavedInteractiveSession,
 } from "./interactive-session/types.ts";
+import {
+  createPromptedMcpPermissionPolicy,
+  denyMcpPermissionPolicy,
+} from "./mcp-approval.ts";
 import {
   formatLiveSessionGoalStatus,
   formatUndoCheckpointList,
@@ -515,6 +522,7 @@ export async function runInteractiveSession(
     for await (const event of stream) {
       if (event.type === "tool_end") {
         const failedGoalVerification =
+          !isMcpToolInvocation(event.toolCall) &&
           event.toolCall.tool === "bash" &&
           event.bashExitCode !== undefined &&
           event.bashExitCode !== null &&
@@ -585,6 +593,31 @@ export async function runInteractiveSession(
         }
       : {}),
   });
+  const mcpRuntime =
+    options.mcpServers === undefined || options.mcpServers.length === 0
+      ? undefined
+      : createMcpRuntime({
+          servers: options.mcpServers,
+          connectionFactory: { connect: connectMcpServer },
+          permission:
+            options.mcpCanPrompt === true
+              ? createPromptedMcpPermissionPolicy(
+                  lineReader,
+                  options.writeStderr,
+                  {
+                    onPromptStart: () => {
+                      setComposerMode("approval");
+                    },
+                    onPromptEnd: () => {
+                      setComposerMode("steer");
+                    },
+                  },
+                )
+              : denyMcpPermissionPolicy(
+                  "MCP calls require a real terminal approval and this session cannot prompt.",
+                ),
+          now,
+        });
   const memoryBinding: InteractiveSessionMemoryBinding = options;
   const reviewedMemory = isReviewedInteractiveMemoryBinding(memoryBinding)
     ? {
@@ -1112,6 +1145,7 @@ export async function runInteractiveSession(
           ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
           bash,
+          ...(mcpRuntime !== undefined ? { mcp: mcpRuntime } : {}),
           hiddenWorkspacePaths,
           ...(managedSkills !== null
             ? { skillActivation: managedSkills.activation }
@@ -1302,6 +1336,7 @@ export async function runInteractiveSession(
         ];
         const successfulVerification = toolExecutionsDuringTurn.find(
           (execution) =>
+            !isMcpToolInvocation(execution.toolCall) &&
             execution.toolCall.tool === "bash" &&
             execution.bashExitCode === 0 &&
             sessionGoalCommandMatchesCriterion(
@@ -1327,7 +1362,9 @@ export async function runInteractiveSession(
                   ", ",
                 )}.`,
               }
-            : successfulVerification?.toolCall.tool === "bash"
+            : successfulVerification !== undefined &&
+                !isMcpToolInvocation(successfulVerification.toolCall) &&
+                successfulVerification.toolCall.tool === "bash"
               ? {
                   kind: "progress_observed",
                   reason: `Completion command ${JSON.stringify(successfulVerification.toolCall.command)} exited 0 after the latest workspace mutation.`,
@@ -2580,6 +2617,7 @@ export async function runInteractiveSession(
     }
   } finally {
     options.offSigint(abortActiveTurn);
+    await mcpRuntime?.close().catch(() => undefined);
     input.close();
   }
   const finalGoal =

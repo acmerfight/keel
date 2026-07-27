@@ -49,7 +49,24 @@ export function costBudgetStopPolicy(): AgentStopPolicy {
 
 function toolCallKey(toolCall: ToolCall): string {
   const { id: _id, ...args } = toolCall;
-  return JSON.stringify(args, Object.keys(args).sort());
+  return JSON.stringify(deeplySortedJsonValue(args));
+}
+
+function deeplySortedJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(deeplySortedJsonValue);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const sorted: Record<string, unknown> = {};
+  const entries = Object.entries(value).sort(
+    ([left], [right]) => Number(left > right) - Number(left < right),
+  );
+  for (const [key, item] of entries) {
+    sorted[key] = deeplySortedJsonValue(item);
+  }
+  return sorted;
 }
 
 function isBlockedGoalProposal(toolCall: ToolCall): boolean {

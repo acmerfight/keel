@@ -11,6 +11,12 @@ describe("MCP CLI args", () => {
         "--name",
         "catalog",
         "--allow-private-network",
+        "--allow-tool",
+        "search",
+        "--allow-tool=lookup",
+        "--deny-tool",
+        "delete",
+        "--deny-tool=purge",
       ],
       {
         command: "mcp",
@@ -18,6 +24,8 @@ describe("MCP CLI args", () => {
         url: "https://mcp.example/tools",
         name: "catalog",
         allowPrivateNetwork: true,
+        allowTools: ["search", "lookup"],
+        denyTools: ["delete", "purge"],
       },
     ],
     [
@@ -28,6 +36,8 @@ describe("MCP CLI args", () => {
         url: "https://mcp.example/tools",
         name: "catalog",
         allowPrivateNetwork: false,
+        allowTools: [],
+        denyTools: [],
       },
     ],
     [
@@ -37,6 +47,8 @@ describe("MCP CLI args", () => {
         mode: "add",
         url: "https://mcp.example/tools",
         allowPrivateNetwork: false,
+        allowTools: [],
+        denyTools: [],
       },
     ],
     [["mcp", "list"], { command: "mcp", mode: "list" }],
@@ -71,6 +83,14 @@ describe("MCP CLI args", () => {
     [
       ["mcp", "add", "https://mcp.example", "--name="],
       "Error: --name requires a value.",
+    ],
+    [
+      ["mcp", "add", "https://mcp.example", "--allow-tool"],
+      "Error: --allow-tool requires a value.",
+    ],
+    [
+      ["mcp", "add", "https://mcp.example", "--deny-tool="],
+      "Error: --deny-tool requires a value.",
     ],
     [
       ["mcp", "add", "https://mcp.example", "--unknown"],

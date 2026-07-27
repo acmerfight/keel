@@ -5,6 +5,7 @@ import {
   gitDiffScopeHeading,
   parseGitDiffOutput,
 } from "../../tools/git-diff-document.ts";
+import { isMcpToolInvocation } from "../../tools/tool-call.ts";
 
 export type ToolOutputProjectionContext =
   | { readonly toolCall: ToolCall }
@@ -902,6 +903,9 @@ function projectToolOutputPreview(
   if (toolCall === null) {
     return boundedText(text, maxChars);
   }
+  if (isMcpToolInvocation(toolCall)) {
+    return boundedText(text, maxChars);
+  }
   switch (toolCall.tool) {
     case "bash":
       return projectBashOutput(text, maxChars, toolCall);
@@ -948,6 +952,7 @@ function projectToolOutputPreview(
     case "memory_add":
     case "memory_forget":
     case "memory_propose":
+    case "mcp_search":
     case "skill_resource":
     case "skill_search":
     case "skill":

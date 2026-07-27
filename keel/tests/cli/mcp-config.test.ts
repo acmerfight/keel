@@ -15,6 +15,7 @@ import {
   deriveMcpServerId,
   findMcpServer,
   listMcpServers,
+  listMcpServersSync,
   validateMcpServerId,
 } from "../../src/cli/mcp-config.ts";
 
@@ -23,6 +24,11 @@ function configRuntime(home: string) {
     env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
   };
 }
+
+const noToolFilter = {
+  allow: null,
+  deny: [],
+};
 
 describe("MCP config", () => {
   test(`Given no MCP config exists,
@@ -67,6 +73,7 @@ describe("MCP config", () => {
       id: "catalog",
       url: "https://example.com/mcp",
       allowPrivateNetwork: false,
+      toolFilter: noToolFilter,
     };
 
     try {
@@ -97,10 +104,11 @@ describe("MCP config", () => {
       id: `server-${index}`,
       url: `https://server-${index}.example/mcp`,
       allowPrivateNetwork: false,
+      toolFilter: noToolFilter,
     }));
     await writeFile(
       join(home, "mcp.json"),
-      `${JSON.stringify({ schemaVersion: 1, servers })}\n`,
+      `${JSON.stringify({ schemaVersion: 2, servers })}\n`,
       "utf8",
     );
 
@@ -111,6 +119,7 @@ describe("MCP config", () => {
           id: "overflow",
           url: "https://overflow.example/mcp",
           allowPrivateNetwork: false,
+          toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("supports at most 128 servers");
       await expect(listMcpServers(configRuntime(home))).resolves.toHaveLength(
@@ -126,17 +135,19 @@ describe("MCP config", () => {
     [
       "duplicate records",
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         servers: [
           {
             id: "same",
             url: "https://example.com:443/mcp",
             allowPrivateNetwork: false,
+            toolFilter: noToolFilter,
           },
           {
             id: "same",
             url: "https://example.com/mcp",
             allowPrivateNetwork: false,
+            toolFilter: noToolFilter,
           },
         ],
       })}\n`,
@@ -146,6 +157,24 @@ describe("MCP config", () => {
       "an oversized document",
       `${" ".repeat(1024 * 1024 + 1)}\n`,
       "file exceeds",
+    ],
+    [
+      "duplicate tool filters",
+      `${JSON.stringify({
+        schemaVersion: 2,
+        servers: [
+          {
+            id: "catalog",
+            url: "https://example.com/mcp",
+            allowPrivateNetwork: false,
+            toolFilter: {
+              allow: ["search", "search"],
+              deny: ["delete", "delete"],
+            },
+          },
+        ],
+      })}\n`,
+      "duplicate MCP tool filter",
     ],
   ])(
     `Given the persisted MCP config contains %s,
@@ -204,6 +233,69 @@ describe("MCP config", () => {
     }
   });
 
+  test(`Given synchronous startup reads missing, valid, oversized, and unreadable MCP configs,
+    When interactive bootstrap crosses the filesystem boundary,
+    Then the latest schema is returned or a normalized config error is raised`, async () => {
+    // Given
+    const missingHome = await mkdtemp(
+      join(tmpdir(), "keel-mcp-config-sync-missing-"),
+    );
+    const validHome = await mkdtemp(
+      join(tmpdir(), "keel-mcp-config-sync-valid-"),
+    );
+    const oversizedHome = await mkdtemp(
+      join(tmpdir(), "keel-mcp-config-sync-oversized-"),
+    );
+    const directoryHome = await mkdtemp(
+      join(tmpdir(), "keel-mcp-config-sync-directory-"),
+    );
+    const invalidParent = await mkdtemp(
+      join(tmpdir(), "keel-mcp-config-sync-parent-"),
+    );
+    const invalidHome = join(invalidParent, "home");
+    const server = {
+      id: "catalog",
+      url: "https://example.com/mcp",
+      allowPrivateNetwork: false,
+      toolFilter: noToolFilter,
+    };
+    await writeFile(
+      join(validHome, "mcp.json"),
+      `${JSON.stringify({ schemaVersion: 2, servers: [server] })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(oversizedHome, "mcp.json"),
+      " ".repeat(1024 * 1024 + 1),
+      "utf8",
+    );
+    await mkdir(join(directoryHome, "mcp.json"));
+    await writeFile(invalidHome, "", "utf8");
+
+    try {
+      // When / Then
+      expect(listMcpServersSync(configRuntime(missingHome))).toEqual([]);
+      expect(listMcpServersSync(configRuntime(validHome))).toEqual([server]);
+      expect(() => listMcpServersSync(configRuntime(oversizedHome))).toThrow(
+        "file exceeds",
+      );
+      expect(() => listMcpServersSync(configRuntime(directoryHome))).toThrow(
+        "cannot read MCP config",
+      );
+      expect(() => listMcpServersSync(configRuntime(invalidHome))).toThrow(
+        "cannot read MCP config",
+      );
+    } finally {
+      await Promise.all([
+        rm(missingHome, { recursive: true, force: true }),
+        rm(validHome, { recursive: true, force: true }),
+        rm(oversizedHome, { recursive: true, force: true }),
+        rm(directoryHome, { recursive: true, force: true }),
+        rm(invalidParent, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   test(`Given a crashed writer left a stale configuration lock,
     When a new mutation starts,
     Then Keel removes the stale lock and atomically publishes the new config`, async () => {
@@ -220,6 +312,7 @@ describe("MCP config", () => {
         id: "catalog",
         url: "https://example.com/mcp",
         allowPrivateNetwork: false,
+        toolFilter: noToolFilter,
       });
 
       // Then
@@ -247,6 +340,7 @@ describe("MCP config", () => {
           id: "catalog",
           url: "https://example.com/mcp",
           allowPrivateNetwork: false,
+          toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("MCP config is busy");
       await expect(stat(lockPath)).resolves.toBeDefined();
@@ -270,6 +364,7 @@ describe("MCP config", () => {
           id: "catalog",
           url: "https://example.com/mcp",
           allowPrivateNetwork: false,
+          toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("cannot inspect MCP config lock");
     } finally {

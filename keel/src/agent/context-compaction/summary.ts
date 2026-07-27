@@ -9,6 +9,7 @@ import type {
   Message,
   Usage,
 } from "../../llm/types.ts";
+import { isUntrustedMcpContentToolCall } from "../../tools/registry.ts";
 import type {
   ModelOperationHandle,
   ModelOperationPurpose,
@@ -207,6 +208,18 @@ function checkpointEvidenceFromMessages(
   );
 }
 
+function checkpointContainsUntrustedMcpContent(
+  messages: readonly Message[],
+): boolean {
+  return messages.some(
+    (message) =>
+      (message.role === "assistant" &&
+        message.toolCalls.some(isUntrustedMcpContentToolCall)) ||
+      (message.role === "user" &&
+        message.contextCompaction?.untrustedMcpContent === true),
+  );
+}
+
 function compactionEvidenceForMessages(options: {
   readonly messages: readonly Message[];
   readonly toolOutputMaxChars: number;
@@ -357,6 +370,7 @@ export async function buildCompactedMessages(
   taskProgress?: SessionTaskProgress,
 ): Promise<BuildCompactedMessagesResult> {
   const recentMessages = messages.slice(firstRetainedIndex);
+  const checkpointSourceMessages = messages.slice(0, firstRetainedIndex);
   const recent =
     toolOutputArtifacts === undefined
       ? compactStaleToolOutputs(recentMessages, options.toolOutputMaxChars)
@@ -366,10 +380,13 @@ export async function buildCompactedMessages(
           toolOutputArtifacts.store,
         );
   const checkpointEvidence = await compactionEvidenceForMessages({
-    messages: messages.slice(0, firstRetainedIndex),
+    messages: checkpointSourceMessages,
     toolOutputMaxChars: options.toolOutputMaxChars,
     artifactStore: toolOutputArtifacts?.store,
   });
+  const untrustedMcpContent = checkpointContainsUntrustedMcpContent(
+    checkpointSourceMessages,
+  );
   const checkpoint = renderConversationCheckpoint({
     summary: normalizeCheckpointSummary(
       appendSessionTaskProgressToSummary(summary, taskProgress),
@@ -384,9 +401,14 @@ export async function buildCompactedMessages(
         role: "user",
         content: checkpoint,
         origin: { type: "compaction_checkpoint" },
-        ...(checkpointEvidence.length === 0
+        ...(checkpointEvidence.length === 0 && !untrustedMcpContent
           ? {}
-          : { contextCompaction: { evidence: checkpointEvidence } }),
+          : {
+              contextCompaction: {
+                evidence: checkpointEvidence,
+                ...(untrustedMcpContent ? { untrustedMcpContent: true } : {}),
+              },
+            }),
       },
       ...recent.messages,
     ],

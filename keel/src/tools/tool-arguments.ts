@@ -26,6 +26,48 @@ export const skillSearchToolArgumentsSchema = z
   })
   .strict();
 
+export const mcpSearchToolArgumentsSchema = z
+  .object({
+    query: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe("Words describing the remote MCP capability to find."),
+    server: optionalToolArgument(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .describe("Optional exact configured MCP server ID."),
+    ),
+    toolName: optionalToolArgument(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(128)
+        .describe("Optional exact raw MCP tool name."),
+    ),
+    limit: optionalToolArgument(
+      z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .describe("Optional maximum matches to activate. Defaults to 5."),
+    ),
+    refresh: optionalToolArgument(
+      z
+        .boolean()
+        .describe(
+          "When true, refresh matching server catalogs before searching.",
+        ),
+    ),
+  })
+  .strict();
+
 export const skillResourceToolArgumentsSchema = z
   .object({
     skill: z.string().describe("Exact qualified name of an active skill."),

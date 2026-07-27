@@ -46,6 +46,7 @@ import {
   type InteractiveSkillRuntime,
   runInteractiveSession,
 } from "./interactive-session.ts";
+import { listMcpServersSync, McpConfigError } from "./mcp-config.ts";
 import {
   formatCostReport,
   printAgentEvents,
@@ -1146,6 +1147,7 @@ async function runSessionCli(
         };
       }
       const projectInstructions = loadProjectInstructions(workspace);
+      const mcpServers = listMcpServersSync(runtime);
       const startedAt = runtime.now();
       void cleanupExpiredToolOutputArtifacts({ runtime });
       const toolOutputArtifactScope =
@@ -1359,6 +1361,9 @@ async function runSessionCli(
           : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         skills,
+        ...(mcpServers.length > 0 ? { mcpServers } : {}),
+        mcpCanPrompt:
+          mode.kind === "interactive" && runtime.input.isTTY === true,
         ...(restoredSessionOptions !== undefined ? restoredSessionOptions : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined
@@ -1523,6 +1528,10 @@ async function runSessionCli(
       return sessionCliExit(mode, 1);
     }
     if (error instanceof BashProjectApprovalsError) {
+      runtime.writeStderr(`${error.message}\n`);
+      return sessionCliExit(mode, 1);
+    }
+    if (error instanceof McpConfigError) {
       runtime.writeStderr(`${error.message}\n`);
       return sessionCliExit(mode, 1);
     }

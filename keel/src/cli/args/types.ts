@@ -67,6 +67,8 @@ export type McpCliArgs =
       readonly url: string;
       readonly name?: string;
       readonly allowPrivateNetwork: boolean;
+      readonly allowTools: readonly string[];
+      readonly denyTools: readonly string[];
     }
   | {
       readonly command: "mcp";

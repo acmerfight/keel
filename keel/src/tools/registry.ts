@@ -1,16 +1,21 @@
 export type {
+  McpToolArguments,
   ModelToolExposure,
   OpenAICompatibleToolDefinition,
   ResolvedModelToolExposure,
   ToolCall,
+  ToolJsonValue,
   ToolName,
 } from "./tool-call.ts";
 export {
+  isMcpToolInvocation,
   isToolName,
+  isUntrustedMcpContentToolCall,
   modelToolExposureAccounting,
   modelToolExposuresEqual,
   normalizeProviderToolCall,
   openAICompatibleTools,
+  providerToolCallFromParsedArguments,
   resolveModelToolExposure,
   toolCallArguments,
   toolCallCanonicalArguments,

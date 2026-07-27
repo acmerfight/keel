@@ -11,7 +11,10 @@ import type {
   UserMessageOrigin,
 } from "../llm/types.ts";
 import {
+  isMcpToolInvocation,
+  type McpToolArguments,
   type ToolCall,
+  type ToolJsonValue,
   toolCallCanonicalArguments,
   toolCallFromParsedArguments,
 } from "../tools/registry.ts";
@@ -42,7 +45,43 @@ function redactUnknownForPersistence(value: unknown): unknown {
   return redacted;
 }
 
+function redactToolJsonValueForPersistence(
+  value: ToolJsonValue,
+): ToolJsonValue {
+  if (typeof value === "string") {
+    return redactTextForPersistence(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactToolJsonValueForPersistence);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  const redacted: Record<string, ToolJsonValue> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    redacted[key] = redactToolJsonValueForPersistence(nestedValue);
+  }
+  return redacted;
+}
+
+function redactMcpToolArgumentsForPersistence(
+  argumentsValue: McpToolArguments,
+): McpToolArguments {
+  const redacted: Record<string, ToolJsonValue> = {};
+  for (const [key, value] of Object.entries(argumentsValue)) {
+    redacted[key] = redactToolJsonValueForPersistence(value);
+  }
+  return redacted;
+}
+
 function redactToolCallForPersistence(toolCall: ToolCall): ToolCall {
+  if (isMcpToolInvocation(toolCall)) {
+    return {
+      ...toolCall,
+      arguments: redactMcpToolArgumentsForPersistence(toolCall.arguments),
+    };
+  }
   const redacted = toolCallFromParsedArguments(
     toolCall.id,
     toolCall.tool,
@@ -82,6 +121,9 @@ function redactUserContextCompactionMetadataForPersistence(
             inspectCommand: redactTextForPersistence(evidence.inspectCommand),
           }),
     })),
+    ...(metadata.untrustedMcpContent === true
+      ? { untrustedMcpContent: true }
+      : {}),
   };
 }
 
