@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { Terminal } from "@earendil-works/pi-tui";
 import type { CliRuntime } from "../cli/runtime.ts";
+import type { McpSecretBackend } from "../mcp/oauth.ts";
 
 export interface RuntimeFixture {
   readonly runtime: CliRuntime;
@@ -28,12 +29,26 @@ export function createRuntime(
     readonly onSigint?: (handler: () => void) => void;
     readonly offSigint?: (handler: () => void) => void;
     readonly now?: () => number;
+    readonly mcpSecretBackend?: McpSecretBackend;
+    readonly openExternalUrl?: (url: URL) => Promise<void>;
   } = {},
 ): RuntimeFixture {
   let stdout = "";
   let stderr = "";
   const input = options.input ?? new PassThrough();
   const stderrIsTTY = options.stderrIsTTY ?? options.inputIsTTY === true;
+  const secretEntries = new Map<string, string>();
+  const secretKey = (service: string, account: string) =>
+    `${service}\0${account}`;
+  const mcpSecretBackend: McpSecretBackend = options.mcpSecretBackend ?? {
+    getPassword: async (service, account) =>
+      secretEntries.get(secretKey(service, account)) ?? null,
+    setPassword: async (service, account, password) => {
+      secretEntries.set(secretKey(service, account), password);
+    },
+    deletePassword: async (service, account) =>
+      secretEntries.delete(secretKey(service, account)),
+  };
   if (options.inputIsTTY === true) {
     Object.defineProperty(input, "isTTY", { value: true });
     if (stderrIsTTY) {
@@ -52,6 +67,12 @@ export function createRuntime(
       env: (key) => options.env?.[key],
       input,
       platform: process.platform,
+      mcpSecretBackend,
+      openExternalUrl:
+        options.openExternalUrl ??
+        (async () => {
+          throw new Error("unexpected external URL open in CLI test");
+        }),
       stderrIsTTY,
       ...(options.stdoutIsTTY !== undefined
         ? { stdoutIsTTY: options.stdoutIsTTY }

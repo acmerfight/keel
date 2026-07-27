@@ -1,8 +1,16 @@
+import { randomBytes } from "node:crypto";
 import {
   discoverMcpServer,
   type McpDiscoveryStatus,
 } from "../mcp/discovery.ts";
+import { authorizeMcpServer, McpOAuthLoginError } from "../mcp/login.ts";
 import { McpNetworkPolicyError, validateMcpServerUrl } from "../mcp/network.ts";
+import {
+  createMcpBearerAuthProvider,
+  deleteMcpOAuthCredentials,
+  McpOAuthCredentialError,
+  type McpPreRegisteredClient,
+} from "../mcp/oauth.ts";
 import type { CliArgs } from "./args.ts";
 import { escapeApprovalText } from "./bash-approval-text.ts";
 import {
@@ -12,11 +20,17 @@ import {
   listMcpServers,
   McpConfigError,
   type McpServerConfig,
+  setMcpServerAuthenticationRequired,
   validateMcpServerId,
 } from "./mcp-config.ts";
+import {
+  McpOAuthCallbackError,
+  startMcpOAuthLoopbackCallback,
+} from "./mcp-oauth-loopback.ts";
 import type { CliRuntime } from "./runtime.ts";
 
 type McpCliArgs = Extract<CliArgs, { readonly command: "mcp" }>;
+const MCP_CLIENT_SECRET_MAX_BYTES = 64 * 1024;
 
 function displayMcpEndpoint(raw: string): string {
   const url = new URL(raw);
@@ -100,7 +114,11 @@ async function writeServerStatuses(
 ): Promise<readonly McpDiscoveryStatus[]> {
   const statuses: McpDiscoveryStatus[] = [];
   for (const [index, server] of servers.entries()) {
-    const status = await discoverMcpServer(server, runtime.now);
+    const status = await discoverMcpServer(
+      server,
+      runtime.now,
+      createMcpBearerAuthProvider(server, runtime.mcpSecretBackend),
+    );
     statuses.push(status);
     if (index > 0) runtime.writeStdout("\n");
     runtime.writeStdout(
@@ -124,6 +142,7 @@ async function runMcpAdd(
     id,
     url: validated.url.href,
     allowPrivateNetwork: cliArgs.allowPrivateNetwork,
+    authenticationRequired: false,
     toolFilter: {
       allow:
         cliArgs.allowTools.length === 0
@@ -134,9 +153,108 @@ async function runMcpAdd(
   };
   await addMcpServer(runtime, server);
   runtime.writeStdout(`Added MCP server "${id}".\n`);
-  const status = await discoverMcpServer(server, runtime.now);
+  const status = await discoverMcpServer(
+    server,
+    runtime.now,
+    createMcpBearerAuthProvider(server, runtime.mcpSecretBackend),
+  );
   runtime.writeStdout(`${formatDiscoveryStatus(server, status, true)}\n`);
   return status.status === "failed" ? 1 : 0;
+}
+
+async function runMcpLogin(
+  cliArgs: Extract<McpCliArgs, { readonly mode: "login" }>,
+  runtime: CliRuntime,
+): Promise<number> {
+  const configuredServer = await findMcpServer(runtime, cliArgs.serverId);
+  await setMcpServerAuthenticationRequired(runtime, configuredServer.id, true);
+  const server: McpServerConfig = {
+    ...configuredServer,
+    authenticationRequired: true,
+  };
+  let preRegisteredClient: McpPreRegisteredClient | null = null;
+  if (cliArgs.clientRegistration.kind === "pre-registered") {
+    let clientSecret: string | null = null;
+    if (cliArgs.clientRegistration.withClientSecret) {
+      if (runtime.input.isTTY === true) {
+        throw new McpOAuthLoginError(
+          "Error: MCP authorization client secret must be piped on stdin; TTY input could echo the secret.",
+        );
+      }
+      const chunks: Buffer[] = [];
+      let byteLength = 0;
+      for await (const chunk of runtime.input) {
+        const bytes = Buffer.isBuffer(chunk)
+          ? chunk
+          : Buffer.from(String(chunk), "utf8");
+        byteLength += bytes.length;
+        if (byteLength > MCP_CLIENT_SECRET_MAX_BYTES) {
+          throw new McpOAuthLoginError(
+            `Error: MCP authorization client secret exceeds ${MCP_CLIENT_SECRET_MAX_BYTES} bytes.`,
+          );
+        }
+        chunks.push(bytes);
+      }
+      const piped = Buffer.concat(chunks, byteLength).toString("utf8");
+      clientSecret = piped.endsWith("\r\n")
+        ? piped.slice(0, -2)
+        : piped.endsWith("\n")
+          ? piped.slice(0, -1)
+          : piped;
+      if (clientSecret === "") {
+        throw new McpOAuthLoginError(
+          "Error: MCP authorization requires a client secret on stdin.",
+        );
+      }
+      if (/[\r\n]/u.test(clientSecret)) {
+        throw new McpOAuthLoginError(
+          "Error: MCP authorization requires a single-line client secret on stdin.",
+        );
+      }
+    }
+    preRegisteredClient = {
+      clientId: cliArgs.clientRegistration.clientId,
+      clientSecret,
+    };
+  }
+  const state = randomBytes(32).toString("base64url");
+  const callback = await startMcpOAuthLoopbackCallback(state);
+  const controller = new AbortController();
+  const abort = () => {
+    controller.abort();
+    void callback.close();
+  };
+  runtime.onSigint(abort);
+  try {
+    await authorizeMcpServer({
+      server,
+      backend: runtime.mcpSecretBackend,
+      redirectUrl: callback.redirectUrl,
+      state,
+      startedAt: runtime.now(),
+      preRegisteredClient,
+      now: runtime.now,
+      openExternalUrl: runtime.openExternalUrl,
+      waitForCallback: callback.waitForCallback,
+      signal: controller.signal,
+    });
+    runtime.writeStdout(`Logged in to MCP server "${server.id}".\n`);
+    return 0;
+  } finally {
+    runtime.offSigint(abort);
+    await callback.close();
+  }
+}
+
+async function runMcpLogout(
+  cliArgs: Extract<McpCliArgs, { readonly mode: "logout" }>,
+  runtime: CliRuntime,
+): Promise<number> {
+  const server = await findMcpServer(runtime, cliArgs.serverId);
+  await deleteMcpOAuthCredentials(server, runtime.mcpSecretBackend);
+  await setMcpServerAuthenticationRequired(runtime, server.id, false);
+  runtime.writeStdout(`Logged out of MCP server "${server.id}".\n`);
+  return 0;
 }
 
 async function runMcpCommandUnsafe(
@@ -173,6 +291,12 @@ async function runMcpCommandUnsafe(
     );
     return 0;
   }
+  if (cliArgs.mode === "login") {
+    return await runMcpLogin(cliArgs, runtime);
+  }
+  if (cliArgs.mode === "logout") {
+    return await runMcpLogout(cliArgs, runtime);
+  }
 
   const servers = await selectedServers(runtime, cliArgs.serverId);
   if (servers.length === 0) {
@@ -201,7 +325,10 @@ export async function runMcpCommand(
   } catch (error) {
     if (
       error instanceof McpConfigError ||
-      error instanceof McpNetworkPolicyError
+      error instanceof McpNetworkPolicyError ||
+      error instanceof McpOAuthCallbackError ||
+      error instanceof McpOAuthCredentialError ||
+      error instanceof McpOAuthLoginError
     ) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;

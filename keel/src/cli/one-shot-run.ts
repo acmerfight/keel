@@ -9,7 +9,6 @@ import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import type { Message } from "../llm/types.ts";
-import { connectMcpServer } from "../mcp/discovery.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
 import {
@@ -47,6 +46,7 @@ import {
   denyMcpPermissionPolicy,
 } from "./mcp-approval.ts";
 import { listMcpServers } from "./mcp-config.ts";
+import { createCliMcpConnectionFactory } from "./mcp-connection.ts";
 import {
   formatCostReport,
   formatUndoCheckpointWarning,
@@ -272,7 +272,7 @@ export async function runOneShotCli(
     if (mcpServers.length > 0) {
       mcpRuntime = createMcpRuntime({
         servers: mcpServers,
-        connectionFactory: { connect: connectMcpServer },
+        connectionFactory: createCliMcpConnectionFactory(runtime),
         permission:
           approvalLineReader === undefined
             ? denyMcpPermissionPolicy(

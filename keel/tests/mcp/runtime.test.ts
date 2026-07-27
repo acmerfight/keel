@@ -55,6 +55,7 @@ const testServerConfig: McpServerConfig = {
   id: "catalog",
   url: "https://catalog.example/mcp",
   allowPrivateNetwork: false,
+  authenticationRequired: false,
   toolFilter: { allow: null, deny: [] },
 };
 
@@ -302,6 +303,7 @@ describe("MCP runtime", () => {
           id: "catalog",
           url: server.url,
           allowPrivateNetwork: true,
+          authenticationRequired: false,
           toolFilter: { allow: null, deny: [] },
         },
       ],
@@ -358,6 +360,7 @@ describe("MCP runtime", () => {
           id: "catalog",
           url: server.url,
           allowPrivateNetwork: true,
+          authenticationRequired: false,
           toolFilter: { allow: null, deny: [] },
         },
       ],

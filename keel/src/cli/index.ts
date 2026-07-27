@@ -8,8 +8,10 @@ import { runForkPointsCommand } from "./fork-points-command.ts";
 import { runHeadlessGoalCli } from "./headless-goal-run.ts";
 import { runInteractiveCli } from "./interactive-run.ts";
 import { runMcpCommand } from "./mcp-command.ts";
+import { createNativeMcpSecretBackend } from "./mcp-secret-backend.ts";
 import { runMemoryCommand } from "./memory-command.ts";
 import { runOneShotCli } from "./one-shot-run.ts";
+import { openExternalUrl } from "./open-external-url.ts";
 import {
   type CliRuntime,
   exitWithCliRuntimeError,
@@ -117,6 +119,9 @@ function defaultRuntime(): CliRuntime {
     env: (key) => process.env[key],
     input: process.stdin,
     platform: process.platform,
+    mcpSecretBackend: createNativeMcpSecretBackend(),
+    openExternalUrl: async (url) =>
+      await openExternalUrl(url, process.platform),
     stderrIsTTY: process.stderr.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
     createInteractiveTerminal: () => new ProcessTerminal(),

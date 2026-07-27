@@ -15,7 +15,7 @@ import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import { sessionHome } from "./session-store.ts";
 
-const MCP_CONFIG_SCHEMA_VERSION = 2;
+const MCP_CONFIG_SCHEMA_VERSION = 3;
 const MCP_CONFIG_MAX_BYTES = 1024 * 1024;
 const MCP_CONFIG_MAX_SERVERS = 128;
 const MCP_CONFIG_LOCK_TIMEOUT_MS = 5_000;
@@ -56,6 +56,7 @@ const mcpServerConfigSchema = z
     id: z.string().regex(MCP_SERVER_ID_PATTERN),
     url: z.url().transform((raw) => new URL(raw).href),
     allowPrivateNetwork: z.boolean(),
+    authenticationRequired: z.boolean(),
     toolFilter: mcpToolFilterSchema,
   })
   .strict();
@@ -367,6 +368,30 @@ export async function addMcpServer(
       schemaVersion: MCP_CONFIG_SCHEMA_VERSION,
       servers: [...file.servers, server].sort((left, right) =>
         left.id.localeCompare(right.id),
+      ),
+    });
+  });
+}
+
+export async function setMcpServerAuthenticationRequired(
+  runtime: McpConfigRuntime,
+  serverId: string,
+  authenticationRequired: boolean,
+): Promise<void> {
+  validateMcpServerId(serverId);
+  await withConfigLock(runtime, async () => {
+    const file = await readMcpConfigFile(runtime);
+    const server = file.servers.find((candidate) => candidate.id === serverId);
+    if (server === undefined) {
+      configError(`Error: MCP server "${serverId}" is not configured.`);
+    }
+    if (server.authenticationRequired === authenticationRequired) return;
+    await writeMcpConfigFile(runtime, {
+      ...file,
+      servers: file.servers.map((candidate) =>
+        candidate.id === serverId
+          ? { ...candidate, authenticationRequired }
+          : candidate,
       ),
     });
   });

@@ -78,6 +78,23 @@ export type McpCliArgs =
       readonly command: "mcp";
       readonly mode: "status" | "doctor";
       readonly serverId?: string;
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "login";
+      readonly serverId: string;
+      readonly clientRegistration:
+        | { readonly kind: "discovered" }
+        | {
+            readonly kind: "pre-registered";
+            readonly clientId: string;
+            readonly withClientSecret: boolean;
+          };
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "logout";
+      readonly serverId: string;
     };
 
 export interface SetupCliArgs {

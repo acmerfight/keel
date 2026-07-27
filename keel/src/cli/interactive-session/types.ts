@@ -8,6 +8,7 @@ import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { UndoProtectionSummary } from "../../core/undo-protection.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
+import type { McpConnectionFactory } from "../../mcp/runtime-types.ts";
 import type {
   BashApprovalGrant,
   BashMode,
@@ -193,8 +194,14 @@ interface InteractiveSessionOptionsBase {
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;
   readonly skills: InteractiveSkillRuntime;
-  readonly mcpServers?: readonly McpServerConfig[];
-  readonly mcpCanPrompt?: boolean;
+  readonly mcp?: {
+    readonly servers: readonly [
+      McpServerConfig,
+      ...(readonly McpServerConfig[]),
+    ];
+    readonly connectionFactory: McpConnectionFactory;
+    readonly canPrompt: boolean;
+  };
   readonly initialSessionTitle?: string;
   readonly initialSessionGoal?: SessionGoal;
   readonly initialMessages?: readonly Message[];

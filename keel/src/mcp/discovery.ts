@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type AuthProvider,
   type CallToolResult,
   Client,
   fromJsonSchema,
@@ -123,6 +124,7 @@ export type McpJsonValue = z.infer<ReturnType<typeof z.json>>;
 export interface McpServerEndpoint {
   readonly url: string;
   readonly allowPrivateNetwork: boolean;
+  readonly authenticationRequired: boolean;
 }
 
 interface McpCatalogIssue {
@@ -215,6 +217,22 @@ function keelVersion(): string {
     readFileSync(join(import.meta.dirname, "../../package.json"), "utf8"),
   );
   return packageJsonSchema.parse(packageJson).version;
+}
+
+export function createMcpSdkClient(): Client {
+  return new Client(
+    { name: MCP_CLIENT_NAME, version: keelVersion() },
+    {
+      listMaxPages: MCP_MAX_CATALOG_PAGES,
+      versionNegotiation: {
+        mode: "auto",
+        probe: {
+          timeoutMs: MCP_DISCOVERY_TIMEOUT_MS,
+          maxRetries: 0,
+        },
+      },
+    },
+  );
 }
 
 function toolLabel(value: unknown, index: number): string {
@@ -515,6 +533,7 @@ export interface McpConnection {
 export async function connectMcpServer(
   server: McpServerEndpoint,
   signal?: AbortSignal,
+  authProvider?: AuthProvider,
 ): Promise<McpConnection> {
   const validated = validateMcpServerUrl(
     server.url,
@@ -522,24 +541,10 @@ export async function connectMcpServer(
   );
   const network = createMcpPolicyFetch(validated);
   const transport = new StreamableHTTPClientTransport(validated.url, {
-    authProvider: {
-      token: async () => undefined,
-    },
+    authProvider: authProvider ?? { token: async () => undefined },
     fetch: network.fetch,
   });
-  const client = new Client(
-    { name: MCP_CLIENT_NAME, version: keelVersion() },
-    {
-      listMaxPages: MCP_MAX_CATALOG_PAGES,
-      versionNegotiation: {
-        mode: "auto",
-        probe: {
-          timeoutMs: MCP_DISCOVERY_TIMEOUT_MS,
-          maxRetries: 0,
-        },
-      },
-    },
-  );
+  const client = createMcpSdkClient();
   try {
     await client.connect(transport, {
       timeout: MCP_CONNECT_TIMEOUT_MS,
@@ -636,12 +641,13 @@ function sanitizedError(error: unknown): string {
 export async function discoverMcpServer(
   server: McpServerEndpoint,
   now: () => number = () => Date.now(),
+  authProvider?: AuthProvider,
 ): Promise<McpDiscoveryStatus> {
   const startedAt = now();
   let connection: McpConnection | null = null;
   let status: McpDiscoveryStatus;
   try {
-    connection = await connectMcpServer(server);
+    connection = await connectMcpServer(server, undefined, authProvider);
     const catalog = await connection.listCatalog();
     status = {
       status: "ready",

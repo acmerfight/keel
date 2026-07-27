@@ -93,6 +93,7 @@ function configurationDigest(server: McpServerConfig): string {
   return sha256(
     JSON.stringify({
       allowPrivateNetwork: server.allowPrivateNetwork,
+      authenticationRequired: server.authenticationRequired,
       id: server.id,
       url: server.url,
     }),

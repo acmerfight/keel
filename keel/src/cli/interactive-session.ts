@@ -54,7 +54,6 @@ import {
   undoCheckpointUnavailable,
 } from "../core/undo-protection.ts";
 import type { Message, Usage, UserMessageOrigin } from "../llm/types.ts";
-import { connectMcpServer } from "../mcp/discovery.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import {
   type BashApprovalGrant,
@@ -594,28 +593,27 @@ export async function runInteractiveSession(
       : {}),
   });
   const mcpRuntime =
-    options.mcpServers === undefined || options.mcpServers.length === 0
+    options.mcp === undefined
       ? undefined
       : createMcpRuntime({
-          servers: options.mcpServers,
-          connectionFactory: { connect: connectMcpServer },
-          permission:
-            options.mcpCanPrompt === true
-              ? createPromptedMcpPermissionPolicy(
-                  lineReader,
-                  options.writeStderr,
-                  {
-                    onPromptStart: () => {
-                      setComposerMode("approval");
-                    },
-                    onPromptEnd: () => {
-                      setComposerMode("steer");
-                    },
+          servers: options.mcp.servers,
+          connectionFactory: options.mcp.connectionFactory,
+          permission: options.mcp.canPrompt
+            ? createPromptedMcpPermissionPolicy(
+                lineReader,
+                options.writeStderr,
+                {
+                  onPromptStart: () => {
+                    setComposerMode("approval");
                   },
-                )
-              : denyMcpPermissionPolicy(
-                  "MCP calls require a real terminal approval and this session cannot prompt.",
-                ),
+                  onPromptEnd: () => {
+                    setComposerMode("steer");
+                  },
+                },
+              )
+            : denyMcpPermissionPolicy(
+                "MCP calls require a real terminal approval and this session cannot prompt.",
+              ),
           now,
         });
   const memoryBinding: InteractiveSessionMemoryBinding = options;
