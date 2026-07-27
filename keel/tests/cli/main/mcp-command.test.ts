@@ -717,6 +717,52 @@ describe("CLI Main - MCP", () => {
     }
   });
 
+  test(`Given a remote MCP server publishes draft-07 tool schemas,
+    When the user runs MCP doctor,
+    Then Keel reports the tools as usable`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-draft-07-home-"));
+    const server = await startLegacyRawCatalogServer([
+      {
+        name: "search_issues",
+        description: "Search Linear issues",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema",
+          type: "object",
+          properties: {
+            query: { type: "string", minLength: 1 },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const add = createRuntime(["mcp", "add", server.url, "--name", "linear"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime), add.stdout()).toBe(0);
+
+      // When
+      const doctor = createRuntime(["mcp", "doctor", "linear"], {
+        env: { KEEL_HOME: home },
+      });
+      const exitCode = await runCliMain(doctor.runtime);
+
+      // Then
+      expect(exitCode, doctor.stdout()).toBe(0);
+      expect(doctor.stderr()).toBe("");
+      expect(doctor.stdout()).toContain(
+        "tools: 1 usable, 0 quarantined, 1 total\n",
+      );
+      expect(doctor.stdout()).not.toContain("quarantined tools:");
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given modern HTTP tools contain valid and invalid x-mcp-header declarations,
     When the user runs MCP doctor,
     Then Keel keeps valid header tools and quarantines every unsafe declaration`, async () => {

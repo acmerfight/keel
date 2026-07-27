@@ -17,6 +17,13 @@ interface OpenAICompatibleIntegerToolParameter
   readonly maximum?: number;
 }
 
+interface OpenAICompatibleNumberToolParameter
+  extends OpenAICompatibleToolParameterBase {
+  readonly type: "number";
+  readonly minimum?: number;
+  readonly maximum?: number;
+}
+
 interface OpenAICompatibleBooleanToolParameter
   extends OpenAICompatibleToolParameterBase {
   readonly type: "boolean";
@@ -39,6 +46,7 @@ interface OpenAICompatibleObjectToolParameter
 export type OpenAICompatibleToolParameter =
   | OpenAICompatibleStringToolParameter
   | OpenAICompatibleIntegerToolParameter
+  | OpenAICompatibleNumberToolParameter
   | OpenAICompatibleBooleanToolParameter
   | OpenAICompatibleArrayToolParameter
   | OpenAICompatibleObjectToolParameter;
@@ -140,10 +148,15 @@ function stringArray(value: unknown, context: string): readonly string[] {
   return result;
 }
 
+type BuiltinToolParameterType = Exclude<
+  OpenAICompatibleToolParameter["type"],
+  "number"
+>;
+
 function toolParameterType(
   value: unknown,
   context: string,
-): OpenAICompatibleToolParameter["type"] {
+): BuiltinToolParameterType {
   switch (value) {
     case "string":
     case "integer":

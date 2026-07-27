@@ -7,6 +7,7 @@ import {
   Client,
   fromJsonSchema,
   type JsonSchemaType,
+  type jsonSchemaValidator,
   type ProtocolEra,
   SdkError,
   SdkErrorCode,
@@ -15,6 +16,11 @@ import {
   type Tool,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
+import {
+  Ajv,
+  AjvJsonSchemaValidator,
+  addFormats,
+} from "@modelcontextprotocol/client/validators/ajv";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
@@ -68,8 +74,20 @@ const MCP_HEADER_OBJECT_SCHEMA_KEYS = new Set([
   "$defs",
   "definitions",
 ]);
+const MCP_JSON_SCHEMA_DRAFT_07_URIS = new Set([
+  "http://json-schema.org/draft-07/schema",
+  "http://json-schema.org/draft-07/schema#",
+  "https://json-schema.org/draft-07/schema",
+  "https://json-schema.org/draft-07/schema#",
+]);
 
 const jsonObjectSchema = z.record(z.string(), z.json());
+const jsonSchemaDialectSchema = z
+  .object({
+    $id: z.json().optional(),
+    $schema: z.string().optional(),
+  })
+  .passthrough();
 const jsonSchemaNodeSchema = z
   .object({
     type: z.json().optional(),
@@ -116,8 +134,7 @@ const wrappedCauseSchema = z
   .passthrough();
 const packageJsonSchema = z.object({ version: z.string().min(1) });
 const sdkJsonSchemaBoundarySchema = z.custom<JsonSchemaType>((value) => {
-  const parsed = jsonObjectSchema.safeParse(value);
-  return parsed.success && jsonSchemaIssue(parsed.data) === null;
+  return jsonObjectSchema.safeParse(value).success;
 });
 export type McpJsonValue = z.infer<ReturnType<typeof z.json>>;
 
@@ -131,6 +148,21 @@ interface McpCatalogIssue {
   readonly tool: string;
   readonly reason: string;
 }
+
+interface McpJsonSchemaValidators {
+  readonly defaultDialect: jsonSchemaValidator;
+  readonly draft07: jsonSchemaValidator;
+}
+
+type McpCompiledJsonSchema =
+  | {
+      readonly ok: true;
+      readonly validator: ReturnType<typeof fromJsonSchema>["~standard"];
+    }
+  | {
+      readonly ok: false;
+      readonly reason: string;
+    };
 
 interface McpCatalogSummary {
   readonly total: number;
@@ -318,15 +350,85 @@ function xMcpHeaderIssue(inputSchema: McpJsonValue): string | null {
   return visit(inputSchema, [], true);
 }
 
-function jsonSchemaIssue(
+function compileJsonSchema(
+  schema: z.infer<typeof jsonObjectSchema>,
+  validator: jsonSchemaValidator,
+): McpCompiledJsonSchema {
+  try {
+    const sdkSchema = sdkJsonSchemaBoundarySchema.parse(schema);
+    return {
+      ok: true,
+      validator: fromJsonSchema(sdkSchema, validator)["~standard"],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `invalid JSON Schema: ${sanitizedError(error)}`,
+    };
+  }
+}
+
+function createMcpJsonSchemaValidators(): McpJsonSchemaValidators {
+  const draft07Ajv = new Ajv({
+    strict: false,
+    validateFormats: true,
+    validateSchema: false,
+    allErrors: true,
+  });
+  addFormats(draft07Ajv);
+  return {
+    defaultDialect: new AjvJsonSchemaValidator(),
+    draft07: new AjvJsonSchemaValidator(draft07Ajv),
+  };
+}
+
+function jsonSchemaValidatorFor(
+  schema: z.infer<typeof jsonObjectSchema>,
+  validators: McpJsonSchemaValidators,
+): jsonSchemaValidator {
+  const dialect = jsonSchemaDialectSchema.parse(schema).$schema;
+  if (dialect === undefined || !MCP_JSON_SCHEMA_DRAFT_07_URIS.has(dialect)) {
+    return validators.defaultDialect;
+  }
+  return validators.draft07;
+}
+
+function jsonSchemaIdentifier(
   schema: z.infer<typeof jsonObjectSchema>,
 ): string | null {
-  try {
-    fromJsonSchema(schema);
-    return null;
-  } catch (error) {
-    return `invalid JSON Schema: ${sanitizedError(error)}`;
+  const identifier = jsonSchemaDialectSchema.parse(schema).$id;
+  return typeof identifier === "string"
+    ? identifier.replace(/#\/?$/u, "")
+    : null;
+}
+
+function conflictingJsonSchemaIdentifiers(
+  tools: readonly McpJsonValue[],
+): ReadonlySet<string> {
+  const contentByIdentifier = new Map<string, string>();
+  const conflicts = new Set<string>();
+  for (const tool of tools) {
+    const parsed = toolDescriptorSchema.safeParse(tool);
+    if (!parsed.success) continue;
+    const schemas = [
+      parsed.data.inputSchema,
+      ...(parsed.data.outputSchema === undefined
+        ? []
+        : [parsed.data.outputSchema]),
+    ];
+    for (const schema of schemas) {
+      const identifier = jsonSchemaIdentifier(schema);
+      if (identifier === null) continue;
+      const content = canonicalJson(schema);
+      const priorContent = contentByIdentifier.get(identifier);
+      if (priorContent === undefined) {
+        contentByIdentifier.set(identifier, content);
+      } else if (priorContent !== content) {
+        conflicts.add(identifier);
+      }
+    }
   }
+  return conflicts;
 }
 
 function legacyOutputSchemaIssue(
@@ -350,6 +452,8 @@ export async function buildMcpCatalog(
 ): Promise<McpCatalog> {
   const issues: McpCatalogIssue[] = [];
   const validated: McpCatalogTool[] = [];
+  const jsonSchemaValidators = createMcpJsonSchemaValidators();
+  const conflictingIdentifiers = conflictingJsonSchemaIdentifiers(tools);
   for (const [index, tool] of tools.entries()) {
     if (exceedsJsonDepth(tool)) {
       appendCatalogIssue(issues, {
@@ -395,37 +499,82 @@ export async function buildMcpCatalog(
       });
       continue;
     }
-    const schemaIssue =
-      jsonSchemaIssue(parsed.data.inputSchema) ??
-      (protocolEra === "legacy"
-        ? legacyOutputSchemaIssue(parsed.data.outputSchema)
-        : null) ??
-      (parsed.data.outputSchema === undefined
-        ? null
-        : jsonSchemaIssue(parsed.data.outputSchema));
-    if (schemaIssue !== null) {
+    const conflictingIdentifier = [
+      jsonSchemaIdentifier(parsed.data.inputSchema),
+      ...(parsed.data.outputSchema === undefined
+        ? []
+        : [jsonSchemaIdentifier(parsed.data.outputSchema)]),
+    ].find(
+      (identifier) =>
+        identifier !== null && conflictingIdentifiers.has(identifier),
+    );
+    if (typeof conflictingIdentifier === "string") {
       appendCatalogIssue(issues, {
         tool: boundedDiagnosticText(parsed.data.name, 160),
-        reason: schemaIssue,
+        reason: `conflicting JSON Schema identifier: ${boundedDiagnosticText(
+          conflictingIdentifier,
+          160,
+        )}`,
       });
       continue;
     }
-    const inputValidator = fromJsonSchema(
-      sdkJsonSchemaBoundarySchema.parse(parsed.data.inputSchema),
-    )["~standard"];
-    const outputValidator =
+    const inputJsonSchemaValidator = jsonSchemaValidatorFor(
+      parsed.data.inputSchema,
+      jsonSchemaValidators,
+    );
+    const outputJsonSchemaValidator =
       parsed.data.outputSchema === undefined
         ? null
-        : fromJsonSchema(
-            sdkJsonSchemaBoundarySchema.parse(parsed.data.outputSchema),
-          )["~standard"];
+        : jsonSchemaValidatorFor(
+            parsed.data.outputSchema,
+            jsonSchemaValidators,
+          );
+    const inputCompilation = compileJsonSchema(
+      parsed.data.inputSchema,
+      inputJsonSchemaValidator,
+    );
+    if (!inputCompilation.ok) {
+      appendCatalogIssue(issues, {
+        tool: boundedDiagnosticText(parsed.data.name, 160),
+        reason: inputCompilation.reason,
+      });
+      continue;
+    }
+    const legacyOutputIssue =
+      protocolEra === "legacy"
+        ? legacyOutputSchemaIssue(parsed.data.outputSchema)
+        : null;
+    if (legacyOutputIssue !== null) {
+      appendCatalogIssue(issues, {
+        tool: boundedDiagnosticText(parsed.data.name, 160),
+        reason: legacyOutputIssue,
+      });
+      continue;
+    }
+    const outputCompilation =
+      parsed.data.outputSchema === undefined ||
+      outputJsonSchemaValidator === null
+        ? null
+        : compileJsonSchema(
+            parsed.data.outputSchema,
+            outputJsonSchemaValidator,
+          );
+    if (outputCompilation !== null && !outputCompilation.ok) {
+      appendCatalogIssue(issues, {
+        tool: boundedDiagnosticText(parsed.data.name, 160),
+        reason: outputCompilation.reason,
+      });
+      continue;
+    }
+    const outputValidator =
+      outputCompilation === null ? null : outputCompilation.validator;
     validated.push({
       descriptor: sdkParsed.value,
       descriptorDigest: createHash("sha256")
         .update(canonicalJson(tool))
         .digest("hex"),
       validateArguments: async (value) => {
-        const validation = await inputValidator.validate(value);
+        const validation = await inputCompilation.validator.validate(value);
         return validation.issues?.map((issue) => issue.message) ?? [];
       },
       validateOutput:

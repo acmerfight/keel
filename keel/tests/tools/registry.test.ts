@@ -105,6 +105,8 @@ function validProviderValue(
       return field.enum?.[0] ?? "value";
     case "integer":
       return field.minimum ?? 1;
+    case "number":
+      return field.minimum ?? 1;
     case "boolean":
       return true;
     case "array":
@@ -154,6 +156,14 @@ function expectProviderParameterMatchesSchema(
       );
       expect(providerField.maximum, `${context} maximum drift`).toBe(
         inclusiveIntegerMaximum(jsonSchemaField),
+      );
+      return;
+    case "number":
+      expect(providerField.minimum, `${context} minimum drift`).toBe(
+        jsonSchemaField.minimum,
+      );
+      expect(providerField.maximum, `${context} maximum drift`).toBe(
+        jsonSchemaField.maximum,
       );
       return;
     case "array":
