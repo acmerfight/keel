@@ -8,6 +8,7 @@ import { toolCallValidationError, zodIssuesText } from "./tool-error.ts";
 import {
   type OpenAICompatibleToolParameters,
   openAICompatibleParametersFromSchema,
+  type ProviderToolInputSchema,
 } from "./tool-schema.ts";
 
 export interface OpenAICompatibleToolDefinition {
@@ -15,7 +16,9 @@ export interface OpenAICompatibleToolDefinition {
   readonly function: {
     readonly name: string;
     readonly description: string;
-    readonly parameters: OpenAICompatibleToolParameters;
+    readonly parameters:
+      | OpenAICompatibleToolParameters
+      | ProviderToolInputSchema;
   };
 }
 
@@ -52,7 +55,7 @@ export interface McpModelToolDefinition {
   readonly kind: "mcp";
   readonly modelName: string;
   readonly description: string;
-  readonly parameters: OpenAICompatibleToolParameters;
+  readonly parameters: ProviderToolInputSchema;
   readonly reference: McpToolReference;
 }
 

@@ -16,6 +16,7 @@ import {
   connectMcpServer,
   discoverMcpServer,
 } from "../../../src/mcp/discovery.ts";
+import { mcpProviderSchemaTarget } from "../../../src/mcp/provider-schema.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 
 interface TestMcpServer {
@@ -423,7 +424,13 @@ describe("CLI Main - MCP", () => {
       expect(status.stdout()).toContain("status: ready\n");
       expect(status.stdout()).toContain("protocol: modern (2026-07-28)\n");
       expect(status.stdout()).toContain(
-        "tools: 1 usable, 0 quarantined, 1 total\n",
+        "tools: 1 catalog-valid, 0 catalog-quarantined, 1 total\n",
+      );
+      expect(status.stdout()).toContain(
+        "provider: deepseek/deepseek-v4-flash\n",
+      );
+      expect(status.stdout()).toContain(
+        "provider tools: 1 usable, 0 quarantined, 0 validation-widened\n",
       );
       expect(status.stdout()).toMatch(/catalog: sha256:[a-f0-9]{64}\n/u);
       expect(status.stdout()).not.toContain("Search the test catalog");
@@ -497,7 +504,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).toContain("status: ready\n");
       expect(add.stdout()).toContain("protocol: legacy (2025-11-25)\n");
       expect(add.stdout()).toContain(
-        "tools: 1 usable, 0 quarantined, 1 total\n",
+        "tools: 1 catalog-valid, 0 catalog-quarantined, 1 total\n",
       );
     } finally {
       await server.close();
@@ -526,9 +533,14 @@ describe("CLI Main - MCP", () => {
       });
       const listExitCode = await runCliMain(list.runtime);
       const direct = await discoverMcpServer({
-        url: server.url,
-        allowPrivateNetwork: true,
-        authenticationRequired: false,
+        server: {
+          url: server.url,
+          allowPrivateNetwork: true,
+          authenticationRequired: false,
+        },
+        now: () => Date.now(),
+        authProvider: null,
+        schemaTarget: mcpProviderSchemaTarget("deepseek", "deepseek-v4-flash"),
       });
 
       // Then
@@ -539,7 +551,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).toContain('Added MCP server "127".\n');
       expect(add.stdout()).toContain("server identity: anonymous\n");
       expect(add.stdout()).toContain(
-        "tools: 0 usable, 0 quarantined, 0 total\n",
+        "tools: 0 catalog-valid, 0 catalog-quarantined, 0 total\n",
       );
       expect(list.stdout()).toContain(
         `127: ${server.url} (private network allowed)\n`,
@@ -699,9 +711,16 @@ describe("CLI Main - MCP", () => {
       expect(exitCode).toBe(1);
       expect(doctor.stderr()).toBe("");
       expect(doctor.stdout()).toContain(
-        "tools: 2 usable, 12 quarantined, 14 total\n",
+        "tools: 2 catalog-valid, 12 catalog-quarantined, 14 total\n",
+      );
+      expect(doctor.stdout()).toContain(
+        "provider tools: 1 usable, 1 quarantined, 0 validation-widened\n",
       );
       expect(doctor.stdout()).toContain("quarantined tools:\n");
+      expect(doctor.stdout()).toContain("provider-quarantined tools:\n");
+      expect(doctor.stdout()).toContain(
+        "- search: inputSchema.properties.query.$ref requires bounded local reference compilation",
+      );
       expect(doctor.stdout()).toContain(`- ${invalidName}: `);
       expect(doctor.stdout()).toContain("- malformed: ");
       expect(doctor.stdout()).not.toContain("Search safely");
@@ -710,7 +729,7 @@ describe("CLI Main - MCP", () => {
           .stdout()
           .split("\n")
           .filter((line) => line.startsWith("- ")),
-      ).toHaveLength(10);
+      ).toHaveLength(11);
     } finally {
       await server.close();
       await rm(home, { recursive: true, force: true });
@@ -754,9 +773,16 @@ describe("CLI Main - MCP", () => {
       expect(exitCode, doctor.stdout()).toBe(0);
       expect(doctor.stderr()).toBe("");
       expect(doctor.stdout()).toContain(
-        "tools: 1 usable, 0 quarantined, 1 total\n",
+        "tools: 1 catalog-valid, 0 catalog-quarantined, 1 total\n",
+      );
+      expect(doctor.stdout()).toContain(
+        "provider tools: 1 usable, 0 quarantined, 1 validation-widened\n",
       );
       expect(doctor.stdout()).not.toContain("quarantined tools:");
+      expect(doctor.stdout()).toContain("validation-widened tools:\n");
+      expect(doctor.stdout()).toContain(
+        "- search_issues: omitted inputSchema.properties.query.minLength",
+      );
     } finally {
       await server.close();
       await rm(home, { recursive: true, force: true });
@@ -919,7 +945,7 @@ describe("CLI Main - MCP", () => {
       expect(exitCode).toBe(1);
       expect(doctor.stderr()).toBe("");
       expect(doctor.stdout()).toContain(
-        "tools: 2 usable, 11 quarantined, 13 total\n",
+        "tools: 2 catalog-valid, 11 catalog-quarantined, 13 total\n",
       );
       expect(doctor.stdout()).toContain("- root-header: invalid x-mcp-header");
       expect(doctor.stdout()).toContain(

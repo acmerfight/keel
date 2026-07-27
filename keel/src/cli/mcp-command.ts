@@ -11,6 +11,10 @@ import {
   McpOAuthCredentialError,
   type McpPreRegisteredClient,
 } from "../mcp/oauth.ts";
+import {
+  type McpProviderSchemaTarget,
+  mcpProviderSchemaTarget,
+} from "../mcp/provider-schema.ts";
 import type { CliArgs } from "./args.ts";
 import { escapeApprovalText } from "./bash-approval-text.ts";
 import {
@@ -27,6 +31,11 @@ import {
   McpOAuthCallbackError,
   startMcpOAuthLoopbackCallback,
 } from "./mcp-oauth-loopback.ts";
+import {
+  providerProfile,
+  selectedModelFromProfile,
+  selectedProviderId,
+} from "./provider-config.ts";
 import type { CliRuntime } from "./runtime.ts";
 
 type McpCliArgs = Extract<CliArgs, { readonly command: "mcp" }>;
@@ -55,13 +64,31 @@ function formatReadyStatus(
     "status: ready",
     `protocol: ${status.protocolEra} (${status.protocolVersion})`,
     `server identity: ${status.serverIdentity ?? "anonymous"}`,
-    `tools: ${status.catalog.usable} usable, ${status.catalog.quarantined} quarantined, ${status.catalog.total} total`,
+    `tools: ${status.catalog.valid} catalog-valid, ${status.catalog.quarantined} catalog-quarantined, ${status.catalog.total} total`,
+    `provider: ${status.provider.target.providerId}/${status.provider.target.model}`,
+    `provider tools: ${status.provider.usable} usable, ${status.provider.quarantined} quarantined, ${status.provider.validationWidened} validation-widened`,
     `catalog: sha256:${status.catalog.digest}`,
     `latency: ${status.latencyMs}ms`,
     ...(includeIssues && status.catalog.issues.length > 0
       ? [
           "quarantined tools:",
           ...status.catalog.issues.map(
+            (issue) => `- ${issue.tool}: ${issue.reason}`,
+          ),
+        ]
+      : []),
+    ...(includeIssues && status.provider.issues.length > 0
+      ? [
+          "provider-quarantined tools:",
+          ...status.provider.issues.map(
+            (issue) => `- ${issue.tool}: ${issue.reason}`,
+          ),
+        ]
+      : []),
+    ...(includeIssues && status.provider.wideningIssues.length > 0
+      ? [
+          "validation-widened tools:",
+          ...status.provider.wideningIssues.map(
             (issue) => `- ${issue.tool}: ${issue.reason}`,
           ),
         ]
@@ -107,18 +134,35 @@ async function selectedServers(
   return await listMcpServers(runtime);
 }
 
+function selectedMcpSchemaTarget(runtime: CliRuntime): McpProviderSchemaTarget {
+  const providerId = selectedProviderId(runtime, undefined);
+  const profile = providerProfile(providerId);
+  const model = selectedModelFromProfile(
+    runtime,
+    undefined,
+    providerId,
+    profile,
+  ).model;
+  return mcpProviderSchemaTarget(providerId, model);
+}
+
 async function writeServerStatuses(
   runtime: CliRuntime,
   servers: readonly McpServerConfig[],
   includeIssues: boolean,
 ): Promise<readonly McpDiscoveryStatus[]> {
   const statuses: McpDiscoveryStatus[] = [];
+  const schemaTarget = selectedMcpSchemaTarget(runtime);
   for (const [index, server] of servers.entries()) {
-    const status = await discoverMcpServer(
+    const status = await discoverMcpServer({
       server,
-      runtime.now,
-      createMcpBearerAuthProvider(server, runtime.mcpSecretBackend),
-    );
+      now: runtime.now,
+      authProvider: createMcpBearerAuthProvider(
+        server,
+        runtime.mcpSecretBackend,
+      ),
+      schemaTarget,
+    });
     statuses.push(status);
     if (index > 0) runtime.writeStdout("\n");
     runtime.writeStdout(
@@ -153,11 +197,12 @@ async function runMcpAdd(
   };
   await addMcpServer(runtime, server);
   runtime.writeStdout(`Added MCP server "${id}".\n`);
-  const status = await discoverMcpServer(
+  const status = await discoverMcpServer({
     server,
-    runtime.now,
-    createMcpBearerAuthProvider(server, runtime.mcpSecretBackend),
-  );
+    now: runtime.now,
+    authProvider: createMcpBearerAuthProvider(server, runtime.mcpSecretBackend),
+    schemaTarget: selectedMcpSchemaTarget(runtime),
+  });
   runtime.writeStdout(`${formatDiscoveryStatus(server, status, true)}\n`);
   return status.status === "failed" ? 1 : 0;
 }
@@ -310,7 +355,10 @@ async function runMcpCommandUnsafe(
   );
   return cliArgs.mode === "doctor" &&
     statuses.some(
-      (status) => status.status !== "ready" || status.catalog.quarantined > 0,
+      (status) =>
+        status.status !== "ready" ||
+        status.catalog.quarantined > 0 ||
+        status.provider.quarantined > 0,
     )
     ? 1
     : 0;

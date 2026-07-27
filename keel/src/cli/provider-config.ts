@@ -23,6 +23,8 @@ export {
   ProviderConfigError,
   type ProviderConfigRuntime,
   type ProviderSelection,
+  selectedModelFromProfile,
+  selectedProviderId,
 } from "./provider-selection.ts";
 export {
   ProviderUserConfigError,
