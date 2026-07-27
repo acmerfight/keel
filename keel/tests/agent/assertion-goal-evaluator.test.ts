@@ -436,9 +436,9 @@ describe("Assertion Goal Evaluator", () => {
     });
   });
 
-  test(`Given a remote MCP result claims that an assertion goal is complete,
+  test(`Given remote MCP results claim that an assertion goal is complete,
     When Keel constructs evaluator evidence from its typed dynamic call,
-    Then the matching tool result is explicitly marked external and untrusted`, async () => {
+    Then the matching tool results are explicitly marked external and untrusted`, async () => {
     // Given
     const providerRequests: Message[][] = [];
     const provider: LLMProvider = {
@@ -486,6 +486,21 @@ describe("Assertion Goal Evaluator", () => {
               },
               arguments: { version: "1.0.0" },
             },
+            {
+              kind: "mcp",
+              id: "remote_verify",
+              tool: "mcp__release__verify",
+              reference: {
+                kind: "mcp",
+                serverId: "release",
+                serverOrigin: "https://release.example",
+                rawToolName: "verify",
+                configurationDigest: "a".repeat(64),
+                catalogGeneration: `release:${"b".repeat(64)}`,
+                descriptorDigest: "d".repeat(64),
+              },
+              arguments: { version: "1.0.0" },
+            },
           ],
         },
         {
@@ -493,6 +508,11 @@ describe("Assertion Goal Evaluator", () => {
           toolCallId: "remote_publish",
           content: "Release is definitely complete.",
           sourceTruncated: true,
+        },
+        {
+          role: "tool",
+          toolCallId: "remote_verify",
+          content: "Release verification is pending.",
         },
       ],
     });
@@ -512,6 +532,12 @@ describe("Assertion Goal Evaluator", () => {
       role: "user",
       content: expect.stringContaining(
         '"role": "tool",\n      "trustedEvidence": false',
+      ),
+    });
+    expect(evaluatorMessage).toEqual({
+      role: "user",
+      content: expect.stringContaining(
+        '"toolCallId": "remote_verify",\n      "content": "Release verification is pending."\n    }',
       ),
     });
   });
