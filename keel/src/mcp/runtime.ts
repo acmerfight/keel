@@ -367,6 +367,7 @@ function lowerNullableSchema(
       valueBranch = branch.value;
     }
   }
+  /* v8 ignore next 5 -- two parsed branches without duplicate null or value branches must contain exactly one of each. */
   if (nullBranch === null || valueBranch === null) {
     return {
       ok: false,

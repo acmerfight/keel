@@ -1105,6 +1105,72 @@ describe("MCP runtime", () => {
     });
   });
 
+  test(`Given draft-07 tools reuse one schema identifier with identical constraints,
+    When the catalog builds their original validators,
+    Then both unambiguous tools remain usable`, async () => {
+    // Given
+    const inputSchema: McpJsonValue = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      $id: "https://schemas.example.test/shared-input",
+      type: "object",
+      properties: {
+        ticket: { type: "string", minLength: 1 },
+      },
+      required: ["ticket"],
+      additionalProperties: false,
+    };
+
+    // When
+    const catalog = await fakeCatalog([
+      { name: "read_ticket", inputSchema },
+      { name: "update_ticket", inputSchema },
+    ]);
+
+    // Then
+    expect(catalog.summary).toMatchObject({
+      total: 2,
+      usable: 2,
+      quarantined: 0,
+      issues: [],
+    });
+    expect(catalog.tools.map((tool) => tool.descriptor.name)).toEqual([
+      "read_ticket",
+      "update_ticket",
+    ]);
+  });
+
+  test(`Given an MCP tool declares an invalid output JSON Schema,
+    When the catalog compiles its original validators,
+    Then the tool is quarantined before it can be exposed`, async () => {
+    // Given / When
+    const catalog = await fakeCatalog([
+      {
+        name: "invalid_output",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: {
+          type: "object",
+          properties: {
+            result: { type: "not-a-json-schema-type" },
+          },
+        },
+      },
+    ]);
+
+    // Then
+    expect(catalog.tools).toEqual([]);
+    expect(catalog.summary).toMatchObject({
+      total: 1,
+      usable: 0,
+      quarantined: 1,
+      issues: [
+        {
+          tool: "invalid_output",
+          reason: expect.stringContaining("invalid JSON Schema"),
+        },
+      ],
+    });
+  });
+
   test(`Given an MCP tool explicitly uses JSON Schema 2020-12 tuple semantics,
     When the catalog validates tool arguments,
     Then the 2020-12 validator accepts the prefix and rejects extra items`, async () => {
@@ -1682,6 +1748,9 @@ describe("MCP runtime", () => {
               description: "User ID, name, email, or me",
               anyOf: [{ type: "string" }, { type: "null" }],
             },
+            parentId: {
+              anyOf: [{ type: "null" }, { type: "string" }],
+            },
           },
           required: ["urlOrId"],
           additionalProperties: false,
@@ -1746,6 +1815,9 @@ describe("MCP runtime", () => {
             type: "string",
             description: "User ID, name, email, or me",
           },
+          parentId: {
+            type: "string",
+          },
         },
         required: ["urlOrId"],
         additionalProperties: false,
@@ -1770,6 +1842,46 @@ describe("MCP runtime", () => {
       "an unsupported composition keyword",
       { type: "object", properties: {}, anyOf: [] },
       "anyOf is not expressible",
+    ],
+    [
+      "a nullable composition with an invalid branch",
+      {
+        type: "object",
+        properties: { value: { anyOf: [{ type: "null" }, true] } },
+      },
+      "anyOf[1] must be a JSON Schema object",
+    ],
+    [
+      "a nullable composition with two null branches",
+      {
+        type: "object",
+        properties: {
+          value: { anyOf: [{ type: "null" }, { type: "null" }] },
+        },
+      },
+      "anyOf is not expressible",
+    ],
+    [
+      "a nullable composition with unsupported null semantics",
+      {
+        type: "object",
+        properties: {
+          value: {
+            anyOf: [{ type: "null", enum: [null] }, { type: "string" }],
+          },
+        },
+      },
+      "anyOf.enum is not expressible",
+    ],
+    [
+      "a nullable composition with an inexpressible value branch",
+      {
+        type: "object",
+        properties: {
+          value: { anyOf: [{ type: "null" }, { type: "array" }] },
+        },
+      },
+      "anyOf.items is required",
     ],
     [
       "a non-object property schema",
