@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import {
   createMcpPolicyFetch,
   type McpNetworkRuntime,
+  preflightMcpOAuthBrowserTarget,
   validateMcpServerUrl,
 } from "../../src/mcp/network.ts";
 
@@ -325,6 +326,138 @@ describe("MCP network policy", () => {
       await server.close();
     }
   });
+
+  test(`Given OAuth discovery names a different public HTTPS origin,
+    When the policy fetch connects to that discovered endpoint,
+    Then it pins a public address without granting cross-origin redirects`, async () => {
+    // Given
+    const capture: ConnectorCapture = { calls: 0, servername: null };
+    const runtime = deterministicNetworkRuntime(
+      {
+        status: "resolved",
+        addresses: [{ address: "93.184.216.34" }],
+      },
+      capture,
+    );
+    const network = createMcpPolicyFetch(
+      validateMcpServerUrl("https://resource.example/mcp", false),
+      runtime,
+    );
+
+    try {
+      // When / Then
+      await expect(
+        network.fetch(
+          "https://auth.example/.well-known/oauth-authorization-server",
+        ),
+      ).rejects.toThrow("fetch failed");
+      expect(capture.calls).toBe(1);
+      expect(capture.servername).toBe("auth.example");
+    } finally {
+      await network.close();
+    }
+  });
+
+  test.each([
+    [
+      "different private target",
+      "https://auth.internal.example/authorize?state=do-not-print",
+      "10.0.0.8",
+      false,
+      "network policy",
+    ],
+    [
+      "different loopback target",
+      "https://localhost/authorize?state=do-not-print",
+      "127.0.0.1",
+      false,
+      "not explicitly approved",
+    ],
+    [
+      "different public target",
+      "https://auth.example/authorize",
+      "93.184.216.34",
+      true,
+      "",
+    ],
+  ])(
+    `Given a private MCP origin is approved but OAuth resolves to a %s,
+    When Keel validates the browser authorization target,
+    Then the private-origin grant is not inherited`,
+    async (_case, target, address, allowed, expectedError) => {
+      // Given
+      const base = validateMcpServerUrl("https://private.example/mcp", true);
+      const runtime = deterministicNetworkRuntime(
+        {
+          status: "resolved",
+          addresses: [{ address }],
+        },
+        { calls: 0, servername: null },
+      );
+
+      // When / Then
+      const validation = preflightMcpOAuthBrowserTarget(
+        new URL(target),
+        base,
+        runtime,
+      );
+      if (allowed) {
+        await expect(validation).resolves.toBeUndefined();
+      } else {
+        await expect(validation).rejects.toThrow(expectedError);
+        await expect(validation).rejects.not.toThrow("do-not-print");
+      }
+    },
+  );
+
+  test.each([
+    [
+      "literal private address",
+      new URL("https://10.0.0.8/authorize"),
+      {
+        status: "resolved",
+        addresses: [{ address: "93.184.216.34" }],
+      } satisfies Resolution,
+      "denied by network policy",
+    ],
+    [
+      "unresolvable public hostname",
+      new URL("https://auth.example/authorize"),
+      {
+        status: "failed",
+        error: Object.assign(new Error("DNS unavailable"), {
+          code: "EAI_AGAIN",
+        }),
+      } satisfies Resolution,
+      'could not resolve "auth.example"',
+    ],
+    [
+      "cross-origin insecure hostname",
+      new URL("http://auth.example/authorize"),
+      {
+        status: "resolved",
+        addresses: [{ address: "93.184.216.34" }],
+      } satisfies Resolution,
+      "must use HTTPS",
+    ],
+  ])(
+    `Given an OAuth browser target is a %s,
+    When Keel preflights it before external navigation,
+    Then it fails closed without relying on the browser`,
+    async (_case, target, resolution, expectedError) => {
+      // Given
+      const base = validateMcpServerUrl("https://resource.example/mcp", false);
+      const runtime = deterministicNetworkRuntime(resolution, {
+        calls: 0,
+        servername: null,
+      });
+
+      // When / Then
+      await expect(
+        preflightMcpOAuthBrowserTarget(target, base, runtime),
+      ).rejects.toThrow(expectedError);
+    },
+  );
 
   test(`Given a server never terminates its redirect chain,
     When policy fetch reaches the redirect limit,

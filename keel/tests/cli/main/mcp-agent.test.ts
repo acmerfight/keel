@@ -12,6 +12,7 @@ import {
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
+import type { McpSecretBackend } from "../../../src/mcp/oauth.ts";
 import {
   requestWithMessagesSchema,
   requestWithToolsSchema,
@@ -26,6 +27,7 @@ import {
   sseToolCall,
   sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
+import { startOAuthMcpServer } from "../../fixtures/mcp-oauth.ts";
 
 interface TestMcpServer {
   readonly url: string;
@@ -230,6 +232,91 @@ describe("CLI Main - MCP agent tools", () => {
       }
     },
   );
+
+  test(`Given the user logged in to a protected MCP server,
+    When Keel discovers and invokes one approved remote tool,
+    Then every MCP request reads the secure credential dynamically and no token reaches the model`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-auth-agent-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-auth-agent-workspace-"),
+    );
+    const mcp = await startOAuthMcpServer();
+    const secretEntries = new Map<string, string>();
+    const secretKey = (service: string, account: string) =>
+      `${service}\0${account}`;
+    let credentialReads = 0;
+    const secretBackend: McpSecretBackend = {
+      getPassword: async (service, account) => {
+        credentialReads += 1;
+        return secretEntries.get(secretKey(service, account)) ?? null;
+      },
+      setPassword: async (service, account, password) => {
+        secretEntries.set(secretKey(service, account), password);
+      },
+      deletePassword: async (service, account) =>
+        secretEntries.delete(secretKey(service, account)),
+    };
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime)).toBe(0);
+    const login = createRuntime(["mcp", "login", "catalog"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secretBackend,
+      openExternalUrl: mcp.openAuthorizationUrl,
+    });
+    expect(await runCliMain(login.runtime), login.stderr()).toBe(0);
+    const readsAfterLogin = credentialReads;
+
+    const capturedBodies: unknown[] = [];
+    const provider = mcpAgentProvider(capturedBodies);
+    await listen(provider);
+    const input = new PassThrough();
+    const reportPath = join(workspace, "authenticated-report.json");
+    let approvalAnswered = false;
+    const run = createRuntime(
+      ["--report", reportPath, "search the protected catalog for otters"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+          KEEL_HOME: home,
+        },
+        input,
+        inputIsTTY: true,
+        mcpSecretBackend: secretBackend,
+        onStderr: (text) => {
+          if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
+            approvalAnswered = true;
+            input.end("y\n");
+          }
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(run.stdout()).toBe("Found one remote match.\n");
+      expect(mcp.calls()).toEqual(["otters"]);
+      expect(credentialReads - readsAfterLogin).toBeGreaterThan(2);
+      expect(JSON.stringify(capturedBodies)).not.toContain(mcp.accessToken);
+      expect(run.stdout()).not.toContain(mcp.accessToken);
+      expect(run.stderr()).not.toContain(mcp.accessToken);
+      expect(await readFile(reportPath, "utf8")).not.toContain(mcp.accessToken);
+    } finally {
+      input.end();
+      await close(provider);
+      await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 
   test(`Given a non-interactive run has no exact saved MCP approval,
     When the provider searches and attempts a valid remote call,

@@ -55,6 +55,7 @@ const testServerConfig: McpServerConfig = {
   id: "catalog",
   url: "https://catalog.example/mcp",
   allowPrivateNetwork: false,
+  authenticationRequired: false,
   toolFilter: { allow: null, deny: [] },
 };
 
@@ -302,6 +303,7 @@ describe("MCP runtime", () => {
           id: "catalog",
           url: server.url,
           allowPrivateNetwork: true,
+          authenticationRequired: false,
           toolFilter: { allow: null, deny: [] },
         },
       ],
@@ -358,6 +360,7 @@ describe("MCP runtime", () => {
           id: "catalog",
           url: server.url,
           allowPrivateNetwork: true,
+          authenticationRequired: false,
           toolFilter: { allow: null, deny: [] },
         },
       ],
@@ -988,6 +991,224 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given a draft-07 MCP tool receives arguments rejected by its original schema,
+    When execution reaches the external boundary,
+    Then draft-07 validation fails before approval or dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema",
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    let approvals = 0;
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      const exposed = await activateExactSearch(runtime);
+      const invalidCall: McpToolCall = {
+        ...exposed,
+        arguments: { query: 42 },
+      };
+
+      // When
+      const result = await runtime.execute(invalidCall, signal);
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("original server JSON Schema");
+      expect(approvals).toBe(0);
+      expect(fake.callCalls()).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given draft-07 tools reuse one schema identifier with different constraints,
+    When the catalog builds their original validators,
+    Then both ambiguous tools are quarantined before execution`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "optional_ticket",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          $id: "https://schemas.example.test/tool-input",
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "required_ticket",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          $id: "https://schemas.example.test/tool-input#",
+          type: "object",
+          properties: {
+            ticket: { type: "string", minLength: 1 },
+          },
+          required: ["ticket"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "required_project",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          $id: "https://schemas.example.test/tool-input#/",
+          type: "object",
+          properties: {
+            project: { type: "string", minLength: 1 },
+          },
+          required: ["project"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    // When / Then
+    expect(catalog.tools).toEqual([]);
+    expect(catalog.summary).toMatchObject({
+      total: 3,
+      usable: 0,
+      quarantined: 3,
+      issues: [
+        {
+          tool: "optional_ticket",
+          reason: expect.stringContaining("conflicting JSON Schema identifier"),
+        },
+        {
+          tool: "required_ticket",
+          reason: expect.stringContaining("conflicting JSON Schema identifier"),
+        },
+        {
+          tool: "required_project",
+          reason: expect.stringContaining("conflicting JSON Schema identifier"),
+        },
+      ],
+    });
+  });
+
+  test(`Given draft-07 tools reuse one schema identifier with identical constraints,
+    When the catalog builds their original validators,
+    Then both unambiguous tools remain usable`, async () => {
+    // Given
+    const inputSchema: McpJsonValue = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      $id: "https://schemas.example.test/shared-input",
+      type: "object",
+      properties: {
+        ticket: { type: "string", minLength: 1 },
+      },
+      required: ["ticket"],
+      additionalProperties: false,
+    };
+
+    // When
+    const catalog = await fakeCatalog([
+      { name: "read_ticket", inputSchema },
+      { name: "update_ticket", inputSchema },
+    ]);
+
+    // Then
+    expect(catalog.summary).toMatchObject({
+      total: 2,
+      usable: 2,
+      quarantined: 0,
+      issues: [],
+    });
+    expect(catalog.tools.map((tool) => tool.descriptor.name)).toEqual([
+      "read_ticket",
+      "update_ticket",
+    ]);
+  });
+
+  test(`Given an MCP tool declares an invalid output JSON Schema,
+    When the catalog compiles its original validators,
+    Then the tool is quarantined before it can be exposed`, async () => {
+    // Given / When
+    const catalog = await fakeCatalog([
+      {
+        name: "invalid_output",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: {
+          type: "object",
+          properties: {
+            result: { type: "not-a-json-schema-type" },
+          },
+        },
+      },
+    ]);
+
+    // Then
+    expect(catalog.tools).toEqual([]);
+    expect(catalog.summary).toMatchObject({
+      total: 1,
+      usable: 0,
+      quarantined: 1,
+      issues: [
+        {
+          tool: "invalid_output",
+          reason: expect.stringContaining("invalid JSON Schema"),
+        },
+      ],
+    });
+  });
+
+  test(`Given an MCP tool explicitly uses JSON Schema 2020-12 tuple semantics,
+    When the catalog validates tool arguments,
+    Then the 2020-12 validator accepts the prefix and rejects extra items`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "tuple",
+        inputSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: {
+            values: {
+              type: "array",
+              prefixItems: [{ type: "string" }],
+              items: false,
+            },
+          },
+          required: ["values"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const tuple = catalog.tools[0];
+    if (tuple === undefined) {
+      throw new Error("expected tuple in the MCP catalog");
+    }
+
+    // When
+    const validIssues = await tuple.validateArguments({ values: ["keel"] });
+    const extraIssues = await tuple.validateArguments({
+      values: ["keel", "extra"],
+    });
+
+    // Then
+    expect(validIssues).toEqual([]);
+    expect(extraIssues).not.toEqual([]);
+  });
+
   test(`Given approval fails closed for an otherwise valid external call,
     When the frozen reference is executed,
     Then the server is never dispatched`, async () => {
@@ -1502,6 +1723,115 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given a Linear-shaped draft-07 schema uses bounded numbers, string length, and nullable strings,
+    When Keel exposes the tool and validates a call,
+    Then the provider gets a safe projection while the original constraints still gate dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "list_issues",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "object",
+          properties: {
+            limit: {
+              type: "number",
+              maximum: 250,
+              description: "Max results",
+            },
+            urlOrId: {
+              type: "string",
+              minLength: 1,
+              description: "Issue URL or ID",
+            },
+            assignee: {
+              description: "User ID, name, email, or me",
+              anyOf: [{ type: "string" }, { type: "null" }],
+            },
+            parentId: {
+              anyOf: [{ type: "null" }, { type: "string" }],
+            },
+          },
+          required: ["urlOrId"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    let approvals = 0;
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        {
+          query: "issues",
+          server: "catalog",
+          tool: "list_issues",
+          limit: 1,
+        },
+        signal,
+      );
+      const exposed = exposedToolCall(runtime);
+
+      // When
+      const result = await runtime.execute(
+        {
+          ...exposed,
+          arguments: { limit: 50, urlOrId: "", assignee: null },
+        },
+        signal,
+      );
+      const validResult = await runtime.execute(
+        {
+          ...exposed,
+          arguments: { limit: 50, urlOrId: "LIN-1", assignee: null },
+        },
+        signal,
+      );
+
+      // Then
+      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            maximum: 250,
+            description: "Max results",
+          },
+          urlOrId: {
+            type: "string",
+            description: "Issue URL or ID",
+          },
+          assignee: {
+            type: "string",
+            description: "User ID, name, email, or me",
+          },
+          parentId: {
+            type: "string",
+          },
+        },
+        required: ["urlOrId"],
+        additionalProperties: false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("original server JSON Schema");
+      expect(validResult.ok).toBe(true);
+      expect(approvals).toBe(1);
+      expect(fake.callCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test.each([
     [
       "a non-object root",
@@ -1512,6 +1842,46 @@ describe("MCP runtime", () => {
       "an unsupported composition keyword",
       { type: "object", properties: {}, anyOf: [] },
       "anyOf is not expressible",
+    ],
+    [
+      "a nullable composition with an invalid branch",
+      {
+        type: "object",
+        properties: { value: { anyOf: [{ type: "null" }, true] } },
+      },
+      "anyOf[1] must be a JSON Schema object",
+    ],
+    [
+      "a nullable composition with two null branches",
+      {
+        type: "object",
+        properties: {
+          value: { anyOf: [{ type: "null" }, { type: "null" }] },
+        },
+      },
+      "anyOf is not expressible",
+    ],
+    [
+      "a nullable composition with unsupported null semantics",
+      {
+        type: "object",
+        properties: {
+          value: {
+            anyOf: [{ type: "null", enum: [null] }, { type: "string" }],
+          },
+        },
+      },
+      "anyOf.enum is not expressible",
+    ],
+    [
+      "a nullable composition with an inexpressible value branch",
+      {
+        type: "object",
+        properties: {
+          value: { anyOf: [{ type: "null" }, { type: "array" }] },
+        },
+      },
+      "anyOf.items is required",
     ],
     [
       "a non-object property schema",
@@ -1582,14 +1952,6 @@ describe("MCP runtime", () => {
       "an undeclared required property",
       { type: "object", properties: {}, required: ["value"] },
       "required references an undeclared property",
-    ],
-    [
-      "an unsupported number type",
-      {
-        type: "object",
-        properties: { value: { type: "number" } },
-      },
-      "type is not supported",
     ],
   ] satisfies readonly [string, McpJsonValue, string][])(
     `Given an MCP tool declares %s,

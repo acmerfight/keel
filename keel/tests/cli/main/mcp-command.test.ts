@@ -441,6 +441,42 @@ describe("CLI Main - MCP", () => {
     }
   });
 
+  test(`Given an unauthenticated MCP server is reachable while the OS credential store is unavailable,
+    When the user adds the public server,
+    Then optional token lookup does not regress anonymous MCP use`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-public-no-keyring-"));
+    const server = await startModernMcpServer();
+    const unavailable = {
+      getPassword: async () => {
+        throw new Error("credential service unavailable");
+      },
+      setPassword: async () => {
+        throw new Error("credential service unavailable");
+      },
+      deletePassword: async () => {
+        throw new Error("credential service unavailable");
+      },
+    };
+    const add = createRuntime(["mcp", "add", server.url, "--name", "public"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: unavailable,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(add.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(add.stderr()).toBe("");
+      expect(add.stdout()).toContain("status: ready\n");
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a 2025-era Streamable HTTP MCP server,
     When the user adds it,
     Then Keel falls back from discovery and reports the negotiated legacy era`, async () => {
@@ -492,6 +528,7 @@ describe("CLI Main - MCP", () => {
       const direct = await discoverMcpServer({
         url: server.url,
         allowPrivateNetwork: true,
+        authenticationRequired: false,
       });
 
       // Then
@@ -674,6 +711,52 @@ describe("CLI Main - MCP", () => {
           .split("\n")
           .filter((line) => line.startsWith("- ")),
       ).toHaveLength(10);
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a remote MCP server publishes draft-07 tool schemas,
+    When the user runs MCP doctor,
+    Then Keel reports the tools as usable`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-draft-07-home-"));
+    const server = await startLegacyRawCatalogServer([
+      {
+        name: "search_issues",
+        description: "Search Linear issues",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema",
+          type: "object",
+          properties: {
+            query: { type: "string", minLength: 1 },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const add = createRuntime(["mcp", "add", server.url, "--name", "linear"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime), add.stdout()).toBe(0);
+
+      // When
+      const doctor = createRuntime(["mcp", "doctor", "linear"], {
+        env: { KEEL_HOME: home },
+      });
+      const exitCode = await runCliMain(doctor.runtime);
+
+      // Then
+      expect(exitCode, doctor.stdout()).toBe(0);
+      expect(doctor.stderr()).toBe("");
+      expect(doctor.stdout()).toContain(
+        "tools: 1 usable, 0 quarantined, 1 total\n",
+      );
+      expect(doctor.stdout()).not.toContain("quarantined tools:");
     } finally {
       await server.close();
       await rm(home, { recursive: true, force: true });
@@ -1003,6 +1086,7 @@ describe("CLI Main - MCP", () => {
       const connection = await connectMcpServer({
         url: server.url,
         allowPrivateNetwork: true,
+        authenticationRequired: false,
       });
 
       // When / Then

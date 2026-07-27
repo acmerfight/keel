@@ -42,8 +42,10 @@ const providerSchemaNodeSchema = z
     type: z.json().optional(),
     description: z.json().optional(),
     enum: z.json().optional(),
+    minLength: z.json().optional(),
     minimum: z.json().optional(),
     maximum: z.json().optional(),
+    anyOf: z.json().optional(),
     items: z.json().optional(),
     properties: z.json().optional(),
     required: z.json().optional(),
@@ -93,6 +95,7 @@ function configurationDigest(server: McpServerConfig): string {
   return sha256(
     JSON.stringify({
       allowPrivateNetwork: server.allowPrivateNetwork,
+      authenticationRequired: server.authenticationRequired,
       id: server.id,
       url: server.url,
     }),
@@ -235,22 +238,26 @@ function unsupportedProviderSchemaKeyword(
   path: string,
 ): string | null {
   const typeSpecificKeywords: ReadonlySet<string> =
-    schema.type === "string"
-      ? new Set(["type", "enum"])
-      : schema.type === "integer"
-        ? new Set(["type", "minimum", "maximum"])
-        : schema.type === "boolean"
-          ? new Set(["type"])
-          : schema.type === "array"
-            ? new Set(["type", "items"])
-            : schema.type === "object" || schema.type === undefined
-              ? new Set([
-                  "type",
-                  "properties",
-                  "required",
-                  "additionalProperties",
-                ])
-              : new Set(["type"]);
+    schema.anyOf !== undefined
+      ? new Set(["anyOf", "type"])
+      : schema.type === "string"
+        ? new Set(["type", "enum", "minLength"])
+        : schema.type === "number"
+          ? new Set(["type", "minimum", "maximum"])
+          : schema.type === "integer"
+            ? new Set(["type", "minimum", "maximum"])
+            : schema.type === "boolean"
+              ? new Set(["type"])
+              : schema.type === "array"
+                ? new Set(["type", "items"])
+                : schema.type === "object" || schema.type === undefined
+                  ? new Set([
+                      "type",
+                      "properties",
+                      "required",
+                      "additionalProperties",
+                    ])
+                  : new Set(["type"]);
   const keyword = Object.keys(schema).find(
     (candidate) =>
       !providerSchemaAnnotationKeywords.has(candidate) &&
@@ -292,9 +299,10 @@ function lowerStringSchema(
   };
 }
 
-function lowerIntegerSchema(
+function lowerNumericSchema(
   schema: ProviderSchemaNode,
   path: string,
+  type: "integer" | "number",
 ): SchemaLoweringResult {
   const description = schemaDescription(schema);
   const minimum = schema.minimum;
@@ -310,11 +318,78 @@ function lowerIntegerSchema(
   return {
     ok: true,
     parameter: {
-      type: "integer",
+      type,
       ...(description !== undefined ? { description } : {}),
       ...(minimum !== undefined ? { minimum } : {}),
       ...(maximum !== undefined ? { maximum } : {}),
     },
+  };
+}
+
+function lowerNullableSchema(
+  schema: ProviderSchemaNode,
+  path: string,
+): SchemaLoweringResult {
+  const unsupportedKeyword = unsupportedProviderSchemaKeyword(schema, path);
+  if (
+    unsupportedKeyword !== null ||
+    schema.type !== undefined ||
+    !Array.isArray(schema.anyOf) ||
+    schema.anyOf.length !== 2
+  ) {
+    return {
+      ok: false,
+      reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
+    };
+  }
+  const branches = schema.anyOf.map((branch, index) =>
+    schemaNode(branch, `${path}.anyOf[${index}]`),
+  );
+  let nullBranch: ProviderSchemaNode | null = null;
+  let valueBranch: ProviderSchemaNode | null = null;
+  for (const branch of branches) {
+    if (!branch.ok) return branch;
+    if (branch.value.type === "null") {
+      if (nullBranch !== null) {
+        return {
+          ok: false,
+          reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
+        };
+      }
+      nullBranch = branch.value;
+    } else {
+      if (valueBranch !== null) {
+        return {
+          ok: false,
+          reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
+        };
+      }
+      valueBranch = branch.value;
+    }
+  }
+  /* v8 ignore next 5 -- two parsed branches without duplicate null or value branches must contain exactly one of each. */
+  if (nullBranch === null || valueBranch === null) {
+    return {
+      ok: false,
+      reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
+    };
+  }
+  const nullIssue = unsupportedProviderSchemaKeyword(
+    nullBranch,
+    `${path}.anyOf`,
+  );
+  if (nullIssue !== null) {
+    return { ok: false, reason: nullIssue };
+  }
+  const lowered = lowerSchemaParameter(valueBranch, `${path}.anyOf`);
+  if (!lowered.ok) return lowered;
+  const description = schemaDescription(schema);
+  return {
+    ok: true,
+    parameter:
+      description === undefined
+        ? lowered.parameter
+        : { ...lowered.parameter, description },
   };
 }
 
@@ -396,6 +471,9 @@ function lowerSchemaParameter(
   const parsed = schemaNode(value, path);
   if (!parsed.ok) return parsed;
   const schema = parsed.value;
+  if (schema.anyOf !== undefined) {
+    return lowerNullableSchema(schema, path);
+  }
   const unsupportedKeyword = unsupportedProviderSchemaKeyword(schema, path);
   if (unsupportedKeyword !== null) {
     return { ok: false, reason: unsupportedKeyword };
@@ -404,7 +482,9 @@ function lowerSchemaParameter(
     case "string":
       return lowerStringSchema(schema, path);
     case "integer":
-      return lowerIntegerSchema(schema, path);
+      return lowerNumericSchema(schema, path, "integer");
+    case "number":
+      return lowerNumericSchema(schema, path, "number");
     case "boolean": {
       const description = schemaDescription(schema);
       return {

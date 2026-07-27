@@ -183,6 +183,24 @@ function validateRedirectTarget(
   return base.access;
 }
 
+function requestTargetAccess(
+  target: URL,
+  base: ValidatedMcpServerUrl,
+): NetworkAccess {
+  const parsed = parseMcpUrl(target.href);
+  if (parsed.origin === base.url.origin) return base.access;
+  if (parsed.protocol !== "https:") {
+    networkPolicyError("Error: cross-origin MCP OAuth targets must use HTTPS.");
+  }
+  const literalAccess = literalHostAccess(parsed.hostname);
+  if (literalAccess === "loopback") {
+    networkPolicyError(
+      "Error: cross-origin private MCP OAuth target rejected because it was not explicitly approved.",
+    );
+  }
+  return "public";
+}
+
 function requestBodyRedirectsToGet(status: number, method: string): boolean {
   return (
     status === 303 ||
@@ -230,7 +248,7 @@ class PolicyFetch implements McpPolicyFetch {
   }
 
   private agentFor(target: URL): Agent {
-    const access = validateRedirectTarget(target, this.base);
+    const access = requestTargetAccess(target, this.base);
     const key = `${target.origin}\0${access}`;
     const existing = this.agents.get(key);
     if (existing !== undefined) return existing;
@@ -363,4 +381,51 @@ export function createMcpPolicyFetch(
   runtime: McpNetworkRuntime = defaultNetworkRuntime,
 ): McpPolicyFetch {
   return new PolicyFetch(base, runtime);
+}
+
+/**
+ * Rejects a currently denied authorization destination before handing it to
+ * the RFC 8252 external user agent. This is deliberately a browser preflight,
+ * not connection pinning: the system browser resolves independently. Every
+ * OAuth request that Keel itself performs uses the pinned policy fetch above.
+ */
+export async function preflightMcpOAuthBrowserTarget(
+  target: URL,
+  base: ValidatedMcpServerUrl,
+  runtime: Pick<McpNetworkRuntime, "resolve"> = defaultNetworkRuntime,
+): Promise<void> {
+  const access = requestTargetAccess(target, base);
+  const hostname = hostnameWithoutBrackets(target.hostname);
+  const literal = isIP(hostname) === 0 ? null : hostname;
+  if (literal !== null) {
+    if (!addressAllowed(literal, access)) {
+      networkPolicyError(
+        "Error: MCP OAuth authorization target is denied by network policy.",
+      );
+    }
+    return;
+  }
+  const addresses = await new Promise<readonly McpResolvedAddress[]>(
+    (resolve, reject) => {
+      runtime.resolve(hostname, (error, resolved) => {
+        if (error !== null) {
+          reject(
+            new McpNetworkPolicyError(
+              `MCP network policy could not resolve "${hostname}".`,
+            ),
+          );
+          return;
+        }
+        resolve(resolved);
+      });
+    },
+  );
+  if (
+    addresses.length === 0 ||
+    addresses.some((address) => !addressAllowed(address.address, access))
+  ) {
+    networkPolicyError(
+      "Error: MCP OAuth authorization target is denied by network policy.",
+    );
+  }
 }

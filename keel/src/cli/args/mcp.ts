@@ -12,6 +12,7 @@ const MCP_ADD_OPTIONS = [
   "--allow-tool",
   "--deny-tool",
 ];
+const MCP_LOGIN_OPTIONS = ["--client-id", "--with-client-secret"];
 
 function parseMcpAddArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   const url = args[0];
@@ -109,6 +110,92 @@ function parseOptionalServer(
   });
 }
 
+function parseRequiredServer(
+  mode: "logout",
+  args: readonly string[],
+): ParseResult<McpCliArgs> {
+  const serverId = args[0];
+  if (serverId === undefined || serverId === "" || serverId.startsWith("-")) {
+    return parseError(`Error: mcp ${mode} requires <server>.`);
+  }
+  if (args.length > 1) {
+    return parseError(`Error: unknown mcp ${mode} option "${args[1]}"`);
+  }
+  return parseOk({
+    command: "mcp",
+    mode,
+    serverId,
+  });
+}
+
+function parseMcpLoginArgs(args: readonly string[]): ParseResult<McpCliArgs> {
+  const serverId = args[0];
+  if (serverId === undefined || serverId === "" || serverId.startsWith("-")) {
+    return parseError("Error: mcp login requires <server>.");
+  }
+  let clientId: string | null = null;
+  let withClientSecret = false;
+  let skipNext = false;
+  const clientIdPrefix = "--client-id=";
+  for (const [index, arg] of args.slice(1).entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (arg === "--client-id") {
+      const parsed = requireSeparatedOptionValue(
+        "--client-id",
+        args[index + 2],
+        MCP_LOGIN_OPTIONS,
+      );
+      if (!parsed.ok) return parsed;
+      if (clientId !== null) {
+        return parseError("Error: --client-id may be specified only once.");
+      }
+      clientId = parsed.value;
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith(clientIdPrefix)) {
+      const value = arg.slice(clientIdPrefix.length);
+      if (value === "") {
+        return parseError("Error: --client-id requires a value.");
+      }
+      if (clientId !== null) {
+        return parseError("Error: --client-id may be specified only once.");
+      }
+      clientId = value;
+      continue;
+    }
+    if (arg === "--with-client-secret") {
+      if (withClientSecret) {
+        return parseError(
+          "Error: --with-client-secret may be specified only once.",
+        );
+      }
+      withClientSecret = true;
+      continue;
+    }
+    return parseError(`Error: unknown mcp login option "${arg}"`);
+  }
+  if (withClientSecret && clientId === null) {
+    return parseError("Error: --with-client-secret requires --client-id.");
+  }
+  return parseOk({
+    command: "mcp",
+    mode: "login",
+    serverId,
+    clientRegistration:
+      clientId === null
+        ? { kind: "discovered" }
+        : {
+            kind: "pre-registered",
+            clientId,
+            withClientSecret,
+          },
+  });
+}
+
 export function parseMcpArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   const mode = args[0];
   if (mode === "add") {
@@ -123,9 +210,15 @@ export function parseMcpArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   if (mode === "status" || mode === "doctor") {
     return parseOptionalServer(mode, args.slice(1));
   }
+  if (mode === "login") {
+    return parseMcpLoginArgs(args.slice(1));
+  }
+  if (mode === "logout") {
+    return parseRequiredServer(mode, args.slice(1));
+  }
   return parseError(
     mode === undefined || mode === ""
-      ? "Error: mcp requires a subcommand: add, list, status, or doctor."
+      ? "Error: mcp requires a subcommand: add, list, status, doctor, login, or logout."
       : `Error: unknown mcp subcommand "${mode}"`,
   );
 }

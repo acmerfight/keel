@@ -1,6 +1,7 @@
 import { writeSync } from "node:fs";
 import type { Terminal } from "@earendil-works/pi-tui";
 import { isAbortThrow } from "../core/error.ts";
+import type { McpSecretBackend } from "../mcp/oauth.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import type { SessionStoreRuntime } from "./session-store.ts";
 
@@ -14,6 +15,8 @@ export interface CliRuntime extends SessionStoreRuntime {
   readonly cwd: () => string;
   readonly input: CliInput;
   readonly platform: NodeJS.Platform;
+  readonly mcpSecretBackend: McpSecretBackend;
+  readonly openExternalUrl: (url: URL) => Promise<void>;
   readonly stderrIsTTY?: boolean;
   readonly stdoutIsTTY?: boolean;
   readonly createInteractiveTerminal?: () => Terminal;

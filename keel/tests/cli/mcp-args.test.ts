@@ -57,6 +57,52 @@ describe("MCP CLI args", () => {
       { command: "mcp", mode: "status", serverId: "catalog" },
     ],
     [["mcp", "doctor"], { command: "mcp", mode: "doctor" }],
+    [
+      ["mcp", "login", "catalog"],
+      {
+        command: "mcp",
+        mode: "login",
+        serverId: "catalog",
+        clientRegistration: { kind: "discovered" },
+      },
+    ],
+    [
+      [
+        "mcp",
+        "login",
+        "catalog",
+        "--client-id",
+        "keel-pre-registered",
+        "--with-client-secret",
+      ],
+      {
+        command: "mcp",
+        mode: "login",
+        serverId: "catalog",
+        clientRegistration: {
+          kind: "pre-registered",
+          clientId: "keel-pre-registered",
+          withClientSecret: true,
+        },
+      },
+    ],
+    [
+      ["mcp", "login", "catalog", "--client-id=keel-pre-registered"],
+      {
+        command: "mcp",
+        mode: "login",
+        serverId: "catalog",
+        clientRegistration: {
+          kind: "pre-registered",
+          clientId: "keel-pre-registered",
+          withClientSecret: false,
+        },
+      },
+    ],
+    [
+      ["mcp", "logout", "catalog"],
+      { command: "mcp", mode: "logout", serverId: "catalog" },
+    ],
   ])(
     `Given valid MCP command %j,
     When CLI arguments are parsed,
@@ -69,7 +115,7 @@ describe("MCP CLI args", () => {
   test.each([
     [
       ["mcp"],
-      "Error: mcp requires a subcommand: add, list, status, or doctor.",
+      "Error: mcp requires a subcommand: add, list, status, doctor, login, or logout.",
     ],
     [["mcp", "add"], "Error: mcp add requires <url>."],
     [
@@ -99,7 +145,47 @@ describe("MCP CLI args", () => {
     [["mcp", "list", "extra"], 'Error: unknown mcp list option "extra"'],
     [["mcp", "status", "--all"], 'Error: unknown mcp status option "--all"'],
     [["mcp", "doctor", "one", "two"], 'Error: unknown mcp doctor option "two"'],
-    [["mcp", "login", "catalog"], 'Error: unknown mcp subcommand "login"'],
+    [["mcp", "login"], "Error: mcp login requires <server>."],
+    [["mcp", "logout"], "Error: mcp logout requires <server>."],
+    [
+      ["mcp", "logout", "catalog", "--all"],
+      'Error: unknown mcp logout option "--all"',
+    ],
+    [
+      ["mcp", "login", "catalog", "--unknown"],
+      'Error: unknown mcp login option "--unknown"',
+    ],
+    [
+      ["mcp", "login", "catalog", "--client-id"],
+      "Error: --client-id requires a value.",
+    ],
+    [
+      ["mcp", "login", "catalog", "--client-id="],
+      "Error: --client-id requires a value.",
+    ],
+    [
+      ["mcp", "login", "catalog", "--client-id", "first", "--client-id=second"],
+      "Error: --client-id may be specified only once.",
+    ],
+    [
+      ["mcp", "login", "catalog", "--client-id=first", "--client-id", "second"],
+      "Error: --client-id may be specified only once.",
+    ],
+    [
+      [
+        "mcp",
+        "login",
+        "catalog",
+        "--client-id=client",
+        "--with-client-secret",
+        "--with-client-secret",
+      ],
+      "Error: --with-client-secret may be specified only once.",
+    ],
+    [
+      ["mcp", "login", "catalog", "--with-client-secret"],
+      "Error: --with-client-secret requires --client-id.",
+    ],
   ])(
     `Given invalid MCP command %j,
     When CLI arguments are parsed,

@@ -47,6 +47,7 @@ import {
   runInteractiveSession,
 } from "./interactive-session.ts";
 import { listMcpServersSync, McpConfigError } from "./mcp-config.ts";
+import { createCliMcpConnectionFactory } from "./mcp-connection.ts";
 import {
   formatCostReport,
   printAgentEvents,
@@ -1148,6 +1149,7 @@ async function runSessionCli(
       }
       const projectInstructions = loadProjectInstructions(workspace);
       const mcpServers = listMcpServersSync(runtime);
+      const [firstMcpServer, ...remainingMcpServers] = mcpServers;
       const startedAt = runtime.now();
       void cleanupExpiredToolOutputArtifacts({ runtime });
       const toolOutputArtifactScope =
@@ -1361,9 +1363,16 @@ async function runSessionCli(
           : {}),
         ...(projectInstructions !== undefined ? { projectInstructions } : {}),
         skills,
-        ...(mcpServers.length > 0 ? { mcpServers } : {}),
-        mcpCanPrompt:
-          mode.kind === "interactive" && runtime.input.isTTY === true,
+        ...(firstMcpServer !== undefined
+          ? {
+              mcp: {
+                servers: [firstMcpServer, ...remainingMcpServers],
+                connectionFactory: createCliMcpConnectionFactory(runtime),
+                canPrompt:
+                  mode.kind === "interactive" && runtime.input.isTTY === true,
+              },
+            }
+          : {}),
         ...(restoredSessionOptions !== undefined ? restoredSessionOptions : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(projectBashApprovals !== undefined

@@ -16,6 +16,7 @@ import {
   findMcpServer,
   listMcpServers,
   listMcpServersSync,
+  setMcpServerAuthenticationRequired,
   validateMcpServerId,
 } from "../../src/cli/mcp-config.ts";
 
@@ -73,6 +74,7 @@ describe("MCP config", () => {
       id: "catalog",
       url: "https://example.com/mcp",
       allowPrivateNetwork: false,
+      authenticationRequired: false,
       toolFilter: noToolFilter,
     };
 
@@ -104,11 +106,12 @@ describe("MCP config", () => {
       id: `server-${index}`,
       url: `https://server-${index}.example/mcp`,
       allowPrivateNetwork: false,
+      authenticationRequired: false,
       toolFilter: noToolFilter,
     }));
     await writeFile(
       join(home, "mcp.json"),
-      `${JSON.stringify({ schemaVersion: 2, servers })}\n`,
+      `${JSON.stringify({ schemaVersion: 3, servers })}\n`,
       "utf8",
     );
 
@@ -119,6 +122,7 @@ describe("MCP config", () => {
           id: "overflow",
           url: "https://overflow.example/mcp",
           allowPrivateNetwork: false,
+          authenticationRequired: false,
           toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("supports at most 128 servers");
@@ -130,23 +134,69 @@ describe("MCP config", () => {
     }
   });
 
+  test(`Given authentication state is persisted beside a configured endpoint,
+    When login, repeated login, and logout update that state,
+    Then the mutation is atomic, idempotent, and rejects unknown server identities`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-auth-"));
+    const runtime = configRuntime(home);
+
+    try {
+      await addMcpServer(runtime, {
+        id: "protected",
+        url: "https://protected.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: false,
+        toolFilter: noToolFilter,
+      });
+      await addMcpServer(runtime, {
+        id: "public",
+        url: "https://public.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: false,
+        toolFilter: noToolFilter,
+      });
+
+      // When / Then
+      await setMcpServerAuthenticationRequired(runtime, "protected", true);
+      await setMcpServerAuthenticationRequired(runtime, "protected", true);
+      await expect(findMcpServer(runtime, "protected")).resolves.toMatchObject({
+        authenticationRequired: true,
+      });
+      await setMcpServerAuthenticationRequired(runtime, "protected", false);
+      await expect(findMcpServer(runtime, "protected")).resolves.toMatchObject({
+        authenticationRequired: false,
+      });
+      await expect(findMcpServer(runtime, "public")).resolves.toMatchObject({
+        authenticationRequired: false,
+      });
+      await expect(
+        setMcpServerAuthenticationRequired(runtime, "missing", true),
+      ).rejects.toThrow('MCP server "missing" is not configured');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     ["invalid JSON", "{\n", "invalid JSON"],
     [
       "duplicate records",
       `${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         servers: [
           {
             id: "same",
             url: "https://example.com:443/mcp",
             allowPrivateNetwork: false,
+            authenticationRequired: false,
             toolFilter: noToolFilter,
           },
           {
             id: "same",
             url: "https://example.com/mcp",
             allowPrivateNetwork: false,
+            authenticationRequired: false,
             toolFilter: noToolFilter,
           },
         ],
@@ -161,12 +211,13 @@ describe("MCP config", () => {
     [
       "duplicate tool filters",
       `${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         servers: [
           {
             id: "catalog",
             url: "https://example.com/mcp",
             allowPrivateNetwork: false,
+            authenticationRequired: false,
             toolFilter: {
               allow: ["search", "search"],
               deny: ["delete", "delete"],
@@ -257,11 +308,12 @@ describe("MCP config", () => {
       id: "catalog",
       url: "https://example.com/mcp",
       allowPrivateNetwork: false,
+      authenticationRequired: false,
       toolFilter: noToolFilter,
     };
     await writeFile(
       join(validHome, "mcp.json"),
-      `${JSON.stringify({ schemaVersion: 2, servers: [server] })}\n`,
+      `${JSON.stringify({ schemaVersion: 3, servers: [server] })}\n`,
       "utf8",
     );
     await writeFile(
@@ -312,6 +364,7 @@ describe("MCP config", () => {
         id: "catalog",
         url: "https://example.com/mcp",
         allowPrivateNetwork: false,
+        authenticationRequired: false,
         toolFilter: noToolFilter,
       });
 
@@ -340,6 +393,7 @@ describe("MCP config", () => {
           id: "catalog",
           url: "https://example.com/mcp",
           allowPrivateNetwork: false,
+          authenticationRequired: false,
           toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("MCP config is busy");
@@ -364,6 +418,7 @@ describe("MCP config", () => {
           id: "catalog",
           url: "https://example.com/mcp",
           allowPrivateNetwork: false,
+          authenticationRequired: false,
           toolFilter: noToolFilter,
         }),
       ).rejects.toThrow("cannot inspect MCP config lock");
