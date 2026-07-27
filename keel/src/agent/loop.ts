@@ -43,7 +43,7 @@ import {
 } from "../tools/scoped-project-instructions.ts";
 import { toolCallAccesses } from "../tools/tool-access.ts";
 import {
-  isMcpToolCall,
+  isMcpToolInvocation,
   isUntrustedMcpContentToolCall,
 } from "../tools/tool-call.ts";
 import {
@@ -234,7 +234,7 @@ function undoCheckpointEvent(
 
 function isBlockedGoalProposal(toolCall: ToolCall): boolean {
   return (
-    !isMcpToolCall(toolCall) &&
+    !isMcpToolInvocation(toolCall) &&
     toolCall.tool === "update_goal" &&
     "status" in toolCall &&
     toolCall.status === "blocked"
@@ -1045,7 +1045,7 @@ export async function* runAgentTurn(
           ? { sessionGoal: toolSessionGoal }
           : {}),
         completionProposalHasFollowingToolCalls:
-          !isMcpToolCall(toolCall) &&
+          !isMcpToolInvocation(toolCall) &&
           toolCall.tool === "update_goal" &&
           "status" in toolCall &&
           toolCall.status === "completed" &&
@@ -1188,7 +1188,7 @@ export async function* runAgentTurn(
         }
       } else {
         const { toolCall } = segment.toolCall;
-        if (!isMcpToolCall(toolCall) && toolCall.tool === "update_goal") {
+        if (!isMcpToolInvocation(toolCall) && toolCall.tool === "update_goal") {
           for (const notice of await settlePendingToolExecutions()) {
             yield { type: "tool_output_artifact", ...notice };
           }

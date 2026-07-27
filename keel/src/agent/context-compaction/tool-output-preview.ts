@@ -5,7 +5,7 @@ import {
   gitDiffScopeHeading,
   parseGitDiffOutput,
 } from "../../tools/git-diff-document.ts";
-import { isMcpToolCall } from "../../tools/tool-call.ts";
+import { isMcpToolInvocation } from "../../tools/tool-call.ts";
 
 export type ToolOutputProjectionContext =
   | { readonly toolCall: ToolCall }
@@ -903,7 +903,7 @@ function projectToolOutputPreview(
   if (toolCall === null) {
     return boundedText(text, maxChars);
   }
-  if (isMcpToolCall(toolCall)) {
+  if (isMcpToolInvocation(toolCall)) {
     return boundedText(text, maxChars);
   }
   switch (toolCall.tool) {

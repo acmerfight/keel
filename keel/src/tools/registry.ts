@@ -8,7 +8,7 @@ export type {
   ToolName,
 } from "./tool-call.ts";
 export {
-  isMcpToolCall,
+  isMcpToolInvocation,
   isToolName,
   isUntrustedMcpContentToolCall,
   modelToolExposureAccounting,

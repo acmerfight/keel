@@ -1,6 +1,6 @@
 import type {
-  McpToolCall,
   McpToolExposureSnapshot,
+  McpToolInvocation,
   ToolJsonValue,
 } from "../tools/tool-call.ts";
 import type { ToolOutputArtifact } from "../tools/types.ts";
@@ -63,13 +63,24 @@ export interface McpPreservedToolResult {
   readonly valueTruncated?: true;
 }
 
-export interface McpToolRuntimeResult {
+interface IdentifiedMcpToolRuntimeResult {
+  readonly identity: "identified";
   readonly content: string;
   readonly ok: boolean;
   readonly sourceTruncated?: boolean;
   readonly artifact?: ToolOutputArtifact;
   readonly preserved: McpPreservedToolResult;
 }
+
+interface UnidentifiedMcpToolRuntimeResult {
+  readonly identity: "unidentified";
+  readonly content: string;
+  readonly ok: false;
+}
+
+export type McpToolRuntimeResult =
+  | IdentifiedMcpToolRuntimeResult
+  | UnidentifiedMcpToolRuntimeResult;
 
 export interface McpRuntime {
   readonly prepareTurn: (signal: AbortSignal) => Promise<void>;
@@ -79,7 +90,7 @@ export interface McpRuntime {
     signal: AbortSignal,
   ) => Promise<McpSearchResult>;
   readonly execute: (
-    toolCall: McpToolCall,
+    toolCall: McpToolInvocation,
     signal: AbortSignal,
   ) => Promise<McpToolRuntimeResult>;
   readonly close: () => Promise<void>;

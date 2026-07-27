@@ -85,7 +85,7 @@ import {
 } from "../skills/model.ts";
 import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
-import { isMcpToolCall } from "../tools/tool-call.ts";
+import { isMcpToolInvocation } from "../tools/tool-call.ts";
 import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
   formatInteractiveForkPicker,
@@ -522,7 +522,7 @@ export async function runInteractiveSession(
     for await (const event of stream) {
       if (event.type === "tool_end") {
         const failedGoalVerification =
-          !isMcpToolCall(event.toolCall) &&
+          !isMcpToolInvocation(event.toolCall) &&
           event.toolCall.tool === "bash" &&
           event.bashExitCode !== undefined &&
           event.bashExitCode !== null &&
@@ -1336,7 +1336,7 @@ export async function runInteractiveSession(
         ];
         const successfulVerification = toolExecutionsDuringTurn.find(
           (execution) =>
-            !isMcpToolCall(execution.toolCall) &&
+            !isMcpToolInvocation(execution.toolCall) &&
             execution.toolCall.tool === "bash" &&
             execution.bashExitCode === 0 &&
             sessionGoalCommandMatchesCriterion(
@@ -1363,7 +1363,7 @@ export async function runInteractiveSession(
                 )}.`,
               }
             : successfulVerification !== undefined &&
-                !isMcpToolCall(successfulVerification.toolCall) &&
+                !isMcpToolInvocation(successfulVerification.toolCall) &&
                 successfulVerification.toolCall.tool === "bash"
               ? {
                   kind: "progress_observed",

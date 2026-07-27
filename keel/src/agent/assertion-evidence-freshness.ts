@@ -3,7 +3,7 @@ import {
   type ReadResourceFreshnessStatus,
   revalidateReadResource,
 } from "../tools/read-resource-observation.ts";
-import { isMcpToolCall } from "../tools/tool-call.ts";
+import { isMcpToolInvocation } from "../tools/tool-call.ts";
 
 type ReadToolCall = Extract<ToolCall, { readonly tool: "read" }>;
 
@@ -21,7 +21,7 @@ function readToolCallsById(
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const toolCall of message.toolCalls) {
-      if (!isMcpToolCall(toolCall) && toolCall.tool === "read") {
+      if (!isMcpToolInvocation(toolCall) && toolCall.tool === "read") {
         reads.set(toolCall.id, toolCall);
       }
     }

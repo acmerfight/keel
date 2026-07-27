@@ -1111,9 +1111,9 @@ describe("Tool Execution", () => {
     expect(dynamic.content).toContain("MCP runtime is unavailable");
   });
 
-  test(`Given an active MCP runtime receives sparse and fully bounded searches plus a rich call result,
+  test(`Given an active MCP runtime receives searches, resolved output, and an unresolved name,
     When the execution boundary delegates them,
-    Then optional search fields, artifacts, provenance, and truncation survive`, async () => {
+    Then only identified output receives external provenance`, async () => {
     const searches: unknown[] = [];
     const mcp: McpRuntime = {
       prepareTurn: async () => {},
@@ -1122,25 +1122,35 @@ describe("Tool Execution", () => {
         searches.push(request);
         return { ok: true, content: "activated" };
       },
-      execute: async (toolCall) => ({
-        content: "remote result",
-        ok: true,
-        sourceTruncated: true,
-        artifact: {
-          content: '{"result":"complete"}',
-          previewContent: "remote result",
-          sourceTruncated: false,
-        },
-        preserved: {
-          origin: "external",
-          trustedEvidence: false,
-          serverId: toolCall.reference.serverId,
-          rawToolName: toolCall.reference.rawToolName,
-          value: { result: "complete" },
-          valueBytes: 21,
-          valueSha256: "d".repeat(64),
-        },
-      }),
+      execute: async (toolCall) => {
+        if (toolCall.kind === "mcp_unresolved") {
+          return {
+            identity: "unidentified",
+            content: "unresolved MCP tool",
+            ok: false,
+          };
+        }
+        return {
+          identity: "identified",
+          content: "remote result",
+          ok: true,
+          sourceTruncated: true,
+          artifact: {
+            content: '{"result":"complete"}',
+            previewContent: "remote result",
+            sourceTruncated: false,
+          },
+          preserved: {
+            origin: "external",
+            trustedEvidence: false,
+            serverId: toolCall.reference.serverId,
+            rawToolName: toolCall.reference.rawToolName,
+            value: { result: "complete" },
+            valueBytes: 21,
+            valueSha256: "d".repeat(64),
+          },
+        };
+      },
       close: async () => {},
     };
     const workspace = process.cwd();
@@ -1189,6 +1199,18 @@ describe("Tool Execution", () => {
       bash: { kind: "disabled" },
       mcp,
     });
+    const unresolved = await executeToolCall({
+      workspace,
+      toolCall: {
+        kind: "mcp_unresolved",
+        id: "remote_stale",
+        tool: "mcp__catalog__removed",
+        arguments: { query: "otters" },
+      },
+      signal,
+      bash: { kind: "disabled" },
+      mcp,
+    });
 
     expect(searches).toEqual([
       { query: "otters" },
@@ -1205,6 +1227,11 @@ describe("Tool Execution", () => {
       sourceTruncated: true,
       artifact: { content: '{"result":"complete"}' },
       effects: [{ kind: "external_tool_result" }],
+    });
+    expect(unresolved).toEqual({
+      content: "unresolved MCP tool",
+      ok: false,
+      effects: [],
     });
   });
 

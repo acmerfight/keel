@@ -18,7 +18,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider, Message, ToolCall } from "../../src/llm/types.ts";
 import { toolCallFromParsedArguments } from "../../src/tools/registry.ts";
 
 async function collect(
@@ -575,6 +575,102 @@ describe("Agent Stopping", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test(`Given one turn contains three calls to the same MCP tool with distinct nested arguments,
+    When the repeated-call guard compares the typed calls,
+    Then it lets the whole batch proceed`, () => {
+    // Given
+    const reference = {
+      kind: "mcp",
+      serverId: "catalog",
+      serverOrigin: "https://catalog.example",
+      rawToolName: "search",
+      configurationDigest: "a".repeat(64),
+      catalogGeneration: `catalog:${"b".repeat(64)}`,
+      descriptorDigest: "c".repeat(64),
+    } as const;
+    const toolCalls = [
+      {
+        kind: "mcp",
+        id: "remote_alpha",
+        tool: "mcp__catalog__search",
+        reference,
+        arguments: { query: "alpha", filters: { year: 2024 } },
+      },
+      {
+        kind: "mcp",
+        id: "remote_beta",
+        tool: "mcp__catalog__search",
+        reference,
+        arguments: { query: "beta", filters: { year: 2025 } },
+      },
+      {
+        kind: "mcp",
+        id: "remote_gamma",
+        tool: "mcp__catalog__search",
+        reference,
+        arguments: { query: "gamma", filters: { year: 2026 } },
+      },
+    ] satisfies readonly ToolCall[];
+
+    // When
+    const decision = repeatedToolCallPolicy().shouldStopAfterTurn({
+      completedTurns: 1,
+      priorToolCalls: [],
+      toolCalls,
+    });
+
+    // Then
+    expect(decision).toEqual({ type: "continue" });
+  });
+
+  test(`Given repeated MCP calls use equivalent nested arguments with different key insertion order,
+    When the repeated-call guard canonicalizes the typed calls,
+    Then it still recognizes the repeated-call streak`, () => {
+    // Given
+    const reference = {
+      kind: "mcp",
+      serverId: "catalog",
+      serverOrigin: "https://catalog.example",
+      rawToolName: "search",
+      configurationDigest: "a".repeat(64),
+      catalogGeneration: `catalog:${"b".repeat(64)}`,
+      descriptorDigest: "c".repeat(64),
+    } as const;
+    const toolCalls = [
+      {
+        kind: "mcp",
+        id: "remote_1",
+        tool: "mcp__catalog__search",
+        reference,
+        arguments: { filters: { type: "paper", year: 2026 } },
+      },
+      {
+        kind: "mcp",
+        id: "remote_2",
+        tool: "mcp__catalog__search",
+        reference,
+        arguments: { filters: { year: 2026, type: "paper" } },
+      },
+      {
+        kind: "mcp",
+        id: "remote_3",
+        tool: "mcp__catalog__search",
+        reference,
+        arguments: { filters: { type: "paper", year: 2026 } },
+      },
+    ] satisfies readonly ToolCall[];
+
+    // When
+    const decision = repeatedToolCallPolicy().shouldStopAfterTurn({
+      completedTurns: 1,
+      priorToolCalls: [],
+      toolCalls,
+    });
+
+    // Then
+    expect(decision).toEqual({ type: "stop", reason: "repeated_tool_call" });
   });
 
   test(`Given repeated blocked goal proposals reach the blocker audit threshold,

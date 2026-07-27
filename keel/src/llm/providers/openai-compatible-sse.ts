@@ -1,5 +1,6 @@
 import { KeelError } from "../../core/error.ts";
 import {
+  isMcpModelToolName,
   isToolName,
   providerToolCallFromParsedArguments,
 } from "../../tools/tool-call.ts";
@@ -182,7 +183,11 @@ function parseToolCall(
             (tool) => tool.modelName === toolCallName,
           ) ?? false)
         : false;
-    if (!isToolName(toolCallName) && !isExposedMcpTool) {
+    if (
+      !isToolName(toolCallName) &&
+      !isExposedMcpTool &&
+      !isMcpModelToolName(toolCallName)
+    ) {
       throw new KeelError(
         "provider_protocol_error",
         `${providerName} returned unsupported tool call: ${toolCallName}`,

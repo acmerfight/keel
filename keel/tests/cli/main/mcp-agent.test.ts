@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { runCliMain } from "../../../src/cli/index.ts";
 import {
   requestWithMessagesSchema,
   requestWithToolsSchema,
+  runReportSchema,
 } from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -272,6 +273,205 @@ describe("CLI Main - MCP agent tools", () => {
         tool_call_id: "call_remote_search",
         content: expect.stringContaining("non-TTY one-shot runs fail closed"),
       });
+    } finally {
+      await close(provider);
+      await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one model turn requests the same MCP tool with three different arguments,
+    When the user approves every exact remote call,
+    Then Keel dispatches all three calls and returns every result to the model`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-batch-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-batch-workspace-"),
+    );
+    const mcp = await startMcpToolServer("modern");
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime)).toBe(0);
+
+    const capturedBodies: unknown[] = [];
+    const provider = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          response.write(
+            sseToolCall("search_batch", "mcp_search", {
+              query: "search",
+              server: "catalog",
+              toolName: "search",
+            }),
+          );
+          response.end(`${sseToolFinish()}data: [DONE]\n\n`);
+          return;
+        }
+        if (capturedBodies.length === 2) {
+          response.write(
+            sseToolCall(
+              "remote_alpha",
+              "mcp__catalog__search",
+              { query: "alpha" },
+              { index: 0 },
+            ),
+          );
+          response.write(
+            sseToolCall(
+              "remote_beta",
+              "mcp__catalog__search",
+              { query: "beta" },
+              { index: 1 },
+            ),
+          );
+          response.write(
+            sseToolCall(
+              "remote_gamma",
+              "mcp__catalog__search",
+              { query: "gamma" },
+              { index: 2 },
+            ),
+          );
+          response.end(`${sseToolFinish()}data: [DONE]\n\n`);
+          return;
+        }
+        response.end(sseTextReplyWithUsage("Found three remote matches."));
+      });
+    });
+    await listen(provider);
+    const input = new PassThrough();
+    let approvals = 0;
+    const run = createRuntime(["search three remote queries"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve MCP tool call?")) {
+          approvals += 1;
+          input.write("y\n");
+          if (approvals === 3) {
+            input.end();
+          }
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(run.stdout()).toBe("Found three remote matches.\n");
+      expect(approvals).toBe(3);
+      expect(mcp.calls()).toEqual(["alpha", "beta", "gamma"]);
+      const resultRequest = requestWithMessagesSchema.parse(capturedBodies[2]);
+      for (const [toolCallId, query] of [
+        ["remote_alpha", "alpha"],
+        ["remote_beta", "beta"],
+        ["remote_gamma", "gamma"],
+      ] as const) {
+        expect(resultRequest.messages).toContainEqual({
+          role: "tool",
+          tool_call_id: toolCallId,
+          content: expect.stringContaining(`remote result for ${query}`),
+        });
+      }
+    } finally {
+      input.end();
+      await close(provider);
+      await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the model calls an MCP name that is absent from the current exposure snapshot,
+    When a non-interactive user requests a run report,
+    Then Keel returns stale-call recovery to the model and persists the completed run`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-stale-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-stale-workspace-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    const mcp = await startMcpToolServer("modern");
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime)).toBe(0);
+
+    const capturedBodies: unknown[] = [];
+    const provider = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          response.write(
+            sseToolCall("stale_remote", "mcp__catalog__removed", {
+              query: "otters",
+            }),
+          );
+          response.end(`${sseToolFinish()}data: [DONE]\n\n`);
+          return;
+        }
+        response.end(
+          sseTextReplyWithUsage("Recovered after the stale MCP call."),
+        );
+      });
+    });
+    await listen(provider);
+    const run = createRuntime(
+      ["--report", reportPath, "use the cached remote search"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+          KEEL_HOME: home,
+        },
+        inputIsTTY: false,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(run.stdout()).toBe("Recovered after the stale MCP call.\n");
+      expect(run.stderr()).not.toContain("provider protocol");
+      expect(mcp.calls()).toEqual([]);
+      const recoveryRequest = requestWithMessagesSchema.parse(
+        capturedBodies[1],
+      );
+      expect(recoveryRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "stale_remote",
+        content: expect.stringContaining("Search again before retrying"),
+      });
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.stopReason).toBe("completed");
     } finally {
       await close(provider);
       await mcp.close();

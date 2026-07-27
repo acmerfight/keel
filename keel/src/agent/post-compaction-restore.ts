@@ -7,7 +7,7 @@ import {
   toolExecutionEffect,
 } from "../tools/execution.ts";
 import type { ProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
-import { isMcpToolCall } from "../tools/tool-call.ts";
+import { isMcpToolInvocation } from "../tools/tool-call.ts";
 import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
 import {
   currentToolRound,
@@ -90,7 +90,7 @@ function currentCompactedReadToolCalls(
     const toolCall = toolCallsById.get(toolOutput.message.toolCallId);
     if (
       toolCall !== undefined &&
-      !isMcpToolCall(toolCall) &&
+      !isMcpToolInvocation(toolCall) &&
       toolCall.tool === "read"
     ) {
       compactedReadToolCalls.push(toolCall);

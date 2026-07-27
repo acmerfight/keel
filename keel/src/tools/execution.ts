@@ -61,7 +61,7 @@ import {
   builtinToolCallSchema,
   type InvalidToolCall,
   isInvalidToolCall,
-  isMcpToolCall,
+  isMcpToolInvocation,
   type ToolCall,
   type ValidToolCall,
 } from "./tool-call.ts";
@@ -339,7 +339,7 @@ function executeSkillTool(
   if (context.skillActivation === undefined) {
     return {
       content:
-        "Tool failed: skill activation is unavailable because no valid workflow skill catalog was exposed.\nRecovery: Continue without a skill.",
+        "Tool failed: skill activation is unavailable in the current tool authority context.\nRecovery: Continue without a skill.",
       ok: false,
       effects: NO_TOOL_EXECUTION_EFFECTS,
     };
@@ -1311,7 +1311,7 @@ export async function executeToolCall(
   options: ExecuteToolCallOptions,
 ): Promise<ToolExecution> {
   const { toolCall, ...context } = options;
-  if (isMcpToolCall(toolCall)) {
+  if (isMcpToolInvocation(toolCall)) {
     if (context.mcp === undefined) {
       return {
         content:
@@ -1322,6 +1322,13 @@ export async function executeToolCall(
     }
     try {
       const result = await context.mcp.execute(toolCall, context.signal);
+      if (result.identity === "unidentified") {
+        return {
+          content: result.content,
+          ok: result.ok,
+          effects: NO_TOOL_EXECUTION_EFFECTS,
+        };
+      }
       return {
         content: result.content,
         ok: result.ok,

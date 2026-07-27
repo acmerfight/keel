@@ -11,7 +11,7 @@ import type {
   UserMessageOrigin,
 } from "../llm/types.ts";
 import {
-  isMcpToolCall,
+  isMcpToolInvocation,
   type McpToolArguments,
   type ToolCall,
   type ToolJsonValue,
@@ -76,7 +76,7 @@ function redactMcpToolArgumentsForPersistence(
 }
 
 function redactToolCallForPersistence(toolCall: ToolCall): ToolCall {
-  if (isMcpToolCall(toolCall)) {
+  if (isMcpToolInvocation(toolCall)) {
     return {
       ...toolCall,
       arguments: redactMcpToolArgumentsForPersistence(toolCall.arguments),

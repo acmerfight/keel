@@ -1212,7 +1212,12 @@ describe("tool registry", () => {
       },
       arguments: { query: "otters" },
     });
-    expect(guessedCall).toBeNull();
+    expect(guessedCall).toEqual({
+      kind: "mcp_unresolved",
+      id: "remote_2",
+      tool: "mcp__catalog__other",
+      arguments: { query: "otters" },
+    });
     expect(invalidArguments).toBeNull();
     expect(disabledExposure).toBeNull();
   });

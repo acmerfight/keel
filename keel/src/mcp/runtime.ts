@@ -3,17 +3,19 @@ import { z } from "zod";
 import type { McpServerConfig } from "../cli/mcp-config.ts";
 import { errorMessage } from "../core/error.ts";
 import { redactSecretLikeText } from "../core/secret-text.ts";
-import type {
-  McpModelToolDefinition,
-  McpToolCall,
-  McpToolExposureSnapshot,
-  McpToolReference,
-  ToolJsonValue,
+import {
+  isUnresolvedMcpToolCall,
+  type McpModelToolDefinition,
+  type McpToolExposureSnapshot,
+  type McpToolInvocation,
+  type McpToolReference,
+  type ToolJsonValue,
 } from "../tools/tool-call.ts";
 import type {
   OpenAICompatibleToolParameter,
   OpenAICompatibleToolParameters,
 } from "../tools/tool-schema.ts";
+import type { ToolOutputArtifact } from "../tools/types.ts";
 import type { McpCatalog, McpCatalogTool, McpConnection } from "./discovery.ts";
 import type {
   McpConnectionFactory,
@@ -673,7 +675,7 @@ function richResultArtifact(
   result: Awaited<ReturnType<McpConnection["callTool"]>>,
   preservedValue: PreservedToolResultValue,
   modelContent: string,
-): McpToolRuntimeResult["artifact"] {
+): ToolOutputArtifact | undefined {
   const hasClientOnlyContent =
     result._meta !== undefined ||
     result.content.some((block) => block.type !== "text");
@@ -1023,9 +1025,17 @@ class DefaultMcpRuntime implements McpRuntime {
   }
 
   async execute(
-    toolCall: McpToolCall,
+    toolCall: McpToolInvocation,
     signal: AbortSignal,
   ): Promise<McpToolRuntimeResult> {
+    if (isUnresolvedMcpToolCall(toolCall)) {
+      return {
+        identity: "unidentified",
+        content:
+          "MCP tool call rejected: its name is not present in the current exposure snapshot. Search again before retrying.",
+        ok: false,
+      };
+    }
     const owner = this.owners.find(
       (candidate) => candidate.server.id === toolCall.reference.serverId,
     );
@@ -1036,6 +1046,7 @@ class DefaultMcpRuntime implements McpRuntime {
       originFor(owner.server) !== toolCall.reference.serverOrigin
     ) {
       return {
+        identity: "identified",
         content:
           "MCP tool call rejected: its server configuration or catalog descriptor changed after exposure. Search again before retrying.",
         ok: false,
@@ -1054,6 +1065,7 @@ class DefaultMcpRuntime implements McpRuntime {
       })
     ) {
       return {
+        identity: "identified",
         content:
           "MCP tool call rejected: the current tool filter denies this external capability. Search again before retrying.",
         ok: false,
@@ -1067,6 +1079,7 @@ class DefaultMcpRuntime implements McpRuntime {
     const argumentIssues = await tool.validateArguments(toolCall.arguments);
     if (argumentIssues.length > 0) {
       return {
+        identity: "identified",
         content:
           "MCP tool call rejected: arguments do not satisfy the original server JSON Schema. Search again or correct the arguments.",
         ok: false,
@@ -1089,6 +1102,7 @@ class DefaultMcpRuntime implements McpRuntime {
     });
     if (decision.type === "deny") {
       return {
+        identity: "identified",
         content: `MCP tool call denied: ${decision.message}`,
         ok: false,
         preserved: preservedExternalResult(
@@ -1105,6 +1119,7 @@ class DefaultMcpRuntime implements McpRuntime {
       })
     ) {
       return {
+        identity: "identified",
         content:
           "MCP tool call rejected: the current tool filter denies this external capability. Search again before retrying.",
         ok: false,
@@ -1118,6 +1133,7 @@ class DefaultMcpRuntime implements McpRuntime {
     const dispatch = owner.resolve(toolCall.reference);
     if (dispatch === null) {
       return {
+        identity: "identified",
         content:
           "MCP tool call rejected: its server configuration or catalog descriptor changed during approval. Search again before retrying.",
         ok: false,
@@ -1150,6 +1166,7 @@ class DefaultMcpRuntime implements McpRuntime {
       const preservedValue = toolResultValue(result);
       const artifact = richResultArtifact(result, preservedValue, content);
       return {
+        identity: "identified",
         content,
         ok: result.isError !== true && outputIssues.length === 0,
         ...(artifact === undefined ? {} : { artifact }),
@@ -1161,6 +1178,7 @@ class DefaultMcpRuntime implements McpRuntime {
       };
     } catch (error) {
       return {
+        identity: "identified",
         content: `MCP tool call failed after dispatch; the outcome is uncertain and Keel did not retry it. ${externalErrorDiagnostic(error)}`,
         ok: false,
         preserved: preservedExternalResult(

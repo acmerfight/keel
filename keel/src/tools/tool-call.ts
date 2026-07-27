@@ -31,6 +31,7 @@ export type McpToolArguments = Readonly<Record<string, ToolJsonValue>>;
 
 const mcpServerIdSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/u);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const mcpModelToolNameSchema = z.string().regex(/^mcp__[A-Za-z0-9_]{1,59}$/u);
 const mcpToolReferenceSchema = z
   .object({
     kind: z.literal("mcp"),
@@ -64,13 +65,25 @@ const mcpToolCallSchema = z
   .object({
     kind: z.literal("mcp"),
     id: z.string().min(1),
-    tool: z.string().regex(/^[A-Za-z0-9_]{1,64}$/u),
+    tool: mcpModelToolNameSchema,
     reference: mcpToolReferenceSchema,
     arguments: z.record(z.string(), z.json()),
   })
   .strict();
 
 export type McpToolCall = z.infer<typeof mcpToolCallSchema>;
+
+const unresolvedMcpToolCallSchema = z
+  .object({
+    kind: z.literal("mcp_unresolved"),
+    id: z.string().min(1),
+    tool: mcpModelToolNameSchema,
+    arguments: z.record(z.string(), z.json()),
+  })
+  .strict();
+
+export type UnresolvedMcpToolCall = z.infer<typeof unresolvedMcpToolCallSchema>;
+export type McpToolInvocation = McpToolCall | UnresolvedMcpToolCall;
 
 export type ModelToolExposure =
   | { readonly kind: "none" }
@@ -137,9 +150,14 @@ export const toolCallSchema = z.union([
   builtinToolCallSchema,
   invalidAgentStateToolCallSchema,
   mcpToolCallSchema,
+  unresolvedMcpToolCallSchema,
 ]);
 
-export type ToolCall = ValidToolCall | InvalidToolCall | McpToolCall;
+export type ToolCall =
+  | ValidToolCall
+  | InvalidToolCall
+  | McpToolCall
+  | UnresolvedMcpToolCall;
 
 export interface ToolCallInput {
   readonly id: string;
@@ -357,6 +375,10 @@ function mcpToolCallFromParsedArguments(
   };
 }
 
+export function isMcpModelToolName(name: string): boolean {
+  return mcpModelToolNameSchema.safeParse(name).success;
+}
+
 export function providerToolCallFromParsedArguments(
   id: string,
   name: string,
@@ -366,8 +388,24 @@ export function providerToolCallFromParsedArguments(
   if (isToolName(name)) {
     return toolCallFromParsedArguments(id, name, parsedArguments);
   }
-  return exposure.kind === "auto"
-    ? mcpToolCallFromParsedArguments(id, name, parsedArguments, exposure)
+  if (exposure.kind !== "auto") return null;
+  const resolved = mcpToolCallFromParsedArguments(
+    id,
+    name,
+    parsedArguments,
+    exposure,
+  );
+  if (resolved !== null || !isMcpModelToolName(name)) return resolved;
+  const argumentsResult = z
+    .record(z.string(), z.json())
+    .safeParse(parsedArguments);
+  return argumentsResult.success
+    ? {
+        kind: "mcp_unresolved",
+        id,
+        tool: name,
+        arguments: argumentsResult.data,
+      }
     : null;
 }
 
@@ -425,7 +463,7 @@ export function normalizeProviderToolCall(toolCall: ToolCallInput): ToolCall {
 }
 
 export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
-  if (isMcpToolCall(toolCall)) {
+  if (isMcpToolInvocation(toolCall)) {
     return { ...toolCall.arguments };
   }
   if (isInvalidToolCall(toolCall)) {
@@ -438,7 +476,7 @@ export function toolCallArguments(toolCall: ToolCall): Record<string, unknown> {
 export function toolCallCanonicalArguments(
   toolCall: ToolCall,
 ): Record<string, unknown> {
-  if (isMcpToolCall(toolCall)) {
+  if (isMcpToolInvocation(toolCall)) {
     return { ...toolCall.arguments };
   }
   if (isInvalidToolCall(toolCall)) {
@@ -452,6 +490,9 @@ export function toolCallLabel(toolCall: ToolCall): string {
   if (isMcpToolCall(toolCall)) {
     return `${toolCall.reference.serverId}/${toolCall.reference.rawToolName}`;
   }
+  if (isUnresolvedMcpToolCall(toolCall)) {
+    return toolCall.tool;
+  }
   if (isInvalidToolCall(toolCall)) {
     return toolCall.tool;
   }
@@ -462,11 +503,23 @@ export function toolCallLabel(toolCall: ToolCall): string {
 export function isInvalidToolCall(
   toolCall: ToolCall,
 ): toolCall is InvalidToolCall {
-  return !isMcpToolCall(toolCall) && "invalidArguments" in toolCall;
+  return !isMcpToolInvocation(toolCall) && "invalidArguments" in toolCall;
 }
 
 export function isMcpToolCall(toolCall: ToolCall): toolCall is McpToolCall {
   return "kind" in toolCall && toolCall.kind === "mcp";
+}
+
+export function isUnresolvedMcpToolCall(
+  toolCall: ToolCall,
+): toolCall is UnresolvedMcpToolCall {
+  return "kind" in toolCall && toolCall.kind === "mcp_unresolved";
+}
+
+export function isMcpToolInvocation(
+  toolCall: ToolCall,
+): toolCall is McpToolInvocation {
+  return isMcpToolCall(toolCall) || isUnresolvedMcpToolCall(toolCall);
 }
 
 export function isUntrustedMcpContentToolCall(toolCall: ToolCall): boolean {

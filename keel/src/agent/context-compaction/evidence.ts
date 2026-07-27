@@ -3,7 +3,7 @@ import type {
   ToolCall,
   UserMessageContextCompactionEvidence,
 } from "../../llm/types.ts";
-import { isMcpToolCall, toolCallLabel } from "../../tools/registry.ts";
+import { isMcpToolInvocation, toolCallLabel } from "../../tools/registry.ts";
 import {
   generatedToolOutputArtifactMarker,
   sourceStatusFromToolOutputText,
@@ -43,7 +43,7 @@ function toolCallsById(
 }
 
 function sourceHandleForToolCall(toolCall: ToolCall): string | null {
-  if (isMcpToolCall(toolCall)) return null;
+  if (isMcpToolInvocation(toolCall)) return null;
   switch (toolCall.tool) {
     case "read": {
       const windowParts: string[] = [];

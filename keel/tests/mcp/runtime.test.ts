@@ -20,6 +20,7 @@ import type {
   McpConnectionFactory,
   McpPermissionPolicy,
   McpToolFilterPolicy,
+  McpToolRuntimeResult,
 } from "../../src/mcp/runtime-types.ts";
 import {
   close,
@@ -36,6 +37,19 @@ interface TestMcpServer {
 }
 
 type McpWireToolResult = Awaited<ReturnType<McpConnection["callTool"]>>;
+type IdentifiedMcpToolRuntimeResult = Extract<
+  McpToolRuntimeResult,
+  { readonly identity: "identified" }
+>;
+
+function expectIdentifiedMcpResult(
+  result: McpToolRuntimeResult,
+): asserts result is IdentifiedMcpToolRuntimeResult {
+  expect(result.identity).toBe("identified");
+  if (result.identity !== "identified") {
+    throw new Error("expected an identified MCP tool result");
+  }
+}
 
 const testServerConfig: McpServerConfig = {
   id: "catalog",
@@ -233,6 +247,50 @@ function exposedToolCall(
 }
 
 describe("MCP runtime", () => {
+  test(`Given a typed MCP invocation has no identity in the frozen exposure snapshot,
+    When runtime handles the unresolved invocation,
+    Then it returns recovery without connecting, approving, or dispatching`, async () => {
+    // Given
+    const fake = fakeConnectionFactory({ catalogs: [] });
+    let approvals = 0;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        {
+          kind: "mcp_unresolved",
+          id: "remote_stale",
+          tool: "mcp__catalog__removed",
+          arguments: { query: "otters" },
+        },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result).toEqual({
+        identity: "unidentified",
+        content:
+          "MCP tool call rejected: its name is not present in the current exposure snapshot. Search again before retrying.",
+        ok: false,
+      });
+      expect(fake.connectCalls()).toBe(0);
+      expect(fake.listCalls()).toBe(0);
+      expect(fake.callCalls()).toBe(0);
+      expect(approvals).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test(`Given a modern MCP tool binds a primitive argument with x-mcp-header,
     When the model activates and invokes the lowered provider tool,
     Then the original descriptor still delivers the matching MCP parameter header`, async () => {
@@ -331,6 +389,7 @@ describe("MCP runtime", () => {
       expect(runtime.exposureSnapshot().tools).toEqual([]);
       expect(result.ok).toBe(false);
       expect(result.content).toContain("current tool filter denies");
+      expectIdentifiedMcpResult(result);
       expect(result.preserved).toMatchObject({
         origin: "external",
         trustedEvidence: false,
@@ -1095,6 +1154,7 @@ describe("MCP runtime", () => {
       // Then
       expect(result.ok).toBe(false);
       expect(result.content).toContain("declared MCP output schema");
+      expectIdentifiedMcpResult(result);
       expect(result.preserved.value).toEqual(invalidResult);
       expect(fake.callCalls()).toBe(1);
     } finally {
@@ -1266,6 +1326,7 @@ describe("MCP runtime", () => {
       expect(result.content).toContain("image, audio, resource_link, resource");
       expect(result.content).not.toContain("privateWidgetState");
       expect(result.content).not.toContain("must-not-enter-model-text");
+      expectIdentifiedMcpResult(result);
       expect(result.preserved.value).toEqual(richResult);
       expect(result.artifact?.content).toBe(JSON.stringify(richResult));
     } finally {
@@ -1308,6 +1369,7 @@ describe("MCP runtime", () => {
 
       // Then
       expect(result.content).toBe("small visible result");
+      expectIdentifiedMcpResult(result);
       expect(result.preserved.valueTruncated).toBe(true);
       expect(result.preserved.value).toMatchObject({
         error: "MCP result exceeded the preserved evidence limit",
