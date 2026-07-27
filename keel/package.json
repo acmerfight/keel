@@ -36,14 +36,19 @@
   },
   "dependencies": {
     "@earendil-works/pi-tui": "0.80.10",
+    "@modelcontextprotocol/client": "2.0.0-beta.5",
     "@vscode/ripgrep": "1.18.0",
     "ignore": "7.0.6",
+    "ipaddr.js": "2.4.0",
+    "undici": "8.9.0",
     "yaml": "2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
     "@fast-check/vitest": "^0.4.1",
+    "@modelcontextprotocol/node": "2.0.0-beta.5",
+    "@modelcontextprotocol/server": "2.0.0-beta.5",
     "@types/node": "^24.13.3",
     "@vitest/coverage-v8": "^4.1.10",
     "@xterm/headless": "6.0.0",

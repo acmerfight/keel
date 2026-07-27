@@ -7,6 +7,7 @@ import { parseCliArgs, USAGE } from "./args.ts";
 import { runForkPointsCommand } from "./fork-points-command.ts";
 import { runHeadlessGoalCli } from "./headless-goal-run.ts";
 import { runInteractiveCli } from "./interactive-run.ts";
+import { runMcpCommand } from "./mcp-command.ts";
 import { runMemoryCommand } from "./memory-command.ts";
 import { runOneShotCli } from "./one-shot-run.ts";
 import {
@@ -50,6 +51,10 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "config") {
     return runConfigCommand(cliArgs, runtime);
+  }
+
+  if (cliArgs.command === "mcp") {
+    return await runMcpCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "setup") {

@@ -23,6 +23,7 @@ export default defineConfig({
           include: [
             "tests/agent/**/*.test.ts",
             "tests/core/**/*.test.ts",
+            "tests/mcp/**/*.test.ts",
             "tests/providers/**/*.test.ts",
             "tests/tools/**/*.test.ts",
             "tests/invariants/**/*.test.ts",
