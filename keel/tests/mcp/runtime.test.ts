@@ -1115,6 +1115,12 @@ describe("MCP runtime", () => {
       false,
       "reported an error without model-visible content",
     ],
+    [
+      "blank text block",
+      { content: [{ type: "text", text: "" }] },
+      true,
+      "returned no model-visible content",
+    ],
   ] satisfies readonly [string, McpWireToolResult, boolean, string][])(
     `Given a remote tool returns a %s result,
     When the total result adapter handles zero content blocks,
@@ -1270,6 +1276,693 @@ describe("MCP runtime", () => {
       expect(result.preserved.valueBytes).toBeGreaterThan(300_000);
       expect(result.preserved.valueSha256).toMatch(/^[a-f0-9]{64}$/u);
       expect(result.artifact?.content).toBe(JSON.stringify(largeResult));
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given modern MCP tools use the JSON Schema forms supported by the provider boundary,
+    When Keel lowers their schemas for model exposure,
+    Then every supported primitive and nested form keeps its bounded annotations`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "schema_matrix",
+        description: "Schema\u0000 matrix",
+        inputSchema: {
+          type: "object",
+          description: "Root\u0007 description",
+          properties: {
+            plain: { type: "string", "x-mcp-header": "X-Plain" },
+            labeled: { type: "string", description: "Labeled" },
+            choice: {
+              type: "string",
+              enum: ["left", "right"],
+              description: "Choice",
+            },
+            plainChoice: { type: "string", enum: ["only"] },
+            count: {
+              type: "integer",
+              minimum: 1,
+              maximum: 10,
+              description: "Count",
+            },
+            enabled: { type: "boolean", description: "Enabled" },
+            flag: { type: "boolean" },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description: "Tags",
+            },
+            plainTags: {
+              type: "array",
+              items: { type: "string" },
+            },
+            nested: {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+              description: "Nested",
+            },
+            emptyObject: { type: "object" },
+          },
+          required: ["plain", "choice", "count"],
+          additionalProperties: false,
+          title: "Annotations remain non-semantic",
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+
+    try {
+      // When
+      const result = await runtime.search(
+        {
+          query: "unused",
+          server: "catalog",
+          tool: "schema_matrix",
+        },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).not.toContain("\u0000");
+      expect(result.content).not.toContain("\u0007");
+      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+        type: "object",
+        description: "Root description",
+        properties: {
+          plain: { type: "string" },
+          labeled: { type: "string", description: "Labeled" },
+          choice: {
+            type: "string",
+            enum: ["left", "right"],
+            description: "Choice",
+          },
+          plainChoice: { type: "string", enum: ["only"] },
+          count: {
+            type: "integer",
+            minimum: 1,
+            maximum: 10,
+            description: "Count",
+          },
+          enabled: { type: "boolean", description: "Enabled" },
+          flag: { type: "boolean" },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Tags",
+          },
+          plainTags: {
+            type: "array",
+            items: { type: "string" },
+          },
+          nested: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+            additionalProperties: false,
+            description: "Nested",
+          },
+          emptyObject: {
+            type: "object",
+            properties: {},
+            required: [],
+            additionalProperties: false,
+          },
+        },
+        required: ["plain", "choice", "count"],
+        additionalProperties: false,
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test.each([
+    [
+      "a non-object root",
+      { type: "string" },
+      "schema.type must be object when present",
+    ],
+    [
+      "an unsupported composition keyword",
+      { type: "object", properties: {}, anyOf: [] },
+      "anyOf is not expressible",
+    ],
+    [
+      "a non-object property schema",
+      { type: "object", properties: { value: true } },
+      "properties.value must be a JSON Schema object",
+    ],
+    [
+      "a non-string enum container",
+      {
+        type: "object",
+        properties: { value: { type: "string", enum: "left" } },
+      },
+      'enum value must be ["array"]',
+    ],
+    [
+      "a mixed string enum",
+      {
+        type: "object",
+        properties: { value: { type: "string", enum: ["left", 1] } },
+      },
+      "enum must contain only strings",
+    ],
+    [
+      "a non-numeric minimum",
+      {
+        type: "object",
+        properties: { value: { type: "integer", minimum: "one" } },
+      },
+      'minimum value must be ["number"]',
+    ],
+    [
+      "a non-numeric maximum",
+      {
+        type: "object",
+        properties: { value: { type: "integer", maximum: "ten" } },
+      },
+      'maximum value must be ["number"]',
+    ],
+    [
+      "an array without items",
+      { type: "object", properties: { value: { type: "array" } } },
+      "items is required",
+    ],
+    [
+      "an array with an invalid item schema",
+      {
+        type: "object",
+        properties: { value: { type: "array", items: true } },
+      },
+      "items must be a JSON Schema object",
+    ],
+    [
+      "a non-object properties map",
+      { type: "object", properties: [] },
+      "expected record, received array",
+    ],
+    [
+      "a non-array required list",
+      { type: "object", properties: {}, required: "value" },
+      "expected array, received string",
+    ],
+    [
+      "a mixed required list",
+      { type: "object", properties: {}, required: ["value", 1] },
+      "expected string, received number",
+    ],
+    [
+      "an undeclared required property",
+      { type: "object", properties: {}, required: ["value"] },
+      "required references an undeclared property",
+    ],
+    [
+      "an unsupported number type",
+      {
+        type: "object",
+        properties: { value: { type: "number" } },
+      },
+      "type is not supported",
+    ],
+  ] satisfies readonly [string, McpJsonValue, string][])(
+    `Given an MCP tool declares %s,
+    When provider schema lowering runs,
+    Then only that tool is quarantined with a precise diagnostic`,
+    async (_caseName, inputSchema, expectedDiagnostic) => {
+      // Given
+      const catalog = await fakeCatalog([
+        { name: "invalid", inputSchema },
+        {
+          name: "valid",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ]);
+      const fake = fakeConnectionFactory({ catalogs: [catalog] });
+      const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+
+      try {
+        // When
+        const result = await runtime.search(
+          { query: "unused", server: "catalog", tool: "invalid" },
+          new AbortController().signal,
+        );
+
+        // Then
+        expect(runtime.exposureSnapshot().tools).toEqual([]);
+        expect(result.content).toContain(expectedDiagnostic);
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
+
+  test(`Given search metadata spans names, descriptions, server ids, limits, and schema budgets,
+    When lexical and exact searches activate capabilities,
+    Then ranking is deterministic and every omission is reported`, async () => {
+    // Given
+    const largeProperties = Object.fromEntries(
+      Array.from({ length: 750 }, (_, index) => [
+        `property_${index}_${"x".repeat(40)}`,
+        { type: "string" },
+      ]),
+    );
+    const catalog = await fakeCatalog([
+      {
+        name: "exact",
+        description: "first description match",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "name-otter",
+        description: "other",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "description-match",
+        description: "otter lookup",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "budget-heavy-a",
+        description: "budget heavy",
+        inputSchema: {
+          type: "object",
+          properties: largeProperties,
+        },
+      },
+      {
+        name: "budget-heavy-b",
+        description: "budget heavy",
+        inputSchema: {
+          type: "object",
+          properties: largeProperties,
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+    const signal = new AbortController().signal;
+
+    try {
+      const exact = await runtime.search({ query: "exact" }, signal);
+      expect(exact.content).toContain("catalog/exact");
+      const toolOnly = await runtime.search(
+        { query: "unused", tool: "exact" },
+        signal,
+      );
+      expect(toolOnly.content).toContain("catalog/exact");
+
+      const lexical = await runtime.search({ query: "otter" }, signal);
+      expect(
+        runtime
+          .exposureSnapshot()
+          .tools.map((tool) => tool.reference.rawToolName),
+      ).toEqual(["name-otter", "description-match"]);
+      expect(lexical.ok).toBe(true);
+      const byServer = await runtime.search({ query: "catalog" }, signal);
+      expect(byServer.content).toContain("catalog/name-otter");
+      const limited = await runtime.search(
+        { query: "description", limit: 1 },
+        signal,
+      );
+      expect(limited.content).toContain("Omitted");
+
+      // When
+      const bounded = await runtime.search(
+        { query: "budget heavy", limit: 1 },
+        signal,
+      );
+
+      // Then
+      expect(runtime.exposureSnapshot().tools).toHaveLength(0);
+      expect(bounded.content).toContain("Omitted 2 matching tools");
+      expect(bounded.content).toContain("2 tools exceeded");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given discovery fails, is cancelled, or is requested after shutdown,
+    When the runtime resolves those lifecycle boundaries,
+    Then it fails closed, redacts diagnostics, and closes partial connections once`, async () => {
+    // Given
+    let closes = 0;
+    const connection: McpConnection = {
+      protocolEra: "modern",
+      protocolVersion: "2026-07-28",
+      serverIdentity: null,
+      listCatalog: async () => {
+        throw new Error(
+          "bad\u0007 endpoint https://user:secret@example.com/mcp?token=hidden http://%",
+        );
+      },
+      callTool: async () => ({ content: [] }),
+      close: async () => {
+        closes++;
+      },
+    };
+    const runtime = runtimeWithFactory({
+      connectionFactory: { connect: async () => connection },
+    });
+
+    // When
+    const failed = await runtime.search(
+      { query: "anything" },
+      new AbortController().signal,
+    );
+    await runtime.close();
+    await runtime.close();
+    const stopped = await runtime.search(
+      { query: "anything" },
+      new AbortController().signal,
+    );
+
+    // Then
+    expect(failed.ok).toBe(false);
+    expect(failed.content).toContain(
+      "Server unavailable: catalog: bad endpoint https://example.com/mcp",
+    );
+    expect(failed.content).toContain("<redacted-url>");
+    expect(failed.content).not.toContain("secret");
+    expect(failed.content).not.toContain("hidden");
+    expect(stopped).toEqual({
+      ok: false,
+      content: "MCP search failed: the MCP runtime is stopped.",
+    });
+    expect(closes).toBe(1);
+  });
+
+  test(`Given an already-aborted request and an in-flight shared discovery request,
+    When cancellation reaches the owner wait boundary,
+    Then callers stop promptly without converting typed abort reasons`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const pending =
+      Promise.withResolvers<Awaited<ReturnType<typeof fakeCatalog>>>();
+    let closes = 0;
+    const connection: McpConnection = {
+      protocolEra: "modern",
+      protocolVersion: "2026-07-28",
+      serverIdentity: null,
+      listCatalog: async () => await pending.promise,
+      callTool: async () => ({ content: [] }),
+      close: async () => {
+        closes++;
+      },
+    };
+    const runtime = runtimeWithFactory({
+      connectionFactory: { connect: async () => connection },
+    });
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort();
+    const duringWait = new AbortController();
+    const waiting = runtime.search({ query: "search" }, duringWait.signal);
+
+    // When / Then
+    await expect(
+      runtime.search({ query: "search" }, alreadyAborted.signal),
+    ).resolves.toMatchObject({ ok: false });
+    duringWait.abort(new Error("typed cancellation"));
+    await expect(waiting).resolves.toMatchObject({ ok: false });
+
+    pending.resolve(catalog);
+    await runtime.close();
+    expect(closes).toBe(1);
+  });
+
+  test(`Given a manual refresh returns an unchanged catalog generation,
+    When a previously exposed reference is invoked,
+    Then the typed reference remains current and dispatch succeeds`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog, catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+    const signal = new AbortController().signal;
+
+    try {
+      const original = await activateExactSearch(runtime);
+
+      // When
+      await runtime.search(
+        {
+          query: "search",
+          server: "catalog",
+          tool: "search",
+          refresh: true,
+        },
+        signal,
+      );
+      const result = await runtime.execute(original, signal);
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(fake.listCalls()).toBe(2);
+      expect(fake.callCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a configured allow-list admits one raw tool,
+    When discovery applies the typed policy,
+    Then that allow-list branch activates exactly the admitted capability`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "blocked",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = createMcpRuntime({
+      servers: [
+        {
+          ...testServerConfig,
+          toolFilter: { allow: ["search"], deny: [] },
+        },
+      ],
+      connectionFactory: fake.factory,
+      permission: allowPermission,
+    });
+
+    try {
+      // When
+      await runtime.search(
+        { query: "unused", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(
+        runtime
+          .exposureSnapshot()
+          .tools.map((tool) => tool.reference.rawToolName),
+      ).toEqual(["search"]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a reference names no descriptor in its otherwise current catalog generation,
+    When execution resolves that forged external identity,
+    Then the owner rejects it as stale before approval`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+
+    try {
+      const call = await activateExactSearch(runtime);
+
+      // When
+      const result = await runtime.execute(
+        {
+          ...call,
+          reference: { ...call.reference, rawToolName: "missing" },
+        },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("changed after exposure");
+      expect(fake.callCalls()).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given approval aborts a request with a non-Error reason,
+    When dispatch reaches its final cancellation gate,
+    Then the runtime throws a standard AbortError without calling the server`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const controller = new AbortController();
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      permission: {
+        review: () => {
+          controller.abort("plain cancellation reason");
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      const call = await activateExactSearch(runtime);
+
+      // When / Then
+      await expect(
+        runtime.execute(call, controller.signal),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(fake.callCalls()).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given cancellation wins while an expired catalog refresh fails,
+    When turn preparation handles the refresh boundary,
+    Then the original typed cancellation reason is propagated`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    let now = 0;
+    let lists = 0;
+    const controller = new AbortController();
+    const cancellation = new Error("cancel refresh");
+    const connection: McpConnection = {
+      protocolEra: "modern",
+      protocolVersion: "2026-07-28",
+      serverIdentity: null,
+      listCatalog: async () => {
+        lists++;
+        if (lists === 1) return catalog;
+        controller.abort(cancellation);
+        throw new Error("transport settled after cancellation");
+      },
+      callTool: async () => ({ content: [] }),
+      close: async () => {},
+    };
+    const runtime = runtimeWithFactory({
+      connectionFactory: { connect: async () => connection },
+      now: () => now,
+    });
+
+    try {
+      await runtime.search({ query: "search" }, new AbortController().signal);
+      now = 5 * 60 * 1_000;
+
+      // When / Then
+      await expect(runtime.prepareTurn(controller.signal)).rejects.toBe(
+        cancellation,
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given two logical servers expose equally scored tools,
+    When discovery builds the shared catalog and active snapshot,
+    Then server and raw-tool ordering are deterministic`, async () => {
+    // Given
+    const aCatalog = await fakeCatalog([
+      {
+        name: "zeta",
+        description: "shared match",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "alpha",
+        description: "shared match",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const bCatalog = await fakeCatalog([
+      {
+        name: "middle",
+        description: "shared match",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const runtime = createMcpRuntime({
+      servers: [
+        {
+          ...testServerConfig,
+          id: "b-server",
+          url: "https://b.example/mcp",
+        },
+        {
+          ...testServerConfig,
+          id: "a-server",
+          url: "https://a.example/mcp",
+        },
+      ],
+      connectionFactory: {
+        connect: async (server) => ({
+          protocolEra: "modern",
+          protocolVersion: "2026-07-28",
+          serverIdentity: null,
+          listCatalog: async () =>
+            server.url.includes("a.example") ? aCatalog : bCatalog,
+          callTool: async () => ({ content: [] }),
+          close: async () => {},
+        }),
+      },
+      permission: allowPermission,
+    });
+
+    try {
+      // When
+      await runtime.search(
+        { query: "shared match", limit: 10 },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(
+        runtime
+          .exposureSnapshot()
+          .tools.map(
+            (tool) =>
+              `${tool.reference.serverId}/${tool.reference.rawToolName}`,
+          ),
+      ).toEqual(["a-server/alpha", "a-server/zeta", "b-server/middle"]);
     } finally {
       await runtime.close();
     }
