@@ -183,10 +183,12 @@ function parseToolCall(
             (tool) => tool.modelName === toolCallName,
           ) ?? false)
         : false;
+    const isRecoverableMcpToolName =
+      toolExposure.kind === "auto" && isMcpModelToolName(toolCallName);
     if (
       !isToolName(toolCallName) &&
       !isExposedMcpTool &&
-      !isMcpModelToolName(toolCallName)
+      !isRecoverableMcpToolName
     ) {
       throw new KeelError(
         "provider_protocol_error",
