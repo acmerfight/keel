@@ -38,6 +38,7 @@ import type {
 
 export { conversationCheckpointSummaryFromMessage } from "./context-compaction/checkpoint.ts";
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
+export { collectToolCompactionEvidence } from "./context-compaction/evidence.ts";
 export {
   contextCompactionRequestTargetTokens,
   resolveContextCompactionOptions,

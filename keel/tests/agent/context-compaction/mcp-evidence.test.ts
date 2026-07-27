@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { collectToolCompactionEvidence } from "../../../src/agent/context-compaction/evidence.ts";
+import { collectToolCompactionEvidence } from "../../../src/agent/context-compaction.ts";
 import type { Message } from "../../../src/llm/types.ts";
 
 describe("Context Compaction MCP Evidence", () => {
