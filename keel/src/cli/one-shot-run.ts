@@ -139,6 +139,7 @@ function oneShotBashRuntime(
     };
   }
 
+  /* v8 ignore next 3 -- TTY ask mode creates the shared approval reader before this private adapter is called. */
   if (lineReader === undefined) {
     throw new Error("TTY bash approval requires an approval line reader");
   }

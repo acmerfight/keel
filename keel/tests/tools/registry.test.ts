@@ -1183,6 +1183,18 @@ describe("tool registry", () => {
       { query: "otters" },
       exposure,
     );
+    const invalidArguments = providerToolCallFromParsedArguments(
+      "remote_3",
+      "mcp__catalog__search",
+      ["not", "an", "object"],
+      exposure,
+    );
+    const disabledExposure = providerToolCallFromParsedArguments(
+      "remote_4",
+      "mcp__catalog__search",
+      { query: "otters" },
+      { kind: "none" },
+    );
 
     // Then
     expect(definition?.function.parameters).toEqual({
@@ -1201,6 +1213,8 @@ describe("tool registry", () => {
       arguments: { query: "otters" },
     });
     expect(guessedCall).toBeNull();
+    expect(invalidArguments).toBeNull();
+    expect(disabledExposure).toBeNull();
   });
 
   test(`Given provider tool names arrive as strings,

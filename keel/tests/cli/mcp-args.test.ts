@@ -16,6 +16,7 @@ describe("MCP CLI args", () => {
         "--allow-tool=lookup",
         "--deny-tool",
         "delete",
+        "--deny-tool=purge",
       ],
       {
         command: "mcp",
@@ -24,7 +25,7 @@ describe("MCP CLI args", () => {
         name: "catalog",
         allowPrivateNetwork: true,
         allowTools: ["search", "lookup"],
-        denyTools: ["delete"],
+        denyTools: ["delete", "purge"],
       },
     ],
     [

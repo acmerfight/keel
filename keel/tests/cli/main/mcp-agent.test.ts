@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,6 +275,116 @@ describe("CLI Main - MCP agent tools", () => {
     } finally {
       await close(provider);
       await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive session loads a configured MCP server,
+    When the model searches and the user approves the exact call in steering input,
+    Then approval mode is restored and the session can exit normally`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-interactive-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-interactive-workspace-"),
+    );
+    const mcp = await startMcpToolServer("modern");
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime)).toBe(0);
+    const capturedBodies: unknown[] = [];
+    const provider = mcpAgentProvider(capturedBodies);
+    await listen(provider);
+    const input = new PassThrough();
+    input.write("search remotely\n");
+    let approvalAnswered = false;
+    let exitQueued = false;
+    const run = createRuntime([], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+      onStderr: (text) => {
+        if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.write("yes\n");
+        }
+      },
+      onStdout: (text) => {
+        if (text.includes("Found one remote match.") && !exitQueued) {
+          exitQueued = true;
+          input.end("/exit\n");
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(approvalAnswered).toBe(true);
+      expect(exitQueued).toBe(true);
+      expect(run.stdout()).toContain("Found one remote match.");
+      expect(mcp.calls()).toEqual(["otters"]);
+
+      const nonTtyInput = new PassThrough();
+      nonTtyInput.end("/exit\n");
+      const nonTty = createRuntime(["--ephemeral"], {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: home,
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+        },
+        input: nonTtyInput,
+        inputIsTTY: false,
+      });
+      expect(await runCliMain(nonTty.runtime)).toBe(0);
+    } finally {
+      input.end();
+      await close(provider);
+      await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given interactive startup finds an invalid MCP config,
+    When the CLI loads external configuration,
+    Then it reports the normalized config error before starting a session`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-invalid-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-invalid-workspace-"),
+    );
+    await writeFile(join(home, "mcp.json"), "{\n", "utf8");
+    const run = createRuntime([], {
+      cwd: workspace,
+      env: {
+        KEEL_HOME: home,
+        KEEL_PROVIDER: "fake",
+        KEEL_FORCE_INTERACTIVE: "1",
+      },
+      input: new PassThrough(),
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(run.stderr()).toContain("cannot read MCP config");
+      expect(run.stderr()).toContain("invalid JSON");
+    } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }

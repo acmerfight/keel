@@ -1102,6 +1102,45 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given a remote tool returns structured data accepted by its declared output schema,
+    When the SDK validator crosses the execution boundary,
+    Then the call remains successful with no synthetic validation issues`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: {
+          type: "object",
+          properties: { matches: { type: "integer" } },
+          required: ["matches"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({
+      catalogs: [catalog],
+      callTool: async () => ({
+        content: [],
+        structuredContent: { matches: 1 },
+      }),
+    });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain('"matches":1');
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test.each([
     [
       "successful empty",
@@ -1656,6 +1695,39 @@ describe("MCP runtime", () => {
       content: "MCP search failed: the MCP runtime is stopped.",
     });
     expect(closes).toBe(1);
+  });
+
+  test(`Given a server advertises duplicate raw tool names,
+    When catalog construction resolves routing identities,
+    Then every ambiguous duplicate is quarantined with one bounded issue`, async () => {
+    // Given / When
+    const catalog = await fakeCatalog([
+      {
+        name: "duplicate",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "duplicate",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+
+    try {
+      const result = await runtime.search(
+        { query: "duplicate" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.content).toContain(
+        "Catalog quarantine: catalog/duplicate: duplicate raw tool name",
+      );
+      expect(runtime.exposureSnapshot().tools).toEqual([]);
+    } finally {
+      await runtime.close();
+    }
   });
 
   test(`Given an already-aborted request and an in-flight shared discovery request,

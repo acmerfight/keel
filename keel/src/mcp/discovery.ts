@@ -589,6 +589,7 @@ export async function connectMcpServer(
         const cleanupFailure = cleanup.find(
           (result) => result.status === "rejected",
         );
+        /* v8 ignore next 3 -- third-party client/transport cleanup faults are nondeterministic; close still surfaces the first failure. */
         if (cleanupFailure !== undefined) {
           throw cleanupFailure.reason;
         }

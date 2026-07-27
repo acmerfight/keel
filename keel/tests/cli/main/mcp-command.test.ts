@@ -12,7 +12,10 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { runMcpCommand } from "../../../src/cli/mcp-command.ts";
-import { discoverMcpServer } from "../../../src/mcp/discovery.ts";
+import {
+  connectMcpServer,
+  discoverMcpServer,
+} from "../../../src/mcp/discovery.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 
 interface TestMcpServer {
@@ -290,6 +293,25 @@ async function startUnboundedPaginationServer(): Promise<TestMcpServer> {
       },
     }),
   );
+}
+
+async function startByteLimitPaginationServer(
+  tools: readonly unknown[],
+): Promise<TestMcpServer> {
+  const pageSize = 16;
+  return await startLegacyRawServer((requestId, requestNumber) => {
+    const start = (requestNumber - 1) * pageSize;
+    const page = tools.slice(start, start + pageSize);
+    const hasNext = start + page.length < tools.length;
+    return jsonResponse({
+      jsonrpc: "2.0",
+      id: requestId,
+      result: {
+        tools: page,
+        ...(hasNext ? { nextCursor: `cursor-${requestNumber}` } : {}),
+      },
+    });
+  });
 }
 
 async function startCatalogErrorServer(
@@ -919,7 +941,7 @@ describe("CLI Main - MCP", () => {
       name: `tool-${index}`,
       inputSchema: { type: "object" },
     }));
-    const server = await startLegacyRawCatalogServer(tools);
+    const server = await startByteLimitPaginationServer(tools);
     const add = createRuntime(
       ["mcp", "add", server.url, "--name", "oversized"],
       { env: { KEEL_HOME: home } },
@@ -937,6 +959,57 @@ describe("CLI Main - MCP", () => {
     } finally {
       await server.close();
       await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a catalog stays within the tool-count limit but exceeds the byte budget,
+    When discovery reads the oversized descriptors,
+    Then it fails before retaining the partial catalog`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-byte-limit-home-"));
+    const tools = Array.from({ length: 1_000 }, (_, index) => ({
+      name: `tool-${index}`,
+      description: "d".repeat(8_400),
+      inputSchema: { type: "object" },
+    }));
+    const server = await startByteLimitPaginationServer(tools);
+    const add = createRuntime(
+      ["mcp", "add", server.url, "--name", "oversized-bytes"],
+      { env: { KEEL_HOME: home } },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(add.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(add.stdout()).toContain(
+        "catalog descriptors exceed 8388608 bytes",
+      );
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a connected MCP adapter is closed more than once,
+    When cleanup is requested repeatedly,
+    Then the SDK client and network transport close idempotently`, async () => {
+    // Given
+    const server = await startModernMcpServer();
+
+    try {
+      const connection = await connectMcpServer({
+        url: server.url,
+        allowPrivateNetwork: true,
+      });
+
+      // When / Then
+      await expect(connection.close()).resolves.toBeUndefined();
+      await expect(connection.close()).resolves.toBeUndefined();
+    } finally {
+      await server.close();
     }
   });
 

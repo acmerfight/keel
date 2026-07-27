@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { z } from "zod";
 import type { ProviderRetryConfig } from "../llm/providers/openai-compatible.ts";
 import type { LLMEvent, LLMProvider } from "../llm/types.ts";
+import type { ModelToolExposure } from "../tools/tool-call.ts";
 import { close, getPort, listen } from "./provider-sse-fixtures.ts";
 
 interface OpenAICompatibleConformanceConfig {
@@ -89,6 +90,35 @@ const expectedUsage = {
   cachedInputTokens: 0,
   uncachedInputTokens: usageTokens.inputTokens,
   outputTokens: usageTokens.outputTokens,
+};
+
+const mcpExposure: ModelToolExposure = {
+  kind: "auto",
+  mcp: {
+    snapshotId: "conformance-mcp",
+    tools: [
+      {
+        kind: "mcp",
+        modelName: "mcp__catalog__search",
+        description: "External catalog search",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+        reference: {
+          kind: "mcp",
+          serverId: "catalog",
+          serverOrigin: "https://catalog.example",
+          rawToolName: "search",
+          configurationDigest: "a".repeat(64),
+          catalogGeneration: `catalog:${"b".repeat(64)}`,
+          descriptorDigest: "c".repeat(64),
+        },
+      },
+    ],
+  },
 };
 
 const requestBodySchema = z
@@ -410,6 +440,63 @@ function chunksForPrompt(
   if (prompt === "conformance-unbounded-output") {
     return textResponse(provider, "unbounded");
   }
+  if (prompt === "conformance-mcp-tool") {
+    return [
+      toolCallChunk(
+        "call_conformance_mcp",
+        "mcp__catalog__search",
+        JSON.stringify({ query: "otters" }),
+      ),
+      finishChunk(provider, { kind: "value", value: "tool_calls" }),
+      sseDone(),
+    ];
+  }
+  if (prompt === "conformance-invalid-mcp-tool") {
+    return [
+      toolCallChunk(
+        "call_conformance_invalid_mcp",
+        "mcp__catalog__search",
+        JSON.stringify(["not", "an", "object"]),
+      ),
+      finishChunk(provider, { kind: "value", value: "tool_calls" }),
+      sseDone(),
+    ];
+  }
+  if (prompt === "conformance-disabled-mcp-tool") {
+    return [
+      toolCallChunk(
+        "call_conformance_disabled_mcp",
+        "mcp__catalog__search",
+        JSON.stringify({ query: "otters" }),
+      ),
+      finishChunk(provider, { kind: "value", value: "tool_calls" }),
+      sseDone(),
+    ];
+  }
+  if (prompt === "conformance-missing-tool-name") {
+    return [
+      sseData({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_conformance_missing_name",
+                  type: "function",
+                  function: { arguments: "{}" },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+        usage: null,
+      }),
+      finishChunk(provider, { kind: "value", value: "tool_calls" }),
+      sseDone(),
+    ];
+  }
   for (const row of [...successCases, ...failureCases]) {
     if (row.prompt === prompt) {
       return row.chunks(provider);
@@ -584,6 +671,58 @@ export function runOpenAICompatibleConformance(
       const parsed = requestBodySchema.parse(JSON.parse(body ?? ""));
       expect(parsed.max_tokens).toBeUndefined();
       expect(parsed.max_completion_tokens).toBeUndefined();
+    });
+
+    test(`Given a frozen turn exposes one dynamic MCP tool,
+      When the provider returns its exact name or invalid arguments,
+      Then the adapter routes the typed reference and distinguishes invalid arguments from unsupported tools`, async () => {
+      const validEvents = await collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [{ role: "user", content: "conformance-mcp-tool" }],
+          signal: freshSignal(),
+          toolExposure: mcpExposure,
+        }),
+      );
+
+      expect(validEvents[0]).toMatchObject({
+        type: "tool_call",
+        kind: "mcp",
+        id: "call_conformance_mcp",
+        tool: "mcp__catalog__search",
+        arguments: { query: "otters" },
+      });
+      await expect(
+        collect(
+          provider.stream({
+            systemPrompt: "You are Keel.",
+            messages: [
+              { role: "user", content: "conformance-invalid-mcp-tool" },
+            ],
+            signal: freshSignal(),
+            toolExposure: mcpExposure,
+          }),
+        ),
+      ).rejects.toThrow(
+        `${spec.name} mcp__catalog__search tool call has invalid arguments`,
+      );
+      await expect(
+        collect(
+          provider.stream({
+            systemPrompt: "You are Keel.",
+            messages: [
+              { role: "user", content: "conformance-disabled-mcp-tool" },
+            ],
+            signal: freshSignal(),
+            toolExposure: { kind: "none" },
+          }),
+        ),
+      ).rejects.toThrow(
+        `${spec.name} returned unsupported tool call: mcp__catalog__search`,
+      );
+      await expect(
+        streamFor(provider, "conformance-missing-tool-name"),
+      ).rejects.toThrow(`${spec.name} returned unsupported tool call: none`);
     });
 
     test.each(failureCases)(

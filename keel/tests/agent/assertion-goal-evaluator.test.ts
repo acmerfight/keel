@@ -492,12 +492,16 @@ describe("Assertion Goal Evaluator", () => {
           role: "tool",
           toolCallId: "remote_publish",
           content: "Release is definitely complete.",
+          sourceTruncated: true,
         },
       ],
     });
 
     // Then
     expect(evaluation.completed).toBe(false);
+    expect(providerRequests[0]?.[0]?.content).toContain(
+      '"sourceTruncated": true',
+    );
     expect(providerRequests).toHaveLength(1);
     const evaluatorMessage = providerRequests[0]?.[0];
     expect(evaluatorMessage).toEqual({
