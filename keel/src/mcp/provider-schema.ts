@@ -115,6 +115,19 @@ export const MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS: McpProviderSchemaReferenceLim
     maxExpandedBytes: 64 * 1_024,
   };
 
+export interface McpLocalReferenceCycleScanLimits {
+  readonly maxReferenceSteps: number;
+  readonly maxScannedSchemaNodes: number;
+}
+
+export const MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS: McpLocalReferenceCycleScanLimits =
+  {
+    // A cycle at maxDepth is observed on the next reference resolution.
+    maxReferenceSteps: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxDepth + 1,
+    maxScannedSchemaNodes:
+      MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxExpandedNodes,
+  };
+
 export type McpProviderSchemaCompilation =
   | {
       readonly ok: true;
@@ -187,6 +200,11 @@ type LocalReferenceResolution =
       readonly value: unknown;
     }
   | { readonly ok: false; readonly reason: string };
+
+export type McpLocalReferenceCycleScan =
+  | { readonly status: "not-found" }
+  | { readonly status: "budget-exceeded" }
+  | { readonly status: "cycle"; readonly diagnostic: string };
 
 function decodeJsonPointerToken(token: string): string | null {
   if (/~(?:[^01]|$)/u.test(token)) return null;
@@ -265,29 +283,34 @@ function resolveLocalReference(
   return { ok: true, reference, value: current };
 }
 
-function referenceOnlyCycleDiagnostic(
+function scanReferenceOnlyCycle(
   value: unknown,
   path: string,
   rootSchema: z.infer<typeof schemaNodeBoundary>,
-): string | null {
+  limits: McpLocalReferenceCycleScanLimits,
+): McpLocalReferenceCycleScan {
   const activeReferences = new Set<string>();
   let current = value;
-  let currentPath = path;
+  let referenceSteps = 0;
   while (true) {
     const parsed = schemaNodeBoundary.safeParse(current);
-    if (!parsed.success || parsed.data.$ref === undefined) return null;
-    const resolved = resolveLocalReference(
-      parsed.data.$ref,
-      currentPath,
-      rootSchema,
-    );
-    if (!resolved.ok) return null;
+    if (!parsed.success || parsed.data.$ref === undefined) {
+      return { status: "not-found" };
+    }
+    if (referenceSteps >= limits.maxReferenceSteps) {
+      return { status: "budget-exceeded" };
+    }
+    const resolved = resolveLocalReference(parsed.data.$ref, path, rootSchema);
+    if (!resolved.ok) return { status: "not-found" };
+    referenceSteps += 1;
     if (activeReferences.has(resolved.reference)) {
-      return `${currentPath}.$ref forms a cycle through ${JSON.stringify(resolved.reference)}`;
+      return {
+        status: "cycle",
+        diagnostic: `local $ref chain forms a cycle through ${JSON.stringify(resolved.reference)} after ${activeReferences.size} unique references at ${path}.$ref`,
+      };
     }
     activeReferences.add(resolved.reference);
     current = resolved.value;
-    currentPath = `${currentPath}.$ref(${JSON.stringify(resolved.reference)})`;
   }
 }
 
@@ -328,24 +351,32 @@ const localReferenceSchemaValueKeywords = new Set([
 ]);
 
 /**
- * Recovers a precise diagnostic for reference-only loops that can overflow the
- * SDK validator before provider projection. Call only after validator failure;
- * structural recursion remains valid at the catalog boundary.
+ * Performs bounded best-effort diagnostic recovery for reference-only loops
+ * that can overflow the SDK validator before provider projection. Call only
+ * after validator failure; structural recursion remains valid at the catalog
+ * boundary.
  */
-export function mcpDegenerateLocalReferenceCycleDiagnostic(
+export function scanMcpDegenerateLocalReferenceCycle(
   rootSchema: z.infer<typeof schemaNodeBoundary>,
   path: "inputSchema" | "outputSchema",
-): string | null {
+  limits: McpLocalReferenceCycleScanLimits,
+): McpLocalReferenceCycleScan {
   const pending: PendingSchemaScan[] = [{ value: rootSchema, path }];
+  let scannedSchemaNodes = 0;
   while (true) {
     const current = pending.pop();
-    if (current === undefined) return null;
-    const diagnostic = referenceOnlyCycleDiagnostic(
+    if (current === undefined) return { status: "not-found" };
+    if (scannedSchemaNodes >= limits.maxScannedSchemaNodes) {
+      return { status: "budget-exceeded" };
+    }
+    scannedSchemaNodes += 1;
+    const scan = scanReferenceOnlyCycle(
       current.value,
       current.path,
       rootSchema,
+      limits,
     );
-    if (diagnostic !== null) return diagnostic;
+    if (scan.status !== "not-found") return scan;
 
     const object = schemaObjectBoundary.safeParse(current.value);
     if (!object.success) continue;

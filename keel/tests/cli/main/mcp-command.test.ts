@@ -58,6 +58,20 @@ function nestedSchema(depth: number): unknown {
   return schema;
 }
 
+function degenerateReferenceCycleSchema(referenceCount: number): unknown {
+  const definitions: Record<string, { readonly $ref: string }> = {};
+  for (let index = 0; index < referenceCount; index += 1) {
+    definitions[`c${index}`] = {
+      $ref: `#/$defs/c${(index + 1) % referenceCount}`,
+    };
+  }
+  return {
+    type: "object",
+    properties: { value: { $ref: "#/$defs/c0" } },
+    $defs: definitions,
+  };
+}
+
 async function startMcpServer(
   handler: TestMcpFetchHandler,
 ): Promise<TestMcpServer> {
@@ -796,9 +810,9 @@ describe("CLI Main - MCP", () => {
     }
   });
 
-  test(`Given an MCP server publishes a degenerate local reference loop beside a valid tool,
+  test(`Given an MCP server publishes short and oversized local reference loops beside a valid tool,
     When the user runs MCP doctor,
-    Then Keel isolates the bad tool with a precise cycle diagnostic`, async () => {
+    Then Keel isolates both bad tools with complete bounded diagnostics`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-ref-cycle-home-"));
     const server = await startModernRawCatalogServer([
@@ -820,6 +834,10 @@ describe("CLI Main - MCP", () => {
           properties: { query: { type: "string" } },
         },
       },
+      {
+        name: "oversized_cycle",
+        inputSchema: degenerateReferenceCycleSchema(1_000),
+      },
     ]);
     const add = createRuntime(["mcp", "add", server.url, "--name", "cycles"], {
       env: { KEEL_HOME: home },
@@ -838,12 +856,17 @@ describe("CLI Main - MCP", () => {
       expect(exitCode, doctor.stdout()).toBe(1);
       expect(doctor.stderr()).toBe("");
       expect(doctor.stdout()).toContain(
-        "tools: 1 catalog-valid, 1 catalog-quarantined, 2 total\n",
+        "tools: 1 catalog-valid, 2 catalog-quarantined, 3 total\n",
       );
       expect(doctor.stdout()).toContain(
-        '- qa_tool: invalid JSON Schema: inputSchema.properties.issue.$ref("#/$defs/A").$ref("#/$defs/B").$ref forms a cycle through "#/$defs/A"\n',
+        '- qa_tool: invalid JSON Schema: local $ref chain forms a cycle through "#/$defs/A" after 2 unique references at inputSchema.properties.issue.$ref\n',
       );
-      expect(doctor.stdout()).not.toContain("Maximum call stack size exceeded");
+      expect(doctor.stdout()).toContain(
+        "- oversized_cycle: invalid JSON Schema: Maximum call stack size exceeded\n",
+      );
+      expect(doctor.stdout()).not.toContain(
+        "- oversized_cycle: invalid JSON Schema: inputSchema.properties.value.$ref",
+      );
       expect(doctor.stdout()).toContain(
         "provider tools: 1 usable, 0 quarantined, 0 validation-widened\n",
       );

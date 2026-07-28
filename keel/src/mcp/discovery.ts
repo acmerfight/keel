@@ -25,9 +25,10 @@ import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 import { McpOAuthAuthenticationRequiredError } from "./oauth.ts";
 import {
   compileMcpProviderInputSchema,
+  MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
   MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
   type McpProviderSchemaTarget,
-  mcpDegenerateLocalReferenceCycleDiagnostic,
+  scanMcpDegenerateLocalReferenceCycle,
 } from "./provider-schema.ts";
 
 const MCP_CLIENT_NAME = "keel";
@@ -372,14 +373,20 @@ function compileJsonSchema(
       validator: fromJsonSchema(sdkSchema, validator)["~standard"],
     };
   } catch (error) {
-    const cycleDiagnostic =
-      error instanceof RangeError
-        ? mcpDegenerateLocalReferenceCycleDiagnostic(schema, path)
-        : null;
-    const diagnostic =
-      cycleDiagnostic === null
-        ? sanitizedError(error)
-        : boundedDiagnosticText(cycleDiagnostic, MCP_ERROR_MAX_LENGTH);
+    let diagnostic = sanitizedError(error);
+    if (error instanceof RangeError) {
+      const cycleScan = scanMcpDegenerateLocalReferenceCycle(
+        schema,
+        path,
+        MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
+      );
+      if (cycleScan.status === "cycle") {
+        diagnostic = boundedDiagnosticText(
+          cycleScan.diagnostic,
+          MCP_ERROR_MAX_LENGTH,
+        );
+      }
+    }
     return {
       ok: false,
       reason: `invalid JSON Schema: ${diagnostic}`,

@@ -17,9 +17,10 @@ import {
 } from "../../src/mcp/discovery.ts";
 import {
   compileMcpProviderInputSchema,
+  MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
   MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
-  mcpDegenerateLocalReferenceCycleDiagnostic,
   mcpProviderSchemaTarget,
+  scanMcpDegenerateLocalReferenceCycle,
 } from "../../src/mcp/provider-schema.ts";
 import { createMcpRuntime } from "../../src/mcp/runtime.ts";
 import type {
@@ -1943,6 +1944,17 @@ describe("MCP runtime", () => {
     When catalog validation compiles their original schemas,
     Then only the degenerate loops are quarantined with precise reference-cycle diagnostics`, async () => {
     // Given
+    const depthBoundaryDefinitions: Record<string, { readonly $ref: string }> =
+      {};
+    for (
+      let index = 0;
+      index < MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxDepth;
+      index += 1
+    ) {
+      depthBoundaryDefinitions[`c${index}`] = {
+        $ref: `#/$defs/c${(index + 1) % MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxDepth}`,
+      };
+    }
     const tools = [
       {
         name: "degenerate_cycle",
@@ -1961,12 +1973,8 @@ describe("MCP runtime", () => {
         inputSchema: { type: "object" },
         outputSchema: {
           type: "object",
-          properties: { result: { $ref: "#/$defs/A" } },
-          $defs: {
-            A: { $ref: "#/$defs/B" },
-            B: { $ref: "#/$defs/C" },
-            C: { $ref: "#/$defs/A" },
-          },
+          properties: { result: { $ref: "#/$defs/c0" } },
+          $defs: depthBoundaryDefinitions,
         },
       },
       {
@@ -1996,12 +2004,12 @@ describe("MCP runtime", () => {
         {
           tool: "degenerate_cycle",
           reason:
-            'invalid JSON Schema: inputSchema.properties.issue.$ref("#/$defs/A").$ref("#/$defs/B").$ref forms a cycle through "#/$defs/A"',
+            'invalid JSON Schema: local $ref chain forms a cycle through "#/$defs/A" after 2 unique references at inputSchema.properties.issue.$ref',
         },
         {
           tool: "degenerate_output_cycle",
           reason:
-            'invalid JSON Schema: outputSchema.properties.result.$ref("#/$defs/A").$ref("#/$defs/B").$ref("#/$defs/C").$ref forms a cycle through "#/$defs/A"',
+            'invalid JSON Schema: local $ref chain forms a cycle through "#/$defs/c0" after 16 unique references at outputSchema.properties.result.$ref',
         },
       ],
     });
@@ -2038,20 +2046,64 @@ describe("MCP runtime", () => {
     };
 
     // When
-    const noCycle = mcpDegenerateLocalReferenceCycleDiagnostic(
+    const noCycle = scanMcpDegenerateLocalReferenceCycle(
       schemaWithoutCycle,
       "inputSchema",
+      MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
     );
-    const composedCycle = mcpDegenerateLocalReferenceCycleDiagnostic(
+    const composedCycle = scanMcpDegenerateLocalReferenceCycle(
       schemaWithComposedCycle,
       "outputSchema",
+      MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
     );
 
     // Then
-    expect(noCycle).toBeNull();
-    expect(composedCycle).toBe(
-      'outputSchema.allOf[0].$ref("#/$defs/A").$ref("#/$defs/B").$ref forms a cycle through "#/$defs/A"',
+    expect(noCycle).toEqual({ status: "not-found" });
+    expect(composedCycle).toEqual({
+      status: "cycle",
+      diagnostic:
+        'local $ref chain forms a cycle through "#/$defs/A" after 2 unique references at outputSchema.allOf[0].$ref',
+    });
+  });
+
+  test(`Given degenerate reference diagnosis reaches either typed scan budget,
+    When it scans an untrusted schema,
+    Then it returns budget-exceeded without constructing a partial cycle diagnostic`, () => {
+    // Given
+    const referenceChain = {
+      type: "object",
+      properties: { value: { $ref: "#/$defs/A" } },
+      $defs: {
+        A: { $ref: "#/$defs/B" },
+        B: { $ref: "#/$defs/A" },
+      },
+    };
+    const nestedSchemaNodes = {
+      type: "object",
+      properties: { value: { type: "string" } },
+    };
+
+    // When
+    const referenceBudget = scanMcpDegenerateLocalReferenceCycle(
+      referenceChain,
+      "inputSchema",
+      {
+        maxReferenceSteps: 1,
+        maxScannedSchemaNodes: 16,
+      },
     );
+    const nodeBudget = scanMcpDegenerateLocalReferenceCycle(
+      nestedSchemaNodes,
+      "outputSchema",
+      {
+        maxReferenceSteps: 16,
+        maxScannedSchemaNodes: 1,
+      },
+    );
+
+    // Then
+    expect(referenceBudget).toEqual({ status: "budget-exceeded" });
+    expect(nodeBudget).toEqual({ status: "budget-exceeded" });
   });
 
   test(`Given provider schema lowering receives malformed JSON Schema values,
