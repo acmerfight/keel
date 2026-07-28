@@ -581,6 +581,7 @@ class DefaultMcpRuntime implements McpRuntime {
           active.tool.descriptor.inputSchema,
           schemaTarget,
         );
+        /* v8 ignore next -- active tools were already compiled under the same current provider capability profile before selection. */
         if (!compiled.ok) continue;
         selected.push({
           owner: active.owner,

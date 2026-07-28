@@ -1956,6 +1956,14 @@ describe("MCP runtime", () => {
         "inputSchema.properties.value.type must be a supported JSON Schema type",
       ],
       [
+        "invalid oneOf branch",
+        {
+          type: "object",
+          properties: { value: { oneOf: [{ type: "string" }, true] } },
+        },
+        "inputSchema.properties.value.oneOf[1] must be a JSON Schema object",
+      ],
+      [
         "non-object root type",
         { type: "array", items: { type: "string" } },
         "inputSchema.type must be object for an MCP tool input schema",
@@ -2019,6 +2027,10 @@ describe("MCP runtime", () => {
     When it compiles the provider projection,
     Then map value schemas are preserved and unsafe exclusivity is rejected with a diagnostic`, () => {
     // When
+    const implicitRootObject = compileMcpProviderInputSchema(
+      { properties: { query: { type: "string" } } },
+      testSchemaTarget,
+    );
     const dynamicMap = compileMcpProviderInputSchema(
       {
         type: "object",
@@ -2049,6 +2061,14 @@ describe("MCP runtime", () => {
     );
 
     // Then
+    expect(implicitRootObject).toMatchObject({
+      ok: true,
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: [],
+      },
+    });
     expect(dynamicMap).toMatchObject({
       ok: true,
       parameters: {
