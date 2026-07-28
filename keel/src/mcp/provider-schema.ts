@@ -260,12 +260,6 @@ function resolveLocalReference(
       };
     }
     const property = object.data[token];
-    if (property === undefined) {
-      return {
-        ok: false,
-        reason: `${path}.$ref cannot resolve local reference ${JSON.stringify(reference)}`,
-      };
-    }
     current = property;
   }
   return { ok: true, reference, value: current };

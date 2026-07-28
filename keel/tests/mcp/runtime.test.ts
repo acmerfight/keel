@@ -2119,6 +2119,7 @@ describe("MCP runtime", () => {
           type: "object",
           additionalProperties: { $ref: "#/$defs/MetadataValue" },
         },
+        selectedLabel: { $ref: "#/$defs/Label/oneOf/1" },
       },
       required: ["issue"],
       additionalProperties: false,
@@ -2226,6 +2227,7 @@ describe("MCP runtime", () => {
               anyOf: [{ type: "string" }, { type: "number" }],
             },
           },
+          selectedLabel: { const: "feature" },
         },
         required: ["issue"],
         additionalProperties: false,
@@ -2391,6 +2393,32 @@ describe("MCP runtime", () => {
         definitions: {},
         diagnostic: 'cannot resolve local reference "#/$defs/__proto__"',
       },
+      {
+        reference: "#/$defs/Choice/oneOf/not-an-index",
+        definitions: {
+          Choice: {
+            oneOf: [{ const: "left" }, { const: "right" }],
+          },
+        },
+        diagnostic:
+          'cannot resolve local reference "#/$defs/Choice/oneOf/not-an-index"',
+      },
+      {
+        reference: "#/$defs/Choice/oneOf/9",
+        definitions: {
+          Choice: {
+            oneOf: [{ const: "left" }, { const: "right" }],
+          },
+        },
+        diagnostic: 'cannot resolve local reference "#/$defs/Choice/oneOf/9"',
+      },
+      {
+        reference: "#/$defs/Value/type/child",
+        definitions: {
+          Value: { type: "string" },
+        },
+        diagnostic: 'cannot resolve local reference "#/$defs/Value/type/child"',
+      },
     ];
 
     for (const testCase of cases) {
@@ -2441,6 +2469,52 @@ describe("MCP runtime", () => {
         referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
       },
     );
+    const validationSibling = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: {
+          issue: {
+            $ref: "#/$defs/Issue",
+            minLength: 3,
+          },
+        },
+        $defs: { Issue: { type: "string" } },
+      },
+      {
+        target: testSchemaTarget,
+        referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+      },
+    );
+    const unknownStructuralSibling = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: {
+          issue: {
+            $ref: "#/$defs/Issue",
+            allOf: [{ type: "string" }],
+          },
+        },
+        $defs: { Issue: { type: "string" } },
+      },
+      {
+        target: testSchemaTarget,
+        referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+      },
+    );
+    const rootReference = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: { self: { $ref: "#" } },
+      },
+      {
+        target: testSchemaTarget,
+        referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+      },
+    );
+    const invalidRoot = compileMcpProviderInputSchema(null, {
+      target: testSchemaTarget,
+      referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+    });
     const reservedPropertyReference = compileMcpProviderInputSchema(
       JSON.parse(
         '{"type":"object","properties":{"issue":{"$ref":"#/$defs/__proto__"}},"$defs":{"__proto__":{"type":"string"}}}',
@@ -2459,6 +2533,32 @@ describe("MCP runtime", () => {
       reason: expect.stringContaining(
         "type cannot be safely combined with $ref",
       ),
+    });
+    expect(validationSibling).toEqual({
+      ok: true,
+      fidelity: "validation-widened",
+      parameters: {
+        type: "object",
+        properties: { issue: { type: "string" } },
+        required: [],
+      },
+      validationWideningDiagnostics: [
+        "omitted inputSchema.properties.issue.minLength",
+      ],
+    });
+    expect(unknownStructuralSibling).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining(
+        "allOf changes structure and is not supported",
+      ),
+    });
+    expect(rootReference).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('forms a cycle through "#"'),
+    });
+    expect(invalidRoot).toEqual({
+      ok: false,
+      reason: "inputSchema must be a JSON Schema object",
     });
     expect(reservedPropertyReference).toEqual({
       ok: false,
