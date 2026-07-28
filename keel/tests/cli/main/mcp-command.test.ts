@@ -796,6 +796,63 @@ describe("CLI Main - MCP", () => {
     }
   });
 
+  test(`Given an MCP server publishes a degenerate local reference loop beside a valid tool,
+    When the user runs MCP doctor,
+    Then Keel isolates the bad tool with a precise cycle diagnostic`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-ref-cycle-home-"));
+    const server = await startModernRawCatalogServer([
+      {
+        name: "qa_tool",
+        inputSchema: {
+          type: "object",
+          properties: { issue: { $ref: "#/$defs/A" } },
+          $defs: {
+            A: { $ref: "#/$defs/B" },
+            B: { $ref: "#/$defs/A" },
+          },
+        },
+      },
+      {
+        name: "healthy_tool",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+        },
+      },
+    ]);
+    const add = createRuntime(["mcp", "add", server.url, "--name", "cycles"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime), add.stdout()).toBe(0);
+
+      // When
+      const doctor = createRuntime(["mcp", "doctor", "cycles"], {
+        env: { KEEL_HOME: home },
+      });
+      const exitCode = await runCliMain(doctor.runtime);
+
+      // Then
+      expect(exitCode, doctor.stdout()).toBe(1);
+      expect(doctor.stderr()).toBe("");
+      expect(doctor.stdout()).toContain(
+        "tools: 1 catalog-valid, 1 catalog-quarantined, 2 total\n",
+      );
+      expect(doctor.stdout()).toContain(
+        '- qa_tool: invalid JSON Schema: inputSchema.properties.issue.$ref("#/$defs/A").$ref("#/$defs/B").$ref forms a cycle through "#/$defs/A"\n',
+      );
+      expect(doctor.stdout()).not.toContain("Maximum call stack size exceeded");
+      expect(doctor.stdout()).toContain(
+        "provider tools: 1 usable, 0 quarantined, 0 validation-widened\n",
+      );
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one discovered tool has an invalid descriptor,
     When the user runs MCP doctor,
     Then Keel keeps the valid tool and diagnoses only the quarantined tool`, async () => {

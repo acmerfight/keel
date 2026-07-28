@@ -265,6 +265,142 @@ function resolveLocalReference(
   return { ok: true, reference, value: current };
 }
 
+function referenceOnlyCycleDiagnostic(
+  value: unknown,
+  path: string,
+  rootSchema: z.infer<typeof schemaNodeBoundary>,
+): string | null {
+  const activeReferences = new Set<string>();
+  let current = value;
+  let currentPath = path;
+  while (true) {
+    const parsed = schemaNodeBoundary.safeParse(current);
+    if (!parsed.success || parsed.data.$ref === undefined) return null;
+    const resolved = resolveLocalReference(
+      parsed.data.$ref,
+      currentPath,
+      rootSchema,
+    );
+    if (!resolved.ok) return null;
+    if (activeReferences.has(resolved.reference)) {
+      return `${currentPath}.$ref forms a cycle through ${JSON.stringify(resolved.reference)}`;
+    }
+    activeReferences.add(resolved.reference);
+    current = resolved.value;
+    currentPath = `${currentPath}.$ref(${JSON.stringify(resolved.reference)})`;
+  }
+}
+
+interface PendingSchemaScan {
+  readonly value: unknown;
+  readonly path: string;
+}
+
+const localReferenceSchemaMapKeywords = new Set([
+  "$defs",
+  "definitions",
+  "dependencies",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+const localReferenceSchemaArrayKeywords = new Set([
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "prefixItems",
+]);
+
+const localReferenceSchemaValueKeywords = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "contentSchema",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+/**
+ * Recovers a precise diagnostic for reference-only loops that can overflow the
+ * SDK validator before provider projection. Call only after validator failure;
+ * structural recursion remains valid at the catalog boundary.
+ */
+export function mcpDegenerateLocalReferenceCycleDiagnostic(
+  value: unknown,
+  path: "inputSchema" | "outputSchema",
+): string | null {
+  const root = schemaNodeBoundary.safeParse(value);
+  if (!root.success) return null;
+
+  const pending: PendingSchemaScan[] = [{ value: root.data, path }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) continue;
+    const diagnostic = referenceOnlyCycleDiagnostic(
+      current.value,
+      current.path,
+      root.data,
+    );
+    if (diagnostic !== null) return diagnostic;
+
+    const object = schemaObjectBoundary.safeParse(current.value);
+    if (!object.success) continue;
+    const entries = Object.entries(object.data);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry === undefined) continue;
+      const [name, child] = entry;
+      const childPath = `${current.path}.${name}`;
+      if (localReferenceSchemaMapKeywords.has(name)) {
+        const schemaMap = schemaObjectBoundary.safeParse(child);
+        if (!schemaMap.success) continue;
+        const schemas = Object.entries(schemaMap.data);
+        for (
+          let schemaIndex = schemas.length - 1;
+          schemaIndex >= 0;
+          schemaIndex -= 1
+        ) {
+          const schema = schemas[schemaIndex];
+          if (schema === undefined) continue;
+          pending.push({
+            value: schema[1],
+            path: `${childPath}.${schema[0]}`,
+          });
+        }
+        continue;
+      }
+      if (
+        localReferenceSchemaArrayKeywords.has(name) ||
+        (name === "items" && Array.isArray(child))
+      ) {
+        if (!Array.isArray(child)) continue;
+        for (
+          let childIndex = child.length - 1;
+          childIndex >= 0;
+          childIndex -= 1
+        ) {
+          pending.push({
+            value: child[childIndex],
+            path: `${childPath}[${childIndex}]`,
+          });
+        }
+        continue;
+      }
+      if (localReferenceSchemaValueKeywords.has(name)) {
+        pending.push({ value: child, path: childPath });
+      }
+    }
+  }
+  return null;
+}
+
 function compileType(
   value: ProviderToolSchemaJson | undefined,
   path: string,

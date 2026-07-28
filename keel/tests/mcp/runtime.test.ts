@@ -1938,6 +1938,80 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given MCP tools have degenerate local reference loops and another has structural recursion,
+    When catalog validation compiles their original schemas,
+    Then only the degenerate loops are quarantined with precise reference-cycle diagnostics`, async () => {
+    // Given
+    const tools = [
+      {
+        name: "degenerate_cycle",
+        inputSchema: {
+          type: "object",
+          const: { $ref: "#/$defs/A" },
+          properties: { issue: { $ref: "#/$defs/A" } },
+          $defs: {
+            A: { $ref: "#/$defs/B" },
+            B: { $ref: "#/$defs/A" },
+          },
+        },
+      },
+      {
+        name: "degenerate_output_cycle",
+        inputSchema: { type: "object" },
+        outputSchema: {
+          type: "object",
+          properties: { result: { $ref: "#/$defs/A" } },
+          $defs: {
+            A: { $ref: "#/$defs/B" },
+            B: { $ref: "#/$defs/C" },
+            C: { $ref: "#/$defs/A" },
+          },
+        },
+      },
+      {
+        name: "structural_recursion",
+        inputSchema: {
+          type: "object",
+          properties: { node: { $ref: "#/$defs/Node" } },
+          $defs: {
+            Node: {
+              type: "object",
+              properties: { child: { $ref: "#/$defs/Node" } },
+            },
+          },
+        },
+      },
+    ];
+
+    // When
+    const catalog = await fakeCatalog(tools);
+
+    // Then
+    expect(catalog.summary).toMatchObject({
+      total: 3,
+      valid: 1,
+      quarantined: 2,
+      issues: [
+        {
+          tool: "degenerate_cycle",
+          reason:
+            'invalid JSON Schema: inputSchema.properties.issue.$ref("#/$defs/A").$ref("#/$defs/B").$ref forms a cycle through "#/$defs/A"',
+        },
+        {
+          tool: "degenerate_output_cycle",
+          reason:
+            'invalid JSON Schema: outputSchema.properties.result.$ref("#/$defs/A").$ref("#/$defs/B").$ref("#/$defs/C").$ref forms a cycle through "#/$defs/A"',
+        },
+      ],
+    });
+    for (const issue of catalog.summary.issues) {
+      expect(issue.reason).not.toContain("Maximum call stack size exceeded");
+    }
+    expect(catalog.tools.map((tool) => tool.descriptor.name)).toEqual([
+      "structural_recursion",
+    ]);
+  });
+
   test(`Given provider schema lowering receives malformed JSON Schema values,
     When it compiles at the MCP boundary,
     Then each invalid structural branch returns a precise fail-closed diagnostic`, () => {
@@ -2236,6 +2310,46 @@ describe("MCP runtime", () => {
     });
   });
 
+  test(`Given URI fragments use percent encoding and JSON Pointer escaping,
+    When provider schema lowering resolves local references,
+    Then percent decoding happens before pointer token interpretation`, () => {
+    // Given
+    const schema = {
+      type: "object",
+      properties: {
+        percentEncodedSlash: { $ref: "#/$defs/a%2Fb" },
+        pointerEscapedSlash: { $ref: "#/$defs/a~1b" },
+        percentEncodedTilde: { $ref: "#/$defs/x%7E1y" },
+        pointerEscapedTilde: { $ref: "#/$defs/x~01y" },
+      },
+      $defs: {
+        a: { b: { type: "string" } },
+        "a/b": { type: "integer" },
+        "x/y": { type: "boolean" },
+        "x~1y": { type: "number" },
+      },
+    };
+
+    // When
+    const result = compileMcpProviderInputSchema(schema, {
+      target: testSchemaTarget,
+      referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+    });
+
+    // Then
+    expect(result).toMatchObject({
+      ok: true,
+      parameters: {
+        properties: {
+          percentEncodedSlash: { type: "string" },
+          pointerEscapedSlash: { type: "integer" },
+          percentEncodedTilde: { type: "boolean" },
+          pointerEscapedTilde: { type: "number" },
+        },
+      },
+    });
+  });
+
   test(`Given local schema references exceed an explicit expansion bound,
     When provider schema lowering resolves the reference,
     Then it fails closed with the bound that was exceeded`, () => {
@@ -2348,6 +2462,86 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given local references exceed the production depth, node, or byte limit,
+    When provider schema lowering uses the shipped reference limits,
+    Then each expansion bomb is rejected by its production bound`, () => {
+    // Given
+    const depthDefinitions: Record<string, McpJsonValue> = {};
+    for (
+      let index = 0;
+      index <= MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxDepth;
+      index += 1
+    ) {
+      depthDefinitions[`Level${index}`] =
+        index === MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxDepth
+          ? { type: "string" }
+          : { $ref: `#/$defs/Level${index + 1}` };
+    }
+    const nodeProperties = Object.fromEntries(
+      Array.from(
+        { length: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxExpandedNodes },
+        (_, index) => [`value${index}`, { const: null }],
+      ),
+    );
+    const repeatedEnum = Array.from(
+      { length: 512 },
+      (_, index) => `${index}-${"x".repeat(64)}`,
+    );
+    const cases = [
+      {
+        schema: {
+          type: "object",
+          properties: { value: { $ref: "#/$defs/Level0" } },
+          $defs: depthDefinitions,
+        },
+        diagnostic: `exceeds the local reference depth limit of ${MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxDepth}`,
+      },
+      {
+        schema: {
+          type: "object",
+          properties: { value: { $ref: "#/$defs/Container" } },
+          $defs: {
+            Container: {
+              type: "object",
+              properties: nodeProperties,
+            },
+          },
+        },
+        diagnostic: `exceeds the expanded schema node limit of ${MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxExpandedNodes}`,
+      },
+      {
+        schema: {
+          type: "object",
+          properties: {
+            first: { $ref: "#/$defs/Value" },
+            second: { $ref: "#/$defs/Value" },
+          },
+          $defs: {
+            Value: {
+              type: "string",
+              enum: repeatedEnum,
+            },
+          },
+        },
+        diagnostic: `exceeds the expanded schema byte limit of ${MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxExpandedBytes}`,
+      },
+    ];
+
+    for (const testCase of cases) {
+      // When
+      const result = compileMcpProviderInputSchema(testCase.schema, {
+        target: testSchemaTarget,
+        referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+      });
+
+      // Then
+      expect(result).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining(testCase.diagnostic),
+      });
+    }
+  });
+
   test(`Given a tool publishes an unsafe or unresolvable schema reference,
     When provider schema lowering parses the external boundary,
     Then it rejects the reference without network or filesystem resolution`, () => {
@@ -2393,6 +2587,13 @@ describe("MCP runtime", () => {
         definitions: {},
         diagnostic: 'cannot resolve local reference "#/$defs/__proto__"',
       },
+      ...["constructor", "toString", "valueOf", "hasOwnProperty"].map(
+        (propertyName) => ({
+          reference: `#/$defs/${propertyName}`,
+          definitions: {},
+          diagnostic: `cannot resolve local reference "#/$defs/${propertyName}"`,
+        }),
+      ),
       {
         reference: "#/$defs/Choice/oneOf/not-an-index",
         definitions: {
@@ -2515,10 +2716,21 @@ describe("MCP runtime", () => {
       target: testSchemaTarget,
       referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
     });
-    const reservedPropertyReference = compileMcpProviderInputSchema(
+    const strippedProtoDefinitionReference = compileMcpProviderInputSchema(
       JSON.parse(
         '{"type":"object","properties":{"issue":{"$ref":"#/$defs/__proto__"}},"$defs":{"__proto__":{"type":"string"}}}',
       ),
+      {
+        target: testSchemaTarget,
+        referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+      },
+    );
+    const definedConstructorReference = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: { issue: { $ref: "#/$defs/constructor" } },
+        $defs: { constructor: { type: "string" } },
+      },
       {
         target: testSchemaTarget,
         referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
@@ -2560,10 +2772,16 @@ describe("MCP runtime", () => {
       ok: false,
       reason: "inputSchema must be a JSON Schema object",
     });
-    expect(reservedPropertyReference).toEqual({
+    expect(strippedProtoDefinitionReference).toEqual({
       ok: false,
       reason:
         'inputSchema.properties.issue.$ref cannot resolve local reference "#/$defs/__proto__"',
+    });
+    expect(definedConstructorReference).toMatchObject({
+      ok: true,
+      parameters: {
+        properties: { issue: { type: "string" } },
+      },
     });
   });
 
