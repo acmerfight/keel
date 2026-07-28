@@ -9,8 +9,6 @@ import {
   type JsonSchemaType,
   type jsonSchemaValidator,
   type ProtocolEra,
-  SdkError,
-  SdkErrorCode,
   StreamableHTTPClientTransport,
   specTypeSchemas,
   type Tool,
@@ -49,7 +47,6 @@ const MCP_HEADER_PRIMITIVE_TYPES = new Set([
   "string",
   "integer",
   "boolean",
-  // The pinned SDK beta accepts number for its published conformance fixture.
   "number",
 ]);
 const MCP_HEADER_UNREACHABLE_SCHEMA_KEYS = [
@@ -129,11 +126,6 @@ const catalogPageSchema = z
         `pagination cursor exceeds ${MCP_MAX_CURSOR_LENGTH} characters`,
       )
       .optional(),
-  })
-  .passthrough();
-const wrappedCauseSchema = z
-  .object({
-    cause: z.unknown(),
   })
   .passthrough();
 const packageJsonSchema = z.object({ version: z.string().min(1) });
@@ -809,15 +801,7 @@ export async function connectMcpServer(
 }
 
 function isUnauthorized(error: unknown): boolean {
-  if (UnauthorizedError.isInstance(error)) return true;
-  if (
-    !SdkError.isInstance(error) ||
-    error.code !== SdkErrorCode.EraNegotiationFailed
-  ) {
-    return false;
-  }
-  const wrapped = wrappedCauseSchema.safeParse(error.data);
-  return wrapped.success && UnauthorizedError.isInstance(wrapped.data.cause);
+  return UnauthorizedError.isInstance(error);
 }
 
 function sanitizedError(error: unknown): string {

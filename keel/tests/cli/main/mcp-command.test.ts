@@ -146,6 +146,39 @@ async function startUnauthorizedMcpServer(): Promise<CountingTestMcpServer> {
   return { ...server, requestCount: () => requests };
 }
 
+async function startRejectedMcpServer(
+  status: 403 | 503,
+): Promise<CountingTestMcpServer> {
+  let requests = 0;
+  const server = await startMcpServer({
+    fetch: async () => {
+      requests += 1;
+      return new Response(
+        status === 403 ? "access denied" : "temporarily unavailable",
+        { status },
+      );
+    },
+  });
+  return { ...server, requestCount: () => requests };
+}
+
+async function startInsufficientScopeMcpServer(): Promise<CountingTestMcpServer> {
+  let requests = 0;
+  const server = await startMcpServer({
+    fetch: async () => {
+      requests += 1;
+      return new Response("scope upgrade required", {
+        status: 403,
+        headers: {
+          "www-authenticate":
+            'Bearer error="insufficient_scope", scope="mcp:tools"',
+        },
+      });
+    },
+  });
+  return { ...server, requestCount: () => requests };
+}
+
 async function startLegacyRawServer(
   listTools: (
     requestId: string | number | undefined,
@@ -585,6 +618,92 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).not.toContain("protocol: legacy");
       expect(server.requestCount()).toBe(1);
       expect((await readdir(home)).sort()).toEqual(["mcp.json"]);
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a modern MCP server is temporarily unavailable,
+    When the user adds it,
+    Then Keel reports the server failure without falling back to the legacy protocol`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-unavailable-home-"));
+    const server = await startRejectedMcpServer(503);
+    const add = createRuntime(
+      ["mcp", "add", server.url, "--name", "unavailable"],
+      { env: { KEEL_HOME: home } },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(add.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(add.stderr()).toBe("");
+      expect(add.stdout()).toContain("status: failed\n");
+      expect(add.stdout()).toContain("HTTP 503");
+      expect(add.stdout()).not.toContain("protocol: legacy");
+      expect(server.requestCount()).toBe(1);
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a modern MCP server denies access,
+    When the user adds it,
+    Then Keel reports the typed authorization denial without falling back to the legacy protocol`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-forbidden-home-"));
+    const server = await startRejectedMcpServer(403);
+    const add = createRuntime(
+      ["mcp", "add", server.url, "--name", "forbidden"],
+      { env: { KEEL_HOME: home } },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(add.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(add.stderr()).toBe("");
+      expect(add.stdout()).toContain("status: failed\n");
+      expect(add.stdout()).toContain("HTTP 403");
+      expect(add.stdout()).not.toContain("protocol: legacy");
+      expect(server.requestCount()).toBe(1);
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a modern MCP server requires broader authorization scope,
+    When the user adds it,
+    Then Keel reports the required scope without falling back to the legacy protocol`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-scope-home-"));
+    const server = await startInsufficientScopeMcpServer();
+    const add = createRuntime(
+      ["mcp", "add", server.url, "--name", "scope-required"],
+      { env: { KEEL_HOME: home } },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(add.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(add.stderr()).toBe("");
+      expect(add.stdout()).toContain("status: failed\n");
+      expect(add.stdout()).toContain(
+        'error: Insufficient scope: required "mcp:tools"',
+      );
+      expect(add.stdout()).not.toContain("protocol: legacy");
+      expect(server.requestCount()).toBe(1);
     } finally {
       await server.close();
       await rm(home, { recursive: true, force: true });
