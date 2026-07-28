@@ -7,7 +7,7 @@ import {
 } from "../mcp/oauth.ts";
 import type { McpConnectionFactory } from "../mcp/runtime-types.ts";
 import type { CliRuntime } from "./runtime.ts";
-import { sessionHome } from "./session-store/paths.ts";
+import { sessionHome } from "./session-store.ts";
 
 export function mcpOAuthRefreshLockRoot(
   runtime: Pick<CliRuntime, "env">,
