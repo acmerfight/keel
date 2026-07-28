@@ -11,6 +11,7 @@ import type { ProviderRetryConfig } from "../llm/providers/openai-compatible.ts"
 import type { LLMEvent, LLMProvider } from "../llm/types.ts";
 import {
   compileMcpProviderInputSchema,
+  MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
   mcpProviderSchemaTarget,
 } from "../mcp/provider-schema.ts";
 import type {
@@ -775,7 +776,7 @@ export function runOpenAICompatibleConformance(
       });
     });
 
-    test(`Given a mainstream MCP schema contains a union, nullable type array, and dynamic map,
+    test(`Given a mainstream MCP schema contains a local union reference, nullable type array, and dynamic map,
       When the enrolled provider sends a real request,
       Then the request contains that provider's explicit compiled projection`, async () => {
       // Given
@@ -783,12 +784,7 @@ export function runOpenAICompatibleConformance(
         {
           type: "object",
           properties: {
-            repoName: {
-              anyOf: [
-                { type: "string" },
-                { type: "array", items: { type: "string" } },
-              ],
-            },
+            repoName: { $ref: "#/$defs/RepoName" },
             cursor: { type: ["integer", "null"] },
             metadata: {
               type: "object",
@@ -796,8 +792,19 @@ export function runOpenAICompatibleConformance(
             },
           },
           required: ["repoName"],
+          $defs: {
+            RepoName: {
+              anyOf: [
+                { type: "string" },
+                { type: "array", items: { type: "string" } },
+              ],
+            },
+          },
         },
-        mcpProviderSchemaTarget(spec.id, spec.model),
+        {
+          target: mcpProviderSchemaTarget(spec.id, spec.model),
+          referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+        },
       );
       expect(compilation.ok).toBe(true);
       if (!compilation.ok) return;

@@ -25,6 +25,7 @@ import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 import { McpOAuthAuthenticationRequiredError } from "./oauth.ts";
 import {
   compileMcpProviderInputSchema,
+  MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
   type McpProviderSchemaTarget,
 } from "./provider-schema.ts";
 
@@ -637,7 +638,10 @@ function summarizeProviderCatalog(
   for (const tool of catalog.tools) {
     const compilation = compileMcpProviderInputSchema(
       tool.descriptor.inputSchema,
-      target,
+      {
+        target,
+        referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+      },
     );
     if (!compilation.ok) {
       appendCatalogIssue(issues, {

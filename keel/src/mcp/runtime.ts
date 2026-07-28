@@ -16,6 +16,7 @@ import type { ToolOutputArtifact } from "../tools/types.ts";
 import type { McpCatalog, McpCatalogTool, McpConnection } from "./discovery.ts";
 import {
   compileMcpProviderInputSchema,
+  MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
   type McpProviderSchemaTarget,
 } from "./provider-schema.ts";
 import type {
@@ -579,7 +580,10 @@ class DefaultMcpRuntime implements McpRuntime {
       for (const active of this.active) {
         const compiled = compileMcpProviderInputSchema(
           active.tool.descriptor.inputSchema,
-          schemaTarget,
+          {
+            target: schemaTarget,
+            referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+          },
         );
         /* v8 ignore next -- active tools were already compiled under the same current provider capability profile before selection. */
         if (!compiled.ok) continue;
@@ -682,7 +686,10 @@ class DefaultMcpRuntime implements McpRuntime {
       for (const tool of state.catalog.tools) {
         const compiled = compileMcpProviderInputSchema(
           tool.descriptor.inputSchema,
-          this.schemaTarget,
+          {
+            target: this.schemaTarget,
+            referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+          },
         );
         if (!compiled.ok) {
           providerQuarantinedCount++;
