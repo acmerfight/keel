@@ -14,6 +14,7 @@ import {
 import type { ProviderToolInputSchema } from "../tools/tool-schema.ts";
 import type { ToolOutputArtifact } from "../tools/types.ts";
 import type { McpCatalog, McpCatalogTool, McpConnection } from "./discovery.ts";
+import { isMcpAuthenticationRequiredError } from "./oauth.ts";
 import {
   compileMcpProviderInputSchema,
   MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
@@ -948,6 +949,20 @@ class DefaultMcpRuntime implements McpRuntime {
         ),
       };
     } catch (error) {
+      if (isMcpAuthenticationRequiredError(error)) {
+        return {
+          identity: "identified",
+          content: `MCP tool call was rejected because authorization is required. Run keel mcp login "${owner.server.id}" to authorize again.`,
+          ok: false,
+          preserved: preservedExternalResult(
+            owner.server.id,
+            tool.descriptor.name,
+            {
+              error: "MCP authorization required",
+            },
+          ),
+        };
+      }
       return {
         identity: "identified",
         content: `MCP tool call failed after dispatch; the outcome is uncertain and Keel did not retry it. ${externalErrorDiagnostic(error)}`,

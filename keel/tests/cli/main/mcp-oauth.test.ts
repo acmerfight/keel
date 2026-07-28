@@ -1,47 +1,59 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test, vi } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { listMcpServers } from "../../../src/cli/mcp-config.ts";
+import type { McpSecretBackend } from "../../../src/mcp/oauth.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import { startOAuthMcpServer } from "../../fixtures/mcp-oauth.ts";
 
-interface TestSecretBackend {
-  readonly getPassword: (
-    service: string,
-    account: string,
-  ) => Promise<string | null>;
-  readonly setPassword: (
-    service: string,
-    account: string,
-    password: string,
-  ) => Promise<void>;
-  readonly deletePassword: (
-    service: string,
-    account: string,
-  ) => Promise<boolean>;
-}
-
 function createSecretBackend(): {
-  readonly backend: TestSecretBackend;
+  readonly backend: McpSecretBackend;
   readonly entries: ReadonlyMap<string, string>;
+  readonly failWrites: (message: string) => void;
 } {
   const entries = new Map<string, string>();
+  let writeFailure: string | null = null;
   const key = (service: string, account: string) => `${service}\0${account}`;
   return {
     backend: {
       getPassword: async (service, account) =>
         entries.get(key(service, account)) ?? null,
       setPassword: async (service, account, password) => {
+        if (writeFailure !== null) throw new Error(writeFailure);
         entries.set(key(service, account), password);
       },
       deletePassword: async (service, account) =>
         entries.delete(key(service, account)),
     },
     entries,
+    failWrites: (message) => {
+      writeFailure = message;
+    },
   };
+}
+
+type OAuthMcpServerOptions = NonNullable<
+  Parameters<typeof startOAuthMcpServer>[0]
+>;
+
+async function loggedInRefreshableMcp(options: OAuthMcpServerOptions) {
+  const home = await mkdtemp(join(tmpdir(), "keel-mcp-refresh-home-"));
+  const mcp = await startOAuthMcpServer(options);
+  const secrets = createSecretBackend();
+  const add = createRuntime(["mcp", "add", mcp.url, "--name", "refreshable"], {
+    env: { KEEL_HOME: home },
+  });
+  expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
+  const login = createRuntime(["mcp", "login", "refreshable"], {
+    env: { KEEL_HOME: home },
+    mcpSecretBackend: secrets.backend,
+    openExternalUrl: mcp.openAuthorizationUrl,
+  });
+  expect(await runCliMain(login.runtime), login.stderr()).toBe(0);
+  return { home, mcp, secrets, login };
 }
 
 const invalidCallbackCases: readonly {
@@ -74,6 +86,242 @@ const invalidCallbackCases: readonly {
 ];
 
 describe("CLI Main - MCP OAuth", () => {
+  test(`Given a logged-in MCP server rejects an expired access token,
+    When the user checks server status,
+    Then Keel refreshes the credential once and reports the protected server ready`, async () => {
+    // Given
+    const { home, mcp, secrets, login } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+    });
+
+    try {
+      mcp.expireAccessToken();
+      const status = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const exitCode = await runCliMain(status.runtime);
+
+      // Then
+      expect(exitCode, status.stderr()).toBe(0);
+      expect(status.stdout()).toContain("status: ready\n");
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "refresh_token",
+      ]);
+      const visibleOutput = [
+        login.stdout(),
+        login.stderr(),
+        status.stdout(),
+        status.stderr(),
+      ].join("\n");
+      expect(visibleOutput).not.toContain(mcp.accessToken);
+      expect(visibleOutput).not.toContain(mcp.refreshedAccessToken);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a refresh response omits the optional refresh token and scope,
+    When the access token expires again,
+    Then Keel preserves the prior values and refreshes the authenticated session again`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "omit-refresh-token-and-scope",
+    });
+
+    try {
+      mcp.expireAccessToken();
+      const firstStatus = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+      expect(await runCliMain(firstStatus.runtime), firstStatus.stderr()).toBe(
+        0,
+      );
+      expect(firstStatus.stdout()).toContain("status: ready\n");
+      const firstRefresh = mcp.tokenRequests()[1];
+      expect(firstRefresh?.grantType).toBe("refresh_token");
+      expect([...secrets.entries.values()].join("\n")).toContain(
+        `"refresh_token":"${firstRefresh?.refreshToken}"`,
+      );
+      expect([...secrets.entries.values()].join("\n")).toContain(
+        '"scope":"mcp:tools"',
+      );
+      mcp.expireAccessToken();
+      const secondStatus = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const exitCode = await runCliMain(secondStatus.runtime);
+
+      // Then
+      expect(exitCode, secondStatus.stderr()).toBe(0);
+      expect(secondStatus.stdout()).toContain("status: ready\n");
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "refresh_token",
+        "refresh_token",
+      ]);
+      expect(mcp.tokenRequests()[2]?.refreshToken).toBe(
+        firstRefresh?.refreshToken,
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given concurrent MCP status checks reject the same expired credential,
+    When they recover in parallel,
+    Then they share one refresh transaction and all adopt the published credential`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      refreshDelayMs: 100,
+    });
+
+    try {
+      mcp.expireAccessToken();
+      const statuses = Array.from({ length: 4 }, () =>
+        createRuntime(["mcp", "status", "refreshable"], {
+          env: { KEEL_HOME: home },
+          mcpSecretBackend: secrets.backend,
+        }),
+      );
+
+      // When
+      const exitCodes = await Promise.all(
+        statuses.map(async (status) => await runCliMain(status.runtime)),
+      );
+
+      // Then
+      expect(exitCodes).toEqual([0, 0, 0, 0]);
+      for (const status of statuses) {
+        expect(status.stdout()).toContain("status: ready\n");
+      }
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "refresh_token",
+      ]);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the authorization server rejects a stored refresh credential,
+    When status retries authentication,
+    Then Keel clears the unusable credential and reports needs-auth without retrying it again`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "invalid-grant",
+    });
+
+    try {
+      mcp.expireAccessToken();
+      const firstStatus = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const firstExitCode = await runCliMain(firstStatus.runtime);
+      const secondStatus = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+      const secondExitCode = await runCliMain(secondStatus.runtime);
+
+      // Then
+      expect(firstExitCode, firstStatus.stderr()).toBe(0);
+      expect(secondExitCode, secondStatus.stderr()).toBe(0);
+      expect(firstStatus.stdout()).toContain("status: needs-auth\n");
+      expect(secondStatus.stdout()).toContain("status: needs-auth\n");
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "refresh_token",
+      ]);
+      expect([...secrets.entries.values()].join("\n")).not.toContain(
+        mcp.accessToken,
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a refresh succeeds but secure credential publication fails,
+    When status recovers from a 401,
+    Then Keel reports a failed server and never exposes the unpublished access token`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+    });
+
+    try {
+      mcp.expireAccessToken();
+      secrets.failWrites("credential publication unavailable");
+      const status = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const exitCode = await runCliMain(status.runtime);
+
+      // Then
+      expect(exitCode, status.stderr()).toBe(0);
+      expect(status.stdout()).toContain("status: failed\n");
+      expect(status.stdout()).toContain("secure credential storage failed");
+      expect(status.stdout()).not.toContain(mcp.refreshedAccessToken);
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "refresh_token",
+      ]);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the cross-process refresh lock cannot be created,
+    When an expired credential receives a 401,
+    Then Keel fails closed before submitting the rotating refresh token`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+    });
+
+    try {
+      mcp.expireAccessToken();
+      await writeFile(join(home, "mcp"), "blocked");
+      const status = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const exitCode = await runCliMain(status.runtime);
+
+      // Then
+      expect(exitCode, status.stderr()).toBe(0);
+      expect(status.stdout()).toContain("status: failed\n");
+      expect(status.stdout()).toContain("refresh lock");
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+      ]);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a protected Streamable HTTP MCP server advertises OAuth discovery and DCR,
     When the user logs in through the loopback PKCE callback and later logs out,
     Then Keel binds and stores authorization securely, authenticates status dynamically, and removes it`, async () => {

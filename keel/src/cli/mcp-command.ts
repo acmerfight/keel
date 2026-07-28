@@ -6,7 +6,6 @@ import {
 import { authorizeMcpServer, McpOAuthLoginError } from "../mcp/login.ts";
 import { McpNetworkPolicyError, validateMcpServerUrl } from "../mcp/network.ts";
 import {
-  createMcpBearerAuthProvider,
   deleteMcpOAuthCredentials,
   McpOAuthCredentialError,
   type McpPreRegisteredClient,
@@ -27,6 +26,10 @@ import {
   setMcpServerAuthenticationRequired,
   validateMcpServerId,
 } from "./mcp-config.ts";
+import {
+  createCliMcpAuthProvider,
+  mcpOAuthRefreshLockRoot,
+} from "./mcp-connection.ts";
 import {
   McpOAuthCallbackError,
   startMcpOAuthLoopbackCallback,
@@ -157,10 +160,7 @@ async function writeServerStatuses(
     const status = await discoverMcpServer({
       server,
       now: runtime.now,
-      authProvider: createMcpBearerAuthProvider(
-        server,
-        runtime.mcpSecretBackend,
-      ),
+      authProvider: createCliMcpAuthProvider(runtime, server),
       schemaTarget,
     });
     statuses.push(status);
@@ -200,7 +200,7 @@ async function runMcpAdd(
   const status = await discoverMcpServer({
     server,
     now: runtime.now,
-    authProvider: createMcpBearerAuthProvider(server, runtime.mcpSecretBackend),
+    authProvider: createCliMcpAuthProvider(runtime, server),
     schemaTarget: selectedMcpSchemaTarget(runtime),
   });
   runtime.writeStdout(`${formatDiscoveryStatus(server, status, true)}\n`);
@@ -274,6 +274,7 @@ async function runMcpLogin(
     await authorizeMcpServer({
       server,
       backend: runtime.mcpSecretBackend,
+      refreshLockRoot: mcpOAuthRefreshLockRoot(runtime),
       redirectUrl: callback.redirectUrl,
       state,
       startedAt: runtime.now(),

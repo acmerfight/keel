@@ -36,6 +36,7 @@ export interface OAuthTokenRequest {
   readonly code: string;
   readonly codeVerifier: string;
   readonly grantType: string;
+  readonly refreshToken: string;
   readonly redirectUri: string;
   readonly resource: string;
 }
@@ -43,10 +44,12 @@ export interface OAuthTokenRequest {
 export interface TestOAuthMcpServer {
   readonly url: string;
   readonly accessToken: string;
+  readonly refreshedAccessToken: string;
   readonly authorizationRequests: () => readonly OAuthAuthorizationRequest[];
   readonly registrationRequests: () => number;
   readonly tokenRequests: () => readonly OAuthTokenRequest[];
   readonly calls: () => readonly string[];
+  readonly expireAccessToken: () => void;
   readonly openAuthorizationUrl: (url: URL) => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -72,9 +75,17 @@ export async function startOAuthMcpServer(
     readonly authentication?: "required" | "optional";
     readonly tokenResponse?: "valid" | "malformed";
     readonly authenticatedMcpResponse?: "valid" | "server-error";
+    readonly refreshResponse?:
+      | "rotate"
+      | "omit-refresh-token-and-scope"
+      | "invalid-grant";
+    readonly refreshDelayMs?: number;
   } = {},
 ): Promise<TestOAuthMcpServer> {
   const accessToken = "keel-mcp-oauth-test-access-token";
+  const refreshedAccessToken = "keel-mcp-oauth-test-refreshed-access-token";
+  const refreshToken = "keel-mcp-oauth-test-refresh-token";
+  const rotatedRefreshToken = "keel-mcp-oauth-test-rotated-refresh-token";
   const authorizationCode = "keel-mcp-oauth-test-code";
   const authorizationRequests: OAuthAuthorizationRequest[] = [];
   const tokenRequests: OAuthTokenRequest[] = [];
@@ -82,6 +93,7 @@ export async function startOAuthMcpServer(
   let registrationRequests = 0;
   let origin = "";
   let resourceUrl = "";
+  let acceptedAccessToken = accessToken;
 
   const mcpHandler = createMcpHandler(() => {
     const mcp = new McpServer(
@@ -126,7 +138,10 @@ export async function startOAuthMcpServer(
             ? {}
             : { registration_endpoint: `${origin}/register` }),
           response_types_supported: ["code"],
-          grant_types_supported: ["authorization_code"],
+          grant_types_supported:
+            options.refreshResponse === undefined
+              ? ["authorization_code"]
+              : ["authorization_code", "refresh_token"],
           code_challenge_methods_supported: ["S256"],
           token_endpoint_auth_methods_supported: [
             options.tokenEndpointAuthMethod ?? "none",
@@ -195,10 +210,35 @@ export async function startOAuthMcpServer(
           code: body.get("code") ?? "",
           codeVerifier: body.get("code_verifier") ?? "",
           grantType: body.get("grant_type") ?? "",
+          refreshToken: body.get("refresh_token") ?? "",
           redirectUri: body.get("redirect_uri") ?? "",
           resource: body.get("resource") ?? "",
         };
         tokenRequests.push(tokenRequest);
+        if (tokenRequest.grantType === "refresh_token") {
+          if (options.refreshDelayMs !== undefined) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, options.refreshDelayMs);
+            });
+          }
+          if (
+            options.refreshResponse === "invalid-grant" ||
+            tokenRequest.refreshToken !== refreshToken
+          ) {
+            return jsonResponse({ error: "invalid_grant" }, 400);
+          }
+          acceptedAccessToken = refreshedAccessToken;
+          return jsonResponse({
+            access_token: refreshedAccessToken,
+            token_type: "Bearer",
+            ...(options.refreshResponse === "omit-refresh-token-and-scope"
+              ? {}
+              : {
+                  refresh_token: rotatedRefreshToken,
+                  scope: "mcp:tools",
+                }),
+          });
+        }
         const authorization = authorizationRequests.at(-1);
         if (
           authorization === undefined ||
@@ -217,11 +257,15 @@ export async function startOAuthMcpServer(
           access_token: accessToken,
           token_type: "Bearer",
           scope: "mcp:tools",
+          ...(options.refreshResponse === undefined
+            ? {}
+            : { refresh_token: refreshToken }),
         });
       }
       if (url.pathname === "/mcp") {
         const authenticated =
-          request.headers.get("authorization") === `Bearer ${accessToken}`;
+          request.headers.get("authorization") ===
+          `Bearer ${acceptedAccessToken}`;
         if (!authenticated && options.authentication !== "optional") {
           const requestMessage = jsonRpcRequestSchema.safeParse(
             await request.clone().json(),
@@ -268,10 +312,14 @@ export async function startOAuthMcpServer(
   return {
     url: resourceUrl,
     accessToken,
+    refreshedAccessToken,
     authorizationRequests: () => [...authorizationRequests],
     registrationRequests: () => registrationRequests,
     tokenRequests: () => [...tokenRequests],
     calls: () => [...calls],
+    expireAccessToken: () => {
+      acceptedAccessToken = "expired";
+    },
     openAuthorizationUrl: async (url) => {
       const response = await fetch(url, { redirect: "follow" });
       await response.text();

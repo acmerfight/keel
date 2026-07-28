@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type {
   AuthProvider,
+  FetchLike,
   OAuthClientInformationContext,
   OAuthClientMetadata,
   OAuthClientProvider,
@@ -8,14 +10,22 @@ import type {
   StoredOAuthClientInformation,
   StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
+import {
+  OAuthError,
+  OAuthErrorCode,
+  refreshAuthorization,
+  UnauthorizedError,
+} from "@modelcontextprotocol/client";
 import { z } from "zod";
 import type { McpServerEndpoint } from "./discovery.ts";
+import { withMcpOAuthRefreshLock } from "./oauth-refresh-lock.ts";
 
 const MCP_OAUTH_SECRET_SERVICE = "Keel MCP OAuth";
 const MCP_OAUTH_SECRET_SCHEMA_VERSION = 1;
 const MCP_OAUTH_MAX_ISSUERS = 16;
 const MCP_OAUTH_MAX_SECRET_BYTES = 1024 * 1024;
 const MCP_OAUTH_FLOW_LIFETIME_MS = 2 * 60 * 1000;
+const MCP_OAUTH_REFRESH_TIMEOUT_MS = 30_000;
 
 const oauthTokensSchema = z
   .object({
@@ -170,6 +180,9 @@ const oauthCredentialRecordSchema = z
   });
 
 type OAuthCredentialRecord = z.infer<typeof oauthCredentialRecordSchema>;
+type IssuerCredentials = z.infer<typeof issuerCredentialsSchema>;
+type UnauthorizedHandler = NonNullable<AuthProvider["onUnauthorized"]>;
+type UnauthorizedContext = Parameters<UnauthorizedHandler>[0];
 
 export interface McpSecretBackend {
   readonly getPassword: (
@@ -190,6 +203,11 @@ export interface McpSecretBackend {
 export interface McpPreRegisteredClient {
   readonly clientId: string;
   readonly clientSecret: string | null;
+}
+
+export interface McpRuntimeAuthProvider extends AuthProvider {
+  readonly wrapFetch: (fetchFn: FetchLike) => FetchLike;
+  readonly onUnauthorized: UnauthorizedHandler;
 }
 
 export interface McpOAuthLoginProvider extends OAuthClientProvider {
@@ -215,6 +233,13 @@ export interface McpOAuthLoginProvider extends OAuthClientProvider {
 export class McpOAuthCredentialError extends Error {}
 export class McpOAuthAuthenticationRequiredError extends McpOAuthCredentialError {}
 class McpOAuthCredentialUnavailableError extends McpOAuthCredentialError {}
+
+export function isMcpAuthenticationRequiredError(error: unknown): boolean {
+  return (
+    UnauthorizedError.isInstance(error) ||
+    error instanceof McpOAuthAuthenticationRequiredError
+  );
+}
 
 function emptyRecord(resource: string): OAuthCredentialRecord {
   return {
@@ -250,6 +275,10 @@ class OAuthCredentialStore {
     this.resource = new URL(server.url).href;
     this.account = credentialAccount(this.resource);
     this.backend = backend;
+  }
+
+  credentialId(): string {
+    return this.account;
   }
 
   async load(): Promise<OAuthCredentialRecord> {
@@ -397,7 +426,7 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
       redirect_uris: [options.redirectUrl],
       client_name: "Keel",
       client_uri: "https://github.com/acmerfight/keel",
-      grant_types: ["authorization_code"],
+      grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method:
         options.preRegisteredClient?.clientSecret === null ||
@@ -524,9 +553,9 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
     )?.tokens;
     if (stored === null) return undefined;
     if (stored === undefined) return undefined;
-    // The SDK automatically refreshes when this method exposes refresh_token.
-    // Slice 4 owns the required single-flight and rotation guarantees, so
-    // Slice 3 persists refresh credentials but deliberately reauthorizes here.
+    // The login provider never exposes refresh_token to the SDK. Request-time
+    // refresh is owned by KeelMcpBearerAuthProvider so the read-refresh-write
+    // transaction is serialized and rotating credentials are published first.
     return withoutRefreshToken(stored);
   }
 
@@ -680,40 +709,237 @@ export function createMcpOAuthLoginProvider(options: {
   return new KeelMcpOAuthProvider(options);
 }
 
-export function createMcpBearerAuthProvider(
-  server: McpServerEndpoint,
-  backend: McpSecretBackend,
-): AuthProvider {
-  const store = new OAuthCredentialStore(server, backend);
-  return {
-    token: async () => {
-      let record: OAuthCredentialRecord;
+const activeRefreshes = new Map<string, Promise<void>>();
+
+function activeCredentials(
+  record: OAuthCredentialRecord,
+): IssuerCredentials | null {
+  const active = record.activeAuthorization;
+  if (active === null) return null;
+  /* v8 ignore next -- parsed credential records guarantee that an active binding identifies one stored non-null token entry. */
+  return (
+    record.credentials.find(
+      (entry) =>
+        entry.issuer === active.issuer &&
+        entry.client.client_id === active.clientId &&
+        entry.tokens !== null,
+    ) ?? null
+  );
+}
+
+function authorizationBearerToken(
+  init: Parameters<FetchLike>[1],
+): string | null {
+  const headers = new Headers(init?.headers);
+  const authorization = headers.get("authorization");
+  if (authorization === null) return null;
+  const match = /^Bearer ([^\s]+)$/iu.exec(authorization);
+  return match?.[1] ?? null;
+}
+
+function refreshFetch(fetchFn: FetchLike): FetchLike {
+  return async (input, init) => {
+    const timeout = AbortSignal.timeout(MCP_OAUTH_REFRESH_TIMEOUT_MS);
+    /* v8 ignore next -- stable SDK v2 currently omits a token-request signal; retain composition for future SDK cancellation support. */
+    const signal =
+      init?.signal === undefined || init.signal === null
+        ? timeout
+        : AbortSignal.any([init.signal, timeout]);
+    return await fetchFn(input, { ...init, signal });
+  };
+}
+
+async function deactivateRejectedCredentials(
+  store: OAuthCredentialStore,
+  record: OAuthCredentialRecord,
+  credentials: IssuerCredentials,
+): Promise<void> {
+  await store.save({
+    ...record,
+    activeAuthorization: null,
+    credentials: replaceIssuerValue(record.credentials, {
+      ...credentials,
+      tokens: null,
+    }),
+  });
+}
+
+function authenticationRequired(message: string): never {
+  throw new McpOAuthAuthenticationRequiredError(
+    `Error: MCP authorization ${message}. Run keel mcp login to authorize again.`,
+  );
+}
+
+async function refreshRejectedCredential(options: {
+  readonly store: OAuthCredentialStore;
+  readonly refreshLockRoot: string;
+  readonly rejectedAccessToken: string;
+  readonly fetchFn: FetchLike;
+}): Promise<void> {
+  await withMcpOAuthRefreshLock({
+    root: options.refreshLockRoot,
+    credentialId: options.store.credentialId(),
+    action: async () => {
+      const record = await options.store.load();
+      const credentials = activeCredentials(record);
+      if (credentials === null || credentials.tokens === null) {
+        authenticationRequired("requires an active OAuth credential");
+      }
+      if (credentials.tokens.access_token !== options.rejectedAccessToken) {
+        return;
+      }
+      const refreshToken = credentials.tokens.refresh_token;
+      if (refreshToken === undefined) {
+        await deactivateRejectedCredentials(options.store, record, credentials);
+        authenticationRequired("has no usable refresh credential");
+      }
+      const discovery = record.discovery;
+      const metadata = discovery?.authorizationServerMetadata;
+      if (
+        discovery === null ||
+        metadata === undefined ||
+        new URL(metadata.issuer).href !== new URL(credentials.issuer).href
+      ) {
+        credentialError(
+          "credential record has no matching authorization-server discovery state for refresh",
+        );
+      }
+      let refreshed: Awaited<ReturnType<typeof refreshAuthorization>>;
       try {
-        record = await store.load();
+        refreshed = await refreshAuthorization(
+          discovery.authorizationServerUrl,
+          {
+            metadata,
+            clientInformation: credentials.client,
+            refreshToken,
+            resource: new URL(record.resource),
+            fetchFn: refreshFetch(options.fetchFn),
+          },
+        );
       } catch (error) {
-        if (error instanceof McpOAuthCredentialUnavailableError) {
-          if (server.authenticationRequired) throw error;
-          return undefined;
+        if (
+          error instanceof OAuthError &&
+          error.code === OAuthErrorCode.InvalidGrant
+        ) {
+          await deactivateRejectedCredentials(
+            options.store,
+            record,
+            credentials,
+          );
+          authenticationRequired("refresh credential was rejected");
         }
         throw error;
       }
-      const active = record.activeAuthorization;
-      const accessToken =
-        active === null
-          ? undefined
-          : record.credentials.find(
-              (entry) =>
-                entry.issuer === active.issuer &&
-                entry.client.client_id === active.clientId,
-            )?.tokens?.access_token;
-      if (accessToken === undefined && server.authenticationRequired) {
-        throw new McpOAuthAuthenticationRequiredError(
-          "Error: MCP authorization requires an active OAuth credential.",
-        );
-      }
-      return accessToken;
+      // The stable SDK preserves an omitted refresh_token. Keel additionally
+      // preserves scope because RFC 6749 allows refresh responses to omit it.
+      const value = storedOAuthTokensSchema.parse({
+        ...refreshed,
+        ...(refreshed.scope === undefined &&
+        credentials.tokens.scope !== undefined
+          ? { scope: credentials.tokens.scope }
+          : {}),
+        issuer: credentials.issuer,
+      });
+      await options.store.save({
+        ...record,
+        credentials: replaceIssuerValue(record.credentials, {
+          ...credentials,
+          tokens: value,
+        }),
+      });
     },
-  };
+  });
+}
+
+async function singleFlightRefresh(
+  credentialId: string,
+  action: () => Promise<void>,
+): Promise<void> {
+  const pending = activeRefreshes.get(credentialId);
+  if (pending !== undefined) {
+    await pending;
+    return;
+  }
+  const operation = action();
+  activeRefreshes.set(credentialId, operation);
+  try {
+    await operation;
+  } finally {
+    activeRefreshes.delete(credentialId);
+  }
+}
+
+class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
+  private readonly server: McpServerEndpoint;
+  private readonly store: OAuthCredentialStore;
+  private readonly refreshLockRoot: string;
+  private readonly rejectedTokens = new WeakMap<Response, string>();
+
+  constructor(options: {
+    readonly server: McpServerEndpoint;
+    readonly backend: McpSecretBackend;
+    readonly refreshLockRoot: string;
+  }) {
+    this.server = options.server;
+    this.store = new OAuthCredentialStore(options.server, options.backend);
+    this.refreshLockRoot = options.refreshLockRoot;
+  }
+
+  async token(): Promise<string | undefined> {
+    let record: OAuthCredentialRecord;
+    try {
+      record = await this.store.load();
+    } catch (error) {
+      if (error instanceof McpOAuthCredentialUnavailableError) {
+        if (this.server.authenticationRequired) throw error;
+        return undefined;
+      }
+      throw error;
+    }
+    const accessToken = activeCredentials(record)?.tokens?.access_token;
+    if (accessToken === undefined && this.server.authenticationRequired) {
+      throw new McpOAuthAuthenticationRequiredError(
+        "Error: MCP authorization requires an active OAuth credential.",
+      );
+    }
+    return accessToken;
+  }
+
+  wrapFetch(fetchFn: FetchLike): FetchLike {
+    return async (input, init) => {
+      const accessToken = authorizationBearerToken(init);
+      const response = await fetchFn(input, init);
+      if (response.status === 401 && accessToken !== null) {
+        this.rejectedTokens.set(response, accessToken);
+      }
+      return response;
+    };
+  }
+
+  async onUnauthorized(context: UnauthorizedContext): Promise<void> {
+    const rejectedAccessToken = this.rejectedTokens.get(context.response);
+    if (rejectedAccessToken === undefined) {
+      authenticationRequired("requires login before retrying this request");
+    }
+    const credentialId = this.store.credentialId();
+    const refreshIdentity = join(this.refreshLockRoot, credentialId);
+    await singleFlightRefresh(refreshIdentity, async () => {
+      await refreshRejectedCredential({
+        store: this.store,
+        refreshLockRoot: this.refreshLockRoot,
+        rejectedAccessToken,
+        fetchFn: context.fetchFn,
+      });
+    });
+  }
+}
+
+export function createMcpBearerAuthProvider(options: {
+  readonly server: McpServerEndpoint;
+  readonly backend: McpSecretBackend;
+  readonly refreshLockRoot: string;
+}): McpRuntimeAuthProvider {
+  return new KeelMcpBearerAuthProvider(options);
 }
 
 export async function deleteMcpOAuthCredentials(

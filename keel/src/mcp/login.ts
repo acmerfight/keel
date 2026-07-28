@@ -87,6 +87,7 @@ function normalizedLoginError(error: unknown): Error {
 export async function authorizeMcpServer(options: {
   readonly server: McpServerEndpoint;
   readonly backend: McpSecretBackend;
+  readonly refreshLockRoot: string;
   readonly redirectUrl: string;
   readonly state: string;
   readonly startedAt: number;
@@ -162,7 +163,11 @@ export async function authorizeMcpServer(options: {
     connection = await connectMcpServer(
       options.server,
       options.signal,
-      createMcpBearerAuthProvider(options.server, options.backend),
+      createMcpBearerAuthProvider({
+        server: options.server,
+        backend: options.backend,
+        refreshLockRoot: options.refreshLockRoot,
+      }),
     );
     await connection.listCatalog(options.signal);
   } catch (error) {
