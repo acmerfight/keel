@@ -18,6 +18,7 @@ import {
 import {
   compileMcpProviderInputSchema,
   MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+  mcpDegenerateLocalReferenceCycleDiagnostic,
   mcpProviderSchemaTarget,
 } from "../../src/mcp/provider-schema.ts";
 import { createMcpRuntime } from "../../src/mcp/runtime.ts";
@@ -2010,6 +2011,47 @@ describe("MCP runtime", () => {
     expect(catalog.tools.map((tool) => tool.descriptor.name)).toEqual([
       "structural_recursion",
     ]);
+  });
+
+  test(`Given ref-shaped data appears outside schema positions and schema positions are mixed,
+    When degenerate local reference diagnosis scans the typed schema,
+    Then it follows only schema-bearing keywords and returns null when no loop exists`, () => {
+    // Given
+    const schemaWithoutCycle = {
+      type: "object",
+      properties: {
+        unresolved: { $ref: "#/$defs/Missing" },
+      },
+      patternProperties: [],
+      allOf: {},
+      additionalProperties: true,
+      items: [{ type: "string" }],
+    };
+    const schemaWithComposedCycle = {
+      type: "object",
+      const: { $ref: "#/$defs/A" },
+      allOf: [{ $ref: "#/$defs/A" }],
+      $defs: {
+        A: { $ref: "#/$defs/B" },
+        B: { $ref: "#/$defs/A" },
+      },
+    };
+
+    // When
+    const noCycle = mcpDegenerateLocalReferenceCycleDiagnostic(
+      schemaWithoutCycle,
+      "inputSchema",
+    );
+    const composedCycle = mcpDegenerateLocalReferenceCycleDiagnostic(
+      schemaWithComposedCycle,
+      "outputSchema",
+    );
+
+    // Then
+    expect(noCycle).toBeNull();
+    expect(composedCycle).toBe(
+      'outputSchema.allOf[0].$ref("#/$defs/A").$ref("#/$defs/B").$ref forms a cycle through "#/$defs/A"',
+    );
   });
 
   test(`Given provider schema lowering receives malformed JSON Schema values,

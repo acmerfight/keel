@@ -333,45 +333,33 @@ const localReferenceSchemaValueKeywords = new Set([
  * structural recursion remains valid at the catalog boundary.
  */
 export function mcpDegenerateLocalReferenceCycleDiagnostic(
-  value: unknown,
+  rootSchema: z.infer<typeof schemaNodeBoundary>,
   path: "inputSchema" | "outputSchema",
 ): string | null {
-  const root = schemaNodeBoundary.safeParse(value);
-  if (!root.success) return null;
-
-  const pending: PendingSchemaScan[] = [{ value: root.data, path }];
-  while (pending.length > 0) {
+  const pending: PendingSchemaScan[] = [{ value: rootSchema, path }];
+  while (true) {
     const current = pending.pop();
-    if (current === undefined) continue;
+    if (current === undefined) return null;
     const diagnostic = referenceOnlyCycleDiagnostic(
       current.value,
       current.path,
-      root.data,
+      rootSchema,
     );
     if (diagnostic !== null) return diagnostic;
 
     const object = schemaObjectBoundary.safeParse(current.value);
     if (!object.success) continue;
-    const entries = Object.entries(object.data);
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry === undefined) continue;
-      const [name, child] = entry;
+    for (const [name, child] of Object.entries(object.data).toReversed()) {
       const childPath = `${current.path}.${name}`;
       if (localReferenceSchemaMapKeywords.has(name)) {
         const schemaMap = schemaObjectBoundary.safeParse(child);
         if (!schemaMap.success) continue;
-        const schemas = Object.entries(schemaMap.data);
-        for (
-          let schemaIndex = schemas.length - 1;
-          schemaIndex >= 0;
-          schemaIndex -= 1
-        ) {
-          const schema = schemas[schemaIndex];
-          if (schema === undefined) continue;
+        for (const [schemaName, schema] of Object.entries(
+          schemaMap.data,
+        ).toReversed()) {
           pending.push({
-            value: schema[1],
-            path: `${childPath}.${schema[0]}`,
+            value: schema,
+            path: `${childPath}.${schemaName}`,
           });
         }
         continue;
@@ -381,13 +369,11 @@ export function mcpDegenerateLocalReferenceCycleDiagnostic(
         (name === "items" && Array.isArray(child))
       ) {
         if (!Array.isArray(child)) continue;
-        for (
-          let childIndex = child.length - 1;
-          childIndex >= 0;
-          childIndex -= 1
-        ) {
+        for (const [childIndex, childSchema] of [
+          ...child.entries(),
+        ].toReversed()) {
           pending.push({
-            value: child[childIndex],
+            value: childSchema,
             path: `${childPath}[${childIndex}]`,
           });
         }
@@ -398,7 +384,6 @@ export function mcpDegenerateLocalReferenceCycleDiagnostic(
       }
     }
   }
-  return null;
 }
 
 function compileType(
