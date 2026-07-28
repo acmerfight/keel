@@ -22,6 +22,7 @@ import {
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
+import { McpOAuthAuthenticationRequiredError } from "./oauth.ts";
 import {
   compileMcpProviderInputSchema,
   type McpProviderSchemaTarget,
@@ -47,6 +48,7 @@ const MCP_HEADER_PRIMITIVE_TYPES = new Set([
   "string",
   "integer",
   "boolean",
+  // Stable SDK conformance accepts number despite the current spec text.
   "number",
 ]);
 const MCP_HEADER_UNREACHABLE_SCHEMA_KEYS = [
@@ -800,8 +802,11 @@ export async function connectMcpServer(
   }
 }
 
-function isUnauthorized(error: unknown): boolean {
-  return UnauthorizedError.isInstance(error);
+function requiresAuthentication(error: unknown): boolean {
+  return (
+    UnauthorizedError.isInstance(error) ||
+    error instanceof McpOAuthAuthenticationRequiredError
+  );
 }
 
 function sanitizedError(error: unknown): string {
@@ -851,7 +856,7 @@ export async function discoverMcpServer(options: {
       latencyMs: Math.max(0, now() - startedAt),
     };
   } catch (error) {
-    if (isUnauthorized(error)) {
+    if (requiresAuthentication(error)) {
       status = {
         status: "needs-auth",
         latencyMs: Math.max(0, now() - startedAt),

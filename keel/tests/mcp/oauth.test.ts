@@ -3,6 +3,7 @@ import {
   createMcpBearerAuthProvider,
   createMcpOAuthLoginProvider,
   deleteMcpOAuthCredentials,
+  McpOAuthAuthenticationRequiredError,
   type McpSecretBackend,
 } from "../../src/mcp/oauth.ts";
 
@@ -481,8 +482,8 @@ describe("MCP OAuth flow state", () => {
     );
 
     // When / Then
-    await expect(bearer.token()).rejects.toThrow(
-      "requires an active OAuth credential",
+    await expect(bearer.token()).rejects.toBeInstanceOf(
+      McpOAuthAuthenticationRequiredError,
     );
   });
 
