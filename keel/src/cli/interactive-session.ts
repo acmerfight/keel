@@ -605,6 +605,7 @@ export async function runInteractiveSession(
     mcpRuntime ??= createMcpRuntime({
       servers: options.mcp.servers,
       connectionFactory: options.mcp.connectionFactory,
+      lifecycle: options.mcp.lifecycle,
       permission: options.mcp.canPrompt
         ? createPromptedMcpPermissionPolicy(lineReader, options.writeStderr, {
             onPromptStart: () => {

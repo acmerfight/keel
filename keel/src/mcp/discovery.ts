@@ -851,18 +851,19 @@ export async function discoverMcpServer(options: {
   readonly now: () => number;
   readonly authProvider: McpRuntimeAuthProvider | null;
   readonly schemaTarget: McpProviderSchemaTarget;
+  readonly signal: AbortSignal;
 }): Promise<McpDiscoveryStatus> {
-  const { server, now, authProvider, schemaTarget } = options;
+  const { server, now, authProvider, schemaTarget, signal } = options;
   const startedAt = now();
   let connection: McpConnection | null = null;
   let status: McpDiscoveryStatus;
   try {
     connection = await connectMcpServer(
       server,
-      undefined,
+      signal,
       authProvider ?? undefined,
     );
-    const catalog = await connection.listCatalog();
+    const catalog = await connection.listCatalog(signal);
     status = {
       status: "ready",
       protocolEra: connection.protocolEra,

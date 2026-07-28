@@ -8,7 +8,6 @@ import {
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import { z } from "zod";
-import type { McpServerEndpoint } from "./discovery.ts";
 import { connectMcpServer, createMcpSdkClient } from "./discovery.ts";
 import {
   createMcpPolicyFetch,
@@ -19,7 +18,9 @@ import {
 import {
   createMcpBearerAuthProvider,
   createMcpOAuthLoginProvider,
+  deleteMcpOAuthCredentials,
   McpOAuthCredentialError,
+  type McpOAuthServerEndpoint,
   type McpPreRegisteredClient,
   type McpSecretBackend,
 } from "./oauth.ts";
@@ -85,7 +86,7 @@ function normalizedLoginError(error: unknown): Error {
 }
 
 export async function authorizeMcpServer(options: {
-  readonly server: McpServerEndpoint;
+  readonly server: McpOAuthServerEndpoint;
   readonly backend: McpSecretBackend;
   readonly refreshLockRoot: string;
   readonly redirectUrl: string;
@@ -95,8 +96,17 @@ export async function authorizeMcpServer(options: {
   readonly now: () => number;
   readonly openExternalUrl: (url: URL) => Promise<void>;
   readonly waitForCallback: () => Promise<URLSearchParams>;
+  readonly isCurrentAndEnabled: () => Promise<boolean>;
   readonly signal: AbortSignal;
 }): Promise<void> {
+  const ensureAvailable = async (): Promise<void> => {
+    if (!(await options.isCurrentAndEnabled())) {
+      throw new McpOAuthLoginError(
+        "Error: MCP server was disabled, removed, or changed during authorization.",
+      );
+    }
+  };
+  await ensureAvailable();
   const validated = validateMcpServerUrl(
     options.server.url,
     options.server.allowPrivateNetwork,
@@ -105,12 +115,16 @@ export async function authorizeMcpServer(options: {
   const provider = createMcpOAuthLoginProvider({
     server: options.server,
     backend: options.backend,
+    refreshLockRoot: options.refreshLockRoot,
+    isCurrentAndEnabled: async () => await options.isCurrentAndEnabled(),
     redirectUrl: options.redirectUrl,
     openAuthorizationUrl: async (authorizationUrl) => {
       await preflightMcpOAuthBrowserTarget(authorizationUrl, validated);
+      await ensureAvailable();
       try {
         await options.openExternalUrl(authorizationUrl);
       } catch {
+        await ensureAvailable();
         throw new McpOAuthLoginError(
           "Error: MCP authorization could not open the system browser.",
         );
@@ -126,6 +140,7 @@ export async function authorizeMcpServer(options: {
   const client = createMcpSdkClient();
   let flowFinished = false;
   try {
+    await ensureAvailable();
     await provider.beginFlow(options.state, options.startedAt);
     let redirected = false;
     try {
@@ -144,9 +159,12 @@ export async function authorizeMcpServer(options: {
     }
     if (redirected) {
       const callbackParams = await options.waitForCallback();
+      await ensureAvailable();
       await provider.validateCallbackState(callbackParams);
+      await ensureAvailable();
       await transport.finishAuth(callbackParams);
     }
+    await ensureAvailable();
     await provider.finishFlow();
     flowFinished = true;
   } catch (error) {
@@ -154,6 +172,13 @@ export async function authorizeMcpServer(options: {
   } finally {
     if (!flowFinished) {
       await Promise.allSettled([provider.abortFlow()]);
+      if (!(await options.isCurrentAndEnabled().catch(() => false))) {
+        await deleteMcpOAuthCredentials(
+          options.server,
+          options.backend,
+          options.refreshLockRoot,
+        ).catch(() => false);
+      }
     }
     await Promise.allSettled([client.close(), network.close()]);
   }
@@ -167,10 +192,19 @@ export async function authorizeMcpServer(options: {
         server: options.server,
         backend: options.backend,
         refreshLockRoot: options.refreshLockRoot,
+        isCurrentAndEnabled: async () => await options.isCurrentAndEnabled(),
       }),
     );
     await connection.listCatalog(options.signal);
+    await ensureAvailable();
   } catch (error) {
+    if (!(await options.isCurrentAndEnabled().catch(() => false))) {
+      await deleteMcpOAuthCredentials(
+        options.server,
+        options.backend,
+        options.refreshLockRoot,
+      ).catch(() => false);
+    }
     throw normalizedLoginError(error);
   } finally {
     await Promise.allSettled(connection === null ? [] : [connection.close()]);

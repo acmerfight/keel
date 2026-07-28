@@ -748,7 +748,7 @@ export async function* runAgentTurn(
 
   for (let completedTurns = 1; ; completedTurns++) {
     await options.mcp?.runtime.prepareTurn(options.mcp.schemaTarget, signal);
-    const mcpExposure = options.mcp?.runtime.exposureSnapshot();
+    const mcpExposure = await options.mcp?.runtime.exposureSnapshot();
     const currentMemorySource = currentMemoryUserMessage();
     const exposeMemoryTools =
       options.memory !== undefined &&

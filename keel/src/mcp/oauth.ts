@@ -21,7 +21,7 @@ import type { McpServerEndpoint } from "./discovery.ts";
 import { withMcpOAuthRefreshLock } from "./oauth-refresh-lock.ts";
 
 const MCP_OAUTH_SECRET_SERVICE = "Keel MCP OAuth";
-const MCP_OAUTH_SECRET_SCHEMA_VERSION = 1;
+const MCP_OAUTH_SECRET_SCHEMA_VERSION = 2;
 const MCP_OAUTH_MAX_ISSUERS = 16;
 const MCP_OAUTH_MAX_SECRET_BYTES = 1024 * 1024;
 const MCP_OAUTH_FLOW_LIFETIME_MS = 2 * 60 * 1000;
@@ -154,6 +154,7 @@ const oauthFlowSchema = z.discriminatedUnion("status", [
 const oauthCredentialRecordSchema = z
   .object({
     schemaVersion: z.literal(MCP_OAUTH_SECRET_SCHEMA_VERSION),
+    incarnation: z.uuid(),
     resource: z.string().url(),
     activeAuthorization: activeAuthorizationSchema.nullable(),
     credentials: z.array(issuerCredentialsSchema).max(MCP_OAUTH_MAX_ISSUERS),
@@ -232,6 +233,7 @@ export interface McpOAuthLoginProvider extends OAuthClientProvider {
 
 export class McpOAuthCredentialError extends Error {}
 export class McpOAuthAuthenticationRequiredError extends McpOAuthCredentialError {}
+export class McpOAuthServerUnavailableError extends McpOAuthCredentialError {}
 class McpOAuthCredentialUnavailableError extends McpOAuthCredentialError {}
 
 export function isMcpAuthenticationRequiredError(error: unknown): boolean {
@@ -241,9 +243,13 @@ export function isMcpAuthenticationRequiredError(error: unknown): boolean {
   );
 }
 
-function emptyRecord(resource: string): OAuthCredentialRecord {
+function emptyRecord(
+  resource: string,
+  incarnation: string,
+): OAuthCredentialRecord {
   return {
     schemaVersion: MCP_OAUTH_SECRET_SCHEMA_VERSION,
+    incarnation,
     resource,
     activeAuthorization: null,
     credentials: [],
@@ -252,8 +258,16 @@ function emptyRecord(resource: string): OAuthCredentialRecord {
   };
 }
 
-function credentialAccount(resource: string): string {
-  return createHash("sha256").update(resource).digest("hex");
+export interface McpOAuthServerEndpoint extends McpServerEndpoint {
+  readonly incarnation: string;
+}
+
+function credentialAccount(server: McpOAuthServerEndpoint): string {
+  return createHash("sha256")
+    .update(server.incarnation)
+    .update("\0")
+    .update(new URL(server.url).href)
+    .digest("hex");
 }
 
 function credentialError(message: string): never {
@@ -269,12 +283,24 @@ function unavailableCredentialError(message: string): never {
 class OAuthCredentialStore {
   private readonly account: string;
   private readonly backend: McpSecretBackend;
+  private readonly incarnation: string;
+  private readonly mutationGuard: (() => Promise<void>) | null;
+  private readonly refreshLockRoot: string;
   private readonly resource: string;
 
-  constructor(server: McpServerEndpoint, backend: McpSecretBackend) {
+  constructor(options: {
+    readonly server: McpOAuthServerEndpoint;
+    readonly backend: McpSecretBackend;
+    readonly refreshLockRoot: string;
+    readonly mutationGuard: (() => Promise<void>) | null;
+  }) {
+    const { server } = options;
     this.resource = new URL(server.url).href;
-    this.account = credentialAccount(this.resource);
-    this.backend = backend;
+    this.incarnation = server.incarnation;
+    this.account = credentialAccount(server);
+    this.backend = options.backend;
+    this.refreshLockRoot = options.refreshLockRoot;
+    this.mutationGuard = options.mutationGuard;
   }
 
   credentialId(): string {
@@ -293,7 +319,9 @@ class OAuthCredentialStore {
         "requires an available OS credential store; secure credential access failed",
       );
     }
-    if (serialized === null) return emptyRecord(this.resource);
+    if (serialized === null) {
+      return emptyRecord(this.resource, this.incarnation);
+    }
     if (Buffer.byteLength(serialized, "utf8") > MCP_OAUTH_MAX_SECRET_BYTES) {
       credentialError("credential record exceeds the safe size limit");
     }
@@ -307,16 +335,48 @@ class OAuthCredentialStore {
     if (!parsed.success) {
       credentialError("credential record does not match the current schema");
     }
-    if (parsed.data.resource !== this.resource) {
+    if (
+      parsed.data.resource !== this.resource ||
+      parsed.data.incarnation !== this.incarnation
+    ) {
       credentialError("credential record is bound to a different resource");
     }
     return parsed.data;
   }
 
-  async save(record: OAuthCredentialRecord): Promise<void> {
+  async update<Result>(
+    action: (record: OAuthCredentialRecord) =>
+      | {
+          readonly next: OAuthCredentialRecord | null;
+          readonly result: Result;
+        }
+      | Promise<{
+          readonly next: OAuthCredentialRecord | null;
+          readonly result: Result;
+        }>,
+  ): Promise<Result> {
+    return await withMcpOAuthRefreshLock({
+      root: this.refreshLockRoot,
+      credentialId: this.credentialId(),
+      action: async () => {
+        await this.mutationGuard?.();
+        const mutation = await action(await this.load());
+        if (mutation.next !== null) {
+          await this.saveUnderLock(mutation.next);
+        }
+        return mutation.result;
+      },
+    });
+  }
+
+  async saveUnderLock(record: OAuthCredentialRecord): Promise<void> {
     const parsed = oauthCredentialRecordSchema.safeParse(record);
     /* v8 ignore next 3 -- private callers construct the precise record type; external stored records are validated by load(). */
-    if (!parsed.success || parsed.data.resource !== this.resource) {
+    if (
+      !parsed.success ||
+      parsed.data.resource !== this.resource ||
+      parsed.data.incarnation !== this.incarnation
+    ) {
       credentialError("refused to store an invalid credential record");
     }
     try {
@@ -333,6 +393,14 @@ class OAuthCredentialStore {
   }
 
   async delete(): Promise<boolean> {
+    return await withMcpOAuthRefreshLock({
+      root: this.refreshLockRoot,
+      credentialId: this.credentialId(),
+      action: async () => await this.deleteUnderLock(),
+    });
+  }
+
+  async deleteUnderLock(): Promise<boolean> {
     try {
       return await this.backend.deletePassword(
         MCP_OAUTH_SECRET_SERVICE,
@@ -406,15 +474,30 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
   private readonly now: () => number;
 
   constructor(options: {
-    readonly server: McpServerEndpoint;
+    readonly server: McpOAuthServerEndpoint;
     readonly backend: McpSecretBackend;
+    readonly refreshLockRoot: string;
+    readonly isCurrentAndEnabled: (
+      server: McpOAuthServerEndpoint,
+    ) => boolean | Promise<boolean>;
     readonly redirectUrl: string;
     readonly openAuthorizationUrl: (url: URL) => Promise<void>;
     readonly preRegisteredClient: McpPreRegisteredClient | null;
     readonly now: () => number;
   }) {
     this.redirectUrl = options.redirectUrl;
-    this.store = new OAuthCredentialStore(options.server, options.backend);
+    this.store = new OAuthCredentialStore({
+      server: options.server,
+      backend: options.backend,
+      refreshLockRoot: options.refreshLockRoot,
+      mutationGuard: async () => {
+        if (!(await options.isCurrentAndEnabled(options.server))) {
+          throw new McpOAuthServerUnavailableError(
+            "Error: MCP server is disabled, removed, or no longer matches this authorization session.",
+          );
+        }
+      },
+    });
     this.openAuthorizationUrl = options.openAuthorizationUrl;
     this.preRegisteredClient = options.preRegisteredClient;
     this.resource = new URL(options.server.url).href;
@@ -437,20 +520,24 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
   }
 
   async beginFlow(state: string, startedAt: number): Promise<void> {
-    const record = await this.store.load();
-    await this.store.save({
-      ...record,
-      flow: {
-        status: "awaiting-callback",
-        state,
-        resource: record.resource,
-        expectedIssuer: null,
-        clientId: null,
-        redirectUri: this.redirectUrl,
-        codeVerifier: null,
-        startedAt,
-        expiresAt: startedAt + MCP_OAUTH_FLOW_LIFETIME_MS,
-      },
+    await this.store.update((record) => {
+      return {
+        next: {
+          ...record,
+          flow: {
+            status: "awaiting-callback",
+            state,
+            resource: record.resource,
+            expectedIssuer: null,
+            clientId: null,
+            redirectUri: this.redirectUrl,
+            codeVerifier: null,
+            startedAt,
+            expiresAt: startedAt + MCP_OAUTH_FLOW_LIFETIME_MS,
+          },
+        },
+        result: undefined,
+      };
     });
   }
 
@@ -466,8 +553,6 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
     context?: OAuthClientInformationContext,
   ): Promise<StoredOAuthClientInformation | undefined> {
     const issuer = contextIssuer(context);
-    const record = await this.store.load();
-    const stored = record.credentials.find((entry) => entry.issuer === issuer);
     if (this.preRegisteredClient !== null) {
       const explicit: StoredOAuthClientInformation = {
         client_id: this.preRegisteredClient.clientId,
@@ -479,28 +564,36 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
       await this.saveClientInformation(explicit, context);
       return explicit;
     }
-    if (stored !== undefined) {
-      if (record.flow.status === "awaiting-callback") {
-        await this.store.save({
-          ...record,
-          flow: {
-            ...record.flow,
-            expectedIssuer: issuer,
-            clientId: stored.client.client_id,
-          },
-        });
-      }
-      return stored.client;
-    }
-    if (
-      record.discovery?.authorizationServerMetadata?.registration_endpoint ===
-      undefined
-    ) {
-      credentialError(
-        "server has no reusable client and does not advertise dynamic registration; configure a pre-registered client",
+    return await this.store.update((record) => {
+      const stored = record.credentials.find(
+        (entry) => entry.issuer === issuer,
       );
-    }
-    return undefined;
+      if (stored !== undefined) {
+        return {
+          next:
+            record.flow.status === "awaiting-callback"
+              ? {
+                  ...record,
+                  flow: {
+                    ...record.flow,
+                    expectedIssuer: issuer,
+                    clientId: stored.client.client_id,
+                  },
+                }
+              : null,
+          result: stored.client,
+        };
+      }
+      if (
+        record.discovery?.authorizationServerMetadata?.registration_endpoint ===
+        undefined
+      ) {
+        credentialError(
+          "server has no reusable client and does not advertise dynamic registration; configure a pre-registered client",
+        );
+      }
+      return { next: null, result: undefined };
+    });
   }
 
   async saveClientInformation(
@@ -513,31 +606,35 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
       ...clientInformation,
       issuer,
     });
-    const record = await this.store.load();
-    const existing = record.credentials.find(
-      (credentials) => credentials.issuer === issuer,
-    );
-    const identityMatches =
-      existing !== undefined && sameClientIdentity(existing.client, value);
-    await this.store.save({
-      ...record,
-      activeAuthorization:
-        record.activeAuthorization?.issuer === issuer && !identityMatches
-          ? null
-          : record.activeAuthorization,
-      credentials: replaceIssuerValue(record.credentials, {
-        issuer,
-        client: value,
-        tokens: identityMatches ? existing.tokens : null,
-      }),
-      flow:
-        record.flow.status === "awaiting-callback"
-          ? {
-              ...record.flow,
-              expectedIssuer: issuer,
-              clientId: value.client_id,
-            }
-          : record.flow,
+    await this.store.update((record) => {
+      const existing = record.credentials.find(
+        (credentials) => credentials.issuer === issuer,
+      );
+      const identityMatches =
+        existing !== undefined && sameClientIdentity(existing.client, value);
+      return {
+        next: {
+          ...record,
+          activeAuthorization:
+            record.activeAuthorization?.issuer === issuer && !identityMatches
+              ? null
+              : record.activeAuthorization,
+          credentials: replaceIssuerValue(record.credentials, {
+            issuer,
+            client: value,
+            tokens: identityMatches ? existing.tokens : null,
+          }),
+          flow:
+            record.flow.status === "awaiting-callback"
+              ? {
+                  ...record.flow,
+                  expectedIssuer: issuer,
+                  clientId: value.client_id,
+                }
+              : record.flow,
+        },
+        result: undefined,
+      };
     });
   }
 
@@ -566,32 +663,36 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
     const issuer = contextIssuer(context);
     requireIssuerMatch(tokens.issuer, issuer);
     const value = storedOAuthTokensSchema.parse({ ...tokens, issuer });
-    const record = await this.store.load();
-    const credentials = record.credentials.find(
-      (entry) => entry.issuer === issuer,
-    );
-    if (credentials === undefined) {
-      credentialError("refused tokens without an issuer-bound OAuth client");
-    }
-    if (
-      record.flow.status === "callback-consumed" &&
-      (new URL(record.flow.expectedIssuer).href !== new URL(issuer).href ||
-        record.flow.clientId !== credentials.client.client_id)
-    ) {
-      credentialError(
-        "refused tokens from a different callback issuer or client",
+    await this.store.update((record) => {
+      const credentials = record.credentials.find(
+        (entry) => entry.issuer === issuer,
       );
-    }
-    await this.store.save({
-      ...record,
-      activeAuthorization: {
-        issuer,
-        clientId: credentials.client.client_id,
-      },
-      credentials: replaceIssuerValue(record.credentials, {
-        ...credentials,
-        tokens: value,
-      }),
+      if (credentials === undefined) {
+        credentialError("refused tokens without an issuer-bound OAuth client");
+      }
+      if (
+        record.flow.status === "callback-consumed" &&
+        (new URL(record.flow.expectedIssuer).href !== new URL(issuer).href ||
+          record.flow.clientId !== credentials.client.client_id)
+      ) {
+        credentialError(
+          "refused tokens from a different callback issuer or client",
+        );
+      }
+      return {
+        next: {
+          ...record,
+          activeAuthorization: {
+            issuer,
+            clientId: credentials.client.client_id,
+          },
+          credentials: replaceIssuerValue(record.credentials, {
+            ...credentials,
+            tokens: value,
+          }),
+        },
+        result: undefined,
+      };
     });
   }
 
@@ -600,13 +701,17 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    const record = await this.store.load();
-    if (record.flow.status !== "awaiting-callback") {
-      credentialError("has no pending login for the PKCE verifier");
-    }
-    await this.store.save({
-      ...record,
-      flow: { ...record.flow, codeVerifier },
+    await this.store.update((record) => {
+      if (record.flow.status !== "awaiting-callback") {
+        credentialError("has no pending login for the PKCE verifier");
+      }
+      return {
+        next: {
+          ...record,
+          flow: { ...record.flow, codeVerifier },
+        },
+        result: undefined,
+      };
     });
   }
 
@@ -627,23 +732,28 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
     ) {
       credentialError("refused discovery bound to a different resource");
     }
-    const record = await this.store.load();
-    const expectedIssuer =
-      discovery.authorizationServerMetadata?.issuer ??
-      discovery.authorizationServerUrl;
-    if (
-      record.flow.status === "callback-consumed" &&
-      new URL(record.flow.expectedIssuer).href !== new URL(expectedIssuer).href
-    ) {
-      credentialError("refused discovery from a different callback issuer");
-    }
-    await this.store.save({
-      ...record,
-      discovery,
-      flow:
-        record.flow.status === "awaiting-callback"
-          ? { ...record.flow, expectedIssuer }
-          : record.flow,
+    await this.store.update((record) => {
+      const expectedIssuer =
+        discovery.authorizationServerMetadata?.issuer ??
+        discovery.authorizationServerUrl;
+      if (
+        record.flow.status === "callback-consumed" &&
+        new URL(record.flow.expectedIssuer).href !==
+          new URL(expectedIssuer).href
+      ) {
+        credentialError("refused discovery from a different callback issuer");
+      }
+      return {
+        next: {
+          ...record,
+          discovery,
+          flow:
+            record.flow.status === "awaiting-callback"
+              ? { ...record.flow, expectedIssuer }
+              : record.flow,
+        },
+        result: undefined,
+      };
     });
   }
 
@@ -652,55 +762,69 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
   }
 
   async validateCallbackState(callbackParams: URLSearchParams): Promise<void> {
-    const record = await this.store.load();
-    const flow = record.flow;
-    if (flow.status !== "awaiting-callback") {
-      credentialError("received a callback without a pending login");
-    }
-    if (this.now() >= flow.expiresAt) {
-      credentialError("rejected an expired callback state");
-    }
-    const state = callbackParams.get("state");
-    if (state === null || state !== flow.state) {
-      credentialError("rejected a callback with an invalid state binding");
-    }
-    if (
-      flow.codeVerifier === null ||
-      flow.expectedIssuer === null ||
-      flow.clientId === null
-    ) {
-      credentialError("callback flow is missing a bound OAuth value");
-    }
-    await this.store.save({
-      ...record,
-      flow: {
-        status: "callback-consumed",
-        resource: flow.resource,
-        expectedIssuer: flow.expectedIssuer,
-        clientId: flow.clientId,
-        redirectUri: flow.redirectUri,
-        codeVerifier: flow.codeVerifier,
-        startedAt: flow.startedAt,
-        expiresAt: flow.expiresAt,
-      },
+    await this.store.update((record) => {
+      const flow = record.flow;
+      if (flow.status !== "awaiting-callback") {
+        credentialError("received a callback without a pending login");
+      }
+      if (this.now() >= flow.expiresAt) {
+        credentialError("rejected an expired callback state");
+      }
+      const state = callbackParams.get("state");
+      if (state === null || state !== flow.state) {
+        credentialError("rejected a callback with an invalid state binding");
+      }
+      if (
+        flow.codeVerifier === null ||
+        flow.expectedIssuer === null ||
+        flow.clientId === null
+      ) {
+        credentialError("callback flow is missing a bound OAuth value");
+      }
+      return {
+        next: {
+          ...record,
+          flow: {
+            status: "callback-consumed",
+            resource: flow.resource,
+            expectedIssuer: flow.expectedIssuer,
+            clientId: flow.clientId,
+            redirectUri: flow.redirectUri,
+            codeVerifier: flow.codeVerifier,
+            startedAt: flow.startedAt,
+            expiresAt: flow.expiresAt,
+          },
+        },
+        result: undefined,
+      };
     });
   }
 
   async finishFlow(): Promise<void> {
-    const record = await this.store.load();
-    await this.store.save({ ...record, flow: { status: "idle" } });
+    await this.store.update((record) => ({
+      next: { ...record, flow: { status: "idle" } },
+      result: undefined,
+    }));
   }
 
   async abortFlow(): Promise<void> {
-    const record = await this.store.load();
-    if (record.flow.status === "idle") return;
-    await this.store.save({ ...record, flow: { status: "idle" } });
+    await this.store.update((record) => ({
+      next:
+        record.flow.status === "idle"
+          ? null
+          : { ...record, flow: { status: "idle" } },
+      result: undefined,
+    }));
   }
 }
 
 export function createMcpOAuthLoginProvider(options: {
-  readonly server: McpServerEndpoint;
+  readonly server: McpOAuthServerEndpoint;
   readonly backend: McpSecretBackend;
+  readonly refreshLockRoot: string;
+  readonly isCurrentAndEnabled: (
+    server: McpOAuthServerEndpoint,
+  ) => boolean | Promise<boolean>;
   readonly redirectUrl: string;
   readonly openAuthorizationUrl: (url: URL) => Promise<void>;
   readonly preRegisteredClient: McpPreRegisteredClient | null;
@@ -754,7 +878,7 @@ async function deactivateRejectedCredentials(
   record: OAuthCredentialRecord,
   credentials: IssuerCredentials,
 ): Promise<void> {
-  await store.save({
+  await store.saveUnderLock({
     ...record,
     activeAuthorization: null,
     credentials: replaceIssuerValue(record.credentials, {
@@ -775,11 +899,13 @@ async function refreshRejectedCredential(options: {
   readonly refreshLockRoot: string;
   readonly rejectedAccessToken: string;
   readonly fetchFn: FetchLike;
+  readonly ensureAvailable: () => Promise<void>;
 }): Promise<void> {
   await withMcpOAuthRefreshLock({
     root: options.refreshLockRoot,
     credentialId: options.store.credentialId(),
     action: async () => {
+      await options.ensureAvailable();
       const record = await options.store.load();
       const credentials = activeCredentials(record);
       if (credentials === null || credentials.tokens === null) {
@@ -821,6 +947,7 @@ async function refreshRejectedCredential(options: {
           error instanceof OAuthError &&
           error.code === OAuthErrorCode.InvalidGrant
         ) {
+          await options.ensureAvailable();
           await deactivateRejectedCredentials(
             options.store,
             record,
@@ -840,7 +967,8 @@ async function refreshRejectedCredential(options: {
           : {}),
         issuer: credentials.issuer,
       });
-      await options.store.save({
+      await options.ensureAvailable();
+      await options.store.saveUnderLock({
         ...record,
         credentials: replaceIssuerValue(record.credentials, {
           ...credentials,
@@ -870,22 +998,43 @@ async function singleFlightRefresh(
 }
 
 class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
-  private readonly server: McpServerEndpoint;
+  private readonly server: McpOAuthServerEndpoint;
   private readonly store: OAuthCredentialStore;
   private readonly refreshLockRoot: string;
+  private readonly isCurrentAndEnabled: (
+    server: McpOAuthServerEndpoint,
+  ) => boolean | Promise<boolean>;
   private readonly rejectedTokens = new WeakMap<Response, string>();
 
   constructor(options: {
-    readonly server: McpServerEndpoint;
+    readonly server: McpOAuthServerEndpoint;
     readonly backend: McpSecretBackend;
     readonly refreshLockRoot: string;
+    readonly isCurrentAndEnabled: (
+      server: McpOAuthServerEndpoint,
+    ) => boolean | Promise<boolean>;
   }) {
     this.server = options.server;
-    this.store = new OAuthCredentialStore(options.server, options.backend);
+    this.store = new OAuthCredentialStore({
+      server: options.server,
+      backend: options.backend,
+      refreshLockRoot: options.refreshLockRoot,
+      mutationGuard: async () => await this.ensureAvailable(),
+    });
     this.refreshLockRoot = options.refreshLockRoot;
+    this.isCurrentAndEnabled = options.isCurrentAndEnabled;
+  }
+
+  private async ensureAvailable(): Promise<void> {
+    if (!(await this.isCurrentAndEnabled(this.server))) {
+      throw new McpOAuthServerUnavailableError(
+        "Error: MCP server is disabled, removed, or no longer matches this authorization session.",
+      );
+    }
   }
 
   async token(): Promise<string | undefined> {
+    await this.ensureAvailable();
     let record: OAuthCredentialRecord;
     try {
       record = await this.store.load();
@@ -917,6 +1066,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
   }
 
   async onUnauthorized(context: UnauthorizedContext): Promise<void> {
+    await this.ensureAvailable();
     const rejectedAccessToken = this.rejectedTokens.get(context.response);
     if (rejectedAccessToken === undefined) {
       authenticationRequired("requires login before retrying this request");
@@ -929,22 +1079,59 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
         refreshLockRoot: this.refreshLockRoot,
         rejectedAccessToken,
         fetchFn: context.fetchFn,
+        ensureAvailable: async () => await this.ensureAvailable(),
       });
     });
   }
 }
 
 export function createMcpBearerAuthProvider(options: {
-  readonly server: McpServerEndpoint;
+  readonly server: McpOAuthServerEndpoint;
   readonly backend: McpSecretBackend;
   readonly refreshLockRoot: string;
+  readonly isCurrentAndEnabled: (
+    server: McpOAuthServerEndpoint,
+  ) => boolean | Promise<boolean>;
 }): McpRuntimeAuthProvider {
   return new KeelMcpBearerAuthProvider(options);
 }
 
 export async function deleteMcpOAuthCredentials(
-  server: McpServerEndpoint,
+  server: McpOAuthServerEndpoint,
   backend: McpSecretBackend,
+  refreshLockRoot: string,
 ): Promise<boolean> {
-  return await new OAuthCredentialStore(server, backend).delete();
+  const store = new OAuthCredentialStore({
+    server,
+    backend,
+    refreshLockRoot,
+    mutationGuard: null,
+  });
+  return await store.delete();
+}
+
+export async function withMcpOAuthCredentialLock<Result>(
+  server: McpOAuthServerEndpoint,
+  refreshLockRoot: string,
+  action: () => Promise<Result>,
+): Promise<Result> {
+  return await withMcpOAuthRefreshLock({
+    root: refreshLockRoot,
+    credentialId: credentialAccount(server),
+    action,
+  });
+}
+
+export async function deleteMcpOAuthCredentialsUnderLock(
+  server: McpOAuthServerEndpoint,
+  backend: McpSecretBackend,
+  refreshLockRoot: string,
+): Promise<boolean> {
+  const store = new OAuthCredentialStore({
+    server,
+    backend,
+    refreshLockRoot,
+    mutationGuard: null,
+  });
+  return await store.deleteUnderLock();
 }

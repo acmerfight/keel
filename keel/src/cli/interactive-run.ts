@@ -47,7 +47,10 @@ import {
   runInteractiveSession,
 } from "./interactive-session.ts";
 import { listMcpServersSync, McpConfigError } from "./mcp-config.ts";
-import { createCliMcpConnectionFactory } from "./mcp-connection.ts";
+import {
+  createCliMcpConnectionFactory,
+  createCliMcpLifecyclePolicy,
+} from "./mcp-connection.ts";
 import {
   formatCostReport,
   printAgentEvents,
@@ -1368,6 +1371,7 @@ async function runSessionCli(
               mcp: {
                 servers: [firstMcpServer, ...remainingMcpServers],
                 connectionFactory: createCliMcpConnectionFactory(runtime),
+                lifecycle: createCliMcpLifecyclePolicy(runtime),
                 canPrompt:
                   mode.kind === "interactive" && runtime.input.isTTY === true,
               },

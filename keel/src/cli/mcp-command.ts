@@ -6,9 +6,10 @@ import {
 import { authorizeMcpServer, McpOAuthLoginError } from "../mcp/login.ts";
 import { McpNetworkPolicyError, validateMcpServerUrl } from "../mcp/network.ts";
 import {
-  deleteMcpOAuthCredentials,
+  deleteMcpOAuthCredentialsUnderLock,
   McpOAuthCredentialError,
   type McpPreRegisteredClient,
+  withMcpOAuthCredentialLock,
 } from "../mcp/oauth.ts";
 import {
   type McpProviderSchemaTarget,
@@ -20,10 +21,14 @@ import {
   addMcpServer,
   deriveMcpServerId,
   findMcpServer,
+  isMcpServerCurrentAndEnabled,
   listMcpServers,
   McpConfigError,
   type McpServerConfig,
+  monitorMcpServerLifecycle,
+  removeMcpServer,
   setMcpServerAuthenticationRequired,
+  setMcpServerEnabled,
   validateMcpServerId,
 } from "./mcp-config.ts";
 import {
@@ -43,6 +48,7 @@ import type { CliRuntime } from "./runtime.ts";
 
 type McpCliArgs = Extract<CliArgs, { readonly command: "mcp" }>;
 const MCP_CLIENT_SECRET_MAX_BYTES = 64 * 1024;
+type McpCommandStatus = McpDiscoveryStatus | { readonly status: "disabled" };
 
 function displayMcpEndpoint(raw: string): string {
   const url = new URL(raw);
@@ -64,6 +70,7 @@ function formatReadyStatus(
     `MCP server: ${server.id}`,
     `origin: ${new URL(server.url).origin}`,
     `endpoint: ${displayMcpEndpoint(server.url)}`,
+    "enabled: true",
     "status: ready",
     `protocol: ${status.protocolEra} (${status.protocolVersion})`,
     `server identity: ${status.serverIdentity ?? "anonymous"}`,
@@ -111,6 +118,7 @@ function formatDiscoveryStatus(
     `MCP server: ${server.id}`,
     `origin: ${new URL(server.url).origin}`,
     `endpoint: ${displayMcpEndpoint(server.url)}`,
+    "enabled: true",
     `status: ${status.status}`,
   ];
   if (status.status === "needs-auth") {
@@ -125,6 +133,37 @@ function formatDiscoveryStatus(
     `error: ${status.error}`,
     `latency: ${status.latencyMs}ms`,
   ].join("\n");
+}
+
+function formatDisabledStatus(server: McpServerConfig): string {
+  return [
+    `MCP server: ${server.id}`,
+    `origin: ${new URL(server.url).origin}`,
+    `endpoint: ${displayMcpEndpoint(server.url)}`,
+    "enabled: false",
+    "status: disabled",
+  ].join("\n");
+}
+
+async function discoverConfiguredMcpServer(
+  runtime: CliRuntime,
+  server: McpServerConfig,
+  schemaTarget: McpProviderSchemaTarget,
+): Promise<McpDiscoveryStatus> {
+  const parent = new AbortController();
+  const lifecycle = monitorMcpServerLifecycle(runtime, server, parent.signal);
+  try {
+    return await discoverMcpServer({
+      server,
+      now: runtime.now,
+      authProvider: createCliMcpAuthProvider(runtime, server),
+      schemaTarget,
+      signal: lifecycle.signal,
+    });
+  } finally {
+    parent.abort();
+    await lifecycle.close();
+  }
 }
 
 async function selectedServers(
@@ -153,16 +192,21 @@ async function writeServerStatuses(
   runtime: CliRuntime,
   servers: readonly McpServerConfig[],
   includeIssues: boolean,
-): Promise<readonly McpDiscoveryStatus[]> {
-  const statuses: McpDiscoveryStatus[] = [];
+): Promise<readonly McpCommandStatus[]> {
+  const statuses: McpCommandStatus[] = [];
   const schemaTarget = selectedMcpSchemaTarget(runtime);
   for (const [index, server] of servers.entries()) {
-    const status = await discoverMcpServer({
+    if (!server.enabled) {
+      statuses.push({ status: "disabled" });
+      if (index > 0) runtime.writeStdout("\n");
+      runtime.writeStdout(`${formatDisabledStatus(server)}\n`);
+      continue;
+    }
+    const status = await discoverConfiguredMcpServer(
+      runtime,
       server,
-      now: runtime.now,
-      authProvider: createCliMcpAuthProvider(runtime, server),
       schemaTarget,
-    });
+    );
     statuses.push(status);
     if (index > 0) runtime.writeStdout("\n");
     runtime.writeStdout(
@@ -182,9 +226,10 @@ async function runMcpAdd(
   );
   const id = cliArgs.name ?? deriveMcpServerId(validated.url);
   validateMcpServerId(id);
-  const server: McpServerConfig = {
+  const server = await addMcpServer(runtime, {
     id,
     url: validated.url.href,
+    enabled: true,
     allowPrivateNetwork: cliArgs.allowPrivateNetwork,
     authenticationRequired: false,
     toolFilter: {
@@ -194,15 +239,13 @@ async function runMcpAdd(
           : [...new Set(cliArgs.allowTools)],
       deny: [...new Set(cliArgs.denyTools)],
     },
-  };
-  await addMcpServer(runtime, server);
-  runtime.writeStdout(`Added MCP server "${id}".\n`);
-  const status = await discoverMcpServer({
-    server,
-    now: runtime.now,
-    authProvider: createCliMcpAuthProvider(runtime, server),
-    schemaTarget: selectedMcpSchemaTarget(runtime),
   });
+  runtime.writeStdout(`Added MCP server "${id}".\n`);
+  const status = await discoverConfiguredMcpServer(
+    runtime,
+    server,
+    selectedMcpSchemaTarget(runtime),
+  );
   runtime.writeStdout(`${formatDiscoveryStatus(server, status, true)}\n`);
   return status.status === "failed" ? 1 : 0;
 }
@@ -212,7 +255,18 @@ async function runMcpLogin(
   runtime: CliRuntime,
 ): Promise<number> {
   const configuredServer = await findMcpServer(runtime, cliArgs.serverId);
-  await setMcpServerAuthenticationRequired(runtime, configuredServer.id, true);
+  if (!configuredServer.enabled) {
+    throw new McpConfigError(
+      `Error: MCP server "${configuredServer.id}" is disabled. Run keel mcp enable "${configuredServer.id}" before login.`,
+    );
+  }
+  await withMcpOAuthCredentialLock(
+    configuredServer,
+    mcpOAuthRefreshLockRoot(runtime),
+    async () => {
+      await setMcpServerAuthenticationRequired(runtime, configuredServer, true);
+    },
+  );
   const server: McpServerConfig = {
     ...configuredServer,
     authenticationRequired: true,
@@ -265,10 +319,19 @@ async function runMcpLogin(
   const state = randomBytes(32).toString("base64url");
   const callback = await startMcpOAuthLoopbackCallback(state);
   const controller = new AbortController();
+  const lifecycle = monitorMcpServerLifecycle(
+    runtime,
+    server,
+    controller.signal,
+  );
   const abort = () => {
     controller.abort();
     void callback.close();
   };
+  const lifecycleAbort = () => {
+    void callback.close();
+  };
+  lifecycle.signal.addEventListener("abort", lifecycleAbort, { once: true });
   runtime.onSigint(abort);
   try {
     await authorizeMcpServer({
@@ -282,12 +345,17 @@ async function runMcpLogin(
       now: runtime.now,
       openExternalUrl: runtime.openExternalUrl,
       waitForCallback: callback.waitForCallback,
-      signal: controller.signal,
+      isCurrentAndEnabled: async () =>
+        await isMcpServerCurrentAndEnabled(runtime, server),
+      signal: lifecycle.signal,
     });
     runtime.writeStdout(`Logged in to MCP server "${server.id}".\n`);
     return 0;
   } finally {
     runtime.offSigint(abort);
+    lifecycle.signal.removeEventListener("abort", lifecycleAbort);
+    controller.abort();
+    await lifecycle.close();
     await callback.close();
   }
 }
@@ -297,9 +365,68 @@ async function runMcpLogout(
   runtime: CliRuntime,
 ): Promise<number> {
   const server = await findMcpServer(runtime, cliArgs.serverId);
-  await deleteMcpOAuthCredentials(server, runtime.mcpSecretBackend);
-  await setMcpServerAuthenticationRequired(runtime, server.id, false);
+  await withMcpOAuthCredentialLock(
+    server,
+    mcpOAuthRefreshLockRoot(runtime),
+    async () => {
+      await deleteMcpOAuthCredentialsUnderLock(
+        server,
+        runtime.mcpSecretBackend,
+        mcpOAuthRefreshLockRoot(runtime),
+      );
+      await setMcpServerAuthenticationRequired(runtime, server, false);
+    },
+  );
   runtime.writeStdout(`Logged out of MCP server "${server.id}".\n`);
+  return 0;
+}
+
+async function runMcpEnabledMutation(
+  cliArgs: Extract<McpCliArgs, { readonly mode: "enable" | "disable" }>,
+  runtime: CliRuntime,
+): Promise<number> {
+  const enabled = cliArgs.mode === "enable";
+  const server = await findMcpServer(runtime, cliArgs.serverId);
+  const changed = await withMcpOAuthCredentialLock(
+    server,
+    mcpOAuthRefreshLockRoot(runtime),
+    async () => await setMcpServerEnabled(runtime, server, enabled),
+  );
+  runtime.writeStdout(
+    changed
+      ? `${enabled ? "Enabled" : "Disabled"} MCP server "${cliArgs.serverId}".\n`
+      : `MCP server "${cliArgs.serverId}" is already ${enabled ? "enabled" : "disabled"}.\n`,
+  );
+  return 0;
+}
+
+async function runMcpRemove(
+  cliArgs: Extract<McpCliArgs, { readonly mode: "remove" }>,
+  runtime: CliRuntime,
+): Promise<number> {
+  const server = (await listMcpServers(runtime)).find(
+    (candidate) => candidate.id === cliArgs.serverId,
+  );
+  const removed =
+    server === undefined
+      ? false
+      : await withMcpOAuthCredentialLock(
+          server,
+          mcpOAuthRefreshLockRoot(runtime),
+          async () =>
+            await removeMcpServer(runtime, server, async (current) => {
+              await deleteMcpOAuthCredentialsUnderLock(
+                current,
+                runtime.mcpSecretBackend,
+                mcpOAuthRefreshLockRoot(runtime),
+              );
+            }),
+        );
+  runtime.writeStdout(
+    removed
+      ? `Removed MCP server "${cliArgs.serverId}".\n`
+      : `MCP server "${cliArgs.serverId}" is already removed.\n`,
+  );
   return 0;
 }
 
@@ -321,6 +448,7 @@ async function runMcpCommandUnsafe(
         "MCP servers:",
         ...servers.map((server) => {
           const policies = [
+            ...(!server.enabled ? ["disabled"] : []),
             ...(server.allowPrivateNetwork ? ["private network allowed"] : []),
             ...(server.toolFilter.allow === null
               ? []
@@ -343,6 +471,12 @@ async function runMcpCommandUnsafe(
   if (cliArgs.mode === "logout") {
     return await runMcpLogout(cliArgs, runtime);
   }
+  if (cliArgs.mode === "enable" || cliArgs.mode === "disable") {
+    return await runMcpEnabledMutation(cliArgs, runtime);
+  }
+  if (cliArgs.mode === "remove") {
+    return await runMcpRemove(cliArgs, runtime);
+  }
 
   const servers = await selectedServers(runtime, cliArgs.serverId);
   if (servers.length === 0) {
@@ -357,9 +491,10 @@ async function runMcpCommandUnsafe(
   return cliArgs.mode === "doctor" &&
     statuses.some(
       (status) =>
-        status.status !== "ready" ||
-        status.catalog.quarantined > 0 ||
-        status.provider.quarantined > 0,
+        status.status === "needs-auth" ||
+        status.status === "failed" ||
+        (status.status === "ready" &&
+          (status.catalog.quarantined > 0 || status.provider.quarantined > 0)),
     )
     ? 1
     : 0;

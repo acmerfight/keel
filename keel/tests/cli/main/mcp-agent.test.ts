@@ -204,6 +204,66 @@ function mcpAgentProvider(capturedBodies: unknown[]): Server {
 }
 
 describe("CLI Main - MCP agent tools", () => {
+  test(`Given a configured MCP server is disabled,
+    When the user starts a one-shot agent run,
+    Then the provider receives no MCP search capability and the server is never required`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-disabled-agent-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-disabled-agent-workspace-"),
+    );
+    const mcp = await startMcpToolServer("modern");
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime)).toBe(0);
+    const disable = createRuntime(["mcp", "disable", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(disable.runtime)).toBe(0);
+    await mcp.close();
+
+    const capturedBodies: unknown[] = [];
+    const provider = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(sseTextReplyWithUsage("Worked without remote tools."));
+      });
+    });
+    await listen(provider);
+    const run = createRuntime(["continue without remote tools"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+        KEEL_HOME: home,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(run.stdout()).toBe("Worked without remote tools.\n");
+      const request = requestWithToolsSchema.parse(capturedBodies[0]);
+      expect(request.tools?.map((tool) => tool.function?.name)).not.toContain(
+        "mcp_search",
+      );
+      expect(mcp.calls()).toEqual([]);
+    } finally {
+      await close(provider);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a remote MCP tool accepts one repository or a repository list,
     When the user asks Keel to call it with multiple repositories,
     Then the selected provider receives the union schema and the approved remote call succeeds`, async () => {

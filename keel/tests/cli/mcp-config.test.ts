@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -14,9 +15,15 @@ import {
   addMcpServer,
   deriveMcpServerId,
   findMcpServer,
+  isMcpServerCurrentAndEnabled,
+  listEnabledMcpServers,
+  listEnabledMcpServersSync,
   listMcpServers,
   listMcpServersSync,
+  type McpServerConfig,
+  removeMcpServer,
   setMcpServerAuthenticationRequired,
+  setMcpServerEnabled,
   validateMcpServerId,
 } from "../../src/cli/mcp-config.ts";
 
@@ -73,13 +80,14 @@ describe("MCP config", () => {
     const catalog = {
       id: "catalog",
       url: "https://example.com/mcp",
+      enabled: true,
       allowPrivateNetwork: false,
       authenticationRequired: false,
       toolFilter: noToolFilter,
     };
 
     try {
-      await addMcpServer(runtime, catalog);
+      const configured = await addMcpServer(runtime, catalog);
 
       // When / Then
       await expect(addMcpServer(runtime, catalog)).rejects.toThrow(
@@ -91,7 +99,7 @@ describe("MCP config", () => {
       await expect(findMcpServer(runtime, "missing")).rejects.toThrow(
         'MCP server "missing" is not configured',
       );
-      await expect(listMcpServers(runtime)).resolves.toEqual([catalog]);
+      await expect(listMcpServers(runtime)).resolves.toEqual([configured]);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -104,14 +112,16 @@ describe("MCP config", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-limit-"));
     const servers = Array.from({ length: 128 }, (_, index) => ({
       id: `server-${index}`,
+      incarnation: randomUUID(),
       url: `https://server-${index}.example/mcp`,
+      enabled: true,
       allowPrivateNetwork: false,
       authenticationRequired: false,
       toolFilter: noToolFilter,
     }));
     await writeFile(
       join(home, "mcp.json"),
-      `${JSON.stringify({ schemaVersion: 3, servers })}\n`,
+      `${JSON.stringify({ schemaVersion: 4, servers })}\n`,
       "utf8",
     );
 
@@ -121,6 +131,7 @@ describe("MCP config", () => {
         addMcpServer(configRuntime(home), {
           id: "overflow",
           url: "https://overflow.example/mcp",
+          enabled: true,
           allowPrivateNetwork: false,
           authenticationRequired: false,
           toolFilter: noToolFilter,
@@ -142,9 +153,10 @@ describe("MCP config", () => {
     const runtime = configRuntime(home);
 
     try {
-      await addMcpServer(runtime, {
+      const protectedServer = await addMcpServer(runtime, {
         id: "protected",
         url: "https://protected.example/mcp",
+        enabled: true,
         allowPrivateNetwork: false,
         authenticationRequired: false,
         toolFilter: noToolFilter,
@@ -152,18 +164,19 @@ describe("MCP config", () => {
       await addMcpServer(runtime, {
         id: "public",
         url: "https://public.example/mcp",
+        enabled: true,
         allowPrivateNetwork: false,
         authenticationRequired: false,
         toolFilter: noToolFilter,
       });
 
       // When / Then
-      await setMcpServerAuthenticationRequired(runtime, "protected", true);
-      await setMcpServerAuthenticationRequired(runtime, "protected", true);
+      await setMcpServerAuthenticationRequired(runtime, protectedServer, true);
+      await setMcpServerAuthenticationRequired(runtime, protectedServer, true);
       await expect(findMcpServer(runtime, "protected")).resolves.toMatchObject({
         authenticationRequired: true,
       });
-      await setMcpServerAuthenticationRequired(runtime, "protected", false);
+      await setMcpServerAuthenticationRequired(runtime, protectedServer, false);
       await expect(findMcpServer(runtime, "protected")).resolves.toMatchObject({
         authenticationRequired: false,
       });
@@ -171,9 +184,135 @@ describe("MCP config", () => {
         authenticationRequired: false,
       });
       await expect(
-        setMcpServerAuthenticationRequired(runtime, "missing", true),
+        setMcpServerAuthenticationRequired(
+          runtime,
+          { ...protectedServer, id: "missing" },
+          true,
+        ),
       ).rejects.toThrow('MCP server "missing" is not configured');
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a configured MCP server,
+    When enable, disable, and remove mutations are repeated or interrupted,
+    Then enabled selection and credential cleanup stay serialized, idempotent, and fail closed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-lifecycle-"));
+    const runtime = configRuntime(home);
+    const catalog = {
+      id: "catalog",
+      url: "https://example.com/mcp",
+      enabled: true,
+      allowPrivateNetwork: false,
+      authenticationRequired: true,
+      toolFilter: noToolFilter,
+    };
+
+    try {
+      const configured = await addMcpServer(runtime, catalog);
+
+      // When / Then
+      await expect(
+        setMcpServerEnabled(runtime, configured, false),
+      ).resolves.toBe(true);
+      await expect(
+        setMcpServerEnabled(runtime, configured, false),
+      ).resolves.toBe(false);
+      await expect(listMcpServers(runtime)).resolves.toEqual([
+        { ...configured, enabled: false },
+      ]);
+      await expect(listEnabledMcpServers(runtime)).resolves.toEqual([]);
+      expect(listEnabledMcpServersSync(runtime)).toEqual([]);
+
+      await expect(
+        setMcpServerEnabled(runtime, configured, true),
+      ).resolves.toBe(true);
+      await expect(
+        setMcpServerEnabled(runtime, configured, true),
+      ).resolves.toBe(false);
+      await expect(listEnabledMcpServers(runtime)).resolves.toEqual([
+        configured,
+      ]);
+      expect(listEnabledMcpServersSync(runtime)).toEqual([configured]);
+      await expect(
+        setMcpServerEnabled(runtime, { ...configured, id: "missing" }, false),
+      ).rejects.toThrow('MCP server "missing" is not configured');
+
+      await expect(
+        removeMcpServer(runtime, configured, async () => {
+          throw new Error("credential cleanup failed");
+        }),
+      ).rejects.toThrow("credential cleanup failed");
+      await expect(findMcpServer(runtime, "catalog")).resolves.toEqual(
+        configured,
+      );
+
+      let removedServer: McpServerConfig | null = null;
+      await expect(
+        removeMcpServer(runtime, configured, async (server) => {
+          removedServer = server;
+        }),
+      ).resolves.toBe(true);
+      expect(removedServer).toEqual(configured);
+      await expect(
+        removeMcpServer(runtime, configured, async () => {
+          throw new Error("must not run for an absent server");
+        }),
+      ).resolves.toBe(false);
+      await expect(listMcpServers(runtime)).resolves.toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one removal waits on credential cleanup while another process removes and re-adds the same endpoint,
+    When the first removal resumes,
+    Then its stale incarnation cannot delete the replacement record`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-aba-"));
+    const runtime = configRuntime(home);
+    const server = {
+      id: "catalog",
+      url: "https://example.com/mcp",
+      enabled: true,
+      allowPrivateNetwork: false,
+      authenticationRequired: true,
+      toolFilter: noToolFilter,
+    };
+    const cleanupStarted = Promise.withResolvers<void>();
+    const finishCleanup = Promise.withResolvers<void>();
+
+    try {
+      const original = await addMcpServer(runtime, server);
+      const firstRemoval = removeMcpServer(runtime, original, async () => {
+        cleanupStarted.resolve();
+        await finishCleanup.promise;
+      });
+      await cleanupStarted.promise;
+      await expect(
+        removeMcpServer(runtime, original, async () => {}),
+      ).resolves.toBe(true);
+      const replacement = await addMcpServer(runtime, server);
+
+      // When
+      finishCleanup.resolve();
+
+      // Then
+      await expect(firstRemoval).rejects.toThrow(
+        "changed while it was being removed",
+      );
+      expect(replacement.incarnation).not.toBe(original.incarnation);
+      await expect(listMcpServers(runtime)).resolves.toEqual([replacement]);
+      await expect(
+        isMcpServerCurrentAndEnabled(runtime, original),
+      ).resolves.toBe(false);
+      await expect(
+        isMcpServerCurrentAndEnabled(runtime, replacement),
+      ).resolves.toBe(true);
+    } finally {
+      finishCleanup.resolve();
       await rm(home, { recursive: true, force: true });
     }
   });
@@ -183,18 +322,22 @@ describe("MCP config", () => {
     [
       "duplicate records",
       `${JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         servers: [
           {
             id: "same",
+            incarnation: randomUUID(),
             url: "https://example.com:443/mcp",
+            enabled: true,
             allowPrivateNetwork: false,
             authenticationRequired: false,
             toolFilter: noToolFilter,
           },
           {
             id: "same",
+            incarnation: randomUUID(),
             url: "https://example.com/mcp",
+            enabled: true,
             allowPrivateNetwork: false,
             authenticationRequired: false,
             toolFilter: noToolFilter,
@@ -211,11 +354,13 @@ describe("MCP config", () => {
     [
       "duplicate tool filters",
       `${JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         servers: [
           {
             id: "catalog",
+            incarnation: randomUUID(),
             url: "https://example.com/mcp",
+            enabled: true,
             allowPrivateNetwork: false,
             authenticationRequired: false,
             toolFilter: {
@@ -306,14 +451,16 @@ describe("MCP config", () => {
     const invalidHome = join(invalidParent, "home");
     const server = {
       id: "catalog",
+      incarnation: randomUUID(),
       url: "https://example.com/mcp",
+      enabled: true,
       allowPrivateNetwork: false,
       authenticationRequired: false,
       toolFilter: noToolFilter,
     };
     await writeFile(
       join(validHome, "mcp.json"),
-      `${JSON.stringify({ schemaVersion: 3, servers: [server] })}\n`,
+      `${JSON.stringify({ schemaVersion: 4, servers: [server] })}\n`,
       "utf8",
     );
     await writeFile(
@@ -363,6 +510,7 @@ describe("MCP config", () => {
       await addMcpServer(configRuntime(home), {
         id: "catalog",
         url: "https://example.com/mcp",
+        enabled: true,
         allowPrivateNetwork: false,
         authenticationRequired: false,
         toolFilter: noToolFilter,
@@ -392,6 +540,7 @@ describe("MCP config", () => {
         addMcpServer(configRuntime(home), {
           id: "catalog",
           url: "https://example.com/mcp",
+          enabled: true,
           allowPrivateNetwork: false,
           authenticationRequired: false,
           toolFilter: noToolFilter,
@@ -417,6 +566,7 @@ describe("MCP config", () => {
         addMcpServer(configRuntime(home), {
           id: "catalog",
           url: "https://example.com/mcp",
+          enabled: true,
           allowPrivateNetwork: false,
           authenticationRequired: false,
           toolFilter: noToolFilter,

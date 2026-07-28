@@ -8,7 +8,10 @@ import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { UndoProtectionSummary } from "../../core/undo-protection.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
-import type { McpConnectionFactory } from "../../mcp/runtime-types.ts";
+import type {
+  McpConnectionFactory,
+  McpLifecyclePolicy,
+} from "../../mcp/runtime-types.ts";
 import type {
   BashApprovalGrant,
   BashMode,
@@ -200,6 +203,7 @@ interface InteractiveSessionOptionsBase {
       ...(readonly McpServerConfig[]),
     ];
     readonly connectionFactory: McpConnectionFactory;
+    readonly lifecycle: McpLifecyclePolicy;
     readonly canPrompt: boolean;
   };
   readonly initialSessionTitle?: string;

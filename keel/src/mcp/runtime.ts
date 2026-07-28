@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import type { McpServerConfig } from "../cli/mcp-config.ts";
 import { errorMessage } from "../core/error.ts";
 import { redactSecretLikeText } from "../core/secret-text.ts";
 import {
@@ -22,9 +22,11 @@ import {
 } from "./provider-schema.ts";
 import type {
   McpConnectionFactory,
+  McpLifecyclePolicy,
   McpPermissionPolicy,
   McpPreservedToolResult,
   McpRuntime,
+  McpRuntimeServer,
   McpSearchRequest,
   McpSearchResult,
   McpToolFilterPolicy,
@@ -32,6 +34,7 @@ import type {
 } from "./runtime-types.ts";
 
 const MCP_CATALOG_TTL_MS = 5 * 60 * 1_000;
+const MCP_LIFECYCLE_POLL_MS = 100;
 const MCP_DEFAULT_SEARCH_LIMIT = 5;
 const MCP_MODEL_SCHEMA_BUDGET_BYTES = 48 * 1_024;
 const MCP_MODEL_NAME_MAX_LENGTH = 64;
@@ -72,36 +75,19 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function configurationDigest(server: McpServerConfig): string {
+function configurationDigest(server: McpRuntimeServer): string {
   return sha256(
     JSON.stringify({
       allowPrivateNetwork: server.allowPrivateNetwork,
-      authenticationRequired: server.authenticationRequired,
       id: server.id,
+      incarnation: server.incarnation,
       url: server.url,
     }),
   );
 }
 
-function originFor(server: McpServerConfig): string {
+function originFor(server: McpRuntimeServer): string {
   return new URL(server.url).origin;
-}
-
-function configuredToolFilterPolicy(
-  servers: readonly McpServerConfig[],
-): McpToolFilterPolicy {
-  const filters = new Map(
-    servers.map((server) => [server.id, server.toolFilter]),
-  );
-  return {
-    allows: ({ serverId, rawToolName }) => {
-      const filter = filters.get(serverId);
-      if (filter === undefined || filter.deny.includes(rawToolName)) {
-        return false;
-      }
-      return filter.allow === null || filter.allow.includes(rawToolName);
-    },
-  };
 }
 
 function diagnosticText(value: string): string {
@@ -411,27 +397,64 @@ function richResultArtifact(
 }
 
 class McpServerOwner {
-  readonly server: McpServerConfig;
+  server: McpRuntimeServer;
   readonly configurationDigest: string;
   private readonly lifecycle = new AbortController();
   private readonly connectionFactory: McpConnectionFactory;
+  private availability = new AbortController();
+  private available: boolean;
   private readonly now: () => number;
   private state: CatalogState = { kind: "idle" };
   private pending: Promise<ReadyCatalogState> | null = null;
+  private pendingAbort: AbortController | null = null;
+  private suspension: Promise<void> | null = null;
 
   constructor(
-    server: McpServerConfig,
+    server: McpRuntimeServer,
     connectionFactory: McpConnectionFactory,
     now: () => number,
   ) {
     this.server = server;
     this.connectionFactory = connectionFactory;
     this.now = now;
+    this.available = server.enabled;
+    if (!server.enabled) {
+      this.availability.abort(
+        new McpServerLifecycleUnavailableError(server.id),
+      );
+    }
     this.configurationDigest = configurationDigest(server);
+  }
+
+  updateServer(server: McpRuntimeServer): void {
+    if (
+      server.id === this.server.id &&
+      server.incarnation === this.server.incarnation &&
+      server.url === this.server.url &&
+      server.allowPrivateNetwork === this.server.allowPrivateNetwork
+    ) {
+      this.server = server;
+      if (server.enabled && !this.available) {
+        this.available = true;
+        this.availability = new AbortController();
+      }
+    }
+  }
+
+  operationSignal(signal: AbortSignal): AbortSignal {
+    return AbortSignal.any([
+      signal,
+      this.lifecycle.signal,
+      this.availability.signal,
+    ]);
   }
 
   current(): ReadyCatalogState | null {
     return this.state.kind === "ready" ? this.state : null;
+  }
+
+  isAvailable(): boolean {
+    return this.available;
   }
 
   expired(): boolean {
@@ -449,6 +472,30 @@ class McpServerOwner {
     await current.connection.close().catch(() => undefined);
   }
 
+  async suspend(): Promise<void> {
+    if (this.state.kind === "stopped") return;
+    this.available = false;
+    this.availability.abort(
+      new McpServerLifecycleUnavailableError(this.server.id),
+    );
+    if (this.suspension === null) {
+      const operation = (async () => {
+        this.pendingAbort?.abort(
+          new McpServerLifecycleUnavailableError(this.server.id),
+        );
+        await this.pending?.catch(() => undefined);
+        const current = this.current();
+        this.state = { kind: "idle" };
+        await current?.connection.close().catch(() => undefined);
+      })();
+      this.suspension = operation;
+      void operation.finally(() => {
+        this.suspension = null;
+      });
+    }
+    await this.suspension;
+  }
+
   async load(
     refresh: boolean,
     signal: AbortSignal,
@@ -460,24 +507,34 @@ class McpServerOwner {
       throw new Error(`MCP server "${this.server.id}" is stopped`);
     }
     if (this.pending === null) {
-      const operation = this.loadOwned();
+      const pendingAbort = new AbortController();
+      this.pendingAbort = pendingAbort;
+      const operation = this.loadOwned(
+        AbortSignal.any([
+          this.lifecycle.signal,
+          this.availability.signal,
+          pendingAbort.signal,
+        ]),
+      );
       this.pending = operation;
       void operation.then(
         () => {
           this.pending = null;
+          if (this.pendingAbort === pendingAbort) this.pendingAbort = null;
         },
         () => {
           this.pending = null;
+          if (this.pendingAbort === pendingAbort) this.pendingAbort = null;
         },
       );
     }
     return await awaitWithSignal(this.pending, signal);
   }
 
-  private async loadOwned(): Promise<ReadyCatalogState> {
+  private async loadOwned(signal: AbortSignal): Promise<ReadyCatalogState> {
     const prior = this.current();
     if (prior !== null) {
-      const catalog = await prior.connection.listCatalog(this.lifecycle.signal);
+      const catalog = await prior.connection.listCatalog(signal);
       const generation =
         catalog.summary.digest === prior.catalog.summary.digest
           ? prior.generation
@@ -495,10 +552,10 @@ class McpServerOwner {
 
     const connection = await this.connectionFactory.connect(
       this.server,
-      this.lifecycle.signal,
+      signal,
     );
     try {
-      const catalog = await connection.listCatalog(this.lifecycle.signal);
+      const catalog = await connection.listCatalog(signal);
       const next: ReadyCatalogState = {
         kind: "ready",
         connection,
@@ -536,6 +593,8 @@ class McpServerOwner {
 
   async close(): Promise<void> {
     this.lifecycle.abort();
+    this.availability.abort();
+    this.pendingAbort?.abort();
     await this.pending?.catch(() => undefined);
     const current = this.current();
     this.state = { kind: "stopped" };
@@ -543,34 +602,185 @@ class McpServerOwner {
   }
 }
 
+class McpServerLifecycleUnavailableError extends Error {
+  constructor(serverId: string) {
+    super(`MCP server "${serverId}" was disabled, removed, or changed`);
+  }
+}
+
+function unavailableMcpToolResult(
+  owner: McpServerOwner,
+  rawToolName: string,
+): McpToolRuntimeResult {
+  return {
+    identity: "identified",
+    content:
+      "MCP tool call rejected: its server was disabled or removed. Enable and search the server again before retrying.",
+    ok: false,
+    preserved: preservedExternalResult(owner.server.id, rawToolName, {
+      error: "MCP server disabled or removed",
+    }),
+  };
+}
+
 class DefaultMcpRuntime implements McpRuntime {
-  private readonly owners: readonly McpServerOwner[];
+  private owners: McpServerOwner[];
   private active: readonly ActiveTool[] = [];
+  private readonly connectionFactory: McpConnectionFactory;
   private readonly permission: McpPermissionPolicy;
-  private readonly filter: McpToolFilterPolicy;
+  private readonly filter: McpToolFilterPolicy | null;
+  private readonly lifecycle: McpLifecyclePolicy;
+  private readonly lifecycleAbort = new AbortController();
+  private readonly lifecycleWatch: Promise<void>;
+  private readonly now: () => number;
+  private reconciliation: Promise<void> | null = null;
   private schemaTarget: McpProviderSchemaTarget;
   private stopped = false;
 
   constructor(
-    servers: readonly McpServerConfig[],
+    servers: readonly McpRuntimeServer[],
     permission: McpPermissionPolicy,
-    filter: McpToolFilterPolicy,
+    filter: McpToolFilterPolicy | null,
+    lifecycle: McpLifecyclePolicy,
     connectionFactory: McpConnectionFactory,
     now: () => number,
     schemaTarget: McpProviderSchemaTarget,
   ) {
     this.permission = permission;
     this.filter = filter;
+    this.lifecycle = lifecycle;
+    this.connectionFactory = connectionFactory;
+    this.now = now;
     this.schemaTarget = schemaTarget;
     this.owners = [...servers]
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((server) => new McpServerOwner(server, connectionFactory, now));
+    this.lifecycleWatch = this.watchLifecycle();
+  }
+
+  private async reconcileOwnersOwned(): Promise<void> {
+    const current = await this.lifecycle.listCurrent();
+    const retained: McpServerOwner[] = [];
+    for (const owner of this.owners) {
+      const server = current.find(
+        (candidate) =>
+          candidate.id === owner.server.id &&
+          candidate.incarnation === owner.server.incarnation &&
+          candidate.url === owner.server.url &&
+          candidate.allowPrivateNetwork === owner.server.allowPrivateNetwork,
+      );
+      if (server === undefined) {
+        this.active = this.active.filter((active) => active.owner !== owner);
+        await owner.close();
+        continue;
+      }
+      owner.updateServer(server);
+      if (!server.enabled) {
+        await this.suspendOwner(owner);
+      }
+      retained.push(owner);
+    }
+    for (const server of current) {
+      if (
+        retained.some(
+          (owner) =>
+            owner.server.id === server.id &&
+            owner.server.incarnation === server.incarnation &&
+            owner.server.url === server.url &&
+            owner.server.allowPrivateNetwork === server.allowPrivateNetwork,
+        )
+      ) {
+        continue;
+      }
+      retained.push(
+        new McpServerOwner(server, this.connectionFactory, this.now),
+      );
+    }
+    this.owners = retained.sort((left, right) =>
+      left.server.id.localeCompare(right.server.id),
+    );
+  }
+
+  private async reconcileOwners(): Promise<void> {
+    const prior = this.reconciliation;
+    const operation = (async () => {
+      await prior?.catch(() => undefined);
+      await this.reconcileOwnersOwned();
+    })();
+    this.reconciliation = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.reconciliation === operation) {
+        this.reconciliation = null;
+      }
+    }
+  }
+
+  private async watchLifecycle(): Promise<void> {
+    while (!this.lifecycleAbort.signal.aborted) {
+      try {
+        await this.reconcileOwners();
+      } catch {
+        await Promise.all(
+          this.owners.map(async (owner) => await this.suspendOwner(owner)),
+        );
+      }
+      try {
+        await delay(MCP_LIFECYCLE_POLL_MS, undefined, {
+          signal: this.lifecycleAbort.signal,
+        });
+      } catch {
+        if (this.lifecycleAbort.signal.aborted) return;
+        throw new Error("MCP lifecycle watcher failed");
+      }
+    }
+  }
+
+  private async ownerIsAvailable(owner: McpServerOwner): Promise<boolean> {
+    if (!owner.server.enabled) return false;
+    try {
+      return await this.lifecycle.isCurrentAndEnabled(owner.server);
+    } catch {
+      return false;
+    }
+  }
+
+  private toolIsAllowed(owner: McpServerOwner, rawToolName: string): boolean {
+    if (this.filter !== null) {
+      return this.filter.allows({
+        serverId: owner.server.id,
+        rawToolName,
+      });
+    }
+    const configured = owner.server.toolFilter;
+    return (
+      !configured.deny.includes(rawToolName) &&
+      (configured.allow === null || configured.allow.includes(rawToolName))
+    );
+  }
+
+  private async suspendOwner(owner: McpServerOwner): Promise<void> {
+    this.active = this.active.filter((active) => active.owner !== owner);
+    await owner.suspend();
+  }
+
+  private async retainAvailableOwners(): Promise<void> {
+    await this.reconcileOwners();
+    await Promise.all(
+      this.owners.map(async (owner) => {
+        if (!(await this.ownerIsAvailable(owner))) {
+          await this.suspendOwner(owner);
+        }
+      }),
+    );
   }
 
   async prepareTurn(
     schemaTarget: McpProviderSchemaTarget,
     signal: AbortSignal,
   ): Promise<void> {
+    await this.retainAvailableOwners();
     if (
       schemaTarget.providerId !== this.schemaTarget.providerId ||
       schemaTarget.model !== this.schemaTarget.model ||
@@ -602,6 +812,9 @@ class DefaultMcpRuntime implements McpRuntime {
       expired.map(async (owner) => {
         try {
           await owner.load(true, signal);
+          if (!(await this.ownerIsAvailable(owner))) {
+            await this.suspendOwner(owner);
+          }
         } catch {
           if (signal.aborted) throw abortError(signal);
           await owner.invalidateExpired();
@@ -610,14 +823,10 @@ class DefaultMcpRuntime implements McpRuntime {
     );
   }
 
-  exposureSnapshot(): McpToolExposureSnapshot {
+  async exposureSnapshot(): Promise<McpToolExposureSnapshot> {
+    await this.retainAvailableOwners();
     const current = this.active.flatMap((active) => {
-      if (
-        !this.filter.allows({
-          serverId: active.owner.server.id,
-          rawToolName: active.tool.descriptor.name,
-        })
-      ) {
+      if (!this.toolIsAllowed(active.owner, active.tool.descriptor.name)) {
         return [];
       }
       const resolved = active.owner.resolve(mcpReference(active));
@@ -632,6 +841,7 @@ class DefaultMcpRuntime implements McpRuntime {
     });
     return {
       snapshotId: exposureId(current),
+      catalogAvailable: this.owners.some((owner) => owner.isAvailable()),
       tools: current,
     };
   }
@@ -654,11 +864,25 @@ class DefaultMcpRuntime implements McpRuntime {
     const loaded = await Promise.all(
       owners.map(async (owner) => {
         try {
+          if (!(await this.ownerIsAvailable(owner))) {
+            await this.suspendOwner(owner);
+            failures.push(`${owner.server.id}: disabled or removed`);
+            return { owner, state: null };
+          }
+          const state = await owner.load(request.refresh === true, signal);
+          if (!(await this.ownerIsAvailable(owner))) {
+            await this.suspendOwner(owner);
+            failures.push(`${owner.server.id}: disabled or removed`);
+            return { owner, state: null };
+          }
           return {
             owner,
-            state: await owner.load(request.refresh === true, signal),
+            state,
           };
         } catch (error) {
+          if (error instanceof McpServerLifecycleUnavailableError) {
+            await this.suspendOwner(owner);
+          }
           failures.push(
             `${owner.server.id}: ${externalErrorDiagnostic(error)}`,
           );
@@ -705,12 +929,7 @@ class DefaultMcpRuntime implements McpRuntime {
             `${owner.server.id}/${diagnosticText(tool.descriptor.name)}: ${compiled.validationWideningDiagnostics.join("; ")}`,
           );
         }
-        if (
-          !this.filter.allows({
-            serverId: owner.server.id,
-            rawToolName: tool.descriptor.name,
-          })
-        ) {
+        if (!this.toolIsAllowed(owner, tool.descriptor.name)) {
           filteredCount++;
           continue;
         }
@@ -830,12 +1049,11 @@ class DefaultMcpRuntime implements McpRuntime {
       };
     }
     const { tool } = resolved;
-    if (
-      !this.filter.allows({
-        serverId: owner.server.id,
-        rawToolName: tool.descriptor.name,
-      })
-    ) {
+    if (!(await this.ownerIsAvailable(owner))) {
+      await this.suspendOwner(owner);
+      return unavailableMcpToolResult(owner, tool.descriptor.name);
+    }
+    if (!this.toolIsAllowed(owner, tool.descriptor.name)) {
       return {
         identity: "identified",
         content:
@@ -884,12 +1102,7 @@ class DefaultMcpRuntime implements McpRuntime {
         ),
       };
     }
-    if (
-      !this.filter.allows({
-        serverId: owner.server.id,
-        rawToolName: tool.descriptor.name,
-      })
-    ) {
+    if (!this.toolIsAllowed(owner, tool.descriptor.name)) {
       return {
         identity: "identified",
         content:
@@ -916,12 +1129,16 @@ class DefaultMcpRuntime implements McpRuntime {
         ),
       };
     }
+    if (!(await this.ownerIsAvailable(owner))) {
+      await this.suspendOwner(owner);
+      return unavailableMcpToolResult(owner, tool.descriptor.name);
+    }
     if (signal.aborted) throw abortError(signal);
     try {
       const result = await dispatch.state.connection.callTool(
         dispatch.tool,
         toolCall.arguments,
-        signal,
+        owner.operationSignal(signal),
       );
       const outputIssues =
         result.isError === true || dispatch.tool.validateOutput === null
@@ -981,14 +1198,17 @@ class DefaultMcpRuntime implements McpRuntime {
   async close(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.lifecycleAbort.abort();
+    await this.lifecycleWatch;
     await Promise.all(this.owners.map(async (owner) => await owner.close()));
   }
 }
 
 export function createMcpRuntime(options: {
-  readonly servers: readonly McpServerConfig[];
+  readonly servers: readonly McpRuntimeServer[];
   readonly permission: McpPermissionPolicy;
   readonly connectionFactory: McpConnectionFactory;
+  readonly lifecycle: McpLifecyclePolicy;
   readonly schemaTarget: McpProviderSchemaTarget;
   readonly filter?: McpToolFilterPolicy;
   readonly now?: () => number;
@@ -996,7 +1216,8 @@ export function createMcpRuntime(options: {
   return new DefaultMcpRuntime(
     options.servers,
     options.permission,
-    options.filter ?? configuredToolFilterPolicy(options.servers),
+    options.filter ?? null,
+    options.lifecycle,
     options.connectionFactory,
     options.now ?? (() => Date.now()),
     options.schemaTarget,

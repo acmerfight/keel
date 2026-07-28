@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import {
@@ -11,16 +11,18 @@ import {
   stat,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import { sessionHome } from "./session-store.ts";
 
-const MCP_CONFIG_SCHEMA_VERSION = 3;
+const MCP_CONFIG_SCHEMA_VERSION = 4;
 const MCP_CONFIG_MAX_BYTES = 1024 * 1024;
 const MCP_CONFIG_MAX_SERVERS = 128;
 const MCP_CONFIG_LOCK_TIMEOUT_MS = 5_000;
 const MCP_CONFIG_STALE_LOCK_MS = 30_000;
 const MCP_SERVER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+const MCP_SERVER_LIFECYCLE_POLL_MS = 50;
 const MCP_TOOL_FILTER_MAX_ENTRIES = 256;
 const mcpToolFilterNameSchema = z.string().min(1).max(128);
 const mcpToolFilterSchema = z
@@ -54,7 +56,9 @@ const mcpToolFilterSchema = z
 const mcpServerConfigSchema = z
   .object({
     id: z.string().regex(MCP_SERVER_ID_PATTERN),
+    incarnation: z.uuid(),
     url: z.url().transform((raw) => new URL(raw).href),
+    enabled: z.boolean(),
     allowPrivateNetwork: z.boolean(),
     authenticationRequired: z.boolean(),
     toolFilter: mcpToolFilterSchema,
@@ -90,6 +94,11 @@ const mcpConfigFileSchema = z
   });
 
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
+export type NewMcpServerConfig = Omit<McpServerConfig, "incarnation">;
+type McpServerIdentity = Pick<
+  McpServerConfig,
+  "id" | "incarnation" | "url" | "allowPrivateNetwork"
+>;
 type McpConfigFile = z.infer<typeof mcpConfigFileSchema>;
 
 interface McpConfigRuntime {
@@ -326,10 +335,26 @@ export async function listMcpServers(
   return (await readMcpConfigFile(runtime)).servers;
 }
 
+export async function listEnabledMcpServers(
+  runtime: McpConfigRuntime,
+): Promise<readonly McpServerConfig[]> {
+  return (await readMcpConfigFile(runtime)).servers.filter(
+    (server) => server.enabled,
+  );
+}
+
 export function listMcpServersSync(
   runtime: McpConfigRuntime,
 ): readonly McpServerConfig[] {
   return readMcpConfigFileSync(runtime).servers;
+}
+
+export function listEnabledMcpServersSync(
+  runtime: McpConfigRuntime,
+): readonly McpServerConfig[] {
+  return readMcpConfigFileSync(runtime).servers.filter(
+    (server) => server.enabled,
+  );
 }
 
 export async function findMcpServer(
@@ -346,12 +371,88 @@ export async function findMcpServer(
   return server;
 }
 
+function sameMcpServerIdentity(
+  left: McpServerIdentity,
+  right: McpServerIdentity,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.incarnation === right.incarnation &&
+    left.url === right.url &&
+    left.allowPrivateNetwork === right.allowPrivateNetwork
+  );
+}
+
+export async function isMcpServerCurrentAndEnabled(
+  runtime: McpConfigRuntime,
+  expected: McpServerIdentity,
+): Promise<boolean> {
+  return await withConfigLock(runtime, async () => {
+    return mcpServerIsCurrentAndEnabled(
+      (await readMcpConfigFile(runtime)).servers,
+      expected,
+    );
+  });
+}
+
+function mcpServerIsCurrentAndEnabled(
+  servers: readonly McpServerConfig[],
+  expected: McpServerIdentity,
+): boolean {
+  const current = servers.find((candidate) => candidate.id === expected.id);
+  return current?.enabled === true && sameMcpServerIdentity(current, expected);
+}
+
+export interface McpServerLifecycleMonitor {
+  readonly signal: AbortSignal;
+  readonly close: () => Promise<void>;
+}
+
+export function monitorMcpServerLifecycle(
+  runtime: McpConfigRuntime,
+  expected: McpServerIdentity,
+  parentSignal: AbortSignal,
+): McpServerLifecycleMonitor {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([parentSignal, controller.signal]);
+  const done = (async () => {
+    try {
+      while (!signal.aborted) {
+        if (
+          !mcpServerIsCurrentAndEnabled(
+            (await readMcpConfigFile(runtime)).servers,
+            expected,
+          )
+        ) {
+          controller.abort(
+            new McpConfigError(
+              `Error: MCP server "${expected.id}" was disabled, removed, or changed.`,
+            ),
+          );
+          return;
+        }
+        await delay(MCP_SERVER_LIFECYCLE_POLL_MS, undefined, { signal });
+      }
+    } catch (error) {
+      if (signal.aborted) return;
+      controller.abort(error);
+    }
+  })();
+  return {
+    signal,
+    close: async () => {
+      controller.abort();
+      await done;
+    },
+  };
+}
+
 export async function addMcpServer(
   runtime: McpConfigRuntime,
-  server: McpServerConfig,
-): Promise<void> {
+  server: NewMcpServerConfig,
+): Promise<McpServerConfig> {
   validateMcpServerId(server.id);
-  await withConfigLock(runtime, async () => {
+  return await withConfigLock(runtime, async () => {
     const file = await readMcpConfigFile(runtime);
     if (file.servers.length >= MCP_CONFIG_MAX_SERVERS) {
       configError(
@@ -364,35 +465,115 @@ export async function addMcpServer(
     if (file.servers.some((candidate) => candidate.url === server.url)) {
       configError("Error: MCP endpoint is already configured.");
     }
+    const configured: McpServerConfig = {
+      ...server,
+      incarnation: randomUUID(),
+    };
     await writeMcpConfigFile(runtime, {
       schemaVersion: MCP_CONFIG_SCHEMA_VERSION,
-      servers: [...file.servers, server].sort((left, right) =>
+      servers: [...file.servers, configured].sort((left, right) =>
         left.id.localeCompare(right.id),
       ),
     });
+    return configured;
   });
 }
 
 export async function setMcpServerAuthenticationRequired(
   runtime: McpConfigRuntime,
-  serverId: string,
+  expected: McpServerConfig,
   authenticationRequired: boolean,
 ): Promise<void> {
-  validateMcpServerId(serverId);
+  validateMcpServerId(expected.id);
   await withConfigLock(runtime, async () => {
     const file = await readMcpConfigFile(runtime);
-    const server = file.servers.find((candidate) => candidate.id === serverId);
+    const server = file.servers.find(
+      (candidate) => candidate.id === expected.id,
+    );
     if (server === undefined) {
-      configError(`Error: MCP server "${serverId}" is not configured.`);
+      configError(`Error: MCP server "${expected.id}" is not configured.`);
+    }
+    if (!sameMcpServerIdentity(server, expected)) {
+      configError(
+        `Error: MCP server "${expected.id}" changed during the command; retry it.`,
+      );
     }
     if (server.authenticationRequired === authenticationRequired) return;
     await writeMcpConfigFile(runtime, {
       ...file,
       servers: file.servers.map((candidate) =>
-        candidate.id === serverId
+        candidate.id === expected.id
           ? { ...candidate, authenticationRequired }
           : candidate,
       ),
     });
+  });
+}
+
+export async function setMcpServerEnabled(
+  runtime: McpConfigRuntime,
+  expected: McpServerConfig,
+  enabled: boolean,
+): Promise<boolean> {
+  validateMcpServerId(expected.id);
+  return await withConfigLock(runtime, async () => {
+    const file = await readMcpConfigFile(runtime);
+    const server = file.servers.find(
+      (candidate) => candidate.id === expected.id,
+    );
+    if (server === undefined) {
+      configError(`Error: MCP server "${expected.id}" is not configured.`);
+    }
+    if (!sameMcpServerIdentity(server, expected)) {
+      configError(
+        `Error: MCP server "${expected.id}" changed during the command; retry it.`,
+      );
+    }
+    if (server.enabled === enabled) return false;
+    await writeMcpConfigFile(runtime, {
+      ...file,
+      servers: file.servers.map((candidate) =>
+        candidate.id === expected.id ? { ...candidate, enabled } : candidate,
+      ),
+    });
+    return true;
+  });
+}
+
+export async function removeMcpServer(
+  runtime: McpConfigRuntime,
+  expected: McpServerConfig,
+  removeCredentials: (server: McpServerConfig) => Promise<void>,
+): Promise<boolean> {
+  validateMcpServerId(expected.id);
+  const server = await withConfigLock(runtime, async () => {
+    return (await readMcpConfigFile(runtime)).servers.find(
+      (candidate) => candidate.id === expected.id,
+    );
+  });
+  if (server === undefined) return false;
+  if (!sameMcpServerIdentity(server, expected)) {
+    configError(
+      `Error: MCP server "${expected.id}" changed while it was being removed; retry the command.`,
+    );
+  }
+
+  await removeCredentials(server);
+  return await withConfigLock(runtime, async () => {
+    const file = await readMcpConfigFile(runtime);
+    const current = file.servers.find(
+      (candidate) => candidate.id === expected.id,
+    );
+    if (current === undefined) return true;
+    if (!sameMcpServerIdentity(current, server)) {
+      configError(
+        `Error: MCP server "${expected.id}" changed while it was being removed; retry the command.`,
+      );
+    }
+    await writeMcpConfigFile(runtime, {
+      ...file,
+      servers: file.servers.filter((candidate) => candidate.id !== expected.id),
+    });
+    return true;
   });
 }
