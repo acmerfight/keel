@@ -25,7 +25,10 @@ import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 import { McpOAuthAuthenticationRequiredError } from "./oauth.ts";
 import {
   compileMcpProviderInputSchema,
+  MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
+  MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
   type McpProviderSchemaTarget,
+  scanMcpDegenerateLocalReferenceCycle,
 } from "./provider-schema.ts";
 
 const MCP_CLIENT_NAME = "keel";
@@ -361,6 +364,7 @@ function xMcpHeaderIssue(inputSchema: McpJsonValue): string | null {
 function compileJsonSchema(
   schema: z.infer<typeof jsonObjectSchema>,
   validator: jsonSchemaValidator,
+  path: "inputSchema" | "outputSchema",
 ): McpCompiledJsonSchema {
   try {
     const sdkSchema = sdkJsonSchemaBoundarySchema.parse(schema);
@@ -369,9 +373,23 @@ function compileJsonSchema(
       validator: fromJsonSchema(sdkSchema, validator)["~standard"],
     };
   } catch (error) {
+    let diagnostic = sanitizedError(error);
+    if (error instanceof RangeError) {
+      const cycleScan = scanMcpDegenerateLocalReferenceCycle(
+        schema,
+        path,
+        MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
+      );
+      if (cycleScan.status === "cycle") {
+        diagnostic = boundedDiagnosticText(
+          cycleScan.diagnostic,
+          MCP_ERROR_MAX_LENGTH,
+        );
+      }
+    }
     return {
       ok: false,
-      reason: `invalid JSON Schema: ${sanitizedError(error)}`,
+      reason: `invalid JSON Schema: ${diagnostic}`,
     };
   }
 }
@@ -540,6 +558,7 @@ export async function buildMcpCatalog(
     const inputCompilation = compileJsonSchema(
       parsed.data.inputSchema,
       inputJsonSchemaValidator,
+      "inputSchema",
     );
     if (!inputCompilation.ok) {
       appendCatalogIssue(issues, {
@@ -566,6 +585,7 @@ export async function buildMcpCatalog(
         : compileJsonSchema(
             parsed.data.outputSchema,
             outputJsonSchemaValidator,
+            "outputSchema",
           );
     if (outputCompilation !== null && !outputCompilation.ok) {
       appendCatalogIssue(issues, {
@@ -637,7 +657,10 @@ function summarizeProviderCatalog(
   for (const tool of catalog.tools) {
     const compilation = compileMcpProviderInputSchema(
       tool.descriptor.inputSchema,
-      target,
+      {
+        target,
+        referenceLimits: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
+      },
     );
     if (!compilation.ok) {
       appendCatalogIssue(issues, {

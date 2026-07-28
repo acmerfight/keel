@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { z } from "zod";
 import type { ProviderId } from "../core/provider-id.ts";
 import type {
@@ -10,6 +11,7 @@ import type {
 const schemaObjectBoundary = z.record(z.string(), z.json());
 const schemaNodeBoundary = z
   .object({
+    $ref: z.json().optional(),
     type: z.json().optional(),
     description: z.json().optional(),
     enum: z.json().optional(),
@@ -95,6 +97,37 @@ export interface McpProviderSchemaTarget {
   readonly capabilityProfile: McpProviderSchemaCapabilityProfile;
 }
 
+export interface McpProviderSchemaReferenceLimits {
+  readonly maxDepth: number;
+  readonly maxExpandedNodes: number;
+  readonly maxExpandedBytes: number;
+}
+
+export interface McpProviderSchemaCompilationOptions {
+  readonly target: McpProviderSchemaTarget;
+  readonly referenceLimits: McpProviderSchemaReferenceLimits;
+}
+
+export const MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS: McpProviderSchemaReferenceLimits =
+  {
+    maxDepth: 16,
+    maxExpandedNodes: 1_024,
+    maxExpandedBytes: 64 * 1_024,
+  };
+
+export interface McpLocalReferenceCycleScanLimits {
+  readonly maxReferenceSteps: number;
+  readonly maxScannedSchemaNodes: number;
+}
+
+export const MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS: McpLocalReferenceCycleScanLimits =
+  {
+    // A cycle at maxDepth is observed on the next reference resolution.
+    maxReferenceSteps: MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxDepth + 1,
+    maxScannedSchemaNodes:
+      MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS.maxExpandedNodes,
+  };
+
 export type McpProviderSchemaCompilation =
   | {
       readonly ok: true;
@@ -106,7 +139,12 @@ export type McpProviderSchemaCompilation =
 
 interface CompilationContext {
   readonly target: McpProviderSchemaTarget;
+  readonly rootSchema: z.infer<typeof schemaNodeBoundary>;
+  readonly referenceLimits: McpProviderSchemaReferenceLimits;
+  readonly activeReferences: string[];
   readonly validationWideningDiagnostics: Set<string>;
+  expandedNodes: number;
+  expandedBytes: number;
   validationWideningCount: number;
 }
 
@@ -153,6 +191,230 @@ function schemaObject(
   return parsed.success
     ? { ok: true, value: parsed.data }
     : { ok: false, reason: `${path} must be a JSON Schema object` };
+}
+
+type LocalReferenceResolution =
+  | {
+      readonly ok: true;
+      readonly reference: string;
+      readonly value: unknown;
+    }
+  | { readonly ok: false; readonly reason: string };
+
+export type McpLocalReferenceCycleScan =
+  | { readonly status: "not-found" }
+  | { readonly status: "budget-exceeded" }
+  | { readonly status: "cycle"; readonly diagnostic: string };
+
+function decodeJsonPointerToken(token: string): string | null {
+  if (/~(?:[^01]|$)/u.test(token)) return null;
+  return token.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+function resolveLocalReference(
+  value: ProviderToolSchemaJson,
+  path: string,
+  rootSchema: z.infer<typeof schemaNodeBoundary>,
+): LocalReferenceResolution {
+  if (typeof value !== "string") {
+    return { ok: false, reason: `${path}.$ref must be a string` };
+  }
+  if (value !== "#" && !value.startsWith("#/")) {
+    return {
+      ok: false,
+      reason: `${path}.$ref must be a same-document JSON Pointer`,
+    };
+  }
+  let pointer: string;
+  try {
+    pointer = decodeURIComponent(value.slice(1));
+  } catch {
+    return {
+      ok: false,
+      reason: `${path}.$ref contains invalid percent encoding`,
+    };
+  }
+  const reference = `#${pointer}`;
+  let current: unknown = rootSchema;
+  if (pointer.length === 0) {
+    return { ok: true, reference, value: current };
+  }
+  for (const encodedToken of pointer.slice(1).split("/")) {
+    const token = decodeJsonPointerToken(encodedToken);
+    if (token === null) {
+      return {
+        ok: false,
+        reason: `${path}.$ref contains an invalid JSON Pointer escape`,
+      };
+    }
+    if (Array.isArray(current)) {
+      if (!/^(?:0|[1-9]\d*)$/u.test(token)) {
+        return {
+          ok: false,
+          reason: `${path}.$ref cannot resolve local reference ${JSON.stringify(reference)}`,
+        };
+      }
+      const item: unknown = current[Number(token)];
+      if (item === undefined) {
+        return {
+          ok: false,
+          reason: `${path}.$ref cannot resolve local reference ${JSON.stringify(reference)}`,
+        };
+      }
+      current = item;
+      continue;
+    }
+    const object = schemaNodeBoundary.safeParse(current);
+    if (!object.success) {
+      return {
+        ok: false,
+        reason: `${path}.$ref cannot resolve local reference ${JSON.stringify(reference)}`,
+      };
+    }
+    if (!Object.hasOwn(object.data, token)) {
+      return {
+        ok: false,
+        reason: `${path}.$ref cannot resolve local reference ${JSON.stringify(reference)}`,
+      };
+    }
+    const property = object.data[token];
+    current = property;
+  }
+  return { ok: true, reference, value: current };
+}
+
+function scanReferenceOnlyCycle(
+  value: unknown,
+  path: string,
+  rootSchema: z.infer<typeof schemaNodeBoundary>,
+  limits: McpLocalReferenceCycleScanLimits,
+): McpLocalReferenceCycleScan {
+  const activeReferences = new Set<string>();
+  let current = value;
+  let referenceSteps = 0;
+  while (true) {
+    const parsed = schemaNodeBoundary.safeParse(current);
+    if (!parsed.success || parsed.data.$ref === undefined) {
+      return { status: "not-found" };
+    }
+    if (referenceSteps >= limits.maxReferenceSteps) {
+      return { status: "budget-exceeded" };
+    }
+    const resolved = resolveLocalReference(parsed.data.$ref, path, rootSchema);
+    if (!resolved.ok) return { status: "not-found" };
+    referenceSteps += 1;
+    if (activeReferences.has(resolved.reference)) {
+      return {
+        status: "cycle",
+        diagnostic: `local $ref chain forms a cycle through ${JSON.stringify(resolved.reference)} after ${activeReferences.size} unique references at ${path}.$ref`,
+      };
+    }
+    activeReferences.add(resolved.reference);
+    current = resolved.value;
+  }
+}
+
+interface PendingSchemaScan {
+  readonly value: unknown;
+  readonly path: string;
+}
+
+const localReferenceSchemaMapKeywords = new Set([
+  "$defs",
+  "definitions",
+  "dependencies",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+const localReferenceSchemaArrayKeywords = new Set([
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "prefixItems",
+]);
+
+const localReferenceSchemaValueKeywords = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "contentSchema",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+/**
+ * Performs bounded best-effort diagnostic recovery for reference-only loops
+ * that can overflow the SDK validator before provider projection. Call only
+ * after validator failure; structural recursion remains valid at the catalog
+ * boundary.
+ */
+export function scanMcpDegenerateLocalReferenceCycle(
+  rootSchema: z.infer<typeof schemaNodeBoundary>,
+  path: "inputSchema" | "outputSchema",
+  limits: McpLocalReferenceCycleScanLimits,
+): McpLocalReferenceCycleScan {
+  const pending: PendingSchemaScan[] = [{ value: rootSchema, path }];
+  let scannedSchemaNodes = 0;
+  while (true) {
+    const current = pending.pop();
+    if (current === undefined) return { status: "not-found" };
+    if (scannedSchemaNodes >= limits.maxScannedSchemaNodes) {
+      return { status: "budget-exceeded" };
+    }
+    scannedSchemaNodes += 1;
+    const scan = scanReferenceOnlyCycle(
+      current.value,
+      current.path,
+      rootSchema,
+      limits,
+    );
+    if (scan.status !== "not-found") return scan;
+
+    const object = schemaObjectBoundary.safeParse(current.value);
+    if (!object.success) continue;
+    for (const [name, child] of Object.entries(object.data).toReversed()) {
+      const childPath = `${current.path}.${name}`;
+      if (localReferenceSchemaMapKeywords.has(name)) {
+        const schemaMap = schemaObjectBoundary.safeParse(child);
+        if (!schemaMap.success) continue;
+        for (const [schemaName, schema] of Object.entries(
+          schemaMap.data,
+        ).toReversed()) {
+          pending.push({
+            value: schema,
+            path: `${childPath}.${schemaName}`,
+          });
+        }
+        continue;
+      }
+      if (
+        localReferenceSchemaArrayKeywords.has(name) ||
+        (name === "items" && Array.isArray(child))
+      ) {
+        if (!Array.isArray(child)) continue;
+        for (const [childIndex, childSchema] of [
+          ...child.entries(),
+        ].toReversed()) {
+          pending.push({
+            value: childSchema,
+            path: `${childPath}[${childIndex}]`,
+          });
+        }
+        continue;
+      }
+      if (localReferenceSchemaValueKeywords.has(name)) {
+        pending.push({ value: child, path: childPath });
+      }
+    }
+  }
 }
 
 function compileType(
@@ -302,27 +564,122 @@ function providerDescription(value: string): string {
     .slice(0, 2_048);
 }
 
+function compileReferencedSchemaNode(
+  reference: ProviderToolSchemaJson,
+  source: z.infer<typeof schemaNodeBoundary>,
+  path: string,
+  context: CompilationContext,
+  root: boolean,
+): SchemaNodeCompilation {
+  const resolved = resolveLocalReference(reference, path, context.rootSchema);
+  if (!resolved.ok) return resolved;
+  if (context.activeReferences.includes(resolved.reference)) {
+    return {
+      ok: false,
+      reason: `${path}.$ref forms a cycle through ${JSON.stringify(resolved.reference)}`,
+    };
+  }
+  if (context.activeReferences.length >= context.referenceLimits.maxDepth) {
+    return {
+      ok: false,
+      reason: `${path}.$ref exceeds the local reference depth limit of ${context.referenceLimits.maxDepth}`,
+    };
+  }
+  for (const keyword of Object.keys(source)) {
+    if (
+      keyword === "$ref" ||
+      keyword === "description" ||
+      annotationKeywords.has(keyword)
+    ) {
+      continue;
+    }
+    if (validationOnlyKeywords.has(keyword)) {
+      recordValidationWidening(context, `omitted ${path}.${keyword}`);
+      continue;
+    }
+    if (supportedKeywords.has(keyword)) {
+      return {
+        ok: false,
+        reason: `${path}.${keyword} cannot be safely combined with $ref`,
+      };
+    }
+    return {
+      ok: false,
+      reason: `${path}.${keyword} changes structure and is not supported by ${context.target.providerId}/${context.target.model}`,
+    };
+  }
+
+  context.activeReferences.push(resolved.reference);
+  const compiled = compileSchemaNode(
+    resolved.value,
+    `${path}.$ref(${JSON.stringify(resolved.reference)})`,
+    context,
+    root,
+  );
+  const outermostReference = context.activeReferences.length === 1;
+  context.activeReferences.pop();
+  if (!compiled.ok) return compiled;
+
+  // Count each projected replacement once; nested references are already
+  // represented inside their outermost serialized subtree.
+  if (outermostReference) {
+    context.expandedBytes += Buffer.byteLength(
+      JSON.stringify(compiled.schema),
+      "utf8",
+    );
+    if (context.expandedBytes > context.referenceLimits.maxExpandedBytes) {
+      return {
+        ok: false,
+        reason: `${path}.$ref exceeds the expanded schema byte limit of ${context.referenceLimits.maxExpandedBytes}`,
+      };
+    }
+  }
+  const description =
+    typeof source.description === "string"
+      ? providerDescription(source.description)
+      : compiled.schema.description;
+  return {
+    ok: true,
+    schema: {
+      ...compiled.schema,
+      ...(description !== undefined ? { description } : {}),
+    },
+  };
+}
+
 function compileSchemaNode(
   value: unknown,
   path: string,
   context: CompilationContext,
   root: boolean,
 ): SchemaNodeCompilation {
+  if (context.activeReferences.length > 0) {
+    context.expandedNodes += 1;
+    if (context.expandedNodes > context.referenceLimits.maxExpandedNodes) {
+      return {
+        ok: false,
+        reason: `${path} exceeds the expanded schema node limit of ${context.referenceLimits.maxExpandedNodes}`,
+      };
+    }
+  }
   const parsed = schemaNodeBoundary.safeParse(value);
   if (!parsed.success) {
     return { ok: false, reason: `${path} must be a JSON Schema object` };
   }
   const source = parsed.data;
+  if (source.$ref !== undefined) {
+    return compileReferencedSchemaNode(
+      source.$ref,
+      source,
+      path,
+      context,
+      root,
+    );
+  }
   for (const keyword of Object.keys(source)) {
     if (validationOnlyKeywords.has(keyword)) {
       recordValidationWidening(context, `omitted ${path}.${keyword}`);
       continue;
-    }
-    if (keyword === "$ref") {
-      return {
-        ok: false,
-        reason: `${path}.$ref requires bounded local reference compilation`,
-      };
     }
     if (!annotationKeywords.has(keyword) && !supportedKeywords.has(keyword)) {
       return {
@@ -457,15 +814,24 @@ function compileSchemaNode(
 
 export function compileMcpProviderInputSchema(
   inputSchema: unknown,
-  target: McpProviderSchemaTarget,
+  options: McpProviderSchemaCompilationOptions,
 ): McpProviderSchemaCompilation {
+  const root = schemaNodeBoundary.safeParse(inputSchema);
+  if (!root.success) {
+    return { ok: false, reason: "inputSchema must be a JSON Schema object" };
+  }
   const validationWideningDiagnostics = new Set<string>();
   const compiled = compileSchemaNode(
-    inputSchema,
+    root.data,
     "inputSchema",
     {
-      target,
+      target: options.target,
+      rootSchema: root.data,
+      referenceLimits: options.referenceLimits,
+      activeReferences: [],
       validationWideningDiagnostics,
+      expandedNodes: 0,
+      expandedBytes: 0,
       validationWideningCount: 0,
     },
     true,

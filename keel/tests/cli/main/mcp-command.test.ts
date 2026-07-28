@@ -58,6 +58,20 @@ function nestedSchema(depth: number): unknown {
   return schema;
 }
 
+function degenerateReferenceCycleSchema(referenceCount: number): unknown {
+  const definitions: Record<string, { readonly $ref: string }> = {};
+  for (let index = 0; index < referenceCount; index += 1) {
+    definitions[`c${index}`] = {
+      $ref: `#/$defs/c${(index + 1) % referenceCount}`,
+    };
+  }
+  return {
+    type: "object",
+    properties: { value: { $ref: "#/$defs/c0" } },
+    $defs: definitions,
+  };
+}
+
 async function startMcpServer(
   handler: TestMcpFetchHandler,
 ): Promise<TestMcpServer> {
@@ -737,6 +751,131 @@ describe("CLI Main - MCP", () => {
     }
   });
 
+  test(`Given an MCP server publishes a tool schema with a local definition reference,
+    When the user runs MCP doctor,
+    Then Keel reports the referenced tool as provider-usable`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-local-ref-home-"));
+    const server = await startModernRawCatalogServer([
+      {
+        name: "create_issue",
+        description: "Create an issue",
+        inputSchema: {
+          type: "object",
+          properties: {
+            issue: { $ref: "#/$defs/Issue" },
+          },
+          required: ["issue"],
+          $defs: {
+            Issue: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                labels: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+              },
+              required: ["title"],
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const add = createRuntime(["mcp", "add", server.url, "--name", "github"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime), add.stdout()).toBe(0);
+
+      // When
+      const doctor = createRuntime(["mcp", "doctor", "github"], {
+        env: { KEEL_HOME: home },
+      });
+      const exitCode = await runCliMain(doctor.runtime);
+
+      // Then
+      expect(exitCode, doctor.stdout()).toBe(0);
+      expect(doctor.stderr()).toBe("");
+      expect(doctor.stdout()).toContain(
+        "provider tools: 1 usable, 0 quarantined, 0 validation-widened\n",
+      );
+      expect(doctor.stdout()).not.toContain("provider-quarantined tools:");
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an MCP server publishes short and oversized local reference loops beside a valid tool,
+    When the user runs MCP doctor,
+    Then Keel isolates both bad tools with complete bounded diagnostics`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-ref-cycle-home-"));
+    const server = await startModernRawCatalogServer([
+      {
+        name: "qa_tool",
+        inputSchema: {
+          type: "object",
+          properties: { issue: { $ref: "#/$defs/A" } },
+          $defs: {
+            A: { $ref: "#/$defs/B" },
+            B: { $ref: "#/$defs/A" },
+          },
+        },
+      },
+      {
+        name: "healthy_tool",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+        },
+      },
+      {
+        name: "oversized_cycle",
+        inputSchema: degenerateReferenceCycleSchema(1_000),
+      },
+    ]);
+    const add = createRuntime(["mcp", "add", server.url, "--name", "cycles"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime), add.stdout()).toBe(0);
+
+      // When
+      const doctor = createRuntime(["mcp", "doctor", "cycles"], {
+        env: { KEEL_HOME: home },
+      });
+      const exitCode = await runCliMain(doctor.runtime);
+
+      // Then
+      expect(exitCode, doctor.stdout()).toBe(1);
+      expect(doctor.stderr()).toBe("");
+      expect(doctor.stdout()).toContain(
+        "tools: 1 catalog-valid, 2 catalog-quarantined, 3 total\n",
+      );
+      expect(doctor.stdout()).toContain(
+        '- qa_tool: invalid JSON Schema: local $ref chain forms a cycle through "#/$defs/A" after 2 unique references at inputSchema.properties.issue.$ref\n',
+      );
+      expect(doctor.stdout()).toContain(
+        "- oversized_cycle: invalid JSON Schema: Maximum call stack size exceeded\n",
+      );
+      expect(doctor.stdout()).not.toContain(
+        "- oversized_cycle: invalid JSON Schema: inputSchema.properties.value.$ref",
+      );
+      expect(doctor.stdout()).toContain(
+        "provider tools: 1 usable, 0 quarantined, 0 validation-widened\n",
+      );
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one discovered tool has an invalid descriptor,
     When the user runs MCP doctor,
     Then Keel keeps the valid tool and diagnoses only the quarantined tool`, async () => {
@@ -833,13 +972,10 @@ describe("CLI Main - MCP", () => {
         "tools: 2 catalog-valid, 12 catalog-quarantined, 14 total\n",
       );
       expect(doctor.stdout()).toContain(
-        "provider tools: 1 usable, 1 quarantined, 0 validation-widened\n",
+        "provider tools: 2 usable, 0 quarantined, 0 validation-widened\n",
       );
       expect(doctor.stdout()).toContain("quarantined tools:\n");
-      expect(doctor.stdout()).toContain("provider-quarantined tools:\n");
-      expect(doctor.stdout()).toContain(
-        "- search: inputSchema.properties.query.$ref requires bounded local reference compilation",
-      );
+      expect(doctor.stdout()).not.toContain("provider-quarantined tools:\n");
       expect(doctor.stdout()).toContain(`- ${invalidName}: `);
       expect(doctor.stdout()).toContain("- malformed: ");
       expect(doctor.stdout()).not.toContain("Search safely");
@@ -848,7 +984,7 @@ describe("CLI Main - MCP", () => {
           .stdout()
           .split("\n")
           .filter((line) => line.startsWith("- ")),
-      ).toHaveLength(11);
+      ).toHaveLength(10);
     } finally {
       await server.close();
       await rm(home, { recursive: true, force: true });
