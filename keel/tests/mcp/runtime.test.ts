@@ -15,7 +15,10 @@ import {
   type McpConnection,
   type McpJsonValue,
 } from "../../src/mcp/discovery.ts";
-import { mcpProviderSchemaTarget } from "../../src/mcp/provider-schema.ts";
+import {
+  compileMcpProviderInputSchema,
+  mcpProviderSchemaTarget,
+} from "../../src/mcp/provider-schema.ts";
 import { createMcpRuntime } from "../../src/mcp/runtime.ts";
 import type {
   McpConnectionFactory,
@@ -824,6 +827,70 @@ describe("MCP runtime", () => {
       expect(staleResult.content).toContain("changed after exposure");
       expect(approvals).toBe(0);
       expect(fake.callCalls()).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given active MCP tools are visible to one provider target,
+    When a later turn switches to another provider model,
+    Then Keel recompiles the active schema snapshot without requiring another search`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "ask_question",
+        description: "Ask about repositories",
+        inputSchema: {
+          type: "object",
+          properties: {
+            repoName: {
+              anyOf: [
+                { type: "string" },
+                { type: "array", items: { type: "string" } },
+              ],
+            },
+          },
+          required: ["repoName"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        {
+          query: "repositories",
+          server: "catalog",
+          tool: "ask_question",
+        },
+        signal,
+      );
+
+      // When
+      await runtime.prepareTurn(
+        mcpProviderSchemaTarget("kimi", "kimi-k2.6"),
+        signal,
+      );
+
+      // Then
+      expect(fake.listCalls()).toBe(1);
+      expect(runtime.exposureSnapshot().tools).toHaveLength(1);
+      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+        type: "object",
+        properties: {
+          repoName: {
+            anyOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } },
+            ],
+          },
+        },
+        required: ["repoName"],
+        additionalProperties: false,
+      });
     } finally {
       await runtime.close();
     }
@@ -1868,6 +1935,136 @@ describe("MCP runtime", () => {
     } finally {
       await runtime.close();
     }
+  });
+
+  test(`Given provider schema lowering receives malformed JSON Schema values,
+    When it compiles at the MCP boundary,
+    Then each invalid structural branch returns a precise fail-closed diagnostic`, () => {
+    // Given
+    const cases = [
+      [
+        "invalid type array",
+        {
+          type: "object",
+          properties: { value: { type: ["string", "void"] } },
+        },
+        "inputSchema.properties.value.type must contain supported JSON Schema types",
+      ],
+      [
+        "invalid scalar type",
+        { type: "object", properties: { value: { type: "void" } } },
+        "inputSchema.properties.value.type must be a supported JSON Schema type",
+      ],
+      [
+        "non-object root type",
+        { type: "array", items: { type: "string" } },
+        "inputSchema.type must be object for an MCP tool input schema",
+      ],
+      [
+        "non-object properties",
+        { type: "object", properties: [] },
+        "inputSchema.properties must be a JSON Schema object",
+      ],
+      [
+        "invalid required entries",
+        { type: "object", properties: {}, required: ["value", 1] },
+        "inputSchema.required must contain only strings",
+      ],
+      [
+        "invalid additionalProperties schema",
+        { type: "object", additionalProperties: [] },
+        "inputSchema.additionalProperties must be a JSON Schema object",
+      ],
+      [
+        "invalid enum container",
+        { type: "object", properties: { value: { enum: "left" } } },
+        "inputSchema.properties.value.enum must be an array",
+      ],
+      [
+        "invalid const value",
+        { type: "object", const: undefined },
+        "inputSchema.const must be a JSON value",
+      ],
+      [
+        "invalid minimum",
+        {
+          type: "object",
+          properties: { value: { type: "number", minimum: "one" } },
+        },
+        "inputSchema.properties.value.minimum must be numeric",
+      ],
+      [
+        "invalid maximum",
+        {
+          type: "object",
+          properties: { value: { type: "number", maximum: "ten" } },
+        },
+        "inputSchema.properties.value.maximum must be numeric",
+      ],
+    ] satisfies readonly [string, unknown, string][];
+
+    for (const [_caseName, inputSchema, reason] of cases) {
+      // When
+      const result = compileMcpProviderInputSchema(
+        inputSchema,
+        testSchemaTarget,
+      );
+
+      // Then
+      expect(result).toEqual({ ok: false, reason });
+    }
+  });
+
+  test(`Given provider schema lowering receives schema-valued maps and overlapping widened oneOf branches,
+    When it compiles the provider projection,
+    Then map value schemas are preserved and unsafe exclusivity is rejected with a diagnostic`, () => {
+    // When
+    const dynamicMap = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: {
+          metadata: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+        required: ["metadata"],
+      },
+      testSchemaTarget,
+    );
+    const unsafeComposition = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: {
+          value: {
+            anyOf: [{ type: "number" }],
+            oneOf: [
+              { type: "string", maxLength: 3 },
+              { type: "string", minLength: 2 },
+            ],
+          },
+        },
+      },
+      testSchemaTarget,
+    );
+
+    // Then
+    expect(dynamicMap).toMatchObject({
+      ok: true,
+      parameters: {
+        properties: {
+          metadata: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+      },
+    });
+    expect(unsafeComposition).toEqual({
+      ok: false,
+      reason:
+        "inputSchema.properties.value combines anyOf with a validation-widened oneOf and cannot be safely projected",
+    });
   });
 
   test(`Given modern MCP tools use the JSON Schema forms supported by the provider boundary,

@@ -49,6 +49,38 @@ function expectRecoverableToolFailure(
 }
 
 describe("Tool Execution", () => {
+  test(`Given an MCP search tool call is missing its required query,
+    When the tool execution layer handles the invalid call,
+    Then it returns a recoverable correction message for the next model turn`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-mcp-search-"));
+
+    try {
+      // When
+      const result = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "mcp_search_1",
+          tool: "mcp_search",
+          invalidArguments: { server: "catalog", toolName: "ask_question" },
+          validationError: "query: Required",
+          recovery:
+            "Provide a non-empty query describing the remote MCP capability. When known, include exact server and toolName string values; omit unknown filters instead of guessing.",
+        },
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+      });
+
+      // Then
+      expectRecoverableToolFailure(result, "mcp_search failed");
+      expect(result.content).toContain("query: Required");
+      expect(result.content).toContain("non-empty query");
+      expect(result.effects).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a glob tool call has a recoverable input error,
     When the tool execution layer handles the call,
     Then it returns a tool failure message for the next model turn`, async () => {

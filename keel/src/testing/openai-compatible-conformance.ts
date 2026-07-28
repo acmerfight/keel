@@ -462,6 +462,17 @@ function chunksForPrompt(
       sseDone(),
     ];
   }
+  if (prompt === "conformance-invalid-mcp-search") {
+    return [
+      toolCallChunk(
+        "call_conformance_invalid_mcp_search",
+        "mcp_search",
+        JSON.stringify({ server: "catalog", toolName: "search" }),
+      ),
+      finishChunk(provider, { kind: "value", value: "tool_calls" }),
+      sseDone(),
+    ];
+  }
   if (prompt === "conformance-invalid-mcp-tool") {
     return [
       toolCallChunk(
@@ -734,6 +745,34 @@ export function runOpenAICompatibleConformance(
       await expect(
         streamFor(provider, "conformance-missing-tool-name"),
       ).rejects.toThrow(`${spec.name} returned unsupported tool call: none`);
+    });
+
+    test(`Given the provider omits the required MCP search query,
+      When the adapter validates the completed tool call,
+      Then it yields a recoverable invalid tool call instead of aborting the stream`, async () => {
+      // When
+      const events = await collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [
+            { role: "user", content: "conformance-invalid-mcp-search" },
+          ],
+          signal: freshSignal(),
+          toolExposure: mcpExposure,
+        }),
+      );
+
+      // Then
+      expect(events[0]).toMatchObject({
+        type: "tool_call",
+        id: "call_conformance_invalid_mcp_search",
+        tool: "mcp_search",
+        invalidArguments: { server: "catalog", toolName: "search" },
+      });
+      expect(events[0]).toMatchObject({
+        validationError: expect.stringContaining("query"),
+        recovery: expect.stringContaining("non-empty query"),
+      });
     });
 
     test(`Given a mainstream MCP schema contains a union, nullable type array, and dynamic map,

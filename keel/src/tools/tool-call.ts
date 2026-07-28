@@ -132,6 +132,7 @@ const recoverableAgentStateToolNames = [
   "memory_add",
   "memory_forget",
   "memory_propose",
+  "mcp_search",
 ] as const;
 
 type RecoverableAgentStateToolName =
@@ -181,6 +182,8 @@ const INVALID_MEMORY_FORGET_RECOVERY =
   "Provide one exact active project-memory ID selected from the current project memory block.";
 const INVALID_MEMORY_PROPOSE_RECOVERY =
   "Provide a complete reviewed-memory proposal with one exact current-user source quote and an explicit conflictMemoryIds array.";
+const INVALID_MCP_SEARCH_RECOVERY =
+  "Provide a non-empty query describing the remote MCP capability. When known, include exact server and toolName string values; omit unknown filters instead of guessing.";
 
 const agentStateRecovery: Readonly<
   Record<RecoverableAgentStateToolName, string>
@@ -190,6 +193,7 @@ const agentStateRecovery: Readonly<
   memory_add: INVALID_MEMORY_ADD_RECOVERY,
   memory_forget: INVALID_MEMORY_FORGET_RECOVERY,
   memory_propose: INVALID_MEMORY_PROPOSE_RECOVERY,
+  mcp_search: INVALID_MCP_SEARCH_RECOVERY,
 };
 
 export function isToolName(name: string): name is ToolName {
