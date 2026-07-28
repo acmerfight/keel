@@ -16,6 +16,7 @@ import type {
   Message,
   ModelToolExposure,
 } from "../../src/llm/types.ts";
+import { mcpProviderSchemaTarget } from "../../src/mcp/provider-schema.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import { createSkillActivation } from "../../src/skills/lifecycle.ts";
 import type {
@@ -27,6 +28,8 @@ import type {
   McpToolExposureSnapshot,
   McpToolReference,
 } from "../../src/tools/tool-call.ts";
+
+const TEST_MCP_SCHEMA_TARGET = mcpProviderSchemaTarget("fake", "fake");
 
 const REVIEW_SKILL: WorkflowSkill = {
   id: "repo:root:review:digest",
@@ -233,7 +236,7 @@ describe("Agent Skill Activation", () => {
           bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           skillActivation,
-          mcp,
+          mcp: { runtime: mcp, schemaTarget: TEST_MCP_SCHEMA_TARGET },
         }),
       );
 
@@ -358,7 +361,7 @@ describe("Agent Skill Activation", () => {
           bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           skillActivation,
-          mcp,
+          mcp: { runtime: mcp, schemaTarget: TEST_MCP_SCHEMA_TARGET },
         }),
       );
 
@@ -458,7 +461,7 @@ describe("Agent Skill Activation", () => {
           bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           skillActivation,
-          mcp,
+          mcp: { runtime: mcp, schemaTarget: TEST_MCP_SCHEMA_TARGET },
         }),
       );
       const compaction = await compactMessages({
@@ -522,7 +525,7 @@ describe("Agent Skill Activation", () => {
           bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           skillActivation,
-          mcp,
+          mcp: { runtime: mcp, schemaTarget: TEST_MCP_SCHEMA_TARGET },
         }),
       );
 

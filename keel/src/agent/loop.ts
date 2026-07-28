@@ -20,6 +20,7 @@ import type {
   ModelToolExposure,
   ToolCall,
 } from "../llm/types.ts";
+import type { McpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
 import {
   type BashRuntime,
@@ -131,7 +132,7 @@ export interface RunAgentOptions {
   readonly userMessage: string;
   readonly systemPrompt: string;
   readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
-  readonly mcp?: McpRuntime;
+  readonly mcp?: AgentMcpRuntime;
   readonly signal: AbortSignal;
   readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -155,7 +156,7 @@ export interface RunAgentTurnOptions {
   readonly messages: Message[];
   readonly systemPrompt: string;
   readonly memory?: AgentMemoryRuntime;
-  readonly mcp?: McpRuntime;
+  readonly mcp?: AgentMcpRuntime;
   readonly signal: AbortSignal;
   readonly bash: BashRuntime;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -181,6 +182,11 @@ export interface RunAgentTurnOptions {
     | readonly InjectedUserMessage[]
     | Promise<readonly InjectedUserMessage[]>;
   readonly modelOperations?: ModelOperationInstrumentation;
+}
+
+interface AgentMcpRuntime {
+  readonly runtime: McpRuntime;
+  readonly schemaTarget: McpProviderSchemaTarget;
 }
 
 function mutatedTargetPathsFromExecution(
@@ -741,8 +747,8 @@ export async function* runAgentTurn(
   };
 
   for (let completedTurns = 1; ; completedTurns++) {
-    await options.mcp?.prepareTurn(signal);
-    const mcpExposure = options.mcp?.exposureSnapshot();
+    await options.mcp?.runtime.prepareTurn(options.mcp.schemaTarget, signal);
+    const mcpExposure = options.mcp?.runtime.exposureSnapshot();
     const currentMemorySource = currentMemoryUserMessage();
     const exposeMemoryTools =
       options.memory !== undefined &&
@@ -1057,7 +1063,7 @@ export async function* runAgentTurn(
         ...(memoryToolContext !== undefined && memoryToolExposure !== undefined
           ? { memory: memoryToolContext }
           : {}),
-        ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
+        ...(options.mcp !== undefined ? { mcp: options.mcp.runtime } : {}),
       });
     };
 

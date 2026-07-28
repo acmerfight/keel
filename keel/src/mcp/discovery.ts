@@ -24,6 +24,10 @@ import {
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
+import {
+  compileMcpProviderInputSchema,
+  type McpProviderSchemaTarget,
+} from "./provider-schema.ts";
 
 const MCP_CLIENT_NAME = "keel";
 const MCP_CONNECT_TIMEOUT_MS = 10_000;
@@ -166,10 +170,19 @@ type McpCompiledJsonSchema =
 
 interface McpCatalogSummary {
   readonly total: number;
-  readonly usable: number;
+  readonly valid: number;
   readonly quarantined: number;
   readonly digest: string;
   readonly issues: readonly McpCatalogIssue[];
+}
+
+interface McpProviderCatalogSummary {
+  readonly target: McpProviderSchemaTarget;
+  readonly usable: number;
+  readonly quarantined: number;
+  readonly validationWidened: number;
+  readonly issues: readonly McpCatalogIssue[];
+  readonly wideningIssues: readonly McpCatalogIssue[];
 }
 
 export interface McpCatalogTool {
@@ -193,6 +206,7 @@ export type McpDiscoveryStatus =
       readonly protocolVersion: string;
       readonly serverIdentity: string | null;
       readonly catalog: McpCatalogSummary;
+      readonly provider: McpProviderCatalogSummary;
       readonly latencyMs: number;
     }
   | {
@@ -609,12 +623,51 @@ export async function buildMcpCatalog(
   return {
     summary: {
       total: tools.length,
-      usable: usableTools.length,
+      valid: usableTools.length,
       quarantined: tools.length - usableTools.length,
       digest,
       issues,
     },
     tools: usableTools,
+  };
+}
+
+function summarizeProviderCatalog(
+  catalog: McpCatalog,
+  target: McpProviderSchemaTarget,
+): McpProviderCatalogSummary {
+  const issues: McpCatalogIssue[] = [];
+  const wideningIssues: McpCatalogIssue[] = [];
+  let usable = 0;
+  let validationWidened = 0;
+  for (const tool of catalog.tools) {
+    const compilation = compileMcpProviderInputSchema(
+      tool.descriptor.inputSchema,
+      target,
+    );
+    if (!compilation.ok) {
+      appendCatalogIssue(issues, {
+        tool: boundedDiagnosticText(tool.descriptor.name, 160),
+        reason: compilation.reason,
+      });
+      continue;
+    }
+    usable += 1;
+    if (compilation.fidelity === "validation-widened") {
+      validationWidened += 1;
+      appendCatalogIssue(wideningIssues, {
+        tool: boundedDiagnosticText(tool.descriptor.name, 160),
+        reason: compilation.validationWideningDiagnostics.join("; "),
+      });
+    }
+  }
+  return {
+    target,
+    usable,
+    quarantined: catalog.tools.length - usable,
+    validationWidened,
+    issues,
+    wideningIssues,
   };
 }
 
@@ -787,16 +840,22 @@ function sanitizedError(error: unknown): string {
   return firstLine.slice(0, MCP_ERROR_MAX_LENGTH) || "MCP discovery failed";
 }
 
-export async function discoverMcpServer(
-  server: McpServerEndpoint,
-  now: () => number = () => Date.now(),
-  authProvider?: AuthProvider,
-): Promise<McpDiscoveryStatus> {
+export async function discoverMcpServer(options: {
+  readonly server: McpServerEndpoint;
+  readonly now: () => number;
+  readonly authProvider: AuthProvider | null;
+  readonly schemaTarget: McpProviderSchemaTarget;
+}): Promise<McpDiscoveryStatus> {
+  const { server, now, authProvider, schemaTarget } = options;
   const startedAt = now();
   let connection: McpConnection | null = null;
   let status: McpDiscoveryStatus;
   try {
-    connection = await connectMcpServer(server, undefined, authProvider);
+    connection = await connectMcpServer(
+      server,
+      undefined,
+      authProvider ?? undefined,
+    );
     const catalog = await connection.listCatalog();
     status = {
       status: "ready",
@@ -804,6 +863,7 @@ export async function discoverMcpServer(
       protocolVersion: connection.protocolVersion,
       serverIdentity: connection.serverIdentity,
       catalog: catalog.summary,
+      provider: summarizeProviderCatalog(catalog, schemaTarget),
       latencyMs: Math.max(0, now() - startedAt),
     };
   } catch (error) {

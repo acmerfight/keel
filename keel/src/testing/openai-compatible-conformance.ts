@@ -6,9 +6,17 @@ import {
 import type { Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { z } from "zod";
+import type { ProviderId } from "../core/provider-id.ts";
 import type { ProviderRetryConfig } from "../llm/providers/openai-compatible.ts";
 import type { LLMEvent, LLMProvider } from "../llm/types.ts";
-import type { ModelToolExposure } from "../tools/tool-call.ts";
+import {
+  compileMcpProviderInputSchema,
+  mcpProviderSchemaTarget,
+} from "../mcp/provider-schema.ts";
+import type {
+  McpModelToolDefinition,
+  ModelToolExposure,
+} from "../tools/tool-call.ts";
 import { close, getPort, listen } from "./provider-sse-fixtures.ts";
 
 interface OpenAICompatibleConformanceConfig {
@@ -24,7 +32,7 @@ interface ConformanceUsageTokens {
 }
 
 export interface OpenAICompatibleConformanceProvider {
-  readonly id: string;
+  readonly id: ProviderId;
   readonly name: string;
   readonly model: string;
   readonly maxOutputTokensField: "max_completion_tokens" | "max_tokens";
@@ -92,32 +100,32 @@ const expectedUsage = {
   outputTokens: usageTokens.outputTokens,
 };
 
+const conformanceMcpTool = {
+  kind: "mcp",
+  modelName: "mcp__catalog__search",
+  description: "External catalog search",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string" } },
+    required: ["query"],
+    additionalProperties: false,
+  },
+  reference: {
+    kind: "mcp",
+    serverId: "catalog",
+    serverOrigin: "https://catalog.example",
+    rawToolName: "search",
+    configurationDigest: "a".repeat(64),
+    catalogGeneration: `catalog:${"b".repeat(64)}`,
+    descriptorDigest: "c".repeat(64),
+  },
+} satisfies McpModelToolDefinition;
+
 const mcpExposure: ModelToolExposure = {
   kind: "auto",
   mcp: {
     snapshotId: "conformance-mcp",
-    tools: [
-      {
-        kind: "mcp",
-        modelName: "mcp__catalog__search",
-        description: "External catalog search",
-        parameters: {
-          type: "object",
-          properties: { query: { type: "string" } },
-          required: ["query"],
-          additionalProperties: false,
-        },
-        reference: {
-          kind: "mcp",
-          serverId: "catalog",
-          serverOrigin: "https://catalog.example",
-          rawToolName: "search",
-          configurationDigest: "a".repeat(64),
-          catalogGeneration: `catalog:${"b".repeat(64)}`,
-          descriptorDigest: "c".repeat(64),
-        },
-      },
-    ],
+    tools: [conformanceMcpTool],
   },
 };
 
@@ -440,12 +448,26 @@ function chunksForPrompt(
   if (prompt === "conformance-unbounded-output") {
     return textResponse(provider, "unbounded");
   }
+  if (prompt === "conformance-mainstream-mcp-schema") {
+    return textResponse(provider, "schema accepted");
+  }
   if (prompt === "conformance-mcp-tool") {
     return [
       toolCallChunk(
         "call_conformance_mcp",
         "mcp__catalog__search",
         JSON.stringify({ query: "otters" }),
+      ),
+      finishChunk(provider, { kind: "value", value: "tool_calls" }),
+      sseDone(),
+    ];
+  }
+  if (prompt === "conformance-invalid-mcp-search") {
+    return [
+      toolCallChunk(
+        "call_conformance_invalid_mcp_search",
+        "mcp_search",
+        JSON.stringify({ server: "catalog", toolName: "search" }),
       ),
       finishChunk(provider, { kind: "value", value: "tool_calls" }),
       sseDone(),
@@ -723,6 +745,110 @@ export function runOpenAICompatibleConformance(
       await expect(
         streamFor(provider, "conformance-missing-tool-name"),
       ).rejects.toThrow(`${spec.name} returned unsupported tool call: none`);
+    });
+
+    test(`Given the provider omits the required MCP search query,
+      When the adapter validates the completed tool call,
+      Then it yields a recoverable invalid tool call instead of aborting the stream`, async () => {
+      // When
+      const events = await collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [
+            { role: "user", content: "conformance-invalid-mcp-search" },
+          ],
+          signal: freshSignal(),
+          toolExposure: mcpExposure,
+        }),
+      );
+
+      // Then
+      expect(events[0]).toMatchObject({
+        type: "tool_call",
+        id: "call_conformance_invalid_mcp_search",
+        tool: "mcp_search",
+        invalidArguments: { server: "catalog", toolName: "search" },
+      });
+      expect(events[0]).toMatchObject({
+        validationError: expect.stringContaining("query"),
+        recovery: expect.stringContaining("non-empty query"),
+      });
+    });
+
+    test(`Given a mainstream MCP schema contains a union, nullable type array, and dynamic map,
+      When the enrolled provider sends a real request,
+      Then the request contains that provider's explicit compiled projection`, async () => {
+      // Given
+      const compilation = compileMcpProviderInputSchema(
+        {
+          type: "object",
+          properties: {
+            repoName: {
+              anyOf: [
+                { type: "string" },
+                { type: "array", items: { type: "string" } },
+              ],
+            },
+            cursor: { type: ["integer", "null"] },
+            metadata: {
+              type: "object",
+              additionalProperties: { type: "string" },
+            },
+          },
+          required: ["repoName"],
+        },
+        mcpProviderSchemaTarget(spec.id, spec.model),
+      );
+      expect(compilation.ok).toBe(true);
+      if (!compilation.ok) return;
+      const exposure: ModelToolExposure = {
+        kind: "auto",
+        mcp: {
+          snapshotId: `conformance-${spec.id}-mainstream-schema`,
+          tools: [
+            {
+              ...conformanceMcpTool,
+              parameters: compilation.parameters,
+            },
+          ],
+        },
+      };
+
+      // When
+      await collect(
+        provider.stream({
+          systemPrompt: "You are Keel.",
+          messages: [
+            { role: "user", content: "conformance-mainstream-mcp-schema" },
+          ],
+          signal: freshSignal(),
+          toolExposure: exposure,
+        }),
+      );
+
+      // Then
+      const body = requestBodies.get("conformance-mainstream-mcp-schema");
+      expect(body).toBeDefined();
+      const request = z
+        .object({
+          tools: z.array(
+            z.object({
+              function: z
+                .object({
+                  name: z.string(),
+                  parameters: z.json(),
+                })
+                .passthrough(),
+            }),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(body ?? ""));
+      expect(
+        request.tools.find(
+          (tool) => tool.function.name === "mcp__catalog__search",
+        )?.function.parameters,
+      ).toEqual(compilation.parameters);
     });
 
     test.each(failureCases)(

@@ -54,7 +54,12 @@ import {
   undoCheckpointUnavailable,
 } from "../core/undo-protection.ts";
 import type { Message, Usage, UserMessageOrigin } from "../llm/types.ts";
+import {
+  type McpProviderSchemaTarget,
+  mcpProviderSchemaTarget,
+} from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
+import type { McpRuntime } from "../mcp/runtime-types.ts";
 import {
   type BashApprovalGrant,
   type BashProjectApprovalGrant,
@@ -592,30 +597,31 @@ export async function runInteractiveSession(
         }
       : {}),
   });
-  const mcpRuntime =
-    options.mcp === undefined
-      ? undefined
-      : createMcpRuntime({
-          servers: options.mcp.servers,
-          connectionFactory: options.mcp.connectionFactory,
-          permission: options.mcp.canPrompt
-            ? createPromptedMcpPermissionPolicy(
-                lineReader,
-                options.writeStderr,
-                {
-                  onPromptStart: () => {
-                    setComposerMode("approval");
-                  },
-                  onPromptEnd: () => {
-                    setComposerMode("steer");
-                  },
-                },
-              )
-            : denyMcpPermissionPolicy(
-                "MCP calls require a real terminal approval and this session cannot prompt.",
-              ),
-          now,
-        });
+  let mcpRuntime: McpRuntime | undefined;
+  const ensureMcpRuntime = (
+    schemaTarget: McpProviderSchemaTarget,
+  ): McpRuntime | undefined => {
+    if (options.mcp === undefined) return undefined;
+    mcpRuntime ??= createMcpRuntime({
+      servers: options.mcp.servers,
+      connectionFactory: options.mcp.connectionFactory,
+      permission: options.mcp.canPrompt
+        ? createPromptedMcpPermissionPolicy(lineReader, options.writeStderr, {
+            onPromptStart: () => {
+              setComposerMode("approval");
+            },
+            onPromptEnd: () => {
+              setComposerMode("steer");
+            },
+          })
+        : denyMcpPermissionPolicy(
+            "MCP calls require a real terminal approval and this session cannot prompt.",
+          ),
+      now,
+      schemaTarget,
+    });
+    return mcpRuntime;
+  };
   const memoryBinding: InteractiveSessionMemoryBinding = options;
   const reviewedMemory = isReviewedInteractiveMemoryBinding(memoryBinding)
     ? {
@@ -982,6 +988,11 @@ export async function runInteractiveSession(
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
     resolved = resolveActiveProvider(request.userMessage);
     const turnProvider = resolved;
+    const schemaTarget = mcpProviderSchemaTarget(
+      turnProvider.providerId,
+      turnProvider.model,
+    );
+    const turnMcpRuntime = ensureMcpRuntime(schemaTarget);
     const turnModelOperations = reportModelOperations(resolved, {
       type: "current_agent_run",
     });
@@ -1143,7 +1154,14 @@ export async function runInteractiveSession(
           ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
           bash,
-          ...(mcpRuntime !== undefined ? { mcp: mcpRuntime } : {}),
+          ...(turnMcpRuntime !== undefined
+            ? {
+                mcp: {
+                  runtime: turnMcpRuntime,
+                  schemaTarget,
+                },
+              }
+            : {}),
           hiddenWorkspacePaths,
           ...(managedSkills !== null
             ? { skillActivation: managedSkills.activation }

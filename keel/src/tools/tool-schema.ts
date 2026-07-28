@@ -54,6 +54,44 @@ export type OpenAICompatibleToolParameter =
 export type OpenAICompatibleToolParameters =
   OpenAICompatibleObjectToolParameter;
 
+export type ProviderToolSchemaJson =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ProviderToolSchemaJson[]
+  | { readonly [key: string]: ProviderToolSchemaJson };
+
+export type ProviderToolSchemaType =
+  | "array"
+  | "boolean"
+  | "integer"
+  | "null"
+  | "number"
+  | "object"
+  | "string";
+
+export interface ProviderToolJsonSchema {
+  readonly type?: ProviderToolSchemaType | readonly ProviderToolSchemaType[];
+  readonly description?: string;
+  readonly enum?: readonly ProviderToolSchemaJson[];
+  readonly const?: ProviderToolSchemaJson;
+  readonly anyOf?: readonly ProviderToolJsonSchema[];
+  readonly oneOf?: readonly ProviderToolJsonSchema[];
+  readonly items?: ProviderToolJsonSchema;
+  readonly properties?: Readonly<Record<string, ProviderToolJsonSchema>>;
+  readonly required?: readonly string[];
+  readonly additionalProperties?: boolean | ProviderToolJsonSchema;
+  readonly minimum?: number;
+  readonly maximum?: number;
+}
+
+export interface ProviderToolInputSchema extends ProviderToolJsonSchema {
+  readonly type: "object";
+  readonly properties: Readonly<Record<string, ProviderToolJsonSchema>>;
+  readonly required: readonly string[];
+}
+
 type JsonObject = Readonly<Record<string, unknown>>;
 
 interface JsonSchemaObject extends JsonObject {

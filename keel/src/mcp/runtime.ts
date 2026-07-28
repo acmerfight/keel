@@ -11,12 +11,13 @@ import {
   type McpToolReference,
   type ToolJsonValue,
 } from "../tools/tool-call.ts";
-import type {
-  OpenAICompatibleToolParameter,
-  OpenAICompatibleToolParameters,
-} from "../tools/tool-schema.ts";
+import type { ProviderToolInputSchema } from "../tools/tool-schema.ts";
 import type { ToolOutputArtifact } from "../tools/types.ts";
 import type { McpCatalog, McpCatalogTool, McpConnection } from "./discovery.ts";
+import {
+  compileMcpProviderInputSchema,
+  type McpProviderSchemaTarget,
+} from "./provider-schema.ts";
 import type {
   McpConnectionFactory,
   McpPermissionPolicy,
@@ -36,24 +37,6 @@ const MCP_MODEL_DESCRIPTION_MAX_LENGTH = 2_048;
 const MCP_SEARCH_DIAGNOSTIC_MAX_LENGTH = 240;
 const MCP_PRESERVED_RESULT_MAX_BYTES = 256 * 1_024;
 
-const jsonObjectSchema = z.record(z.string(), z.json());
-const providerSchemaNodeSchema = z
-  .object({
-    type: z.json().optional(),
-    description: z.json().optional(),
-    enum: z.json().optional(),
-    minLength: z.json().optional(),
-    minimum: z.json().optional(),
-    maximum: z.json().optional(),
-    anyOf: z.json().optional(),
-    items: z.json().optional(),
-    properties: z.json().optional(),
-    required: z.json().optional(),
-    additionalProperties: z.json().optional(),
-  })
-  .catchall(z.json());
-type ProviderSchemaNode = z.infer<typeof providerSchemaNodeSchema>;
-
 type CatalogState =
   | { readonly kind: "idle" }
   | {
@@ -71,7 +54,7 @@ interface SearchableTool {
   readonly owner: McpServerOwner;
   readonly state: ReadyCatalogState;
   readonly tool: McpCatalogTool;
-  readonly parameters: OpenAICompatibleToolParameters;
+  readonly parameters: ProviderToolInputSchema;
   readonly score: number;
 }
 
@@ -79,13 +62,9 @@ interface ActiveTool {
   readonly owner: McpServerOwner;
   readonly state: ReadyCatalogState;
   readonly tool: McpCatalogTool;
-  readonly parameters: OpenAICompatibleToolParameters;
+  readonly parameters: ProviderToolInputSchema;
   readonly modelName: string;
 }
-
-type SchemaLoweringResult =
-  | { readonly ok: true; readonly parameter: OpenAICompatibleToolParameter }
-  | { readonly ok: false; readonly reason: string };
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -181,348 +160,6 @@ async function awaitWithSignal<T>(
       },
     );
   });
-}
-
-function schemaObject(
-  value: unknown,
-  path: string,
-):
-  | {
-      readonly ok: true;
-      readonly value: Readonly<Record<string, ToolJsonValue>>;
-    }
-  | { readonly ok: false; readonly reason: string } {
-  const parsed = jsonObjectSchema.safeParse(value);
-  /* v8 ignore next 3 -- buildMcpCatalog validates every properties map through the SDK JSON Schema boundary. */
-  if (!parsed.success) {
-    return { ok: false, reason: `${path} must be a JSON Schema object` };
-  }
-  return { ok: true, value: parsed.data };
-}
-
-function schemaNode(
-  value: unknown,
-  path: string,
-):
-  | { readonly ok: true; readonly value: ProviderSchemaNode }
-  | { readonly ok: false; readonly reason: string } {
-  const parsed = providerSchemaNodeSchema.safeParse(value);
-  return parsed.success
-    ? { ok: true, value: parsed.data }
-    : { ok: false, reason: `${path} must be a JSON Schema object` };
-}
-
-function schemaDescription(schema: ProviderSchemaNode): string | undefined {
-  return typeof schema.description === "string"
-    ? diagnosticText(schema.description)
-    : undefined;
-}
-
-const providerSchemaAnnotationKeywords = new Set([
-  "$comment",
-  "$defs",
-  "$id",
-  "$schema",
-  "default",
-  "deprecated",
-  "description",
-  "examples",
-  "readOnly",
-  "title",
-  "writeOnly",
-  "x-mcp-header",
-]);
-
-function unsupportedProviderSchemaKeyword(
-  schema: ProviderSchemaNode,
-  path: string,
-): string | null {
-  const typeSpecificKeywords: ReadonlySet<string> =
-    schema.anyOf !== undefined
-      ? new Set(["anyOf", "type"])
-      : schema.type === "string"
-        ? new Set(["type", "enum", "minLength"])
-        : schema.type === "number"
-          ? new Set(["type", "minimum", "maximum"])
-          : schema.type === "integer"
-            ? new Set(["type", "minimum", "maximum"])
-            : schema.type === "boolean"
-              ? new Set(["type"])
-              : schema.type === "array"
-                ? new Set(["type", "items"])
-                : schema.type === "object" || schema.type === undefined
-                  ? new Set([
-                      "type",
-                      "properties",
-                      "required",
-                      "additionalProperties",
-                    ])
-                  : new Set(["type"]);
-  const keyword = Object.keys(schema).find(
-    (candidate) =>
-      !providerSchemaAnnotationKeywords.has(candidate) &&
-      !typeSpecificKeywords.has(candidate),
-  );
-  return keyword === undefined
-    ? null
-    : `${path}.${keyword} is not expressible in the current provider schema`;
-}
-
-function lowerStringSchema(
-  schema: ProviderSchemaNode,
-  path: string,
-): SchemaLoweringResult {
-  const description = schemaDescription(schema);
-  const enumValues = schema.enum;
-  if (enumValues === undefined) {
-    return {
-      ok: true,
-      parameter: {
-        type: "string",
-        ...(description !== undefined ? { description } : {}),
-      },
-    };
-  }
-  if (
-    !Array.isArray(enumValues) ||
-    !enumValues.every((value) => typeof value === "string")
-  ) {
-    return { ok: false, reason: `${path}.enum must contain only strings` };
-  }
-  return {
-    ok: true,
-    parameter: {
-      type: "string",
-      enum: enumValues,
-      ...(description !== undefined ? { description } : {}),
-    },
-  };
-}
-
-function lowerNumericSchema(
-  schema: ProviderSchemaNode,
-  path: string,
-  type: "integer" | "number",
-): SchemaLoweringResult {
-  const description = schemaDescription(schema);
-  const minimum = schema.minimum;
-  const maximum = schema.maximum;
-  /* v8 ignore next 3 -- the SDK JSON Schema boundary rejects non-numeric minimum values during catalog construction. */
-  if (minimum !== undefined && typeof minimum !== "number") {
-    return { ok: false, reason: `${path}.minimum must be numeric` };
-  }
-  /* v8 ignore next 3 -- the SDK JSON Schema boundary rejects non-numeric maximum values during catalog construction. */
-  if (maximum !== undefined && typeof maximum !== "number") {
-    return { ok: false, reason: `${path}.maximum must be numeric` };
-  }
-  return {
-    ok: true,
-    parameter: {
-      type,
-      ...(description !== undefined ? { description } : {}),
-      ...(minimum !== undefined ? { minimum } : {}),
-      ...(maximum !== undefined ? { maximum } : {}),
-    },
-  };
-}
-
-function lowerNullableSchema(
-  schema: ProviderSchemaNode,
-  path: string,
-): SchemaLoweringResult {
-  const unsupportedKeyword = unsupportedProviderSchemaKeyword(schema, path);
-  if (
-    unsupportedKeyword !== null ||
-    schema.type !== undefined ||
-    !Array.isArray(schema.anyOf) ||
-    schema.anyOf.length !== 2
-  ) {
-    return {
-      ok: false,
-      reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
-    };
-  }
-  const branches = schema.anyOf.map((branch, index) =>
-    schemaNode(branch, `${path}.anyOf[${index}]`),
-  );
-  let nullBranch: ProviderSchemaNode | null = null;
-  let valueBranch: ProviderSchemaNode | null = null;
-  for (const branch of branches) {
-    if (!branch.ok) return branch;
-    if (branch.value.type === "null") {
-      if (nullBranch !== null) {
-        return {
-          ok: false,
-          reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
-        };
-      }
-      nullBranch = branch.value;
-    } else {
-      if (valueBranch !== null) {
-        return {
-          ok: false,
-          reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
-        };
-      }
-      valueBranch = branch.value;
-    }
-  }
-  /* v8 ignore next 5 -- two parsed branches without duplicate null or value branches must contain exactly one of each. */
-  if (nullBranch === null || valueBranch === null) {
-    return {
-      ok: false,
-      reason: `${path}.anyOf is not expressible as one nullable provider parameter`,
-    };
-  }
-  const nullIssue = unsupportedProviderSchemaKeyword(
-    nullBranch,
-    `${path}.anyOf`,
-  );
-  if (nullIssue !== null) {
-    return { ok: false, reason: nullIssue };
-  }
-  const lowered = lowerSchemaParameter(valueBranch, `${path}.anyOf`);
-  if (!lowered.ok) return lowered;
-  const description = schemaDescription(schema);
-  return {
-    ok: true,
-    parameter:
-      description === undefined
-        ? lowered.parameter
-        : { ...lowered.parameter, description },
-  };
-}
-
-function lowerArraySchema(
-  schema: ProviderSchemaNode,
-  path: string,
-): SchemaLoweringResult {
-  const itemSchema = schema.items;
-  if (itemSchema === undefined) {
-    return { ok: false, reason: `${path}.items is required` };
-  }
-  const items = lowerSchemaParameter(itemSchema, `${path}.items`);
-  if (!items.ok) return items;
-  const description = schemaDescription(schema);
-  return {
-    ok: true,
-    parameter: {
-      type: "array",
-      items: items.parameter,
-      ...(description !== undefined ? { description } : {}),
-    },
-  };
-}
-
-function lowerObjectSchema(
-  schema: ProviderSchemaNode,
-  path: string,
-): SchemaLoweringResult {
-  const parsedProperties = schemaObject(
-    schema.properties ?? {},
-    `${path}.properties`,
-  );
-  /* v8 ignore next -- buildMcpCatalog has already established the SDK properties-map invariant. */
-  if (!parsedProperties.ok) return parsedProperties;
-  const properties: Record<string, OpenAICompatibleToolParameter> = {};
-  for (const [name, propertySchema] of Object.entries(parsedProperties.value)) {
-    const lowered = lowerSchemaParameter(
-      propertySchema,
-      `${path}.properties.${name}`,
-    );
-    if (!lowered.ok) return lowered;
-    properties[name] = lowered.parameter;
-  }
-  const required = schema.required ?? [];
-  /* v8 ignore next 5 -- buildMcpCatalog validates required as a string array at the external SDK boundary. */
-  if (
-    !Array.isArray(required) ||
-    !required.every((value) => typeof value === "string")
-  ) {
-    return { ok: false, reason: `${path}.required must contain only strings` };
-  }
-  if (
-    required.some(
-      (name) => typeof name === "string" && !Object.hasOwn(properties, name),
-    )
-  ) {
-    return {
-      ok: false,
-      reason: `${path}.required references an undeclared property`,
-    };
-  }
-  const description = schemaDescription(schema);
-  return {
-    ok: true,
-    parameter: {
-      type: "object",
-      properties,
-      required,
-      additionalProperties: false,
-      ...(description !== undefined ? { description } : {}),
-    },
-  };
-}
-
-function lowerSchemaParameter(
-  value: unknown,
-  path: string,
-): SchemaLoweringResult {
-  const parsed = schemaNode(value, path);
-  if (!parsed.ok) return parsed;
-  const schema = parsed.value;
-  if (schema.anyOf !== undefined) {
-    return lowerNullableSchema(schema, path);
-  }
-  const unsupportedKeyword = unsupportedProviderSchemaKeyword(schema, path);
-  if (unsupportedKeyword !== null) {
-    return { ok: false, reason: unsupportedKeyword };
-  }
-  switch (schema.type) {
-    case "string":
-      return lowerStringSchema(schema, path);
-    case "integer":
-      return lowerNumericSchema(schema, path, "integer");
-    case "number":
-      return lowerNumericSchema(schema, path, "number");
-    case "boolean": {
-      const description = schemaDescription(schema);
-      return {
-        ok: true,
-        parameter: {
-          type: "boolean",
-          ...(description !== undefined ? { description } : {}),
-        },
-      };
-    }
-    case "array":
-      return lowerArraySchema(schema, path);
-    case "object":
-    case undefined:
-      return lowerObjectSchema(schema, path);
-    default:
-      return {
-        ok: false,
-        reason: `${path}.type is not supported by the current provider schema`,
-      };
-  }
-}
-
-function lowerInputSchema(
-  tool: McpCatalogTool,
-):
-  | { readonly ok: true; readonly parameters: OpenAICompatibleToolParameters }
-  | { readonly ok: false; readonly reason: string } {
-  const lowered = lowerSchemaParameter(
-    tool.descriptor.inputSchema,
-    "inputSchema",
-  );
-  if (!lowered.ok) return lowered;
-  /* v8 ignore next 3 -- buildMcpCatalog only constructs McpCatalogTool from object-root input schemas. */
-  if (lowered.parameter.type !== "object") {
-    return { ok: false, reason: "inputSchema must lower to an object" };
-  }
-  return { ok: true, parameters: lowered.parameter };
 }
 
 function modelNameBase(serverId: string, rawToolName: string): string {
@@ -645,6 +282,8 @@ function exposureId(definitions: readonly McpModelToolDefinition[]): string {
     JSON.stringify(
       definitions.map((definition) => ({
         modelName: definition.modelName,
+        description: definition.description,
+        parameters: definition.parameters,
         reference: definition.reference,
       })),
     ),
@@ -907,6 +546,7 @@ class DefaultMcpRuntime implements McpRuntime {
   private active: readonly ActiveTool[] = [];
   private readonly permission: McpPermissionPolicy;
   private readonly filter: McpToolFilterPolicy;
+  private schemaTarget: McpProviderSchemaTarget;
   private stopped = false;
 
   constructor(
@@ -915,15 +555,43 @@ class DefaultMcpRuntime implements McpRuntime {
     filter: McpToolFilterPolicy,
     connectionFactory: McpConnectionFactory,
     now: () => number,
+    schemaTarget: McpProviderSchemaTarget,
   ) {
     this.permission = permission;
     this.filter = filter;
+    this.schemaTarget = schemaTarget;
     this.owners = [...servers]
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((server) => new McpServerOwner(server, connectionFactory, now));
   }
 
-  async prepareTurn(signal: AbortSignal): Promise<void> {
+  async prepareTurn(
+    schemaTarget: McpProviderSchemaTarget,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (
+      schemaTarget.providerId !== this.schemaTarget.providerId ||
+      schemaTarget.model !== this.schemaTarget.model ||
+      schemaTarget.capabilityProfile !== this.schemaTarget.capabilityProfile
+    ) {
+      this.schemaTarget = schemaTarget;
+      const selected: Array<Omit<ActiveTool, "modelName">> = [];
+      for (const active of this.active) {
+        const compiled = compileMcpProviderInputSchema(
+          active.tool.descriptor.inputSchema,
+          schemaTarget,
+        );
+        /* v8 ignore next -- active tools were already compiled under the same current provider capability profile before selection. */
+        if (!compiled.ok) continue;
+        selected.push({
+          owner: active.owner,
+          state: active.state,
+          tool: active.tool,
+          parameters: compiled.parameters,
+        });
+      }
+      this.active = assignModelNames(selected);
+    }
     const expired = this.owners.filter((owner) => owner.expired());
     await Promise.all(
       expired.map(async (owner) => {
@@ -995,10 +663,13 @@ class DefaultMcpRuntime implements McpRuntime {
     );
     const matches: SearchableTool[] = [];
     const loweringIssues: string[] = [];
+    const wideningIssues: string[] = [];
     const catalogIssues: string[] = [];
     let discoveredCount = 0;
     let filteredCount = 0;
     let quarantinedCount = 0;
+    let providerUsableCount = 0;
+    let providerQuarantinedCount = 0;
     for (const { owner, state } of loaded) {
       if (state === null) continue;
       discoveredCount += state.catalog.summary.total;
@@ -1009,6 +680,23 @@ class DefaultMcpRuntime implements McpRuntime {
         ),
       );
       for (const tool of state.catalog.tools) {
+        const compiled = compileMcpProviderInputSchema(
+          tool.descriptor.inputSchema,
+          this.schemaTarget,
+        );
+        if (!compiled.ok) {
+          providerQuarantinedCount++;
+          loweringIssues.push(
+            `${owner.server.id}/${diagnosticText(tool.descriptor.name)}: ${compiled.reason}`,
+          );
+          continue;
+        }
+        providerUsableCount++;
+        if (compiled.validationWideningDiagnostics.length > 0) {
+          wideningIssues.push(
+            `${owner.server.id}/${diagnosticText(tool.descriptor.name)}: ${compiled.validationWideningDiagnostics.join("; ")}`,
+          );
+        }
         if (
           !this.filter.allows({
             serverId: owner.server.id,
@@ -1020,18 +708,11 @@ class DefaultMcpRuntime implements McpRuntime {
         }
         const score = searchScore(request, owner.server.id, tool);
         if (score <= 0) continue;
-        const lowered = lowerInputSchema(tool);
-        if (!lowered.ok) {
-          loweringIssues.push(
-            `${owner.server.id}/${diagnosticText(tool.descriptor.name)}: ${lowered.reason}`,
-          );
-          continue;
-        }
         matches.push({
           owner,
           state,
           tool,
-          parameters: lowered.parameters,
+          parameters: compiled.parameters,
           score,
         });
       }
@@ -1081,7 +762,7 @@ class DefaultMcpRuntime implements McpRuntime {
       );
     }
     resultLines.push(
-      `Catalog counts: ${discoveredCount} discovered, ${quarantinedCount} quarantined, ${filteredCount} filtered, ${matches.length} searchable, ${this.active.length} active, ${matches.length - this.active.length} omitted.`,
+      `Catalog counts: ${discoveredCount} discovered, ${quarantinedCount} catalog-quarantined, ${providerUsableCount} provider-usable for ${this.schemaTarget.providerId}/${this.schemaTarget.model}, ${providerQuarantinedCount} provider-quarantined, ${filteredCount} filtered, ${matches.length} searchable, ${this.active.length} active, ${matches.length - this.active.length} omitted.`,
     );
     if (schemaOmitted > 0) {
       resultLines.push(
@@ -1090,6 +771,9 @@ class DefaultMcpRuntime implements McpRuntime {
     }
     for (const issue of loweringIssues.slice(0, 3)) {
       resultLines.push(`Provider schema quarantine: ${issue}`);
+    }
+    for (const issue of wideningIssues.slice(0, 3)) {
+      resultLines.push(`Provider schema validation widening: ${issue}`);
     }
     for (const issue of catalogIssues.slice(0, 3)) {
       resultLines.push(`Catalog quarantine: ${issue}`);
@@ -1283,6 +967,7 @@ export function createMcpRuntime(options: {
   readonly servers: readonly McpServerConfig[];
   readonly permission: McpPermissionPolicy;
   readonly connectionFactory: McpConnectionFactory;
+  readonly schemaTarget: McpProviderSchemaTarget;
   readonly filter?: McpToolFilterPolicy;
   readonly now?: () => number;
 }): McpRuntime {
@@ -1292,5 +977,6 @@ export function createMcpRuntime(options: {
     options.filter ?? configuredToolFilterPolicy(options.servers),
     options.connectionFactory,
     options.now ?? (() => Date.now()),
+    options.schemaTarget,
   );
 }

@@ -9,6 +9,7 @@ import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import type { Message } from "../llm/types.ts";
+import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
 import {
@@ -283,6 +284,10 @@ export async function runOneShotCli(
                 runtime.writeStderr,
               ),
         now: runtime.now,
+        schemaTarget: mcpProviderSchemaTarget(
+          resolved.providerId,
+          resolved.model,
+        ),
       });
     }
     await cleanupExpiredToolOutputArtifacts({ runtime });
@@ -373,7 +378,17 @@ export async function runOneShotCli(
         : {}),
       signal: abortController.signal,
       bash: bashRuntime,
-      ...(mcpRuntime !== undefined ? { mcp: mcpRuntime } : {}),
+      ...(mcpRuntime !== undefined
+        ? {
+            mcp: {
+              runtime: mcpRuntime,
+              schemaTarget: mcpProviderSchemaTarget(
+                resolved.providerId,
+                resolved.model,
+              ),
+            },
+          }
+        : {}),
       ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
       ...(skillActivation !== undefined ? { skillActivation } : {}),
       stopPolicy: defaultStopPolicy(),

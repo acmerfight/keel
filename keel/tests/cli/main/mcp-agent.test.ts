@@ -101,6 +101,60 @@ async function startMcpToolServer(
   };
 }
 
+async function startUnionMcpToolServer(): Promise<TestMcpServer> {
+  const calls: string[] = [];
+  const handler = createMcpHandler(() => {
+    const server = new McpServer(
+      { name: "keel-union-agent-test", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    server.registerTool(
+      "ask_question",
+      {
+        description: "Ask about one or more repositories",
+        inputSchema: z.object({
+          repoName: z.union([z.string(), z.array(z.string())]),
+          question: z.string().max(200),
+        }),
+      },
+      async ({ question, repoName }) => {
+        const repositories =
+          typeof repoName === "string" ? [repoName] : repoName;
+        calls.push(...repositories);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `answered ${question} for ${repositories.join(", ")}`,
+            },
+          ],
+        };
+      },
+    );
+    return server;
+  });
+  const server = createServer((request, response) => {
+    void toNodeHandler(handler)(
+      {
+        headers: request.headers,
+        ...(request.method !== undefined ? { method: request.method } : {}),
+        ...(request.url !== undefined ? { url: request.url } : {}),
+        [Symbol.asyncIterator]: () => request[Symbol.asyncIterator](),
+      },
+      response,
+    );
+  });
+  await listen(server);
+  return {
+    url: `http://127.0.0.1:${getPort(server)}/mcp`,
+    calls: () => [...calls],
+    close: async () => {
+      await handler.close?.();
+      await close(server);
+    },
+  };
+}
+
 function mcpAgentProvider(capturedBodies: unknown[]): Server {
   return createServer((request, response) => {
     if (request.url !== "/chat/completions") {
@@ -150,6 +204,128 @@ function mcpAgentProvider(capturedBodies: unknown[]): Server {
 }
 
 describe("CLI Main - MCP agent tools", () => {
+  test(`Given a remote MCP tool accepts one repository or a repository list,
+    When the user asks Keel to call it with multiple repositories,
+    Then the selected provider receives the union schema and the approved remote call succeeds`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-union-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-union-workspace-"),
+    );
+    const mcp = await startUnionMcpToolServer();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
+
+    const capturedBodies: unknown[] = [];
+    const provider = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (capturedBodies.length === 1) {
+          response.write(
+            sseToolCall("find_union_tool", "mcp_search", {
+              query: "repository question",
+              server: "catalog",
+              toolName: "ask_question",
+            }),
+          );
+          response.end(`${sseToolFinish()}data: [DONE]\n\n`);
+          return;
+        }
+        if (capturedBodies.length === 2) {
+          response.write(
+            sseToolCall(
+              "ask_multiple_repositories",
+              "mcp__catalog__ask_question",
+              {
+                repoName: ["acmerfight/keel", "openai/codex"],
+                question: "How do their tool schemas differ?",
+              },
+            ),
+          );
+          response.end(`${sseToolFinish()}data: [DONE]\n\n`);
+          return;
+        }
+        response.end(sseTextReplyWithUsage("Compared both repositories."));
+      });
+    });
+    await listen(provider);
+    const input = new PassThrough();
+    let approvalAnswered = false;
+    const run = createRuntime(["compare both repositories through MCP"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.end("y\n");
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(run.stdout()).toBe("Compared both repositories.\n");
+      expect(mcp.calls()).toEqual(["acmerfight/keel", "openai/codex"]);
+      const request = z
+        .object({
+          tools: z.array(
+            z
+              .object({
+                function: z
+                  .object({
+                    name: z.string(),
+                    parameters: z.json(),
+                  })
+                  .passthrough(),
+              })
+              .passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(capturedBodies[1]);
+      const tool = request.tools.find(
+        (candidate) => candidate.function.name === "mcp__catalog__ask_question",
+      );
+      const parameters = z
+        .object({
+          properties: z.object({
+            repoName: z.object({
+              anyOf: z.array(z.json()),
+            }),
+          }),
+        })
+        .passthrough()
+        .parse(tool?.function.parameters);
+      expect(parameters.properties.repoName.anyOf).toEqual([
+        { type: "string" },
+        { type: "array", items: { type: "string" } },
+      ]);
+    } finally {
+      input.end();
+      await close(provider);
+      await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test.each(["modern", "legacy"] as const)(
     `Given an unauthenticated %s Streamable HTTP MCP server is configured,
     When the user asks Keel to use its tool and approves the exact remote call,

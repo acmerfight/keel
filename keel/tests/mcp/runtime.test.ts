@@ -15,6 +15,10 @@ import {
   type McpConnection,
   type McpJsonValue,
 } from "../../src/mcp/discovery.ts";
+import {
+  compileMcpProviderInputSchema,
+  mcpProviderSchemaTarget,
+} from "../../src/mcp/provider-schema.ts";
 import { createMcpRuntime } from "../../src/mcp/runtime.ts";
 import type {
   McpConnectionFactory,
@@ -58,6 +62,10 @@ const testServerConfig: McpServerConfig = {
   authenticationRequired: false,
   toolFilter: { allow: null, deny: [] },
 };
+const testSchemaTarget = mcpProviderSchemaTarget(
+  "deepseek",
+  "deepseek-v4-flash",
+);
 
 const allowPermission: McpPermissionPolicy = {
   review: () => ({ type: "allow" }),
@@ -140,6 +148,7 @@ function runtimeWithFactory(options: {
     servers: [testServerConfig],
     connectionFactory: options.connectionFactory,
     permission: options.permission ?? allowPermission,
+    schemaTarget: testSchemaTarget,
     ...(options.filter !== undefined ? { filter: options.filter } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
   });
@@ -309,6 +318,7 @@ describe("MCP runtime", () => {
       ],
       connectionFactory: { connect: connectMcpServer },
       permission: allowPermission,
+      schemaTarget: testSchemaTarget,
     });
     const signal = new AbortController().signal;
 
@@ -374,6 +384,7 @@ describe("MCP runtime", () => {
           return { type: "allow" };
         },
       },
+      schemaTarget: testSchemaTarget,
     });
     const signal = new AbortController().signal;
 
@@ -426,6 +437,7 @@ describe("MCP runtime", () => {
       ],
       connectionFactory: fake.factory,
       permission: allowPermission,
+      schemaTarget: testSchemaTarget,
     });
 
     try {
@@ -438,8 +450,9 @@ describe("MCP runtime", () => {
       // Then
       expect(runtime.exposureSnapshot().tools).toEqual([]);
       expect(searchResult.content).toContain(
-        "1 discovered, 0 quarantined, 1 filtered",
+        "1 discovered, 0 catalog-quarantined, 1 provider-usable",
       );
+      expect(searchResult.content).toContain("1 filtered");
     } finally {
       await runtime.close();
     }
@@ -644,9 +657,9 @@ describe("MCP runtime", () => {
     }
   });
 
-  test(`Given one tool uses provider-inexpressible schema semantics beside a valid tool,
+  test(`Given one tool uses a non-null union beside a simple tool,
     When the catalog is searched,
-    Then only the affected schema is quarantined with a diagnostic`, async () => {
+    Then both schemas remain provider-usable`, async () => {
     // Given
     const catalog = await fakeCatalog([
       {
@@ -690,12 +703,11 @@ describe("MCP runtime", () => {
         runtime
           .exposureSnapshot()
           .tools.map((tool) => tool.reference.rawToolName),
-      ).toEqual(["search"]);
-      expect(searchResult.content).toContain(
-        "Provider schema quarantine: catalog/ambiguous",
-      );
+      ).toEqual(["ambiguous", "search"]);
+      expect(searchResult.content).not.toContain("Provider schema quarantine:");
       expect(searchResult.content).toContain("2 discovered");
-      expect(searchResult.content).toContain("1 active");
+      expect(searchResult.content).toContain("2 provider-usable");
+      expect(searchResult.content).toContain("2 active");
     } finally {
       await runtime.close();
     }
@@ -820,6 +832,70 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given active MCP tools are visible to one provider target,
+    When a later turn switches to another provider model,
+    Then Keel recompiles the active schema snapshot without requiring another search`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "ask_question",
+        description: "Ask about repositories",
+        inputSchema: {
+          type: "object",
+          properties: {
+            repoName: {
+              anyOf: [
+                { type: "string" },
+                { type: "array", items: { type: "string" } },
+              ],
+            },
+          },
+          required: ["repoName"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        {
+          query: "repositories",
+          server: "catalog",
+          tool: "ask_question",
+        },
+        signal,
+      );
+
+      // When
+      await runtime.prepareTurn(
+        mcpProviderSchemaTarget("kimi", "kimi-k2.6"),
+        signal,
+      );
+
+      // Then
+      expect(fake.listCalls()).toBe(1);
+      expect(runtime.exposureSnapshot().tools).toHaveLength(1);
+      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+        type: "object",
+        properties: {
+          repoName: {
+            anyOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } },
+            ],
+          },
+        },
+        required: ["repoName"],
+        additionalProperties: false,
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test(`Given an active catalog reaches its five-minute TTL,
     When the next turn is prepared,
     Then refresh is atomic and changed tools require a new search snapshot`, async () => {
@@ -857,7 +933,7 @@ describe("MCP runtime", () => {
 
       // When
       now = 5 * 60 * 1_000;
-      await runtime.prepareTurn(signal);
+      await runtime.prepareTurn(testSchemaTarget, signal);
 
       // Then
       expect(fake.listCalls()).toBe(2);
@@ -929,7 +1005,7 @@ describe("MCP runtime", () => {
 
       // When
       now = 5 * 60 * 1_000;
-      await runtime.prepareTurn(signal);
+      await runtime.prepareTurn(testSchemaTarget, signal);
       const execution = await runtime.execute(expiredCall, signal);
 
       // Then
@@ -1086,7 +1162,7 @@ describe("MCP runtime", () => {
     expect(catalog.tools).toEqual([]);
     expect(catalog.summary).toMatchObject({
       total: 3,
-      usable: 0,
+      valid: 0,
       quarantined: 3,
       issues: [
         {
@@ -1129,7 +1205,7 @@ describe("MCP runtime", () => {
     // Then
     expect(catalog.summary).toMatchObject({
       total: 2,
-      usable: 2,
+      valid: 2,
       quarantined: 0,
       issues: [],
     });
@@ -1160,7 +1236,7 @@ describe("MCP runtime", () => {
     expect(catalog.tools).toEqual([]);
     expect(catalog.summary).toMatchObject({
       total: 1,
-      usable: 0,
+      valid: 0,
       quarantined: 1,
       issues: [
         {
@@ -1422,6 +1498,264 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given mainstream MCP schemas combine unions, type arrays, literal domains, validation constraints, and dynamic maps,
+    When the current provider compiles and invokes the tool,
+    Then structural meaning reaches the model while the original schema remains the dispatch authority`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "mainstream",
+        inputSchema: {
+          type: "object",
+          properties: {
+            repoName: {
+              anyOf: [
+                { type: "string" },
+                { type: "array", items: { type: "string" } },
+              ],
+            },
+            labels: {
+              type: "array",
+              items: {
+                oneOf: [
+                  { type: "string" },
+                  {
+                    type: "object",
+                    properties: { name: { type: "string" } },
+                    required: ["name"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
+            },
+            skip: { type: ["integer", "null"] },
+            confirmed: { type: "boolean", enum: [true] },
+            mode: { const: "read" },
+            metadata: {
+              type: "object",
+              propertyNames: { pattern: "^[a-z]+$" },
+              minProperties: 1,
+              maxProperties: 3,
+              additionalProperties: { type: "string" },
+            },
+            slug: {
+              type: "string",
+              minLength: 3,
+              maxLength: 20,
+              pattern: "^[a-z]+$",
+            },
+            limit: { type: "integer", exclusiveMinimum: 0 },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              contains: { const: "mcp" },
+              minItems: 1,
+              uniqueItems: true,
+            },
+          },
+          required: [
+            "repoName",
+            "labels",
+            "skip",
+            "confirmed",
+            "mode",
+            "metadata",
+            "slug",
+            "limit",
+            "tags",
+          ],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+    const signal = new AbortController().signal;
+
+    try {
+      const search = await runtime.search(
+        { query: "unused", server: "catalog", tool: "mainstream" },
+        signal,
+      );
+      const exposed = exposedToolCall(runtime);
+
+      // When
+      const invalid = await runtime.execute(
+        {
+          ...exposed,
+          arguments: {
+            repoName: ["acmerfight/keel"],
+            labels: [{ name: "bug" }],
+            skip: null,
+            confirmed: true,
+            mode: "read",
+            metadata: { team: "harness" },
+            slug: "UP",
+            limit: 0,
+            tags: [],
+          },
+        },
+        signal,
+      );
+      const valid = await runtime.execute(
+        {
+          ...exposed,
+          arguments: {
+            repoName: ["acmerfight/keel"],
+            labels: [{ name: "bug" }],
+            skip: null,
+            confirmed: true,
+            mode: "read",
+            metadata: { team: "harness" },
+            slug: "keel",
+            limit: 1,
+            tags: ["mcp"],
+          },
+        },
+        signal,
+      );
+
+      // Then
+      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+        type: "object",
+        properties: {
+          repoName: {
+            anyOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } },
+            ],
+          },
+          labels: {
+            type: "array",
+            items: {
+              oneOf: [
+                { type: "string" },
+                {
+                  type: "object",
+                  properties: { name: { type: "string" } },
+                  required: ["name"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          },
+          skip: { type: ["integer", "null"] },
+          confirmed: { type: "boolean", enum: [true] },
+          mode: { const: "read" },
+          metadata: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+          slug: { type: "string" },
+          limit: { type: "integer" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: [
+          "repoName",
+          "labels",
+          "skip",
+          "confirmed",
+          "mode",
+          "metadata",
+          "slug",
+          "limit",
+          "tags",
+        ],
+        additionalProperties: false,
+      });
+      expect(search.content).toContain(
+        "1 provider-usable for deepseek/deepseek-v4-flash",
+      );
+      expect(search.content).toContain("Provider schema validation widening:");
+      expect(invalid.ok).toBe(false);
+      expect(invalid.content).toContain("original server JSON Schema");
+      expect(valid.ok).toBe(true);
+      expect(fake.callCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given oneOf branches can overlap after provider-only validation constraints are omitted,
+    When the provider compiler widens the schema,
+    Then it lowers exclusivity to anyOf while original oneOf validation still gates dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "exclusive_choice",
+        inputSchema: {
+          type: "object",
+          properties: {
+            "value.oneOf[0]": {
+              type: "string",
+              maxLength: 3,
+            },
+            "value.oneOf[1]": {
+              type: "string",
+              minLength: 2,
+            },
+            value: {
+              oneOf: [
+                { type: "string", maxLength: 3 },
+                { type: "string", minLength: 2 },
+              ],
+            },
+          },
+          required: ["value"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({ connectionFactory: fake.factory });
+    const signal = new AbortController().signal;
+
+    try {
+      const search = await runtime.search(
+        {
+          query: "unused",
+          server: "catalog",
+          tool: "exclusive_choice",
+        },
+        signal,
+      );
+      const exposed = exposedToolCall(runtime);
+
+      // When
+      const overlapping = await runtime.execute(
+        { ...exposed, arguments: { value: "ab" } },
+        signal,
+      );
+      const exclusive = await runtime.execute(
+        { ...exposed, arguments: { value: "" } },
+        signal,
+      );
+
+      // Then
+      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+        type: "object",
+        properties: {
+          "value.oneOf[0]": { type: "string" },
+          "value.oneOf[1]": { type: "string" },
+          value: {
+            anyOf: [{ type: "string" }, { type: "string" }],
+          },
+        },
+        required: ["value"],
+        additionalProperties: false,
+      });
+      expect(search.content).toContain(
+        "lowered inputSchema.properties.value.oneOf to anyOf",
+      );
+      expect(overlapping.ok).toBe(false);
+      expect(overlapping.content).toContain("original server JSON Schema");
+      expect(exclusive.ok).toBe(true);
+      expect(fake.callCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test.each([
     [
       "successful empty",
@@ -1603,6 +1937,156 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given provider schema lowering receives malformed JSON Schema values,
+    When it compiles at the MCP boundary,
+    Then each invalid structural branch returns a precise fail-closed diagnostic`, () => {
+    // Given
+    const cases = [
+      [
+        "invalid type array",
+        {
+          type: "object",
+          properties: { value: { type: ["string", "void"] } },
+        },
+        "inputSchema.properties.value.type must contain supported JSON Schema types",
+      ],
+      [
+        "invalid scalar type",
+        { type: "object", properties: { value: { type: "void" } } },
+        "inputSchema.properties.value.type must be a supported JSON Schema type",
+      ],
+      [
+        "invalid oneOf branch",
+        {
+          type: "object",
+          properties: { value: { oneOf: [{ type: "string" }, true] } },
+        },
+        "inputSchema.properties.value.oneOf[1] must be a JSON Schema object",
+      ],
+      [
+        "non-object root type",
+        { type: "array", items: { type: "string" } },
+        "inputSchema.type must be object for an MCP tool input schema",
+      ],
+      [
+        "non-object properties",
+        { type: "object", properties: [] },
+        "inputSchema.properties must be a JSON Schema object",
+      ],
+      [
+        "invalid required entries",
+        { type: "object", properties: {}, required: ["value", 1] },
+        "inputSchema.required must contain only strings",
+      ],
+      [
+        "invalid additionalProperties schema",
+        { type: "object", additionalProperties: [] },
+        "inputSchema.additionalProperties must be a JSON Schema object",
+      ],
+      [
+        "invalid enum container",
+        { type: "object", properties: { value: { enum: "left" } } },
+        "inputSchema.properties.value.enum must be an array",
+      ],
+      [
+        "invalid const value",
+        { type: "object", const: undefined },
+        "inputSchema.const must be a JSON value",
+      ],
+      [
+        "invalid minimum",
+        {
+          type: "object",
+          properties: { value: { type: "number", minimum: "one" } },
+        },
+        "inputSchema.properties.value.minimum must be numeric",
+      ],
+      [
+        "invalid maximum",
+        {
+          type: "object",
+          properties: { value: { type: "number", maximum: "ten" } },
+        },
+        "inputSchema.properties.value.maximum must be numeric",
+      ],
+    ] satisfies readonly [string, unknown, string][];
+
+    for (const [_caseName, inputSchema, reason] of cases) {
+      // When
+      const result = compileMcpProviderInputSchema(
+        inputSchema,
+        testSchemaTarget,
+      );
+
+      // Then
+      expect(result).toEqual({ ok: false, reason });
+    }
+  });
+
+  test(`Given provider schema lowering receives schema-valued maps and overlapping widened oneOf branches,
+    When it compiles the provider projection,
+    Then map value schemas are preserved and unsafe exclusivity is rejected with a diagnostic`, () => {
+    // When
+    const implicitRootObject = compileMcpProviderInputSchema(
+      { properties: { query: { type: "string" } } },
+      testSchemaTarget,
+    );
+    const dynamicMap = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: {
+          metadata: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+        required: ["metadata"],
+      },
+      testSchemaTarget,
+    );
+    const unsafeComposition = compileMcpProviderInputSchema(
+      {
+        type: "object",
+        properties: {
+          value: {
+            anyOf: [{ type: "number" }],
+            oneOf: [
+              { type: "string", maxLength: 3 },
+              { type: "string", minLength: 2 },
+            ],
+          },
+        },
+      },
+      testSchemaTarget,
+    );
+
+    // Then
+    expect(implicitRootObject).toMatchObject({
+      ok: true,
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: [],
+      },
+    });
+    expect(dynamicMap).toMatchObject({
+      ok: true,
+      parameters: {
+        properties: {
+          metadata: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+      },
+    });
+    expect(unsafeComposition).toEqual({
+      ok: false,
+      reason:
+        "inputSchema.properties.value combines anyOf with a validation-widened oneOf and cannot be safely projected",
+    });
+  });
+
   test(`Given modern MCP tools use the JSON Schema forms supported by the provider boundary,
     When Keel lowers their schemas for model exposure,
     Then every supported primitive and nested form keeps its bounded annotations`, async () => {
@@ -1705,15 +2189,9 @@ describe("MCP runtime", () => {
             type: "object",
             properties: { name: { type: "string" } },
             required: ["name"],
-            additionalProperties: false,
             description: "Nested",
           },
-          emptyObject: {
-            type: "object",
-            properties: {},
-            required: [],
-            additionalProperties: false,
-          },
+          emptyObject: { type: "object" },
         },
         required: ["plain", "choice", "count"],
         additionalProperties: false,
@@ -1812,11 +2290,11 @@ describe("MCP runtime", () => {
             description: "Issue URL or ID",
           },
           assignee: {
-            type: "string",
+            anyOf: [{ type: "string" }, { type: "null" }],
             description: "User ID, name, email, or me",
           },
           parentId: {
-            type: "string",
+            anyOf: [{ type: "null" }, { type: "string" }],
           },
         },
         required: ["urlOrId"],
@@ -1839,9 +2317,9 @@ describe("MCP runtime", () => {
       "schema.type must be object when present",
     ],
     [
-      "an unsupported composition keyword",
+      "an empty composition",
       { type: "object", properties: {}, anyOf: [] },
-      "anyOf is not expressible",
+      "anyOf must contain at least one JSON Schema branch",
     ],
     [
       "a nullable composition with an invalid branch",
@@ -1852,28 +2330,6 @@ describe("MCP runtime", () => {
       "anyOf[1] must be a JSON Schema object",
     ],
     [
-      "a nullable composition with two null branches",
-      {
-        type: "object",
-        properties: {
-          value: { anyOf: [{ type: "null" }, { type: "null" }] },
-        },
-      },
-      "anyOf is not expressible",
-    ],
-    [
-      "a nullable composition with unsupported null semantics",
-      {
-        type: "object",
-        properties: {
-          value: {
-            anyOf: [{ type: "null", enum: [null] }, { type: "string" }],
-          },
-        },
-      },
-      "anyOf.enum is not expressible",
-    ],
-    [
       "a nullable composition with an inexpressible value branch",
       {
         type: "object",
@@ -1881,7 +2337,7 @@ describe("MCP runtime", () => {
           value: { anyOf: [{ type: "null" }, { type: "array" }] },
         },
       },
-      "anyOf.items is required",
+      "anyOf[1].items is required",
     ],
     [
       "a non-object property schema",
@@ -1895,14 +2351,6 @@ describe("MCP runtime", () => {
         properties: { value: { type: "string", enum: "left" } },
       },
       'enum value must be ["array"]',
-    ],
-    [
-      "a mixed string enum",
-      {
-        type: "object",
-        properties: { value: { type: "string", enum: ["left", 1] } },
-      },
-      "enum must contain only strings",
     ],
     [
       "a non-numeric minimum",
@@ -1947,11 +2395,6 @@ describe("MCP runtime", () => {
       "a mixed required list",
       { type: "object", properties: {}, required: ["value", 1] },
       "expected string, received number",
-    ],
-    [
-      "an undeclared required property",
-      { type: "object", properties: {}, required: ["value"] },
-      "required references an undeclared property",
     ],
   ] satisfies readonly [string, McpJsonValue, string][])(
     `Given an MCP tool declares %s,
@@ -2259,6 +2702,7 @@ describe("MCP runtime", () => {
       ],
       connectionFactory: fake.factory,
       permission: allowPermission,
+      schemaTarget: testSchemaTarget,
     });
 
     try {
@@ -2385,9 +2829,9 @@ describe("MCP runtime", () => {
       now = 5 * 60 * 1_000;
 
       // When / Then
-      await expect(runtime.prepareTurn(controller.signal)).rejects.toBe(
-        cancellation,
-      );
+      await expect(
+        runtime.prepareTurn(testSchemaTarget, controller.signal),
+      ).rejects.toBe(cancellation);
     } finally {
       await runtime.close();
     }
@@ -2441,6 +2885,7 @@ describe("MCP runtime", () => {
         }),
       },
       permission: allowPermission,
+      schemaTarget: testSchemaTarget,
     });
 
     try {

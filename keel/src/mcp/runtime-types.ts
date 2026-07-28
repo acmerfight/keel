@@ -5,6 +5,7 @@ import type {
 } from "../tools/tool-call.ts";
 import type { ToolOutputArtifact } from "../tools/types.ts";
 import type { McpConnection, McpServerEndpoint } from "./discovery.ts";
+import type { McpProviderSchemaTarget } from "./provider-schema.ts";
 
 export interface McpSearchRequest {
   readonly query: string;
@@ -83,7 +84,10 @@ export type McpToolRuntimeResult =
   | UnidentifiedMcpToolRuntimeResult;
 
 export interface McpRuntime {
-  readonly prepareTurn: (signal: AbortSignal) => Promise<void>;
+  readonly prepareTurn: (
+    schemaTarget: McpProviderSchemaTarget,
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly exposureSnapshot: () => McpToolExposureSnapshot;
   readonly search: (
     request: McpSearchRequest,
