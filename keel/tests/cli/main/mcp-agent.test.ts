@@ -409,15 +409,15 @@ describe("CLI Main - MCP agent tools", () => {
     },
   );
 
-  test(`Given the user logged in to a protected MCP server,
+  test(`Given the user logged in and the protected MCP server rejects the expired access token,
     When Keel discovers and invokes one approved remote tool,
-    Then every MCP request reads the secure credential dynamically and no token reaches the model`, async () => {
+    Then Keel refreshes once, every request reads the published credential dynamically, and no token reaches the model`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-auth-agent-home-"));
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-mcp-auth-agent-workspace-"),
     );
-    const mcp = await startOAuthMcpServer();
+    const mcp = await startOAuthMcpServer({ refreshResponse: "rotate" });
     const secretEntries = new Map<string, string>();
     const secretKey = (service: string, account: string) =>
       `${service}\0${account}`;
@@ -444,6 +444,7 @@ describe("CLI Main - MCP agent tools", () => {
     });
     expect(await runCliMain(login.runtime), login.stderr()).toBe(0);
     const readsAfterLogin = credentialReads;
+    mcp.expireAccessToken();
 
     const capturedBodies: unknown[] = [];
     const provider = mcpAgentProvider(capturedBodies);
@@ -481,10 +482,20 @@ describe("CLI Main - MCP agent tools", () => {
       expect(run.stdout()).toBe("Found one remote match.\n");
       expect(mcp.calls()).toEqual(["otters"]);
       expect(credentialReads - readsAfterLogin).toBeGreaterThan(2);
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "refresh_token",
+      ]);
       expect(JSON.stringify(capturedBodies)).not.toContain(mcp.accessToken);
+      expect(JSON.stringify(capturedBodies)).not.toContain(
+        mcp.refreshedAccessToken,
+      );
       expect(run.stdout()).not.toContain(mcp.accessToken);
       expect(run.stderr()).not.toContain(mcp.accessToken);
       expect(await readFile(reportPath, "utf8")).not.toContain(mcp.accessToken);
+      expect(await readFile(reportPath, "utf8")).not.toContain(
+        mcp.refreshedAccessToken,
+      );
     } finally {
       input.end();
       await close(provider);

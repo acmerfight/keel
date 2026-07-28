@@ -15,6 +15,7 @@ import {
   type McpConnection,
   type McpJsonValue,
 } from "../../src/mcp/discovery.ts";
+import { McpOAuthAuthenticationRequiredError } from "../../src/mcp/oauth.ts";
 import {
   compileMcpProviderInputSchema,
   MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
@@ -1364,6 +1365,51 @@ describe("MCP runtime", () => {
       expect(result.content).toContain("did not retry");
       expect(result.content).not.toContain("topsecret");
       expect(result.content).not.toContain("live-secret-token-270");
+      expect(fake.callCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given an MCP server rejects authorization before dispatch,
+    When execution settles the call,
+    Then it asks the user to log in without reporting an uncertain external outcome`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({
+      catalogs: [catalog],
+      callTool: async () => {
+        throw new McpOAuthAuthenticationRequiredError(
+          "Error: MCP authorization refresh credential was rejected.",
+        );
+      },
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        'Run keel mcp login "catalog" to authorize again.',
+      );
+      expect(result.content).not.toContain("outcome is uncertain");
       expect(fake.callCalls()).toBe(1);
     } finally {
       await runtime.close();

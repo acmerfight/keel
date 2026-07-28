@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  type AuthProvider,
   type CallToolResult,
   Client,
   fromJsonSchema,
@@ -12,7 +11,6 @@ import {
   StreamableHTTPClientTransport,
   specTypeSchemas,
   type Tool,
-  UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import {
   Ajv,
@@ -22,7 +20,10 @@ import {
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
-import { McpOAuthAuthenticationRequiredError } from "./oauth.ts";
+import {
+  isMcpAuthenticationRequiredError,
+  type McpRuntimeAuthProvider,
+} from "./oauth.ts";
 import {
   compileMcpProviderInputSchema,
   MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
@@ -752,7 +753,7 @@ export interface McpConnection {
 export async function connectMcpServer(
   server: McpServerEndpoint,
   signal?: AbortSignal,
-  authProvider?: AuthProvider,
+  authProvider?: McpRuntimeAuthProvider,
 ): Promise<McpConnection> {
   const validated = validateMcpServerUrl(
     server.url,
@@ -761,7 +762,7 @@ export async function connectMcpServer(
   const network = createMcpPolicyFetch(validated);
   const transport = new StreamableHTTPClientTransport(validated.url, {
     authProvider: authProvider ?? { token: async () => undefined },
-    fetch: network.fetch,
+    fetch: authProvider?.wrapFetch(network.fetch) ?? network.fetch,
   });
   const client = createMcpSdkClient();
   try {
@@ -825,13 +826,6 @@ export async function connectMcpServer(
   }
 }
 
-function requiresAuthentication(error: unknown): boolean {
-  return (
-    UnauthorizedError.isInstance(error) ||
-    error instanceof McpOAuthAuthenticationRequiredError
-  );
-}
-
 function sanitizedError(error: unknown): string {
   const firstLine = errorMessage(error)
     .replace(/[\r\n][\s\S]*/u, "")
@@ -855,7 +849,7 @@ function sanitizedError(error: unknown): string {
 export async function discoverMcpServer(options: {
   readonly server: McpServerEndpoint;
   readonly now: () => number;
-  readonly authProvider: AuthProvider | null;
+  readonly authProvider: McpRuntimeAuthProvider | null;
   readonly schemaTarget: McpProviderSchemaTarget;
 }): Promise<McpDiscoveryStatus> {
   const { server, now, authProvider, schemaTarget } = options;
@@ -879,7 +873,7 @@ export async function discoverMcpServer(options: {
       latencyMs: Math.max(0, now() - startedAt),
     };
   } catch (error) {
-    if (requiresAuthentication(error)) {
+    if (isMcpAuthenticationRequiredError(error)) {
       status = {
         status: "needs-auth",
         latencyMs: Math.max(0, now() - startedAt),
