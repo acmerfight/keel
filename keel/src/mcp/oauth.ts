@@ -213,6 +213,7 @@ export interface McpOAuthLoginProvider extends OAuthClientProvider {
 }
 
 export class McpOAuthCredentialError extends Error {}
+export class McpOAuthAuthenticationRequiredError extends McpOAuthCredentialError {}
 class McpOAuthCredentialUnavailableError extends McpOAuthCredentialError {}
 
 function emptyRecord(resource: string): OAuthCredentialRecord {
@@ -706,7 +707,9 @@ export function createMcpBearerAuthProvider(
                 entry.client.client_id === active.clientId,
             )?.tokens?.access_token;
       if (accessToken === undefined && server.authenticationRequired) {
-        credentialError("requires an active OAuth credential");
+        throw new McpOAuthAuthenticationRequiredError(
+          "Error: MCP authorization requires an active OAuth credential.",
+        );
       }
       return accessToken;
     },

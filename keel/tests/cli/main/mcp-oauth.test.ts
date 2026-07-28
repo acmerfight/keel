@@ -604,6 +604,45 @@ describe("CLI Main - MCP OAuth", () => {
     }
   });
 
+  test(`Given a failed login left an MCP server requiring authentication without an active credential,
+    When the user checks its status,
+    Then Keel reports needs-auth instead of a server failure`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-missing-auth-home-"));
+    const mcp = await startOAuthMcpServer({ authentication: "optional" });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+      expect(await runCliMain(login.runtime)).toBe(1);
+      const status = createRuntime(["mcp", "status", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const exitCode = await runCliMain(status.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(status.stderr()).toBe("");
+      expect(status.stdout()).toContain("status: needs-auth\n");
+      expect(status.stdout()).toContain("authorization: required\n");
+      expect(status.stdout()).not.toContain("status: failed");
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given MCP login is waiting for the loopback authorization callback,
     When the CLI receives SIGINT,
     Then it aborts OAuth and closes the callback listener`, async () => {
