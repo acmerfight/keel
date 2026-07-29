@@ -22,6 +22,8 @@ import { errorMessage } from "../core/error.ts";
 import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 import {
   isMcpAuthenticationRequiredError,
+  type McpAuthorizationIdentity,
+  McpOAuthAuthenticationRequiredError,
   type McpRuntimeAuthProvider,
 } from "./oauth.ts";
 import {
@@ -741,10 +743,12 @@ export interface McpConnection {
   readonly protocolEra: ProtocolEra;
   readonly protocolVersion: string;
   readonly serverIdentity: string | null;
+  readonly authorizationIdentity: () => Promise<McpAuthorizationIdentity>;
   readonly listCatalog: (signal?: AbortSignal) => Promise<McpCatalog>;
   readonly callTool: (
     tool: McpCatalogTool,
     arguments_: Readonly<Record<string, McpJsonValue>>,
+    authorizationIdentity: McpAuthorizationIdentity,
     signal: AbortSignal,
   ) => Promise<CallToolResult>;
   readonly close: () => Promise<void>;
@@ -788,22 +792,45 @@ export async function connectMcpServer(
               `${identity.name}@${identity.version}`,
               MCP_IDENTITY_MAX_LENGTH,
             ),
+      authorizationIdentity:
+        authProvider === undefined
+          ? async () => ({ kind: "anonymous" })
+          : async () => await authProvider.authorizationIdentity(),
       listCatalog: async (listSignal) =>
         await buildMcpCatalog(
           await listCatalogTools(client, listSignal),
           protocolEra,
         ),
-      callTool: async (tool, arguments_, signal) =>
-        await client.callTool(
-          { name: tool.descriptor.name, arguments: arguments_ },
-          {
-            signal,
-            timeout: MCP_CALL_TIMEOUT_MS,
-            maxTotalTimeout: MCP_CALL_MAX_TOTAL_TIMEOUT_MS,
-            resetTimeoutOnProgress: false,
-            toolDefinition: tool.descriptor,
-          },
-        ),
+      callTool: async (
+        tool,
+        arguments_,
+        expectedAuthorizationIdentity,
+        signal,
+      ) => {
+        const action = async () =>
+          await client.callTool(
+            { name: tool.descriptor.name, arguments: arguments_ },
+            {
+              signal,
+              timeout: MCP_CALL_TIMEOUT_MS,
+              maxTotalTimeout: MCP_CALL_MAX_TOTAL_TIMEOUT_MS,
+              resetTimeoutOnProgress: false,
+              toolDefinition: tool.descriptor,
+            },
+          );
+        if (authProvider !== undefined) {
+          return await authProvider.withAuthorizationIdentity(
+            expectedAuthorizationIdentity,
+            action,
+          );
+        }
+        if (expectedAuthorizationIdentity.kind !== "anonymous") {
+          throw new McpOAuthAuthenticationRequiredError(
+            "Error: MCP authorization identity is unavailable for authenticated dispatch.",
+          );
+        }
+        return await action();
+      },
       close: async () => {
         if (closed) return;
         closed = true;

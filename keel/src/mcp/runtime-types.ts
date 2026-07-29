@@ -5,6 +5,7 @@ import type {
 } from "../tools/tool-call.ts";
 import type { ToolOutputArtifact } from "../tools/types.ts";
 import type { McpConnection, McpServerEndpoint } from "./discovery.ts";
+import type { McpAuthorizationIdentity } from "./oauth.ts";
 import type { McpProviderSchemaTarget } from "./provider-schema.ts";
 
 export interface McpSearchRequest {
@@ -22,7 +23,10 @@ export type McpSearchResult =
 export interface McpPermissionRequest {
   readonly origin: string;
   readonly serverId: string;
+  readonly configurationDigest: string;
   readonly rawToolName: string;
+  readonly descriptorDigest: string;
+  readonly authorizationIdentity: McpAuthorizationIdentity;
   readonly arguments: Readonly<Record<string, ToolJsonValue>>;
   readonly signal: AbortSignal;
 }

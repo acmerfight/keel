@@ -615,6 +615,114 @@ describe("CLI Main - MCP agent tools", () => {
     }
   });
 
+  test(`Given the user saves an exact MCP tool approval for the current project,
+    When a later non-interactive run requests the same remote call,
+    Then Keel dispatches it without another approval prompt`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-saved-approval-home-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-saved-approval-workspace-"),
+    );
+    const mcp = await startMcpToolServer("modern");
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
+
+    const firstBodies: unknown[] = [];
+    const firstProvider = mcpAgentProvider(firstBodies);
+    await listen(firstProvider);
+    const input = new PassThrough();
+    let approvalSaved = false;
+    const firstRun = createRuntime(["search remotely"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(firstProvider)}`,
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve MCP tool call?") && !approvalSaved) {
+          approvalSaved = true;
+          input.end("s\n");
+        }
+      },
+    });
+    expect(await runCliMain(firstRun.runtime), firstRun.stderr()).toBe(0);
+    expect(approvalSaved).toBe(true);
+    await close(firstProvider);
+
+    const secondBodies: unknown[] = [];
+    const secondProvider = mcpAgentProvider(secondBodies);
+    await listen(secondProvider);
+    const secondRun = createRuntime(["search remotely"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(secondProvider)}`,
+        KEEL_HOME: home,
+      },
+      inputIsTTY: false,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(secondRun.runtime);
+
+      // Then
+      expect(exitCode, secondRun.stderr()).toBe(0);
+      expect(secondRun.stdout()).toBe("Found one remote match.\n");
+      expect(secondRun.stderr()).not.toContain("Approve MCP tool call?");
+      expect(mcp.calls()).toEqual(["otters", "otters"]);
+      await close(secondProvider);
+
+      const list = createRuntime(["mcp", "approvals", "list"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(list.runtime), list.stderr()).toBe(0);
+      expect(list.stdout()).toContain("MCP project approvals:\n");
+      expect(list.stdout()).toContain("tool: catalog/search\n");
+      expect(list.stdout()).toContain("authorization: anonymous\n");
+
+      const revoke = createRuntime(["mcp", "approvals", "revoke", "1"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(revoke.runtime), revoke.stderr()).toBe(0);
+      expect(revoke.stdout()).toBe("Revoked MCP project approval 1.\n");
+
+      const thirdBodies: unknown[] = [];
+      const thirdProvider = mcpAgentProvider(thirdBodies);
+      await listen(thirdProvider);
+      const thirdRun = createRuntime(["search remotely"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(thirdProvider)}`,
+          KEEL_HOME: home,
+        },
+        inputIsTTY: false,
+      });
+      expect(await runCliMain(thirdRun.runtime), thirdRun.stderr()).toBe(0);
+      expect(mcp.calls()).toEqual(["otters", "otters"]);
+      const recoveryRequest = requestWithMessagesSchema.parse(thirdBodies[2]);
+      expect(recoveryRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_remote_search",
+        content: expect.stringContaining("exact saved project approval"),
+      });
+      await close(thirdProvider);
+    } finally {
+      input.end();
+      await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given one model turn requests the same MCP tool with three different arguments,
     When the user approves every exact remote call,
     Then Keel dispatches all three calls and returns every result to the model`, async () => {

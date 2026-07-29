@@ -205,6 +205,9 @@ interface InteractiveSessionOptionsBase {
     readonly connectionFactory: McpConnectionFactory;
     readonly lifecycle: McpLifecyclePolicy;
     readonly canPrompt: boolean;
+    readonly approvalRuntime: {
+      readonly env: (key: string) => string | undefined;
+    };
   };
   readonly initialSessionTitle?: string;
   readonly initialSessionGoal?: SessionGoal;

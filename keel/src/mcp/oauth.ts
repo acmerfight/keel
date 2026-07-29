@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type {
   AuthProvider,
@@ -21,7 +22,7 @@ import type { McpServerEndpoint } from "./discovery.ts";
 import { withMcpOAuthRefreshLock } from "./oauth-refresh-lock.ts";
 
 const MCP_OAUTH_SECRET_SERVICE = "Keel MCP OAuth";
-const MCP_OAUTH_SECRET_SCHEMA_VERSION = 2;
+const MCP_OAUTH_SECRET_SCHEMA_VERSION = 3;
 const MCP_OAUTH_MAX_ISSUERS = 16;
 const MCP_OAUTH_MAX_SECRET_BYTES = 1024 * 1024;
 const MCP_OAUTH_FLOW_LIFETIME_MS = 2 * 60 * 1000;
@@ -121,6 +122,7 @@ const activeAuthorizationSchema = z
   .object({
     issuer: z.string().url(),
     clientId: z.string().min(1),
+    grantId: z.uuid(),
   })
   .strict();
 const oauthFlowSchema = z.discriminatedUnion("status", [
@@ -206,7 +208,34 @@ export interface McpPreRegisteredClient {
   readonly clientSecret: string | null;
 }
 
+export type McpAuthorizationIdentity =
+  | { readonly kind: "anonymous" }
+  | {
+      readonly kind: "oauth";
+      readonly issuer: string;
+      readonly clientId: string;
+      readonly grantId: string;
+    };
+
+export function sameMcpAuthorizationIdentity(
+  left: McpAuthorizationIdentity,
+  right: McpAuthorizationIdentity,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "anonymous" || right.kind === "anonymous") return true;
+  return (
+    left.issuer === right.issuer &&
+    left.clientId === right.clientId &&
+    left.grantId === right.grantId
+  );
+}
+
 export interface McpRuntimeAuthProvider extends AuthProvider {
+  readonly authorizationIdentity: () => Promise<McpAuthorizationIdentity>;
+  readonly withAuthorizationIdentity: <Result>(
+    expected: McpAuthorizationIdentity,
+    action: () => Promise<Result>,
+  ) => Promise<Result>;
   readonly wrapFetch: (fetchFn: FetchLike) => FetchLike;
   readonly onUnauthorized: UnauthorizedHandler;
 }
@@ -685,6 +714,10 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
           activeAuthorization: {
             issuer,
             clientId: credentials.client.client_id,
+            grantId:
+              record.flow.status === "callback-consumed"
+                ? randomUUID()
+                : (record.activeAuthorization?.grantId ?? randomUUID()),
           },
           credentials: replaceIssuerValue(record.credentials, {
             ...credentials,
@@ -851,6 +884,20 @@ function activeCredentials(
   );
 }
 
+function authorizationIdentity(
+  record: OAuthCredentialRecord,
+): McpAuthorizationIdentity {
+  const active = record.activeAuthorization;
+  return active === null
+    ? { kind: "anonymous" }
+    : {
+        kind: "oauth",
+        issuer: active.issuer,
+        clientId: active.clientId,
+        grantId: active.grantId,
+      };
+}
+
 function authorizationBearerToken(
   init: Parameters<FetchLike>[1],
 ): string | null {
@@ -894,10 +941,25 @@ function authenticationRequired(message: string): never {
   );
 }
 
+function requireAuthorizationIdentity(
+  record: OAuthCredentialRecord,
+  expected: McpAuthorizationIdentity | null,
+): void {
+  if (
+    expected !== null &&
+    !sameMcpAuthorizationIdentity(expected, authorizationIdentity(record))
+  ) {
+    authenticationRequired(
+      "changed authorization identity before authenticated dispatch",
+    );
+  }
+}
+
 async function refreshRejectedCredential(options: {
   readonly store: OAuthCredentialStore;
   readonly refreshLockRoot: string;
   readonly rejectedAccessToken: string;
+  readonly expectedAuthorizationIdentity: McpAuthorizationIdentity | null;
   readonly fetchFn: FetchLike;
   readonly ensureAvailable: () => Promise<void>;
 }): Promise<void> {
@@ -907,6 +969,10 @@ async function refreshRejectedCredential(options: {
     action: async () => {
       await options.ensureAvailable();
       const record = await options.store.load();
+      requireAuthorizationIdentity(
+        record,
+        options.expectedAuthorizationIdentity,
+      );
       const credentials = activeCredentials(record);
       if (credentials === null || credentials.tokens === null) {
         authenticationRequired("requires an active OAuth credential");
@@ -1005,6 +1071,8 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
     server: McpOAuthServerEndpoint,
   ) => boolean | Promise<boolean>;
   private readonly rejectedTokens = new WeakMap<Response, string>();
+  private readonly expectedAuthorization =
+    new AsyncLocalStorage<McpAuthorizationIdentity>();
 
   constructor(options: {
     readonly server: McpOAuthServerEndpoint;
@@ -1045,6 +1113,10 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
       }
       throw error;
     }
+    requireAuthorizationIdentity(
+      record,
+      this.expectedAuthorization.getStore() ?? null,
+    );
     const accessToken = activeCredentials(record)?.tokens?.access_token;
     if (accessToken === undefined && this.server.authenticationRequired) {
       throw new McpOAuthAuthenticationRequiredError(
@@ -1052,6 +1124,28 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
       );
     }
     return accessToken;
+  }
+
+  async authorizationIdentity(): Promise<McpAuthorizationIdentity> {
+    await this.ensureAvailable();
+    let record: OAuthCredentialRecord;
+    try {
+      record = await this.store.load();
+    } catch (error) {
+      if (error instanceof McpOAuthCredentialUnavailableError) {
+        if (this.server.authenticationRequired) throw error;
+        return { kind: "anonymous" };
+      }
+      throw error;
+    }
+    return authorizationIdentity(record);
+  }
+
+  async withAuthorizationIdentity<Result>(
+    expected: McpAuthorizationIdentity,
+    action: () => Promise<Result>,
+  ): Promise<Result> {
+    return await this.expectedAuthorization.run(expected, action);
   }
 
   wrapFetch(fetchFn: FetchLike): FetchLike {
@@ -1078,6 +1172,8 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
         store: this.store,
         refreshLockRoot: this.refreshLockRoot,
         rejectedAccessToken,
+        expectedAuthorizationIdentity:
+          this.expectedAuthorization.getStore() ?? null,
         fetchFn: context.fetchFn,
         ensureAvailable: async () => await this.ensureAvailable(),
       });

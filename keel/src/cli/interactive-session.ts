@@ -170,16 +170,14 @@ import type {
   ReviewedInteractiveSessionMemoryBinding,
   SavedInteractiveSession,
 } from "./interactive-session/types.ts";
-import {
-  createPromptedMcpPermissionPolicy,
-  denyMcpPermissionPolicy,
-} from "./mcp-approval.ts";
+import { createMcpPermissionPolicy } from "./mcp-approval.ts";
 import {
   formatLiveSessionGoalStatus,
   formatUndoCheckpointList,
   formatUndoCheckpointWarning,
   sanitizeStatusLineText,
 } from "./output.ts";
+import { approvalProjectRoot } from "./project-root.ts";
 import {
   accountModelOperations,
   createAgentEventReportRecorder,
@@ -606,18 +604,27 @@ export async function runInteractiveSession(
       servers: options.mcp.servers,
       connectionFactory: options.mcp.connectionFactory,
       lifecycle: options.mcp.lifecycle,
-      permission: options.mcp.canPrompt
-        ? createPromptedMcpPermissionPolicy(lineReader, options.writeStderr, {
-            onPromptStart: () => {
-              setComposerMode("approval");
+      permission: createMcpPermissionPolicy({
+        runtime: options.mcp.approvalRuntime,
+        projectRoot: approvalProjectRoot(options.workspace),
+        prompt: options.mcp.canPrompt
+          ? {
+              kind: "interactive",
+              lineReader,
+              writeStderr: options.writeStderr,
+              onPromptStart: () => {
+                setComposerMode("approval");
+              },
+              onPromptEnd: () => {
+                setComposerMode("steer");
+              },
+            }
+          : {
+              kind: "headless",
+              deniedMessage:
+                "MCP calls require an exact saved project approval and this session cannot prompt.",
             },
-            onPromptEnd: () => {
-              setComposerMode("steer");
-            },
-          })
-        : denyMcpPermissionPolicy(
-            "MCP calls require a real terminal approval and this session cannot prompt.",
-          ),
+      }),
       now,
       schemaTarget,
     });
