@@ -10,6 +10,7 @@ import {
   McpOAuthAuthenticationRequiredError,
   McpOAuthServerUnavailableError,
   type McpSecretBackend,
+  sameMcpAuthorizationIdentity,
 } from "../../src/mcp/oauth.ts";
 
 const TEST_SERVER_INCARNATION = "00000000-0000-4000-8000-000000000001";
@@ -178,6 +179,23 @@ async function captureUnauthorizedResponse(
 }
 
 describe("MCP OAuth flow state", () => {
+  test(`Given anonymous and OAuth grant identities,
+    When authorization bindings are compared,
+    Then identities with different kinds never match`, () => {
+    // Given
+    const anonymous = { kind: "anonymous" } as const;
+    const oauth = {
+      kind: "oauth",
+      issuer: "https://auth.example",
+      clientId: "client",
+      grantId: "00000000-0000-4000-8000-000000000001",
+    } as const;
+
+    // When / Then
+    expect(sameMcpAuthorizationIdentity(anonymous, oauth)).toBe(false);
+    expect(sameMcpAuthorizationIdentity(oauth, anonymous)).toBe(false);
+  });
+
   test(`Given bearer identity is requested with unavailable or malformed secure state,
     When authentication is optional or required,
     Then optional unavailability is anonymous while required and malformed state fail closed`, async () => {

@@ -165,13 +165,9 @@ async function readApprovalsFile(
   runtime: McpProjectApprovalRuntime,
 ): Promise<McpProjectApprovalsFile> {
   const filePath = approvalsPath(runtime);
+  let fileSize: number;
   try {
-    const fileStat = await stat(filePath);
-    if (fileStat.size > MCP_PROJECT_APPROVALS_MAX_BYTES) {
-      approvalError(
-        `Error: cannot read MCP project approvals ${filePath}: file exceeds ${MCP_PROJECT_APPROVALS_MAX_BYTES} bytes.`,
-      );
-    }
+    fileSize = (await stat(filePath)).size;
   } catch (error) {
     if (hasNodeErrorCode(error, "ENOENT")) {
       return {
@@ -179,10 +175,14 @@ async function readApprovalsFile(
         grants: [],
       };
     }
-    if (error instanceof McpProjectApprovalsError) throw error;
     /* v8 ignore next 3 -- requires an injected stat fault other than missing/oversized; ordinary malformed states continue through bounded read and schema validation. */
     approvalError(
       `Error: cannot inspect MCP project approvals ${filePath}: ${errorMessage(error)}.`,
+    );
+  }
+  if (fileSize > MCP_PROJECT_APPROVALS_MAX_BYTES) {
+    approvalError(
+      `Error: cannot read MCP project approvals ${filePath}: file exceeds ${MCP_PROJECT_APPROVALS_MAX_BYTES} bytes.`,
     );
   }
 
@@ -205,7 +205,7 @@ async function readApprovalsFile(
   const parsed = mcpProjectApprovalsFileSchema.safeParse(json);
   if (!parsed.success) {
     approvalError(
-      `Error: cannot read MCP project approvals ${filePath}: ${parsed.error.issues[0]?.message ?? "invalid current schema"}.`,
+      `Error: cannot read MCP project approvals ${filePath}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}.`,
     );
   }
   return parsed.data;
