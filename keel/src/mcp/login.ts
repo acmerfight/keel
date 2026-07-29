@@ -173,11 +173,13 @@ export async function authorizeMcpServer(options: {
     if (!flowFinished) {
       await Promise.allSettled([provider.abortFlow()]);
       if (!(await options.isCurrentAndEnabled().catch(() => false))) {
-        await deleteMcpOAuthCredentials(
-          options.server,
-          options.backend,
-          options.refreshLockRoot,
-        ).catch(() => false);
+        await Promise.allSettled([
+          deleteMcpOAuthCredentials(
+            options.server,
+            options.backend,
+            options.refreshLockRoot,
+          ),
+        ]);
       }
     }
     await Promise.allSettled([client.close(), network.close()]);
@@ -199,11 +201,13 @@ export async function authorizeMcpServer(options: {
     await ensureAvailable();
   } catch (error) {
     if (!(await options.isCurrentAndEnabled().catch(() => false))) {
-      await deleteMcpOAuthCredentials(
-        options.server,
-        options.backend,
-        options.refreshLockRoot,
-      ).catch(() => false);
+      await Promise.allSettled([
+        deleteMcpOAuthCredentials(
+          options.server,
+          options.backend,
+          options.refreshLockRoot,
+        ),
+      ]);
     }
     throw normalizedLoginError(error);
   } finally {

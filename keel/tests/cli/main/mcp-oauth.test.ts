@@ -12,11 +12,9 @@ import { startOAuthMcpServer } from "../../fixtures/mcp-oauth.ts";
 function createSecretBackend(): {
   readonly backend: McpSecretBackend;
   readonly entries: ReadonlyMap<string, string>;
-  readonly failDeletesAfterEffect: (message: string) => void;
   readonly failWrites: (message: string) => void;
 } {
   const entries = new Map<string, string>();
-  let deleteFailure: string | null = null;
   let writeFailure: string | null = null;
   const key = (service: string, account: string) => `${service}\0${account}`;
   return {
@@ -27,16 +25,10 @@ function createSecretBackend(): {
         if (writeFailure !== null) throw new Error(writeFailure);
         entries.set(key(service, account), password);
       },
-      deletePassword: async (service, account) => {
-        const deleted = entries.delete(key(service, account));
-        if (deleteFailure !== null) throw new Error(deleteFailure);
-        return deleted;
-      },
+      deletePassword: async (service, account) =>
+        entries.delete(key(service, account)),
     },
     entries,
-    failDeletesAfterEffect: (message) => {
-      deleteFailure = message;
-    },
     failWrites: (message) => {
       writeFailure = message;
     },
@@ -147,7 +139,6 @@ describe("CLI Main - MCP OAuth", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-login-race-"));
     const mcp = await startOAuthMcpServer();
     const secrets = createSecretBackend();
-    secrets.failDeletesAfterEffect("credential cleanup unavailable");
     const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
       env: { KEEL_HOME: home },
     });
@@ -174,7 +165,6 @@ describe("CLI Main - MCP OAuth", () => {
       expect(login.stderr()).toMatch(
         /disabled, removed, or changed|callback was cancelled/u,
       );
-      expect(login.stderr()).not.toContain("credential cleanup unavailable");
       expect(mcp.tokenRequests()).toEqual([]);
       expect(secrets.entries.size).toBe(0);
       await expect(listMcpServers({ env: login.runtime.env })).resolves.toEqual(

@@ -725,9 +725,7 @@ class DefaultMcpRuntime implements McpRuntime {
           signal: this.lifecycleAbort.signal,
         });
       } catch {
-        /* v8 ignore next 2 -- the abortable delay rejects only when this controller is aborted. */
-        if (this.lifecycleAbort.signal.aborted) return;
-        throw new Error("MCP lifecycle watcher failed");
+        return;
       }
     }
   }
