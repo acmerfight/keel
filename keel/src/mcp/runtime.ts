@@ -37,7 +37,6 @@ import type {
   McpToolRuntimeResult,
 } from "./runtime-types.ts";
 
-const MCP_CATALOG_TTL_MS = 5 * 60 * 1_000;
 const MCP_LIFECYCLE_POLL_MS = 100;
 const MCP_DEFAULT_SEARCH_LIMIT = 5;
 const MCP_MODEL_SCHEMA_BUDGET_BYTES = 48 * 1_024;
@@ -460,7 +459,8 @@ class McpServerOwner {
   expired(): boolean {
     const current = this.current();
     return (
-      current !== null && this.now() - current.refreshedAt >= MCP_CATALOG_TTL_MS
+      current !== null &&
+      this.now() - current.refreshedAt >= current.catalog.cacheTtlMs
     );
   }
 

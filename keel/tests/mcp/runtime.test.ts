@@ -12,6 +12,7 @@ import type { McpServerConfig } from "../../src/cli/mcp-config.ts";
 import {
   buildMcpCatalog,
   connectMcpServer,
+  MCP_DEFAULT_CATALOG_CACHE_TTL_MS,
   type McpConnection,
   type McpJsonValue,
 } from "../../src/mcp/discovery.ts";
@@ -49,6 +50,19 @@ interface TestMcpServer {
   readonly close: () => Promise<void>;
 }
 
+interface FinalSpecRequestHeaders {
+  readonly method: string;
+  readonly mcpProtocolVersion: string | null;
+  readonly mcpMethod: string | null;
+  readonly mcpName: string | null;
+}
+
+interface FinalSpecCatalogServer {
+  readonly url: string;
+  readonly requests: () => readonly FinalSpecRequestHeaders[];
+  readonly close: () => Promise<void>;
+}
+
 type McpWireToolResult = Awaited<ReturnType<McpConnection["callTool"]>>;
 type IdentifiedMcpToolRuntimeResult = Extract<
   McpToolRuntimeResult,
@@ -77,6 +91,14 @@ const testSchemaTarget = mcpProviderSchemaTarget(
   "deepseek",
   "deepseek-v4-flash",
 );
+const finalSpecRequestSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    id: z.union([z.string(), z.number()]).optional(),
+    method: z.string(),
+    params: z.json().optional(),
+  })
+  .passthrough();
 
 const allowPermission: McpPermissionPolicy = {
   review: () => ({ type: "allow" }),
@@ -106,8 +128,9 @@ async function fakeCatalog(
     readonly inputSchema: McpJsonValue;
     readonly outputSchema?: McpJsonValue;
   }[],
+  cacheTtlMs = MCP_DEFAULT_CATALOG_CACHE_TTL_MS,
 ) {
-  return await buildMcpCatalog(tools, "modern");
+  return await buildMcpCatalog(tools, "modern", cacheTtlMs);
 }
 
 function fakeConnectionFactory(options: {
@@ -278,6 +301,122 @@ async function startMcpToolServer(): Promise<TestMcpServer> {
     parameterHeaders: () => [...parameterHeaders],
     close: async () => {
       await handler.close?.();
+      await close(server);
+    },
+  };
+}
+
+function headerString(
+  value: string | readonly string[] | undefined,
+): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.join(",");
+  return null;
+}
+
+async function requestBody(request: AsyncIterable<unknown>): Promise<string> {
+  let body = "";
+  for await (const chunk of request) {
+    body += String(chunk);
+  }
+  return body;
+}
+
+async function startFinalSpecCatalogServer(): Promise<FinalSpecCatalogServer> {
+  const requests: FinalSpecRequestHeaders[] = [];
+  let listCalls = 0;
+  const server = createServer((request, response) => {
+    void (async () => {
+      requests.push({
+        method: request.method ?? "",
+        mcpProtocolVersion: headerString(
+          request.headers["mcp-protocol-version"],
+        ),
+        mcpMethod: headerString(request.headers["mcp-method"]),
+        mcpName: headerString(request.headers["mcp-name"]),
+      });
+      const parsed = finalSpecRequestSchema.parse(
+        JSON.parse(await requestBody(request)),
+      );
+      if (parsed.method === "server/discover") {
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: {
+              resultType: "complete",
+              supportedVersions: ["2026-07-28"],
+              capabilities: { tools: {} },
+              ttlMs: 0,
+              cacheScope: "private",
+            },
+          }),
+        );
+        return;
+      }
+      if (parsed.method === "tools/list") {
+        listCalls++;
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: {
+              resultType: "complete",
+              ttlMs: listCalls === 1 ? 0 : MCP_DEFAULT_CATALOG_CACHE_TTL_MS,
+              cacheScope: "private",
+              tools: [
+                {
+                  name: "search",
+                  description:
+                    listCalls === 1
+                      ? "Before final cache refresh"
+                      : "After final cache refresh",
+                  inputSchema: {
+                    type: "object",
+                    properties: { query: { type: "string" } },
+                    required: ["query"],
+                  },
+                },
+              ],
+            },
+          }),
+        );
+        return;
+      }
+      if (parsed.method === "tools/call") {
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: {
+              resultType: "complete",
+              content: [{ type: "text", text: "final result" }],
+            },
+          }),
+        );
+        return;
+      }
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: parsed.id,
+          error: { code: -32601, message: "Method not found" },
+        }),
+      );
+    })().catch((error: unknown) => {
+      response.statusCode = 500;
+      response.end(error instanceof Error ? error.message : String(error));
+    });
+  });
+  await listen(server);
+  return {
+    url: `http://127.0.0.1:${getPort(server)}/mcp`,
+    requests: () => [...requests],
+    close: async () => {
       await close(server);
     },
   };
@@ -966,6 +1105,76 @@ describe("MCP runtime", () => {
       // Then
       expect(result.ok, result.content).toBe(true);
       expect(server.parameterHeaders()).toEqual(["acme"]);
+    } finally {
+      await runtime.close();
+      await server.close();
+    }
+  });
+
+  test(`Given a final MCP server returns complete results and zero catalog cache TTL,
+    When the agent prepares the next turn and invokes the refreshed tool,
+    Then Keel honors final headers and does not expose the stale catalog`, async () => {
+    // Given
+    const server = await startFinalSpecCatalogServer();
+    const servers = [
+      {
+        id: "catalog",
+        incarnation: "00000000-0000-4000-8000-000000000004",
+        url: server.url,
+        enabled: true,
+        allowPrivateNetwork: true,
+        authenticationRequired: false,
+        toolFilter: { allow: null, deny: [] },
+      },
+    ];
+    const runtime = createMcpRuntime({
+      servers,
+      connectionFactory: { connect: connectMcpServer },
+      lifecycle: staticLifecycle(servers),
+      permission: allowPermission,
+      schemaTarget: testSchemaTarget,
+      now: () => 0,
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+      const originalSnapshot = await runtime.exposureSnapshot();
+
+      // When
+      await runtime.prepareTurn(testSchemaTarget, signal);
+      const refreshedSearch = await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+      const toolCall = await exposedToolCall(runtime);
+      const result = await runtime.execute(toolCall, signal);
+
+      // Then
+      expect(originalSnapshot.tools[0]?.description).toContain(
+        "Before final cache refresh",
+      );
+      expect(refreshedSearch.ok, refreshedSearch.content).toBe(true);
+      expect(result.ok, result.content).toBe(true);
+      expect(result.content).toBe("final result");
+      expect(server.requests()).toContainEqual({
+        method: "POST",
+        mcpProtocolVersion: "2026-07-28",
+        mcpMethod: "tools/list",
+        mcpName: null,
+      });
+      expect(server.requests()).toContainEqual({
+        method: "POST",
+        mcpProtocolVersion: "2026-07-28",
+        mcpMethod: "tools/call",
+        mcpName: "search",
+      });
+      expect(
+        (await runtime.exposureSnapshot()).tools[0]?.description,
+      ).toContain("After final cache refresh");
     } finally {
       await runtime.close();
       await server.close();
@@ -2203,6 +2412,128 @@ describe("MCP runtime", () => {
       expect(
         (await runtime.exposureSnapshot()).tools[0]?.description,
       ).toContain("After TTL refresh");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a final MCP catalog declares zero cache TTL,
+    When the next turn is prepared without clock advance,
+    Then Keel refreshes before exposing stale remote tools`, async () => {
+    // Given
+    const firstCatalog = await fakeCatalog(
+      [
+        {
+          name: "search",
+          description: "Before server TTL refresh",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      0,
+    );
+    const secondCatalog = await fakeCatalog([
+      {
+        name: "search",
+        description: "After server TTL refresh",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({
+      catalogs: [firstCatalog, secondCatalog],
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      now: () => 0,
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+      const originalSnapshot = await runtime.exposureSnapshot();
+
+      // When
+      await runtime.prepareTurn(testSchemaTarget, signal);
+
+      // Then
+      expect(fake.listCalls()).toBe(2);
+      expect(originalSnapshot.tools[0]?.description).toContain(
+        "Before server TTL refresh",
+      );
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+      expect(
+        (await runtime.exposureSnapshot()).tools[0]?.description,
+      ).toContain("After server TTL refresh");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a final MCP catalog declares a positive cache TTL,
+    When turns are prepared before and after that freshness window,
+    Then Keel reuses the catalog only until the server TTL expires`, async () => {
+    // Given
+    const firstCatalog = await fakeCatalog(
+      [
+        {
+          name: "search",
+          description: "Before positive TTL refresh",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      10,
+    );
+    const secondCatalog = await fakeCatalog([
+      {
+        name: "search",
+        description: "After positive TTL refresh",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    let now = 0;
+    const fake = fakeConnectionFactory({
+      catalogs: [firstCatalog, secondCatalog],
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      now: () => now,
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+
+      // When
+      now = 9;
+      await runtime.prepareTurn(testSchemaTarget, signal);
+      const freshSnapshot = await runtime.exposureSnapshot();
+      now = 10;
+      await runtime.prepareTurn(testSchemaTarget, signal);
+
+      // Then
+      expect(fake.listCalls()).toBe(2);
+      expect(freshSnapshot.tools[0]?.description).toContain(
+        "Before positive TTL refresh",
+      );
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+      expect(
+        (await runtime.exposureSnapshot()).tools[0]?.description,
+      ).toContain("After positive TTL refresh");
     } finally {
       await runtime.close();
     }
