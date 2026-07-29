@@ -40,6 +40,7 @@ const MCP_CONNECT_TIMEOUT_MS = 10_000;
 const MCP_DISCOVERY_TIMEOUT_MS = 10_000;
 const MCP_CALL_TIMEOUT_MS = 30_000;
 const MCP_CALL_MAX_TOTAL_TIMEOUT_MS = 60_000;
+export const MCP_DEFAULT_CATALOG_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MCP_MAX_CATALOG_TOOLS = 1_000;
 const MCP_MAX_CATALOG_PAGES = 64;
 const MCP_MAX_CATALOG_BYTES = 8 * 1024 * 1024;
@@ -128,6 +129,8 @@ const toolDescriptorSchema = z
 const catalogPageSchema = z
   .object({
     tools: z.array(z.json()),
+    ttlMs: z.number().int().nonnegative().optional(),
+    cacheScope: z.enum(["private", "public"]).optional(),
     nextCursor: z
       .string()
       .max(
@@ -198,6 +201,7 @@ export interface McpCatalogTool {
 export interface McpCatalog {
   readonly summary: McpCatalogSummary;
   readonly tools: readonly McpCatalogTool[];
+  readonly cacheTtlMs: number;
 }
 
 export type McpDiscoveryStatus =
@@ -479,6 +483,7 @@ function appendCatalogIssue(
 export async function buildMcpCatalog(
   tools: readonly McpJsonValue[],
   protocolEra: ProtocolEra,
+  cacheTtlMs: number,
 ): Promise<McpCatalog> {
   const issues: McpCatalogIssue[] = [];
   const validated: McpCatalogTool[] = [];
@@ -647,6 +652,7 @@ export async function buildMcpCatalog(
       issues,
     },
     tools: usableTools,
+    cacheTtlMs,
   };
 }
 
@@ -694,12 +700,21 @@ function summarizeProviderCatalog(
 
 async function listCatalogTools(
   client: Client,
+  protocolEra: ProtocolEra,
   signal?: AbortSignal,
-): Promise<readonly McpJsonValue[]> {
-  if (client.getServerCapabilities()?.tools === undefined) return [];
+): Promise<{
+  readonly tools: readonly McpJsonValue[];
+  readonly cacheTtlMs: number;
+}> {
+  const defaultCacheTtlMs =
+    protocolEra === "modern" ? 0 : MCP_DEFAULT_CATALOG_CACHE_TTL_MS;
+  if (client.getServerCapabilities()?.tools === undefined) {
+    return { tools: [], cacheTtlMs: defaultCacheTtlMs };
+  }
 
   const tools: McpJsonValue[] = [];
   const seenCursors = new Set<string>();
+  let cacheTtlMs = defaultCacheTtlMs;
   let catalogBytes = 0;
   let cursor: string | undefined;
   for (let page = 1; page <= MCP_MAX_CATALOG_PAGES; page += 1) {
@@ -714,6 +729,9 @@ async function listCatalogTools(
         ...(signal !== undefined ? { signal } : {}),
       },
     );
+    const pageCacheTtlMs = result.ttlMs ?? defaultCacheTtlMs;
+    cacheTtlMs =
+      page === 1 ? pageCacheTtlMs : Math.min(cacheTtlMs, pageCacheTtlMs);
     if (tools.length + result.tools.length > MCP_MAX_CATALOG_TOOLS) {
       throw new Error(
         `catalog contains more than ${MCP_MAX_CATALOG_TOOLS} tools`,
@@ -728,7 +746,7 @@ async function listCatalogTools(
       }
     }
     tools.push(...result.tools);
-    if (result.nextCursor === undefined) return tools;
+    if (result.nextCursor === undefined) return { tools, cacheTtlMs };
     if (seenCursors.has(result.nextCursor)) {
       throw new Error(
         `tools/list pagination repeated cursor after page ${page}`,
@@ -798,9 +816,9 @@ export async function connectMcpServer(
           ? async () => ({ kind: "anonymous" })
           : async () => await authProvider.authorizationIdentity(),
       listCatalog: async (listSignal) =>
-        await buildMcpCatalog(
-          await listCatalogTools(client, listSignal),
-          protocolEra,
+        await listCatalogTools(client, protocolEra, listSignal).then(
+          (catalog) =>
+            buildMcpCatalog(catalog.tools, protocolEra, catalog.cacheTtlMs),
         ),
       callTool: async (
         tool,
