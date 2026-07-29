@@ -130,6 +130,7 @@ const catalogPageSchema = z
   .object({
     tools: z.array(z.json()),
     ttlMs: z.number().int().nonnegative().optional(),
+    // Keel validates cache scope at the wire boundary; catalog reuse is per connection, so runtime only needs the freshness TTL.
     cacheScope: z.enum(["private", "public"]).optional(),
     nextCursor: z
       .string()
