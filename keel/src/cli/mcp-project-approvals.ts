@@ -169,6 +169,7 @@ async function readApprovalsFile(
   try {
     fileSize = (await stat(filePath)).size;
   } catch (error) {
+    /* v8 ignore else -- real filesystem coverage exercises missing files; a different stat failure requires OS fault injection and is surfaced below. */
     if (hasNodeErrorCode(error, "ENOENT")) {
       return {
         schemaVersion: MCP_PROJECT_APPROVALS_SCHEMA_VERSION,
