@@ -6,6 +6,7 @@ import { escapeApprovalText } from "./bash-approval-text.ts";
 import type { LineReader } from "./interactive-session/line-reader.ts";
 import {
   hasMcpProjectApprovalGrant,
+  McpProjectApprovalsError,
   mcpProjectApprovalGrant,
   saveMcpProjectApprovalGrant,
 } from "./mcp-project-approvals.ts";
@@ -39,15 +40,34 @@ export function createMcpPermissionPolicy(options: {
   return {
     review: async (request: McpPermissionRequest) => {
       const grant = mcpProjectApprovalGrant(options.projectRoot, request);
-      if (await hasMcpProjectApprovalGrant(options.runtime, grant)) {
+      let approvalLookupError: McpProjectApprovalsError | null = null;
+      let hasGrant = false;
+      try {
+        hasGrant = await hasMcpProjectApprovalGrant(options.runtime, grant);
+      } catch (error) {
+        if (!(error instanceof McpProjectApprovalsError)) throw error;
+        approvalLookupError = error;
+      }
+      if (hasGrant) {
         return { type: "allow" };
       }
       if (options.prompt.kind === "headless") {
-        return { type: "deny", message: options.prompt.deniedMessage };
+        return {
+          type: "deny",
+          message:
+            approvalLookupError === null
+              ? options.prompt.deniedMessage
+              : approvalLookupError.message,
+        };
       }
       options.prompt.onPromptStart();
       try {
         const sequence = options.prompt.lineReader.sequence();
+        if (approvalLookupError !== null) {
+          options.prompt.writeStderr(
+            `${approvalLookupError.message}\nContinuing with one-time interactive approval; saved MCP approvals are unavailable.\n`,
+          );
+        }
         options.prompt.writeStderr(
           [
             "Approve MCP tool call?",
@@ -77,7 +97,15 @@ export function createMcpPermissionPolicy(options: {
           return { type: "allow" };
         }
         if (answer === "s" || answer === "save") {
-          await saveMcpProjectApprovalGrant(options.runtime, grant);
+          try {
+            await saveMcpProjectApprovalGrant(options.runtime, grant);
+          } catch (error) {
+            if (!(error instanceof McpProjectApprovalsError)) throw error;
+            return {
+              type: "deny",
+              message: `${error.message} Use y to allow once after repairing or clearing MCP project approvals.`,
+            };
+          }
           return { type: "allow" };
         }
         return {

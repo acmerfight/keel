@@ -12,6 +12,7 @@ import {
 import { join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import { compareJsonObjectKeys } from "../core/json-key-order.ts";
 import type { McpAuthorizationIdentity } from "../mcp/oauth.ts";
 import type { McpPermissionRequest } from "../mcp/runtime-types.ts";
 import type { ToolJsonValue } from "../tools/tool-call.ts";
@@ -91,7 +92,7 @@ function canonicalJson(value: ToolJsonValue): string {
     return `[${value.map(canonicalJson).join(",")}]`;
   }
   return `{${Object.entries(value)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareJsonObjectKeys(left, right))
     .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
     .join(",")}}`;
 }

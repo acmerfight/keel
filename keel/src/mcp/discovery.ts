@@ -19,6 +19,7 @@ import {
 } from "@modelcontextprotocol/client/validators/ajv";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import { compareJsonObjectKeys } from "../core/json-key-order.ts";
 import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 import {
   isMcpAuthenticationRequiredError,
@@ -242,7 +243,7 @@ function canonicalJson(value: McpJsonValue, depth = 0): string {
     return `[${value.map((item) => canonicalJson(item, depth + 1)).join(",")}]`;
   }
   return `{${Object.entries(value)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareJsonObjectKeys(left, right))
     .map(
       ([key, item]) =>
         `${JSON.stringify(key)}:${canonicalJson(item, depth + 1)}`,

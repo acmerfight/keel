@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -100,6 +100,154 @@ describe("MCP Approval", () => {
         type: "deny",
         message: "terminal required",
       });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the saved MCP approval store is malformed,
+    When an interactive MCP call asks for one-time approval,
+    Then the user can still review and allow that exact call`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-approval-home-"));
+    await writeFile(join(home, "mcp-project-approvals.json"), "{", "utf8");
+    let stderr = "";
+    const lifecycle: string[] = [];
+    const policy = createMcpPermissionPolicy({
+      runtime: { env: (key) => (key === "KEEL_HOME" ? home : undefined) },
+      projectRoot: "/project",
+      prompt: {
+        kind: "interactive",
+        lineReader: lineReaderReturning("y"),
+        writeStderr: (text: string) => {
+          stderr += text;
+        },
+        onPromptStart: () => lifecycle.push("approval"),
+        onPromptEnd: () => lifecycle.push("steer"),
+      },
+    });
+
+    try {
+      // When
+      const decision = await policy.review(request);
+
+      // Then
+      expect(decision).toEqual({ type: "allow" });
+      expect(stderr).toContain("cannot read MCP project approvals");
+      expect(stderr).toContain("saved MCP approvals are unavailable");
+      expect(stderr).toContain("Approve MCP tool call?");
+      expect(lifecycle).toEqual(["approval", "steer"]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the saved MCP approval store is malformed,
+    When a headless MCP call needs an exact saved approval,
+    Then the denial explains the approval store failure`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-approval-home-"));
+    await writeFile(join(home, "mcp-project-approvals.json"), "{", "utf8");
+    const policy = createMcpPermissionPolicy({
+      runtime: { env: (key) => (key === "KEEL_HOME" ? home : undefined) },
+      projectRoot: "/project",
+      prompt: { kind: "headless", deniedMessage: "terminal required" },
+    });
+
+    try {
+      // When / Then
+      await expect(policy.review(request)).resolves.toEqual({
+        type: "deny",
+        message: expect.stringContaining("cannot read MCP project approvals"),
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the saved MCP approval store is malformed,
+    When the user asks to save a project approval,
+    Then the call is denied with a repairable save diagnostic`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-approval-home-"));
+    await writeFile(join(home, "mcp-project-approvals.json"), "{", "utf8");
+    const policy = createMcpPermissionPolicy({
+      runtime: { env: (key) => (key === "KEEL_HOME" ? home : undefined) },
+      projectRoot: "/project",
+      prompt: {
+        kind: "interactive",
+        lineReader: lineReaderReturning("s"),
+        writeStderr: () => {},
+        onPromptStart: () => {},
+        onPromptEnd: () => {},
+      },
+    });
+
+    try {
+      // When / Then
+      await expect(policy.review(request)).resolves.toEqual({
+        type: "deny",
+        message: expect.stringContaining(
+          "Use y to allow once after repairing or clearing MCP project approvals",
+        ),
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the approval runtime raises an implementation fault,
+    When an MCP call asks for approval,
+    Then the permission policy preserves the original fault identity`, async () => {
+    // Given
+    const failure = new Error("runtime exploded");
+    const policy = createMcpPermissionPolicy({
+      runtime: {
+        env: () => {
+          throw failure;
+        },
+      },
+      projectRoot: "/project",
+      prompt: { kind: "headless", deniedMessage: "terminal required" },
+    });
+
+    // When / Then
+    await expect(policy.review(request)).rejects.toBe(failure);
+  });
+
+  test(`Given the approval runtime fails unexpectedly while saving,
+    When the user asks to save a project approval,
+    Then the permission policy preserves the original fault identity`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-approval-home-"));
+    const failure = new Error("save exploded");
+    let saving = false;
+    const policy = createMcpPermissionPolicy({
+      runtime: {
+        env: (key) => {
+          if (saving) throw failure;
+          return key === "KEEL_HOME" ? home : undefined;
+        },
+      },
+      projectRoot: "/project",
+      prompt: {
+        kind: "interactive",
+        lineReader: {
+          ...lineReaderReturning("s"),
+          readLineAfter: async () => {
+            saving = true;
+            return "s";
+          },
+        },
+        writeStderr: () => {},
+        onPromptStart: () => {},
+        onPromptEnd: () => {},
+      },
+    });
+
+    try {
+      // When / Then
+      await expect(policy.review(request)).rejects.toBe(failure);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
