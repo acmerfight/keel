@@ -46,7 +46,10 @@ async function loggedInRefreshableMcp(options: OAuthMcpServerOptions) {
   const add = createRuntime(["mcp", "add", mcp.url, "--name", "refreshable"], {
     env: { KEEL_HOME: home },
   });
-  expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
+  expect(
+    await runCliMain(add.runtime),
+    [add.stdout(), add.stderr()].join("\n"),
+  ).toBe(0);
   const login = createRuntime(["mcp", "login", "refreshable"], {
     env: { KEEL_HOME: home },
     mcpSecretBackend: secrets.backend,
@@ -86,6 +89,185 @@ const invalidCallbackCases: readonly {
 ];
 
 describe("CLI Main - MCP OAuth", () => {
+  test(`Given an OAuth MCP server is disabled before login,
+    When the user attempts authorization,
+    Then Keel rejects the command before opening a browser or creating credentials`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-disabled-login-"));
+    const mcp = await startOAuthMcpServer();
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const disable = createRuntime(["mcp", "disable", "protected"], {
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      let browserOpened = false;
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: async () => {
+          browserOpened = true;
+        },
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stdout()).toBe("");
+      expect(login.stderr()).toContain('MCP server "protected" is disabled');
+      expect(browserOpened).toBe(false);
+      expect(mcp.authorizationRequests()).toEqual([]);
+      expect(mcp.tokenRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an OAuth server is disabled after login begins but before its callback is consumed,
+    When authorization redirects back to Keel,
+    Then no token exchange or durable credential survives the lifecycle change`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-login-race-"));
+    const mcp = await startOAuthMcpServer();
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: async (url) => {
+          const disable = createRuntime(["mcp", "disable", "protected"], {
+            env: { KEEL_HOME: home },
+          });
+          expect(await runCliMain(disable.runtime)).toBe(0);
+          await mcp.openAuthorizationUrl(url);
+        },
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stderr()).toMatch(
+        /disabled, removed, or changed|callback was cancelled/u,
+      );
+      expect(mcp.tokenRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+      await expect(listMcpServers({ env: login.runtime.env })).resolves.toEqual(
+        [expect.objectContaining({ id: "protected", enabled: false })],
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given MCP login is waiting without an authorization callback,
+    When another command disables the configured server,
+    Then login settles only after its loopback listener is closed`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-login-disable-"));
+    const mcp = await startOAuthMcpServer();
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+    const authorizationOpened = Promise.withResolvers<URL>();
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: async (url) => {
+          authorizationOpened.resolve(url);
+        },
+      });
+      const loginRun = runCliMain(login.runtime);
+      const authorizationUrl = new URL(await authorizationOpened.promise);
+      const redirectUrl = authorizationUrl.searchParams.get("redirect_uri");
+      if (redirectUrl === null) {
+        throw new Error("MCP authorization URL omitted redirect_uri");
+      }
+      const disable = createRuntime(["mcp", "disable", "protected"], {
+        env: { KEEL_HOME: home },
+      });
+
+      // When
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      const exitCode = await loginRun;
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stderr()).toContain("callback was cancelled");
+      await expect(
+        fetch(redirectUrl, { signal: AbortSignal.timeout(1_000) }),
+      ).rejects.toThrow();
+      expect(mcp.tokenRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a disabled MCP server has durable OAuth credentials,
+    When the user removes the server twice,
+    Then Keel deletes credentials and configuration exactly once`, async () => {
+    // Given
+    const fixture = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+    });
+
+    try {
+      expect(fixture.secrets.entries.size).toBe(1);
+      const disable = createRuntime(["mcp", "disable", "refreshable"], {
+        env: { KEEL_HOME: fixture.home },
+        mcpSecretBackend: fixture.secrets.backend,
+      });
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      const remove = createRuntime(["mcp", "remove", "refreshable"], {
+        env: { KEEL_HOME: fixture.home },
+        mcpSecretBackend: fixture.secrets.backend,
+      });
+      const removeAgain = createRuntime(["mcp", "remove", "refreshable"], {
+        env: { KEEL_HOME: fixture.home },
+        mcpSecretBackend: fixture.secrets.backend,
+      });
+
+      // When
+      const removeExitCode = await runCliMain(remove.runtime);
+      const removeAgainExitCode = await runCliMain(removeAgain.runtime);
+
+      // Then
+      expect(removeExitCode, remove.stderr()).toBe(0);
+      expect(remove.stdout()).toBe('Removed MCP server "refreshable".\n');
+      expect(removeAgainExitCode, removeAgain.stderr()).toBe(0);
+      expect(removeAgain.stdout()).toBe(
+        'MCP server "refreshable" is already removed.\n',
+      );
+      expect(fixture.secrets.entries.size).toBe(0);
+      await expect(listMcpServers(remove.runtime)).resolves.toEqual([]);
+    } finally {
+      await fixture.mcp.close();
+      await rm(fixture.home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a logged-in MCP server rejects an expired access token,
     When the user checks server status,
     Then Keel refreshes the credential once and reports the protected server ready`, async () => {
@@ -300,6 +482,7 @@ describe("CLI Main - MCP OAuth", () => {
 
     try {
       mcp.expireAccessToken();
+      await rm(join(home, "mcp"), { recursive: true, force: true });
       await writeFile(join(home, "mcp"), "blocked");
       const status = createRuntime(["mcp", "status", "refreshable"], {
         env: { KEEL_HOME: home },
@@ -813,6 +996,50 @@ describe("CLI Main - MCP OAuth", () => {
       expect(login.stderr()).not.toContain(mcp.accessToken);
       expect(mcp.tokenRequests()).toHaveLength(1);
     } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given OAuth credentials are stored while authenticated verification is pending,
+    When another command disables the server,
+    Then login fails and removes the credential before returning`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-auth-verify-race-"));
+    const mcp = await startOAuthMcpServer({
+      authenticatedMcpResponse: "pending",
+    });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+      const loginRun = runCliMain(login.runtime);
+      await mcp.authenticatedMcpRequest;
+      expect(secrets.entries.size).toBe(1);
+      const disable = createRuntime(["mcp", "disable", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      mcp.releaseAuthenticatedMcpResponse();
+      const exitCode = await loginRun;
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stderr()).not.toBe("");
+      expect(secrets.entries.size).toBe(0);
+    } finally {
+      mcp.releaseAuthenticatedMcpResponse();
       await mcp.close();
       await rm(home, { recursive: true, force: true });
     }

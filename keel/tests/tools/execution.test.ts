@@ -1149,7 +1149,11 @@ describe("Tool Execution", () => {
     const searches: unknown[] = [];
     const mcp: McpRuntime = {
       prepareTurn: async () => {},
-      exposureSnapshot: () => ({ snapshotId: "empty", tools: [] }),
+      exposureSnapshot: async () => ({
+        snapshotId: "empty",
+        catalogAvailable: true,
+        tools: [],
+      }),
       search: async (request) => {
         searches.push(request);
         return { ok: true, content: "activated" };
@@ -1272,7 +1276,11 @@ describe("Tool Execution", () => {
     Then faults become recoverable while typed cancellation still propagates`, async () => {
     const baseRuntime: McpRuntime = {
       prepareTurn: async () => {},
-      exposureSnapshot: () => ({ snapshotId: "empty", tools: [] }),
+      exposureSnapshot: async () => ({
+        snapshotId: "empty",
+        catalogAvailable: true,
+        tools: [],
+      }),
       search: async () => ({ ok: true, content: "unused" }),
       execute: async () => {
         throw new Error("adapter exploded");

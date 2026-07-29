@@ -28,6 +28,11 @@ interface CountingTestMcpServer extends TestMcpServer {
   readonly requestCount: () => number;
 }
 
+interface LifecyclePendingTestMcpServer extends TestMcpServer {
+  readonly secondCatalogRequest: Promise<void>;
+  readonly secondCatalogAborted: Promise<void>;
+}
+
 interface TestMcpFetchHandler {
   readonly fetch: (request: Request) => Promise<Response>;
   readonly close?: () => Promise<void>;
@@ -136,6 +141,21 @@ async function startModernMcpServer(): Promise<TestMcpServer> {
     return buildCatalogServer();
   });
   return await startMcpServer(handler);
+}
+
+async function startCountingModernMcpServer(): Promise<CountingTestMcpServer> {
+  let requests = 0;
+  const handler = createMcpHandler(() => {
+    return buildCatalogServer();
+  });
+  const server = await startMcpServer({
+    fetch: async (request) => {
+      requests += 1;
+      return await handler.fetch(request);
+    },
+    close: handler.close,
+  });
+  return { ...server, requestCount: () => requests };
 }
 
 async function startLegacyMcpServer(): Promise<TestMcpServer> {
@@ -317,6 +337,66 @@ async function startModernRawCatalogServer(
   });
 }
 
+async function startLifecyclePendingMcpServer(): Promise<LifecyclePendingTestMcpServer> {
+  let catalogRequests = 0;
+  const secondCatalogRequest = Promise.withResolvers<void>();
+  const secondCatalogAborted = Promise.withResolvers<void>();
+  const server = await startMcpServer({
+    fetch: async (request) => {
+      const parsed = jsonRpcRequestSchema.parse(await request.json());
+      if (parsed.method === "server/discover") {
+        return jsonResponse({
+          jsonrpc: "2.0",
+          id: parsed.id,
+          result: {
+            supportedVersions: ["2026-07-28"],
+            capabilities: { tools: {} },
+            ttlMs: 0,
+            cacheScope: "private",
+          },
+        });
+      }
+      if (parsed.method === "tools/list") {
+        catalogRequests += 1;
+        if (catalogRequests === 1) {
+          return jsonResponse({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: {
+              resultType: "complete",
+              ttlMs: 0,
+              cacheScope: "private",
+              tools: [],
+            },
+          });
+        }
+        secondCatalogRequest.resolve();
+        await new Promise<void>((resolve) => {
+          if (request.signal.aborted) {
+            resolve();
+            return;
+          }
+          request.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+        secondCatalogAborted.resolve();
+        return new Response(null, { status: 499 });
+      }
+      return jsonResponse({
+        jsonrpc: "2.0",
+        id: parsed.id,
+        error: { code: -32601, message: "Method not found" },
+      });
+    },
+  });
+  return {
+    ...server,
+    secondCatalogRequest: secondCatalogRequest.promise,
+    secondCatalogAborted: secondCatalogAborted.promise,
+  };
+}
+
 async function startLateUnauthorizedMcpServer(): Promise<TestMcpServer> {
   return await startLegacyRawServer(
     () =>
@@ -495,6 +575,144 @@ describe("CLI Main - MCP", () => {
     }
   });
 
+  test(`Given an enabled MCP server,
+    When the user disables, enables, and removes it,
+    Then lifecycle commands are idempotent and disabled or removed servers never connect`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-lifecycle-home-"));
+    const server = await startCountingModernMcpServer();
+    const add = createRuntime(["mcp", "add", server.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const requestsAfterAdd = server.requestCount();
+
+      // When
+      const disable = createRuntime(["mcp", "disable", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const disableAgain = createRuntime(["mcp", "disable", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const disabledStatus = createRuntime(["mcp", "status", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const disabledList = createRuntime(["mcp", "list"], {
+        env: { KEEL_HOME: home },
+      });
+      const enable = createRuntime(["mcp", "enable", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const enableAgain = createRuntime(["mcp", "enable", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const enabledStatus = createRuntime(["mcp", "status", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const remove = createRuntime(["mcp", "remove", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const removeAgain = createRuntime(["mcp", "remove", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const removedList = createRuntime(["mcp", "list"], {
+        env: { KEEL_HOME: home },
+      });
+
+      // Then
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      expect(disable.stdout()).toBe('Disabled MCP server "catalog".\n');
+      expect(await runCliMain(disableAgain.runtime)).toBe(0);
+      expect(disableAgain.stdout()).toBe(
+        'MCP server "catalog" is already disabled.\n',
+      );
+      expect(await runCliMain(disabledStatus.runtime)).toBe(0);
+      expect(disabledStatus.stdout()).toContain("enabled: false\n");
+      expect(disabledStatus.stdout()).toContain("status: disabled\n");
+      expect(await runCliMain(disabledList.runtime)).toBe(0);
+      expect(disabledList.stdout()).toContain(
+        `catalog: ${server.url} (disabled)\n`,
+      );
+      expect(server.requestCount()).toBe(requestsAfterAdd);
+
+      expect(await runCliMain(enable.runtime)).toBe(0);
+      expect(enable.stdout()).toBe('Enabled MCP server "catalog".\n');
+      expect(await runCliMain(enableAgain.runtime)).toBe(0);
+      expect(enableAgain.stdout()).toBe(
+        'MCP server "catalog" is already enabled.\n',
+      );
+      expect(await runCliMain(enabledStatus.runtime)).toBe(0);
+      expect(enabledStatus.stdout()).toContain("enabled: true\n");
+      expect(enabledStatus.stdout()).toContain("status: ready\n");
+      expect(server.requestCount()).toBeGreaterThan(requestsAfterAdd);
+      const requestsAfterEnabledStatus = server.requestCount();
+
+      expect(await runCliMain(remove.runtime)).toBe(0);
+      expect(remove.stdout()).toBe('Removed MCP server "catalog".\n');
+      expect(await runCliMain(removeAgain.runtime)).toBe(0);
+      expect(removeAgain.stdout()).toBe(
+        'MCP server "catalog" is already removed.\n',
+      );
+      expect(await runCliMain(removedList.runtime)).toBe(0);
+      expect(removedList.stdout()).toBe("No MCP servers configured.\n");
+      expect(server.requestCount()).toBe(requestsAfterEnabledStatus);
+      expect(disable.stderr()).toBe("");
+      expect(disableAgain.stderr()).toBe("");
+      expect(disabledStatus.stderr()).toBe("");
+      expect(disabledList.stderr()).toBe("");
+      expect(enable.stderr()).toBe("");
+      expect(enableAgain.stderr()).toBe("");
+      expect(enabledStatus.stderr()).toBe("");
+      expect(remove.stderr()).toBe("");
+      expect(removeAgain.stderr()).toBe("");
+      expect(removedList.stderr()).toBe("");
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given status is waiting for an MCP catalog,
+    When the configured server is disabled concurrently,
+    Then the lifecycle change aborts discovery before returning its final status`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-status-race-"));
+    const server = await startLifecyclePendingMcpServer();
+    const add = createRuntime(["mcp", "add", server.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const status = createRuntime(["mcp", "status", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const statusRun = runCliMain(status.runtime);
+      await server.secondCatalogRequest;
+      const disable = createRuntime(["mcp", "disable", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+
+      // When
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      const exitCode = await statusRun;
+
+      // Then
+      expect(exitCode).toBe(0);
+      await expect(server.secondCatalogAborted).resolves.toBeUndefined();
+      expect(status.stdout()).toContain("status: failed\n");
+      expect(status.stdout()).toContain("disabled, removed, or changed");
+      expect(disable.stdout()).toBe('Disabled MCP server "catalog".\n');
+      expect(status.stderr()).toBe("");
+      expect(disable.stderr()).toBe("");
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an unauthenticated MCP server is reachable while the OS credential store is unavailable,
     When the user adds the public server,
     Then optional token lookup does not regress anonymous MCP use`, async () => {
@@ -588,6 +806,7 @@ describe("CLI Main - MCP", () => {
         now: () => Date.now(),
         authProvider: null,
         schemaTarget: mcpProviderSchemaTarget("deepseek", "deepseek-v4-flash"),
+        signal: new AbortController().signal,
       });
 
       // Then
@@ -1564,6 +1783,17 @@ describe("CLI Main - MCP", () => {
       expect(list.stdout()).toContain(`second: ${secondServer.url}\n`);
       expect(status.stdout()).toContain("MCP server: first\n");
       expect(status.stdout()).toContain("\n\nMCP server: second\n");
+
+      const disableSecond = createRuntime(["mcp", "disable", "second"], {
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disableSecond.runtime)).toBe(0);
+      const disabledStatus = createRuntime(["mcp", "status"], {
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disabledStatus.runtime)).toBe(0);
+      expect(disabledStatus.stdout()).toContain("\n\nMCP server: second\n");
+      expect(disabledStatus.stdout()).toContain("status: disabled\n");
     } finally {
       await firstServer.close();
       await secondServer.close();

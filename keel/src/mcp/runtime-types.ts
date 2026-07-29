@@ -46,11 +46,28 @@ export interface McpToolFilterPolicy {
   readonly allows: (request: McpToolFilterRequest) => boolean;
 }
 
+export interface McpRuntimeServer extends McpServerEndpoint {
+  readonly id: string;
+  readonly incarnation: string;
+  readonly enabled: boolean;
+  readonly toolFilter: {
+    readonly allow: readonly string[] | null;
+    readonly deny: readonly string[];
+  };
+}
+
 export interface McpConnectionFactory {
   readonly connect: (
-    server: McpServerEndpoint,
+    server: McpRuntimeServer,
     signal: AbortSignal,
   ) => Promise<McpConnection>;
+}
+
+export interface McpLifecyclePolicy {
+  readonly isCurrentAndEnabled: (
+    server: McpRuntimeServer,
+  ) => boolean | Promise<boolean>;
+  readonly listCurrent: () => Promise<readonly McpRuntimeServer[]>;
 }
 
 export interface McpPreservedToolResult {
@@ -88,7 +105,7 @@ export interface McpRuntime {
     schemaTarget: McpProviderSchemaTarget,
     signal: AbortSignal,
   ) => Promise<void>;
-  readonly exposureSnapshot: () => McpToolExposureSnapshot;
+  readonly exposureSnapshot: () => Promise<McpToolExposureSnapshot>;
   readonly search: (
     request: McpSearchRequest,
     signal: AbortSignal,

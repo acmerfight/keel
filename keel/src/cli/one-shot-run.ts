@@ -47,7 +47,10 @@ import {
   denyMcpPermissionPolicy,
 } from "./mcp-approval.ts";
 import { listMcpServers } from "./mcp-config.ts";
-import { createCliMcpConnectionFactory } from "./mcp-connection.ts";
+import {
+  createCliMcpConnectionFactory,
+  createCliMcpLifecyclePolicy,
+} from "./mcp-connection.ts";
 import {
   formatCostReport,
   formatUndoCheckpointWarning,
@@ -274,6 +277,7 @@ export async function runOneShotCli(
       mcpRuntime = createMcpRuntime({
         servers: mcpServers,
         connectionFactory: createCliMcpConnectionFactory(runtime),
+        lifecycle: createCliMcpLifecyclePolicy(runtime),
         permission:
           approvalLineReader === undefined
             ? denyMcpPermissionPolicy(

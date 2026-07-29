@@ -126,6 +126,7 @@ const mcpExposure: ModelToolExposure = {
   kind: "auto",
   mcp: {
     snapshotId: "conformance-mcp",
+    catalogAvailable: true,
     tools: [conformanceMcpTool],
   },
 };
@@ -812,6 +813,7 @@ export function runOpenAICompatibleConformance(
         kind: "auto",
         mcp: {
           snapshotId: `conformance-${spec.id}-mainstream-schema`,
+          catalogAvailable: true,
           tools: [
             {
               ...conformanceMcpTool,

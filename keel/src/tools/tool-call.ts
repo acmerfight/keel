@@ -61,6 +61,7 @@ export interface McpModelToolDefinition {
 
 export interface McpToolExposureSnapshot {
   readonly snapshotId: string;
+  readonly catalogAvailable: boolean;
   readonly tools: readonly McpModelToolDefinition[];
 }
 
@@ -291,14 +292,17 @@ export function openAICompatibleTools(
       (tool) =>
         (exposure.bash === true || tool.risk.kind !== "trusted-shell") &&
         (exposure.skill === true || tool.availability !== "skill-catalog") &&
-        (exposure.mcp !== undefined || tool.availability !== "mcp-catalog") &&
+        (exposure.mcp?.catalogAvailable === true ||
+          tool.availability !== "mcp-catalog") &&
         (exposure.memory !== undefined || tool.availability !== "memory") &&
         (exposure.memory === "reviewed" ||
           tool.availability !== "memory-proposal"),
     )
     .map(toOpenAICompatibleToolDefinition);
   const mcpTools =
-    exposure.mcp?.tools.map(mcpOpenAICompatibleToolDefinition) ?? [];
+    exposure.mcp?.catalogAvailable === true
+      ? exposure.mcp.tools.map(mcpOpenAICompatibleToolDefinition)
+      : [];
   return [...builtins, ...mcpTools];
 }
 
@@ -311,7 +315,8 @@ export function resolveModelToolExposure(
     bash: exposure?.bash === true,
     skill: exposure?.skill === true,
     memory: exposure?.memory ?? "disabled",
-    mcpSnapshotId: exposure?.mcp?.snapshotId ?? null,
+    mcpSnapshotId:
+      exposure?.mcp?.catalogAvailable === true ? exposure.mcp.snapshotId : null,
   };
 }
 

@@ -23,6 +23,7 @@ import {
 
 const emptyMcpExposure = {
   snapshotId: "test-empty",
+  catalogAvailable: true,
   tools: [],
 } as const;
 
@@ -1150,6 +1151,7 @@ describe("tool registry", () => {
       kind: "auto",
       mcp: {
         snapshotId: "snapshot",
+        catalogAvailable: true,
         tools: [
           {
             kind: "mcp",

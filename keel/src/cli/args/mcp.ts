@@ -111,7 +111,7 @@ function parseOptionalServer(
 }
 
 function parseRequiredServer(
-  mode: "logout",
+  mode: "logout" | "enable" | "disable" | "remove",
   args: readonly string[],
 ): ParseResult<McpCliArgs> {
   const serverId = args[0];
@@ -213,12 +213,17 @@ export function parseMcpArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   if (mode === "login") {
     return parseMcpLoginArgs(args.slice(1));
   }
-  if (mode === "logout") {
+  if (
+    mode === "logout" ||
+    mode === "enable" ||
+    mode === "disable" ||
+    mode === "remove"
+  ) {
     return parseRequiredServer(mode, args.slice(1));
   }
   return parseError(
     mode === undefined || mode === ""
-      ? "Error: mcp requires a subcommand: add, list, status, doctor, login, or logout."
+      ? "Error: mcp requires a subcommand: add, list, status, doctor, login, logout, enable, disable, or remove."
       : `Error: unknown mcp subcommand "${mode}"`,
   );
 }

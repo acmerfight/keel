@@ -26,6 +26,7 @@ import {
 import { createMcpRuntime } from "../../src/mcp/runtime.ts";
 import type {
   McpConnectionFactory,
+  McpLifecyclePolicy,
   McpPermissionPolicy,
   McpToolFilterPolicy,
   McpToolRuntimeResult,
@@ -61,7 +62,9 @@ function expectIdentifiedMcpResult(
 
 const testServerConfig: McpServerConfig = {
   id: "catalog",
+  incarnation: "00000000-0000-4000-8000-000000000001",
   url: "https://catalog.example/mcp",
+  enabled: true,
   allowPrivateNetwork: false,
   authenticationRequired: false,
   toolFilter: { allow: null, deny: [] },
@@ -74,6 +77,23 @@ const testSchemaTarget = mcpProviderSchemaTarget(
 const allowPermission: McpPermissionPolicy = {
   review: () => ({ type: "allow" }),
 };
+function staticLifecycle(
+  servers: readonly McpServerConfig[],
+): McpLifecyclePolicy {
+  return {
+    isCurrentAndEnabled: async (expected) =>
+      servers.some(
+        (server) =>
+          server.enabled &&
+          server.id === expected.id &&
+          server.incarnation === expected.incarnation &&
+          server.url === expected.url &&
+          server.allowPrivateNetwork === expected.allowPrivateNetwork,
+      ),
+    listCurrent: async () => servers,
+  };
+}
+const currentLifecycle = staticLifecycle([testServerConfig]);
 
 async function fakeCatalog(
   tools: readonly {
@@ -144,6 +164,7 @@ function fakeConnectionFactory(options: {
 
 function runtimeWithFactory(options: {
   readonly connectionFactory: McpConnectionFactory;
+  readonly lifecycle?: McpLifecyclePolicy;
   readonly permission?: McpPermissionPolicy;
   readonly filter?: McpToolFilterPolicy;
   readonly now?: () => number;
@@ -151,6 +172,7 @@ function runtimeWithFactory(options: {
   return createMcpRuntime({
     servers: [testServerConfig],
     connectionFactory: options.connectionFactory,
+    lifecycle: options.lifecycle ?? currentLifecycle,
     permission: options.permission ?? allowPermission,
     schemaTarget: testSchemaTarget,
     ...(options.filter !== undefined ? { filter: options.filter } : {}),
@@ -165,7 +187,7 @@ async function activateExactSearch(
     { query: "unrelated", server: "catalog", tool: "search" },
     new AbortController().signal,
   );
-  return exposedToolCall(runtime);
+  return await exposedToolCall(runtime);
 }
 
 async function startMcpToolServer(): Promise<TestMcpServer> {
@@ -244,10 +266,10 @@ async function startMcpToolServer(): Promise<TestMcpServer> {
   };
 }
 
-function exposedToolCall(
+async function exposedToolCall(
   runtime: ReturnType<typeof createMcpRuntime>,
-): McpToolCall {
-  const definition = runtime.exposureSnapshot().tools[0];
+): Promise<McpToolCall> {
+  const definition = (await runtime.exposureSnapshot()).tools[0];
   if (definition === undefined) {
     throw new Error("expected one exposed MCP tool");
   }
@@ -261,6 +283,572 @@ function exposedToolCall(
 }
 
 describe("MCP runtime", () => {
+  test(`Given a server is disabled while its first catalog is still loading,
+    When the lifecycle watcher observes the mutation,
+    Then it aborts discovery, closes the connection, and exposes nothing`, async () => {
+    // Given
+    const catalogRequested = Promise.withResolvers<void>();
+    let enabled = true;
+    let closeCalls = 0;
+    const runtime = runtimeWithFactory({
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [{ ...testServerConfig, enabled }],
+      },
+      connectionFactory: {
+        connect: async () => ({
+          protocolEra: "modern",
+          protocolVersion: "2026-07-28",
+          serverIdentity: "pending@1.0.0",
+          listCatalog: async (signal) => {
+            catalogRequested.resolve();
+            if (signal === undefined) {
+              throw new Error("expected lifecycle abort signal");
+            }
+            return await new Promise((_, reject) => {
+              const abort = () => reject(signal.reason);
+              if (signal.aborted) {
+                abort();
+                return;
+              }
+              signal.addEventListener("abort", abort, { once: true });
+            });
+          },
+          callTool: async () => ({ content: [] }),
+          close: async () => {
+            closeCalls++;
+          },
+        }),
+      },
+    });
+
+    try {
+      const search = runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+      await catalogRequested.promise;
+
+      // When
+      enabled = false;
+      const result = await search;
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+      expect(closeCalls).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a ready server becomes disabled while no turn is running,
+    When the lifecycle watcher observes current configuration,
+    Then it closes the idle transport without waiting for another model turn`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    let enabled = true;
+    const closed = Promise.withResolvers<void>();
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({
+      connectionFactory: {
+        connect: async (server, signal) => {
+          const connection = await fake.factory.connect(server, signal);
+          return {
+            ...connection,
+            close: async () => {
+              await connection.close();
+              closed.resolve();
+            },
+          };
+        },
+      },
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [{ ...testServerConfig, enabled }],
+      },
+    });
+
+    try {
+      await activateExactSearch(runtime);
+
+      // When
+      enabled = false;
+      await closed.promise;
+
+      // Then
+      expect(fake.closeCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a disabled server exists when an interactive runtime starts,
+    When it is enabled before the next search,
+    Then reconciliation creates a usable owner without restarting Keel`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let enabled = false;
+    const lifecycle: McpLifecyclePolicy = {
+      isCurrentAndEnabled: async () => enabled,
+      listCurrent: async () => [{ ...testServerConfig, enabled }],
+    };
+    const runtime = createMcpRuntime({
+      servers: [{ ...testServerConfig, enabled: false }],
+      connectionFactory: fake.factory,
+      lifecycle,
+      permission: allowPermission,
+      schemaTarget: testSchemaTarget,
+    });
+
+    try {
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+      expect(fake.connectCalls()).toBe(0);
+
+      // When
+      enabled = true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const result = await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok, result.content).toBe(true);
+      expect(fake.connectCalls()).toBe(1);
+      expect((await runtime.exposureSnapshot()).tools).toHaveLength(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given live configuration replaces a ready server with a new server,
+    When the next turn reconciles the runtime,
+    Then the removed transport closes and the replacement becomes searchable`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const replacement = {
+      ...testServerConfig,
+      id: "replacement",
+      incarnation: "00000000-0000-4000-8000-000000000002",
+      url: "https://replacement.example/mcp",
+    };
+    let current: readonly McpServerConfig[] = [testServerConfig];
+    const lifecycle: McpLifecyclePolicy = {
+      isCurrentAndEnabled: async (expected) =>
+        current.some(
+          (server) =>
+            server.enabled &&
+            server.id === expected.id &&
+            server.incarnation === expected.incarnation,
+        ),
+      listCurrent: async () => current,
+    };
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle,
+    });
+
+    try {
+      await activateExactSearch(runtime);
+
+      // When
+      current = [replacement];
+      await runtime.prepareTurn(testSchemaTarget, new AbortController().signal);
+      const result = await runtime.search(
+        { query: "search", server: "replacement", tool: "search" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok, result.content).toBe(true);
+      expect(fake.closeCalls()).toBe(1);
+      expect(
+        (await runtime.exposureSnapshot()).tools[0]?.reference.serverId,
+      ).toBe("replacement");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given lifecycle configuration becomes unreadable for a ready server,
+    When the background watcher reconciles it,
+    Then the existing transport is suspended instead of remaining exposed`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const closed = Promise.withResolvers<void>();
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let unreadable = false;
+    const runtime = runtimeWithFactory({
+      connectionFactory: {
+        connect: async (server, signal) => {
+          const connection = await fake.factory.connect(server, signal);
+          return {
+            ...connection,
+            close: async () => {
+              await connection.close();
+              closed.resolve();
+            },
+          };
+        },
+      },
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => {
+          if (unreadable) throw new Error("config unavailable");
+          return [testServerConfig];
+        },
+      },
+    });
+
+    try {
+      await activateExactSearch(runtime);
+
+      // When
+      unreadable = true;
+      await closed.promise;
+
+      // Then
+      expect(fake.closeCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given lifecycle availability lookup fails before discovery,
+    When the user searches the configured server,
+    Then Keel fails closed without opening a transport`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => {
+          throw new Error("config unavailable");
+        },
+        listCurrent: async () => [testServerConfig],
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+      expect(fake.connectCalls()).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a server is disabled after its catalog finishes loading,
+    When search rechecks lifecycle before exposure,
+    Then the loaded catalog is discarded and its transport closes`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const catalogRequested = Promise.withResolvers<void>();
+    const releaseCatalog =
+      Promise.withResolvers<Awaited<ReturnType<typeof fakeCatalog>>>();
+    let enabled = true;
+    let closeCalls = 0;
+    const runtime = runtimeWithFactory({
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [testServerConfig],
+      },
+      connectionFactory: {
+        connect: async () => ({
+          protocolEra: "modern",
+          protocolVersion: "2026-07-28",
+          serverIdentity: "post-load@1.0.0",
+          listCatalog: async () => {
+            catalogRequested.resolve();
+            return await releaseCatalog.promise;
+          },
+          callTool: async () => ({ content: [] }),
+          close: async () => {
+            closeCalls++;
+          },
+        }),
+      },
+    });
+
+    try {
+      const search = runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+      await catalogRequested.promise;
+
+      // When
+      enabled = false;
+      releaseCatalog.resolve(catalog);
+      const result = await search;
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+      expect(closeCalls).toBe(1);
+    } finally {
+      releaseCatalog.resolve(catalog);
+      await runtime.close();
+    }
+  });
+
+  test(`Given a previously exposed tool is disabled before execution starts,
+    When the model invokes that frozen reference,
+    Then Keel rejects it before approval or remote dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let enabled = true;
+    let approvals = 0;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [testServerConfig],
+      },
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      const toolCall = await activateExactSearch(runtime);
+      enabled = false;
+
+      // When
+      const result = await runtime.execute(
+        toolCall,
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+      expect(approvals).toBe(0);
+      expect(fake.callCalls()).toBe(0);
+      expect(fake.closeCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given an MCP call is in flight when its server is disabled,
+    When the lifecycle watcher observes the mutation,
+    Then the call signal aborts and no remote work remains live`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const callStarted = Promise.withResolvers<void>();
+    const callAborted = Promise.withResolvers<void>();
+    let enabled = true;
+    const fake = fakeConnectionFactory({
+      catalogs: [catalog],
+      callTool: async (_tool, _arguments, signal) => {
+        callStarted.resolve();
+        return await new Promise((_, reject) => {
+          const abort = () => {
+            callAborted.resolve();
+            reject(signal.reason);
+          };
+          if (signal.aborted) {
+            abort();
+            return;
+          }
+          signal.addEventListener("abort", abort, { once: true });
+        });
+      },
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [{ ...testServerConfig, enabled }],
+      },
+    });
+
+    try {
+      const call = await activateExactSearch(runtime);
+      const execution = runtime.execute(call, new AbortController().signal);
+      await callStarted.promise;
+
+      // When
+      enabled = false;
+      await callAborted.promise;
+      const result = await execution;
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(fake.closeCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a server is disabled while an exposed call awaits approval,
+    When approval returns allow,
+    Then lifecycle is rechecked and dispatch is rejected`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const approvalStarted = Promise.withResolvers<void>();
+    const approvalFinished = Promise.withResolvers<void>();
+    let enabled = true;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [{ ...testServerConfig, enabled }],
+      },
+      permission: {
+        review: async () => {
+          approvalStarted.resolve();
+          await approvalFinished.promise;
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      const toolCall = await activateExactSearch(runtime);
+      const execution = runtime.execute(toolCall, new AbortController().signal);
+      await approvalStarted.promise;
+
+      // When
+      enabled = false;
+      approvalFinished.resolve();
+      const result = await execution;
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+      expect(fake.callCalls()).toBe(0);
+      expect(fake.closeCalls()).toBe(1);
+    } finally {
+      approvalFinished.resolve();
+      await runtime.close();
+    }
+  });
+
+  test(`Given a disabled MCP server is present in configuration,
+    When runtime searches for remote tools,
+    Then the server never connects, lists tools, enters exposure, or requests approval`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let approvals = 0;
+    const servers = [{ ...testServerConfig, enabled: false }];
+    const runtime = createMcpRuntime({
+      servers,
+      connectionFactory: fake.factory,
+      lifecycle: staticLifecycle(servers),
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+      schemaTarget: testSchemaTarget,
+    });
+
+    try {
+      // When
+      const result = await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.content).toContain("0 discovered");
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+      expect(fake.connectCalls()).toBe(0);
+      expect(fake.listCalls()).toBe(0);
+      expect(fake.callCalls()).toBe(0);
+      expect(approvals).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test(`Given a typed MCP invocation has no identity in the frozen exposure snapshot,
     When runtime handles the unresolved invocation,
     Then it returns recovery without connecting, approving, or dispatching`, async () => {
@@ -310,17 +898,21 @@ describe("MCP runtime", () => {
     Then the original descriptor still delivers the matching MCP parameter header`, async () => {
     // Given
     const server = await startMcpToolServer();
+    const servers = [
+      {
+        id: "catalog",
+        incarnation: "00000000-0000-4000-8000-000000000002",
+        url: server.url,
+        enabled: true,
+        allowPrivateNetwork: true,
+        authenticationRequired: false,
+        toolFilter: { allow: null, deny: [] },
+      },
+    ];
     const runtime = createMcpRuntime({
-      servers: [
-        {
-          id: "catalog",
-          url: server.url,
-          allowPrivateNetwork: true,
-          authenticationRequired: false,
-          toolFilter: { allow: null, deny: [] },
-        },
-      ],
+      servers,
       connectionFactory: { connect: connectMcpServer },
+      lifecycle: staticLifecycle(servers),
       permission: allowPermission,
       schemaTarget: testSchemaTarget,
     });
@@ -335,7 +927,7 @@ describe("MCP runtime", () => {
         },
         signal,
       );
-      const definition = runtime.exposureSnapshot().tools[0];
+      const definition = (await runtime.exposureSnapshot()).tools[0];
       if (definition === undefined) {
         throw new Error("expected x-mcp-header tool to be active");
       }
@@ -368,17 +960,21 @@ describe("MCP runtime", () => {
     const server = await startMcpToolServer();
     let allowed = true;
     let approvals = 0;
+    const servers = [
+      {
+        id: "catalog",
+        incarnation: "00000000-0000-4000-8000-000000000003",
+        url: server.url,
+        enabled: true,
+        allowPrivateNetwork: true,
+        authenticationRequired: false,
+        toolFilter: { allow: null, deny: [] },
+      },
+    ];
     const runtime = createMcpRuntime({
-      servers: [
-        {
-          id: "catalog",
-          url: server.url,
-          allowPrivateNetwork: true,
-          authenticationRequired: false,
-          toolFilter: { allow: null, deny: [] },
-        },
-      ],
+      servers,
       connectionFactory: { connect: connectMcpServer },
+      lifecycle: staticLifecycle(servers),
       filter: {
         allows: () => allowed,
       },
@@ -397,14 +993,14 @@ describe("MCP runtime", () => {
         { query: "search", server: "catalog", tool: "search" },
         signal,
       );
-      const toolCall = exposedToolCall(runtime);
+      const toolCall = await exposedToolCall(runtime);
 
       // When
       allowed = false;
       const result = await runtime.execute(toolCall, signal);
 
       // Then
-      expect(runtime.exposureSnapshot().tools).toEqual([]);
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
       expect(result.ok).toBe(false);
       expect(result.content).toContain("current tool filter denies");
       expectIdentifiedMcpResult(result);
@@ -432,14 +1028,16 @@ describe("MCP runtime", () => {
       },
     ]);
     const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const servers = [
+      {
+        ...testServerConfig,
+        toolFilter: { allow: ["search"], deny: ["search"] },
+      },
+    ];
     const runtime = createMcpRuntime({
-      servers: [
-        {
-          ...testServerConfig,
-          toolFilter: { allow: ["search"], deny: ["search"] },
-        },
-      ],
+      servers,
       connectionFactory: fake.factory,
+      lifecycle: staticLifecycle(servers),
       permission: allowPermission,
       schemaTarget: testSchemaTarget,
     });
@@ -452,7 +1050,7 @@ describe("MCP runtime", () => {
       );
 
       // Then
-      expect(runtime.exposureSnapshot().tools).toEqual([]);
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
       expect(searchResult.content).toContain(
         "1 discovered, 0 catalog-quarantined, 1 provider-usable",
       );
@@ -481,6 +1079,7 @@ describe("MCP runtime", () => {
     let approvals = 0;
     const runtime = runtimeWithFactory({
       connectionFactory: fake.factory,
+      lifecycle: currentLifecycle,
       filter: { allows: () => allowed },
       permission: {
         review: () => {
@@ -612,7 +1211,7 @@ describe("MCP runtime", () => {
       // Then
       expect(fake.connectCalls()).toBe(1);
       expect(fake.listCalls()).toBe(1);
-      expect(runtime.exposureSnapshot().tools).toHaveLength(1);
+      expect((await runtime.exposureSnapshot()).tools).toHaveLength(1);
     } finally {
       await runtime.close();
     }
@@ -650,10 +1249,10 @@ describe("MCP runtime", () => {
       );
 
       // Then
-      expect(runtime.exposureSnapshot().tools).toHaveLength(1);
-      expect(runtime.exposureSnapshot().tools[0]?.reference.rawToolName).toBe(
-        "capability-999",
-      );
+      expect((await runtime.exposureSnapshot()).tools).toHaveLength(1);
+      expect(
+        (await runtime.exposureSnapshot()).tools[0]?.reference.rawToolName,
+      ).toBe("capability-999");
       expect(searchResult.content).toContain("1000 discovered");
       expect(searchResult.content).toContain("1 active");
     } finally {
@@ -704,9 +1303,9 @@ describe("MCP runtime", () => {
 
       // Then
       expect(
-        runtime
-          .exposureSnapshot()
-          .tools.map((tool) => tool.reference.rawToolName),
+        (await runtime.exposureSnapshot()).tools.map(
+          (tool) => tool.reference.rawToolName,
+        ),
       ).toEqual(["ambiguous", "search"]);
       expect(searchResult.content).not.toContain("Provider schema quarantine:");
       expect(searchResult.content).toContain("2 discovered");
@@ -742,7 +1341,7 @@ describe("MCP runtime", () => {
         { query: "unused", server: "catalog", limit: 10 },
         new AbortController().signal,
       );
-      const exposed = runtime.exposureSnapshot().tools;
+      const exposed = (await runtime.exposureSnapshot()).tools;
 
       // Then
       expect(exposed).toHaveLength(2);
@@ -806,8 +1405,8 @@ describe("MCP runtime", () => {
         { query: "search", server: "catalog", tool: "search" },
         signal,
       );
-      const firstSnapshot = runtime.exposureSnapshot();
-      const oldCall = exposedToolCall(runtime);
+      const firstSnapshot = await runtime.exposureSnapshot();
+      const oldCall = await exposedToolCall(runtime);
 
       // When
       await runtime.search(
@@ -819,7 +1418,7 @@ describe("MCP runtime", () => {
         },
         signal,
       );
-      const secondSnapshot = runtime.exposureSnapshot();
+      const secondSnapshot = await runtime.exposureSnapshot();
       const staleResult = await runtime.execute(oldCall, signal);
 
       // Then
@@ -881,8 +1480,8 @@ describe("MCP runtime", () => {
 
       // Then
       expect(fake.listCalls()).toBe(1);
-      expect(runtime.exposureSnapshot().tools).toHaveLength(1);
-      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+      expect((await runtime.exposureSnapshot()).tools).toHaveLength(1);
+      expect((await runtime.exposureSnapshot()).tools[0]?.parameters).toEqual({
         type: "object",
         properties: {
           repoName: {
@@ -933,7 +1532,7 @@ describe("MCP runtime", () => {
         { query: "search", server: "catalog", tool: "search" },
         signal,
       );
-      const originalSnapshot = runtime.exposureSnapshot();
+      const originalSnapshot = await runtime.exposureSnapshot();
 
       // When
       now = 5 * 60 * 1_000;
@@ -944,16 +1543,88 @@ describe("MCP runtime", () => {
       expect(originalSnapshot.tools[0]?.description).toContain(
         "Before TTL refresh",
       );
-      expect(runtime.exposureSnapshot().tools).toEqual([]);
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
 
       await runtime.search(
         { query: "search", server: "catalog", tool: "search" },
         signal,
       );
-      expect(runtime.exposureSnapshot().tools[0]?.description).toContain(
-        "After TTL refresh",
-      );
+      expect(
+        (await runtime.exposureSnapshot()).tools[0]?.description,
+      ).toContain("After TTL refresh");
     } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a server is disabled after an expired catalog refresh completes,
+    When the next turn rechecks lifecycle,
+    Then the refreshed transport is suspended before exposure`, async () => {
+    // Given
+    const firstCatalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const secondCatalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const refreshRequested = Promise.withResolvers<void>();
+    const releaseRefresh =
+      Promise.withResolvers<Awaited<ReturnType<typeof fakeCatalog>>>();
+    let listCalls = 0;
+    let closeCalls = 0;
+    let enabled = true;
+    let now = 0;
+    const runtime = runtimeWithFactory({
+      now: () => now,
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [testServerConfig],
+      },
+      connectionFactory: {
+        connect: async () => ({
+          protocolEra: "modern",
+          protocolVersion: "2026-07-28",
+          serverIdentity: "ttl-race@1.0.0",
+          listCatalog: async () => {
+            listCalls++;
+            if (listCalls === 1) return firstCatalog;
+            refreshRequested.resolve();
+            return await releaseRefresh.promise;
+          },
+          callTool: async () => ({ content: [] }),
+          close: async () => {
+            closeCalls++;
+          },
+        }),
+      },
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+      now = 5 * 60 * 1_000;
+      const preparation = runtime.prepareTurn(testSchemaTarget, signal);
+      await refreshRequested.promise;
+
+      // When
+      enabled = false;
+      releaseRefresh.resolve(secondCatalog);
+      await preparation;
+
+      // Then
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+      expect(closeCalls).toBe(1);
+    } finally {
+      releaseRefresh.resolve(secondCatalog);
       await runtime.close();
     }
   });
@@ -1005,7 +1676,7 @@ describe("MCP runtime", () => {
         { query: "search", server: "catalog", tool: "search" },
         signal,
       );
-      const expiredCall = exposedToolCall(runtime);
+      const expiredCall = await exposedToolCall(runtime);
 
       // When
       now = 5 * 60 * 1_000;
@@ -1013,7 +1684,7 @@ describe("MCP runtime", () => {
       const execution = await runtime.execute(expiredCall, signal);
 
       // Then
-      expect(runtime.exposureSnapshot().tools).toEqual([]);
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
       expect(execution.ok).toBe(false);
       expect(execution.content).toContain("changed after exposure");
       expect(callCalls).toBe(0);
@@ -1418,7 +2089,7 @@ describe("MCP runtime", () => {
 
   test(`Given cancellation reaches a call after dispatch begins,
     When the transport aborts,
-    Then the same signal is forwarded and the mutation outcome remains explicit`, async () => {
+    Then the transport signal preserves the caller abort and the mutation outcome remains explicit`, async () => {
     // Given
     const catalog = await fakeCatalog([
       {
@@ -1431,11 +2102,11 @@ describe("MCP runtime", () => {
       },
     ]);
     const controller = new AbortController();
-    let receivedSignal: AbortSignal | null = null;
+    const received: { signal?: AbortSignal } = {};
     const fake = fakeConnectionFactory({
       catalogs: [catalog],
       callTool: async (_toolName, _arguments, signal) => {
-        receivedSignal = signal;
+        received.signal = signal;
         controller.abort(new Error("user interrupted"));
         throw controller.signal.reason;
       },
@@ -1450,7 +2121,8 @@ describe("MCP runtime", () => {
       const result = await runtime.execute(toolCall, controller.signal);
 
       // Then
-      expect(receivedSignal).toBe(controller.signal);
+      expect(received.signal?.aborted).toBe(true);
+      expect(received.signal?.reason).toBe(controller.signal.reason);
       expect(result.ok).toBe(false);
       expect(result.content).toContain("outcome is uncertain");
       expect(fake.callCalls()).toBe(1);
@@ -1626,7 +2298,7 @@ describe("MCP runtime", () => {
         { query: "unused", server: "catalog", tool: "mainstream" },
         signal,
       );
-      const exposed = exposedToolCall(runtime);
+      const exposed = await exposedToolCall(runtime);
 
       // When
       const invalid = await runtime.execute(
@@ -1665,7 +2337,7 @@ describe("MCP runtime", () => {
       );
 
       // Then
-      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+      expect((await runtime.exposureSnapshot()).tools[0]?.parameters).toEqual({
         type: "object",
         properties: {
           repoName: {
@@ -1768,7 +2440,7 @@ describe("MCP runtime", () => {
         },
         signal,
       );
-      const exposed = exposedToolCall(runtime);
+      const exposed = await exposedToolCall(runtime);
 
       // When
       const overlapping = await runtime.execute(
@@ -1781,7 +2453,7 @@ describe("MCP runtime", () => {
       );
 
       // Then
-      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+      expect((await runtime.exposureSnapshot()).tools[0]?.parameters).toEqual({
         type: "object",
         properties: {
           "value.oneOf[0]": { type: "string" },
@@ -2974,7 +3646,7 @@ describe("MCP runtime", () => {
         },
         signal,
       );
-      const exposed = exposedToolCall(runtime);
+      const exposed = await exposedToolCall(runtime);
 
       // When
       const result = await runtime.execute(
@@ -2986,7 +3658,7 @@ describe("MCP runtime", () => {
       );
 
       // Then
-      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+      expect((await runtime.exposureSnapshot()).tools[0]?.parameters).toEqual({
         type: "object",
         properties: {
           issue: {
@@ -3053,9 +3725,9 @@ describe("MCP runtime", () => {
 
       // Then
       expect(
-        runtime
-          .exposureSnapshot()
-          .tools.map((tool) => tool.reference.rawToolName),
+        (await runtime.exposureSnapshot()).tools.map(
+          (tool) => tool.reference.rawToolName,
+        ),
       ).toEqual(["valid"]);
       expect(result.content).toContain("3 discovered");
       expect(result.content).toContain("2 catalog-quarantined");
@@ -3140,7 +3812,7 @@ describe("MCP runtime", () => {
       expect(result.ok).toBe(true);
       expect(result.content).not.toContain("\u0000");
       expect(result.content).not.toContain("\u0007");
-      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+      expect((await runtime.exposureSnapshot()).tools[0]?.parameters).toEqual({
         type: "object",
         description: "Root description",
         properties: {
@@ -3242,7 +3914,7 @@ describe("MCP runtime", () => {
         },
         signal,
       );
-      const exposed = exposedToolCall(runtime);
+      const exposed = await exposedToolCall(runtime);
 
       // When
       const result = await runtime.execute(
@@ -3261,7 +3933,7 @@ describe("MCP runtime", () => {
       );
 
       // Then
-      expect(runtime.exposureSnapshot().tools[0]?.parameters).toEqual({
+      expect((await runtime.exposureSnapshot()).tools[0]?.parameters).toEqual({
         type: "object",
         properties: {
           limit: {
@@ -3418,7 +4090,7 @@ describe("MCP runtime", () => {
         );
 
         // Then
-        expect(runtime.exposureSnapshot().tools).toEqual([]);
+        expect((await runtime.exposureSnapshot()).tools).toEqual([]);
         expect(result.content).toContain(expectedDiagnostic);
       } finally {
         await runtime.close();
@@ -3484,9 +4156,9 @@ describe("MCP runtime", () => {
 
       const lexical = await runtime.search({ query: "otter" }, signal);
       expect(
-        runtime
-          .exposureSnapshot()
-          .tools.map((tool) => tool.reference.rawToolName),
+        (await runtime.exposureSnapshot()).tools.map(
+          (tool) => tool.reference.rawToolName,
+        ),
       ).toEqual(["name-otter", "description-match"]);
       expect(lexical.ok).toBe(true);
       const byServer = await runtime.search({ query: "catalog" }, signal);
@@ -3504,7 +4176,7 @@ describe("MCP runtime", () => {
       );
 
       // Then
-      expect(runtime.exposureSnapshot().tools).toHaveLength(0);
+      expect((await runtime.exposureSnapshot()).tools).toHaveLength(0);
       expect(bounded.content).toContain("Omitted 2 matching tools");
       expect(bounded.content).toContain("2 tools exceeded");
     } finally {
@@ -3589,7 +4261,7 @@ describe("MCP runtime", () => {
       expect(result.content).toContain(
         "Catalog quarantine: catalog/duplicate: duplicate raw tool name",
       );
-      expect(runtime.exposureSnapshot().tools).toEqual([]);
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
     } finally {
       await runtime.close();
     }
@@ -3691,14 +4363,16 @@ describe("MCP runtime", () => {
       },
     ]);
     const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const servers = [
+      {
+        ...testServerConfig,
+        toolFilter: { allow: ["search"], deny: [] },
+      },
+    ];
     const runtime = createMcpRuntime({
-      servers: [
-        {
-          ...testServerConfig,
-          toolFilter: { allow: ["search"], deny: [] },
-        },
-      ],
+      servers,
       connectionFactory: fake.factory,
+      lifecycle: staticLifecycle(servers),
       permission: allowPermission,
       schemaTarget: testSchemaTarget,
     });
@@ -3712,9 +4386,9 @@ describe("MCP runtime", () => {
 
       // Then
       expect(
-        runtime
-          .exposureSnapshot()
-          .tools.map((tool) => tool.reference.rawToolName),
+        (await runtime.exposureSnapshot()).tools.map(
+          (tool) => tool.reference.rawToolName,
+        ),
       ).toEqual(["search"]);
     } finally {
       await runtime.close();
@@ -3858,19 +4532,20 @@ describe("MCP runtime", () => {
         inputSchema: { type: "object", properties: {} },
       },
     ]);
+    const servers = [
+      {
+        ...testServerConfig,
+        id: "b-server",
+        url: "https://b.example/mcp",
+      },
+      {
+        ...testServerConfig,
+        id: "a-server",
+        url: "https://a.example/mcp",
+      },
+    ];
     const runtime = createMcpRuntime({
-      servers: [
-        {
-          ...testServerConfig,
-          id: "b-server",
-          url: "https://b.example/mcp",
-        },
-        {
-          ...testServerConfig,
-          id: "a-server",
-          url: "https://a.example/mcp",
-        },
-      ],
+      servers,
       connectionFactory: {
         connect: async (server) => ({
           protocolEra: "modern",
@@ -3882,6 +4557,7 @@ describe("MCP runtime", () => {
           close: async () => {},
         }),
       },
+      lifecycle: staticLifecycle(servers),
       permission: allowPermission,
       schemaTarget: testSchemaTarget,
     });
@@ -3895,12 +4571,9 @@ describe("MCP runtime", () => {
 
       // Then
       expect(
-        runtime
-          .exposureSnapshot()
-          .tools.map(
-            (tool) =>
-              `${tool.reference.serverId}/${tool.reference.rawToolName}`,
-          ),
+        (await runtime.exposureSnapshot()).tools.map(
+          (tool) => `${tool.reference.serverId}/${tool.reference.rawToolName}`,
+        ),
       ).toEqual(["a-server/alpha", "a-server/zeta", "b-server/middle"]);
     } finally {
       await runtime.close();

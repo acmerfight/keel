@@ -49,6 +49,8 @@ export interface TestOAuthMcpServer {
   readonly registrationRequests: () => number;
   readonly tokenRequests: () => readonly OAuthTokenRequest[];
   readonly calls: () => readonly string[];
+  readonly authenticatedMcpRequest: Promise<void>;
+  readonly releaseAuthenticatedMcpResponse: () => void;
   readonly expireAccessToken: () => void;
   readonly openAuthorizationUrl: (url: URL) => Promise<void>;
   readonly close: () => Promise<void>;
@@ -74,7 +76,7 @@ export async function startOAuthMcpServer(
     readonly authChallenge?: "connect" | "tools-list";
     readonly authentication?: "required" | "optional";
     readonly tokenResponse?: "valid" | "malformed";
-    readonly authenticatedMcpResponse?: "valid" | "server-error";
+    readonly authenticatedMcpResponse?: "valid" | "server-error" | "pending";
     readonly refreshResponse?:
       | "rotate"
       | "omit-refresh-token-and-scope"
@@ -94,6 +96,8 @@ export async function startOAuthMcpServer(
   let origin = "";
   let resourceUrl = "";
   let acceptedAccessToken = accessToken;
+  const authenticatedMcpRequest = Promise.withResolvers<void>();
+  const authenticatedMcpResponse = Promise.withResolvers<void>();
 
   const mcpHandler = createMcpHandler(() => {
     const mcp = new McpServer(
@@ -289,6 +293,12 @@ export async function startOAuthMcpServer(
         ) {
           return new Response(null, { status: 500 });
         }
+        if (authenticated) {
+          authenticatedMcpRequest.resolve();
+          if (options.authenticatedMcpResponse === "pending") {
+            await authenticatedMcpResponse.promise;
+          }
+        }
         return await mcpHandler.fetch(request);
       }
       return new Response(null, { status: 404 });
@@ -317,6 +327,10 @@ export async function startOAuthMcpServer(
     registrationRequests: () => registrationRequests,
     tokenRequests: () => [...tokenRequests],
     calls: () => [...calls],
+    authenticatedMcpRequest: authenticatedMcpRequest.promise,
+    releaseAuthenticatedMcpResponse: () => {
+      authenticatedMcpResponse.resolve();
+    },
     expireAccessToken: () => {
       acceptedAccessToken = "expired";
     },

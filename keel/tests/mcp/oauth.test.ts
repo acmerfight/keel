@@ -4,12 +4,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
-  createMcpBearerAuthProvider,
   createMcpOAuthLoginProvider,
+  createMcpBearerAuthProvider as createProductionMcpBearerAuthProvider,
   deleteMcpOAuthCredentials,
   McpOAuthAuthenticationRequiredError,
+  McpOAuthServerUnavailableError,
   type McpSecretBackend,
 } from "../../src/mcp/oauth.ts";
+
+const TEST_SERVER_INCARNATION = "00000000-0000-4000-8000-000000000001";
+
+function createMcpBearerAuthProvider(
+  options: Omit<
+    Parameters<typeof createProductionMcpBearerAuthProvider>[0],
+    "isCurrentAndEnabled" | "server"
+  > & {
+    readonly server: Omit<
+      Parameters<typeof createProductionMcpBearerAuthProvider>[0]["server"],
+      "incarnation"
+    >;
+  },
+) {
+  return createProductionMcpBearerAuthProvider({
+    ...options,
+    server: { ...options.server, incarnation: TEST_SERVER_INCARNATION },
+    isCurrentAndEnabled: async () => true,
+  });
+}
 
 const TEST_REFRESH_LOCK_ROOT = join(
   tmpdir(),
@@ -51,11 +72,14 @@ function oauthProvider(options: {
 }) {
   return createMcpOAuthLoginProvider({
     server: {
+      incarnation: TEST_SERVER_INCARNATION,
       url: "https://resource.example/mcp",
       allowPrivateNetwork: false,
       authenticationRequired: false,
     },
     backend: options.backend,
+    refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    isCurrentAndEnabled: async () => true,
     redirectUrl: "http://127.0.0.1:43123/oauth/callback",
     openAuthorizationUrl: async () => {},
     preRegisteredClient:
@@ -154,6 +178,50 @@ async function captureUnauthorizedResponse(
 }
 
 describe("MCP OAuth flow state", () => {
+  test(`Given a runtime server is disabled before credential access,
+    When bearer authentication is requested,
+    Then lifecycle rejects before reading or refreshing secure state`, async () => {
+    // Given
+    let reads = 0;
+    let refreshRequests = 0;
+    const bearer = createProductionMcpBearerAuthProvider({
+      server: {
+        incarnation: TEST_SERVER_INCARNATION,
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: true,
+      },
+      backend: {
+        getPassword: async () => {
+          reads++;
+          return null;
+        },
+        setPassword: async () => {},
+        deletePassword: async () => false,
+      },
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+      isCurrentAndEnabled: async () => false,
+    });
+
+    // When / Then
+    await expect(bearer.token()).rejects.toBeInstanceOf(
+      McpOAuthServerUnavailableError,
+    );
+    const response = await captureUnauthorizedResponse(bearer, "stale-token");
+    await expect(
+      bearer.onUnauthorized({
+        response,
+        serverUrl: new URL("https://resource.example/mcp"),
+        fetchFn: async () => {
+          refreshRequests++;
+          return new Response(null, { status: 500 });
+        },
+      }),
+    ).rejects.toBeInstanceOf(McpOAuthServerUnavailableError);
+    expect(reads).toBe(0);
+    expect(refreshRequests).toBe(0);
+  });
+
   test.each([
     ["oversized", "x".repeat(1024 * 1024 + 1), "safe size limit"],
     ["invalid JSON", "{", "invalid JSON"],
@@ -268,13 +336,128 @@ describe("MCP OAuth flow state", () => {
     await expect(
       deleteMcpOAuthCredentials(
         {
+          incarnation: TEST_SERVER_INCARNATION,
           url: "https://resource.example/mcp",
           allowPrivateNetwork: false,
           authenticationRequired: false,
         },
         unavailable,
+        TEST_REFRESH_LOCK_ROOT,
       ),
     ).rejects.toThrow("secure credential removal failed");
+  });
+
+  test(`Given concurrent lifecycle commands remove one MCP credential,
+    When both deletion attempts target the same resource,
+    Then the OAuth refresh lock serializes secure backend mutation`, async () => {
+    // Given
+    const refreshLockRoot = join(
+      tmpdir(),
+      `keel-mcp-delete-lock-${randomUUID()}`,
+    );
+    let activeDeletions = 0;
+    let maximumActiveDeletions = 0;
+    const backend: McpSecretBackend = {
+      getPassword: async () => null,
+      setPassword: async () => {},
+      deletePassword: async () => {
+        activeDeletions += 1;
+        maximumActiveDeletions = Math.max(
+          maximumActiveDeletions,
+          activeDeletions,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        activeDeletions -= 1;
+        return true;
+      },
+    };
+    const server = {
+      incarnation: TEST_SERVER_INCARNATION,
+      url: "https://resource.example/mcp",
+      allowPrivateNetwork: false,
+      authenticationRequired: true,
+    };
+
+    try {
+      // When
+      await Promise.all([
+        deleteMcpOAuthCredentials(server, backend, refreshLockRoot),
+        deleteMcpOAuthCredentials(server, backend, refreshLockRoot),
+      ]);
+
+      // Then
+      expect(maximumActiveDeletions).toBe(1);
+    } finally {
+      await rm(refreshLockRoot, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a removed server and its replacement use the same resource URL,
+    When stale cleanup targets the removed incarnation,
+    Then the replacement incarnation keeps its independent credential`, async () => {
+    // Given
+    const secrets = testSecretBackend();
+    const refreshLockRoot = join(
+      tmpdir(),
+      `keel-mcp-incarnation-credentials-${randomUUID()}`,
+    );
+    const replacement = {
+      incarnation: "00000000-0000-4000-8000-000000000022",
+      url: "https://resource.example/mcp",
+      allowPrivateNetwork: false,
+      authenticationRequired: true,
+    };
+    const replacementLogin = createMcpOAuthLoginProvider({
+      server: replacement,
+      backend: secrets.backend,
+      refreshLockRoot,
+      isCurrentAndEnabled: async () => true,
+      redirectUrl: "http://127.0.0.1:43123/oauth/callback",
+      openAuthorizationUrl: async () => {},
+      preRegisteredClient: {
+        clientId: "replacement-client",
+        clientSecret: null,
+      },
+      now: () => 0,
+    });
+    await replacementLogin.saveClientInformation(
+      {
+        client_id: "replacement-client",
+        issuer: "https://auth.example",
+      },
+      { issuer: "https://auth.example" },
+    );
+    await replacementLogin.saveTokens(
+      {
+        access_token: "replacement-access-token",
+        token_type: "Bearer",
+        issuer: "https://auth.example",
+      },
+      { issuer: "https://auth.example" },
+    );
+
+    try {
+      // When
+      await deleteMcpOAuthCredentials(
+        {
+          ...replacement,
+          incarnation: "00000000-0000-4000-8000-000000000011",
+        },
+        secrets.backend,
+        refreshLockRoot,
+      );
+
+      // Then
+      const bearer = createProductionMcpBearerAuthProvider({
+        server: replacement,
+        backend: secrets.backend,
+        refreshLockRoot,
+        isCurrentAndEnabled: async () => true,
+      });
+      await expect(bearer.token()).resolves.toBe("replacement-access-token");
+    } finally {
+      await rm(refreshLockRoot, { recursive: true, force: true });
+    }
   });
 
   test(`Given the SDK omits or changes an authorization issuer context,
@@ -607,6 +790,113 @@ describe("MCP OAuth flow state", () => {
     // Then
     await expect(bearer.token()).resolves.toBe("peer-access-token");
     expect(refreshRequests).toBe(0);
+  });
+
+  test(`Given a token refresh is in flight when its MCP server is disabled,
+    When the authorization server returns rotated credentials,
+    Then lifecycle is rechecked and the rotation is not persisted`, async () => {
+    // Given
+    const secrets = testSecretBackend();
+    await seedActiveCredential({
+      backend: secrets.backend,
+      refreshToken: "old-refresh-token",
+    });
+    let enabled = true;
+    const bearer = createProductionMcpBearerAuthProvider({
+      server: {
+        incarnation: TEST_SERVER_INCARNATION,
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: true,
+      },
+      backend: secrets.backend,
+      refreshLockRoot: join(
+        tmpdir(),
+        `keel-mcp-refresh-disable-${randomUUID()}`,
+      ),
+      isCurrentAndEnabled: async () => enabled,
+    });
+    const response = await captureUnauthorizedResponse(
+      bearer,
+      "expired-access-token",
+    );
+    const refreshRequested = Promise.withResolvers<void>();
+    const finishRefresh = Promise.withResolvers<void>();
+    const refresh = bearer.onUnauthorized({
+      response,
+      serverUrl: new URL("https://resource.example/mcp"),
+      fetchFn: async () => {
+        refreshRequested.resolve();
+        await finishRefresh.promise;
+        return Response.json({
+          access_token: "rotated-access-token",
+          refresh_token: "rotated-refresh-token",
+          token_type: "Bearer",
+        });
+      },
+    });
+    await refreshRequested.promise;
+
+    // When
+    enabled = false;
+    finishRefresh.resolve();
+
+    // Then
+    await expect(refresh).rejects.toBeInstanceOf(
+      McpOAuthServerUnavailableError,
+    );
+    expect(secrets.values().join("\n")).toContain("old-refresh-token");
+    expect(secrets.values().join("\n")).not.toContain("rotated-refresh-token");
+  });
+
+  test(`Given refresh holds the credential transaction while login updates flow state,
+    When rotated tokens publish before the login mutation acquires the lock,
+    Then the login rereads and preserves both the rotation and its new flow`, async () => {
+    // Given
+    const secrets = testSecretBackend();
+    const login = await seedActiveCredential({
+      backend: secrets.backend,
+      refreshToken: "old-refresh-token",
+    });
+    const bearer = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: true,
+      },
+      backend: secrets.backend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+    const response = await captureUnauthorizedResponse(
+      bearer,
+      "expired-access-token",
+    );
+    const refreshRequested = Promise.withResolvers<void>();
+    const finishRefresh = Promise.withResolvers<void>();
+    const refresh = bearer.onUnauthorized({
+      response,
+      serverUrl: new URL("https://resource.example/mcp"),
+      fetchFn: async () => {
+        refreshRequested.resolve();
+        await finishRefresh.promise;
+        return Response.json({
+          access_token: "rotated-access-token",
+          refresh_token: "rotated-refresh-token",
+          token_type: "Bearer",
+        });
+      },
+    });
+    await refreshRequested.promise;
+    const beginFlow = login.beginFlow("s".repeat(43), 10);
+
+    // When
+    finishRefresh.resolve();
+    await Promise.all([refresh, beginFlow]);
+
+    // Then
+    await expect(bearer.token()).resolves.toBe("rotated-access-token");
+    await expect(login.state()).resolves.toBe("s".repeat(43));
+    expect(secrets.values().join("\n")).toContain("rotated-refresh-token");
   });
 
   test(`Given two isolated Keel homes use the same MCP resource URL,

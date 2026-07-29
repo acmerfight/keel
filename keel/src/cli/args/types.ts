@@ -95,6 +95,21 @@ export type McpCliArgs =
       readonly command: "mcp";
       readonly mode: "logout";
       readonly serverId: string;
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "enable";
+      readonly serverId: string;
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "disable";
+      readonly serverId: string;
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "remove";
+      readonly serverId: string;
     };
 
 export interface SetupCliArgs {

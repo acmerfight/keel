@@ -103,6 +103,18 @@ describe("MCP CLI args", () => {
       ["mcp", "logout", "catalog"],
       { command: "mcp", mode: "logout", serverId: "catalog" },
     ],
+    [
+      ["mcp", "enable", "catalog"],
+      { command: "mcp", mode: "enable", serverId: "catalog" },
+    ],
+    [
+      ["mcp", "disable", "catalog"],
+      { command: "mcp", mode: "disable", serverId: "catalog" },
+    ],
+    [
+      ["mcp", "remove", "catalog"],
+      { command: "mcp", mode: "remove", serverId: "catalog" },
+    ],
   ])(
     `Given valid MCP command %j,
     When CLI arguments are parsed,
@@ -115,7 +127,7 @@ describe("MCP CLI args", () => {
   test.each([
     [
       ["mcp"],
-      "Error: mcp requires a subcommand: add, list, status, doctor, login, or logout.",
+      "Error: mcp requires a subcommand: add, list, status, doctor, login, logout, enable, disable, or remove.",
     ],
     [["mcp", "add"], "Error: mcp add requires <url>."],
     [
@@ -147,9 +159,24 @@ describe("MCP CLI args", () => {
     [["mcp", "doctor", "one", "two"], 'Error: unknown mcp doctor option "two"'],
     [["mcp", "login"], "Error: mcp login requires <server>."],
     [["mcp", "logout"], "Error: mcp logout requires <server>."],
+    [["mcp", "enable"], "Error: mcp enable requires <server>."],
+    [["mcp", "disable"], "Error: mcp disable requires <server>."],
+    [["mcp", "remove"], "Error: mcp remove requires <server>."],
     [
       ["mcp", "logout", "catalog", "--all"],
       'Error: unknown mcp logout option "--all"',
+    ],
+    [
+      ["mcp", "enable", "catalog", "--all"],
+      'Error: unknown mcp enable option "--all"',
+    ],
+    [
+      ["mcp", "disable", "catalog", "--all"],
+      'Error: unknown mcp disable option "--all"',
+    ],
+    [
+      ["mcp", "remove", "catalog", "--all"],
+      'Error: unknown mcp remove option "--all"',
     ],
     [
       ["mcp", "login", "catalog", "--unknown"],

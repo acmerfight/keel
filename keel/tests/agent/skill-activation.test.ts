@@ -69,11 +69,13 @@ const MCP_REFERENCE: McpToolReference = {
 
 const EMPTY_MCP_EXPOSURE: McpToolExposureSnapshot = {
   snapshotId: "empty",
+  catalogAvailable: true,
   tools: [],
 };
 
 const ACTIVE_MCP_EXPOSURE: McpToolExposureSnapshot = {
   snapshotId: "active",
+  catalogAvailable: true,
   tools: [
     {
       kind: "mcp",
@@ -173,7 +175,7 @@ describe("Agent Skill Activation", () => {
     skillActivation.expose([REVIEW_DESCRIPTOR]);
     const mcp: McpRuntime = {
       prepareTurn: async () => {},
-      exposureSnapshot: () => EMPTY_MCP_EXPOSURE,
+      exposureSnapshot: async () => EMPTY_MCP_EXPOSURE,
       search: async () => ({ ok: false, content: "unused" }),
       execute: async (toolCall) => {
         expect(toolCall.kind).toBe("mcp_unresolved");
@@ -267,7 +269,7 @@ describe("Agent Skill Activation", () => {
     let remoteCalls = 0;
     const mcp: McpRuntime = {
       prepareTurn: async () => {},
-      exposureSnapshot: () =>
+      exposureSnapshot: async () =>
         activatedMcpTool ? ACTIVE_MCP_EXPOSURE : EMPTY_MCP_EXPOSURE,
       search: async () => {
         activatedMcpTool = true;
@@ -405,7 +407,7 @@ describe("Agent Skill Activation", () => {
     skillActivation.expose([REVIEW_DESCRIPTOR]);
     const mcp: McpRuntime = {
       prepareTurn: async () => {},
-      exposureSnapshot: () => EMPTY_MCP_EXPOSURE,
+      exposureSnapshot: async () => EMPTY_MCP_EXPOSURE,
       search: async () => ({
         ok: true,
         content: "Activate the repo:review Skill on the next user turn.",
