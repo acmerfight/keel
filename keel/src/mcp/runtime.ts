@@ -14,7 +14,11 @@ import {
 import type { ProviderToolInputSchema } from "../tools/tool-schema.ts";
 import type { ToolOutputArtifact } from "../tools/types.ts";
 import type { McpCatalog, McpCatalogTool, McpConnection } from "./discovery.ts";
-import { isMcpAuthenticationRequiredError } from "./oauth.ts";
+import {
+  isMcpAuthenticationRequiredError,
+  type McpAuthorizationIdentity,
+  sameMcpAuthorizationIdentity,
+} from "./oauth.ts";
 import {
   compileMcpProviderInputSchema,
   MCP_PROVIDER_SCHEMA_REFERENCE_LIMITS,
@@ -79,8 +83,10 @@ function configurationDigest(server: McpRuntimeServer): string {
   return sha256(
     JSON.stringify({
       allowPrivateNetwork: server.allowPrivateNetwork,
+      authenticationRequired: server.authenticationRequired,
       id: server.id,
       incarnation: server.incarnation,
+      toolFilter: server.toolFilter,
       url: server.url,
     }),
   );
@@ -398,7 +404,7 @@ function richResultArtifact(
 
 class McpServerOwner {
   server: McpRuntimeServer;
-  readonly configurationDigest: string;
+  configurationDigest: string;
   private readonly lifecycle = new AbortController();
   private readonly connectionFactory: McpConnectionFactory;
   private availability = new AbortController();
@@ -428,6 +434,7 @@ class McpServerOwner {
 
   updateServer(server: McpRuntimeServer): void {
     this.server = server;
+    this.configurationDigest = configurationDigest(server);
     if (server.enabled && !this.available) {
       this.available = true;
       this.availability = new AbortController();
@@ -739,6 +746,15 @@ class DefaultMcpRuntime implements McpRuntime {
     }
   }
 
+  private async reconcileExecutionConfiguration(): Promise<boolean> {
+    try {
+      await this.reconcileOwners();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private toolIsAllowed(owner: McpServerOwner, rawToolName: string): boolean {
     if (this.filter !== null) {
       return this.filter.allows({
@@ -1020,6 +1036,19 @@ class DefaultMcpRuntime implements McpRuntime {
         ok: false,
       };
     }
+    if (!(await this.reconcileExecutionConfiguration())) {
+      return {
+        identity: "identified",
+        content:
+          "MCP tool call rejected: Keel could not verify the current server configuration. Search again before retrying.",
+        ok: false,
+        preserved: preservedExternalResult(
+          toolCall.reference.serverId,
+          toolCall.reference.rawToolName,
+          { error: "MCP server configuration unavailable" },
+        ),
+      };
+    }
     const owner = this.owners.find(
       (candidate) => candidate.server.id === toolCall.reference.serverId,
     );
@@ -1076,10 +1105,32 @@ class DefaultMcpRuntime implements McpRuntime {
         ),
       };
     }
+    let authorizationIdentity: McpAuthorizationIdentity;
+    try {
+      authorizationIdentity = await awaitWithSignal(
+        resolved.state.connection.authorizationIdentity(),
+        signal,
+      );
+    } catch (error) {
+      if (signal.aborted) throw abortError(signal);
+      return {
+        identity: "identified",
+        content: `MCP tool call rejected: Keel could not verify the current authorization identity. ${externalErrorDiagnostic(error)}`,
+        ok: false,
+        preserved: preservedExternalResult(
+          owner.server.id,
+          tool.descriptor.name,
+          { error: "MCP authorization identity unavailable" },
+        ),
+      };
+    }
     const decision = await this.permission.review({
       origin: originFor(owner.server),
       serverId: owner.server.id,
+      configurationDigest: owner.configurationDigest,
       rawToolName: tool.descriptor.name,
+      descriptorDigest: tool.descriptorDigest,
+      authorizationIdentity,
       arguments: toolCall.arguments,
       signal,
     });
@@ -1094,6 +1145,104 @@ class DefaultMcpRuntime implements McpRuntime {
           { error: "MCP tool approval denied" },
         ),
       };
+    }
+    if (!(await this.reconcileExecutionConfiguration())) {
+      return {
+        identity: "identified",
+        content:
+          "MCP tool call rejected: Keel could not revalidate the current server configuration after approval. Search again before retrying.",
+        ok: false,
+        preserved: preservedExternalResult(
+          owner.server.id,
+          tool.descriptor.name,
+          { error: "MCP server configuration unavailable after approval" },
+        ),
+      };
+    }
+    if (!(await this.ownerIsAvailable(owner))) {
+      await this.suspendOwner(owner);
+      return unavailableMcpToolResult(owner, tool.descriptor.name);
+    }
+    if (!this.toolIsAllowed(owner, tool.descriptor.name)) {
+      return {
+        identity: "identified",
+        content:
+          "MCP tool call rejected: the current tool filter denies this external capability. Search again before retrying.",
+        ok: false,
+        preserved: preservedExternalResult(
+          owner.server.id,
+          tool.descriptor.name,
+          { error: "MCP tool denied by current filter" },
+        ),
+      };
+    }
+    const authorizationDispatch = owner.resolve(toolCall.reference);
+    if (authorizationDispatch === null) {
+      return {
+        identity: "identified",
+        content:
+          "MCP tool call rejected: its server configuration or catalog descriptor changed during approval. Search again before retrying.",
+        ok: false,
+        preserved: preservedExternalResult(
+          owner.server.id,
+          tool.descriptor.name,
+          { error: "stale MCP exposure snapshot after approval" },
+        ),
+      };
+    }
+    let currentAuthorizationIdentity: McpAuthorizationIdentity;
+    try {
+      currentAuthorizationIdentity = await awaitWithSignal(
+        authorizationDispatch.state.connection.authorizationIdentity(),
+        signal,
+      );
+    } catch (error) {
+      if (signal.aborted) throw abortError(signal);
+      return {
+        identity: "identified",
+        content: `MCP tool call rejected: Keel could not revalidate the current authorization identity after approval. ${externalErrorDiagnostic(error)}`,
+        ok: false,
+        preserved: preservedExternalResult(
+          owner.server.id,
+          tool.descriptor.name,
+          { error: "MCP authorization identity unavailable after approval" },
+        ),
+      };
+    }
+    if (
+      !sameMcpAuthorizationIdentity(
+        authorizationIdentity,
+        currentAuthorizationIdentity,
+      )
+    ) {
+      return {
+        identity: "identified",
+        content:
+          "MCP tool call rejected: its authorization identity changed during approval. Review the call again before retrying.",
+        ok: false,
+        preserved: preservedExternalResult(
+          owner.server.id,
+          tool.descriptor.name,
+          { error: "MCP authorization identity changed during approval" },
+        ),
+      };
+    }
+    if (!(await this.reconcileExecutionConfiguration())) {
+      return {
+        identity: "identified",
+        content:
+          "MCP tool call rejected: Keel could not revalidate the current server configuration before dispatch. Search again before retrying.",
+        ok: false,
+        preserved: preservedExternalResult(
+          owner.server.id,
+          tool.descriptor.name,
+          { error: "MCP server configuration unavailable before dispatch" },
+        ),
+      };
+    }
+    if (!(await this.ownerIsAvailable(owner))) {
+      await this.suspendOwner(owner);
+      return unavailableMcpToolResult(owner, tool.descriptor.name);
     }
     if (!this.toolIsAllowed(owner, tool.descriptor.name)) {
       return {
@@ -1113,24 +1262,21 @@ class DefaultMcpRuntime implements McpRuntime {
       return {
         identity: "identified",
         content:
-          "MCP tool call rejected: its server configuration or catalog descriptor changed during approval. Search again before retrying.",
+          "MCP tool call rejected: its server configuration or catalog descriptor changed before dispatch. Search again before retrying.",
         ok: false,
         preserved: preservedExternalResult(
           owner.server.id,
           tool.descriptor.name,
-          { error: "stale MCP exposure snapshot after approval" },
+          { error: "stale MCP exposure snapshot before dispatch" },
         ),
       };
-    }
-    if (!(await this.ownerIsAvailable(owner))) {
-      await this.suspendOwner(owner);
-      return unavailableMcpToolResult(owner, tool.descriptor.name);
     }
     if (signal.aborted) throw abortError(signal);
     try {
       const result = await dispatch.state.connection.callTool(
         dispatch.tool,
         toolCall.arguments,
+        currentAuthorizationIdentity,
         owner.operationSignal(signal),
       );
       const outputIssues =

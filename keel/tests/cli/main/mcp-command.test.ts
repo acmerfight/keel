@@ -12,6 +12,7 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { runMcpCommand } from "../../../src/cli/mcp-command.ts";
+import { saveMcpProjectApprovalGrant } from "../../../src/cli/mcp-project-approvals.ts";
 import {
   connectMcpServer,
   discoverMcpServer,
@@ -1597,6 +1598,43 @@ describe("CLI Main - MCP", () => {
     }
   });
 
+  test(`Given an unauthenticated MCP connection is handed an OAuth-bound dispatch identity,
+    When a tool call is attempted,
+    Then the adapter rejects before sending the mismatched authenticated call`, async () => {
+    // Given
+    const server = await startModernMcpServer();
+    const connection = await connectMcpServer({
+      url: server.url,
+      allowPrivateNetwork: true,
+      authenticationRequired: false,
+    });
+
+    try {
+      const tool = (await connection.listCatalog()).tools[0];
+      if (tool === undefined) throw new Error("expected one MCP test tool");
+
+      // When / Then
+      await expect(
+        connection.callTool(
+          tool,
+          { query: "otters" },
+          {
+            kind: "oauth",
+            issuer: "https://auth.example",
+            clientId: "client",
+            grantId: "00000000-0000-4000-8000-000000000001",
+          },
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow(
+        "authorization identity is unavailable for authenticated dispatch",
+      );
+    } finally {
+      await connection.close();
+      await server.close();
+    }
+  });
+
   test.each([
     ["http://example.com/mcp", "MCP server URLs must use HTTPS", "not-present"],
     [
@@ -1797,6 +1835,78 @@ describe("CLI Main - MCP", () => {
     } finally {
       await firstServer.close();
       await secondServer.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two projects have saved MCP approvals,
+    When the user clears approvals from one project,
+    Then only that project's exact grants are removed`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-mcp-approvals-command-home-"),
+    );
+    const firstProject = await mkdtemp(
+      join(tmpdir(), "keel-mcp-approvals-first-project-"),
+    );
+    const secondProject = await mkdtemp(
+      join(tmpdir(), "keel-mcp-approvals-second-project-"),
+    );
+    const approvalRuntime = createRuntime([], {
+      env: { KEEL_HOME: home },
+    });
+    const grant = {
+      serverId: "catalog",
+      origin: "https://catalog.example",
+      configurationDigest: "a".repeat(64),
+      rawToolName: "search",
+      descriptorDigest: "b".repeat(64),
+      authorizationIdentity: { kind: "anonymous" },
+      argumentsDigest: "c".repeat(64),
+    } as const;
+    await saveMcpProjectApprovalGrant(approvalRuntime.runtime, {
+      ...grant,
+      projectRoot: firstProject,
+    });
+    await saveMcpProjectApprovalGrant(approvalRuntime.runtime, {
+      ...grant,
+      projectRoot: secondProject,
+    });
+    const clear = createRuntime(["mcp", "approvals", "clear"], {
+      cwd: firstProject,
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(clear.runtime);
+
+      // Then
+      expect(exitCode, clear.stderr()).toBe(0);
+      expect(clear.stdout()).toBe("Cleared 1 MCP project approval.\n");
+      const firstList = createRuntime(["mcp", "approvals", "list"], {
+        cwd: firstProject,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(firstList.runtime)).toBe(0);
+      expect(firstList.stdout()).toBe("No MCP project approvals.\n");
+      const secondList = createRuntime(["mcp", "approvals", "list"], {
+        cwd: secondProject,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(secondList.runtime)).toBe(0);
+      expect(secondList.stdout()).toContain("MCP project approvals:\n");
+      const missingRevoke = createRuntime(["mcp", "approvals", "revoke", "2"], {
+        cwd: secondProject,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(missingRevoke.runtime)).toBe(1);
+      expect(missingRevoke.stderr()).toBe(
+        "Error: MCP project approval 2 does not exist.\n",
+      );
+    } finally {
+      await rm(firstProject, { recursive: true, force: true });
+      await rm(secondProject, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });

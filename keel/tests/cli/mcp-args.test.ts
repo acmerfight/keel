@@ -115,6 +115,15 @@ describe("MCP CLI args", () => {
       ["mcp", "remove", "catalog"],
       { command: "mcp", mode: "remove", serverId: "catalog" },
     ],
+    [["mcp", "approvals", "list"], { command: "mcp", mode: "approvals-list" }],
+    [
+      ["mcp", "approvals", "revoke", "2"],
+      { command: "mcp", mode: "approvals-revoke", index: 2 },
+    ],
+    [
+      ["mcp", "approvals", "clear"],
+      { command: "mcp", mode: "approvals-clear" },
+    ],
   ])(
     `Given valid MCP command %j,
     When CLI arguments are parsed,
@@ -127,7 +136,7 @@ describe("MCP CLI args", () => {
   test.each([
     [
       ["mcp"],
-      "Error: mcp requires a subcommand: add, list, status, doctor, login, logout, enable, disable, or remove.",
+      "Error: mcp requires a subcommand: add, list, status, doctor, login, logout, enable, disable, remove, or approvals.",
     ],
     [["mcp", "add"], "Error: mcp add requires <url>."],
     [
@@ -162,6 +171,34 @@ describe("MCP CLI args", () => {
     [["mcp", "enable"], "Error: mcp enable requires <server>."],
     [["mcp", "disable"], "Error: mcp disable requires <server>."],
     [["mcp", "remove"], "Error: mcp remove requires <server>."],
+    [
+      ["mcp", "approvals"],
+      "Error: mcp approvals requires a subcommand: list, revoke, or clear.",
+    ],
+    [
+      ["mcp", "approvals", "revoke"],
+      "Error: mcp approvals revoke requires a positive index.",
+    ],
+    [
+      ["mcp", "approvals", "revoke", "0"],
+      "Error: mcp approvals revoke requires a positive index.",
+    ],
+    [
+      ["mcp", "approvals", "revoke", "9007199254740992"],
+      "Error: mcp approvals revoke requires a positive index.",
+    ],
+    [
+      ["mcp", "approvals", "list", "extra"],
+      'Error: unknown mcp approvals list option "extra"',
+    ],
+    [
+      ["mcp", "approvals", "revoke", "1", "extra"],
+      'Error: unknown mcp approvals revoke option "extra"',
+    ],
+    [
+      ["mcp", "approvals", "unknown"],
+      'Error: unknown mcp approvals subcommand "unknown"',
+    ],
     [
       ["mcp", "logout", "catalog", "--all"],
       'Error: unknown mcp logout option "--all"',

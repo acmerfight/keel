@@ -15,7 +15,10 @@ import {
   type McpConnection,
   type McpJsonValue,
 } from "../../src/mcp/discovery.ts";
-import { McpOAuthAuthenticationRequiredError } from "../../src/mcp/oauth.ts";
+import {
+  type McpAuthorizationIdentity,
+  McpOAuthAuthenticationRequiredError,
+} from "../../src/mcp/oauth.ts";
 import {
   compileMcpProviderInputSchema,
   MCP_LOCAL_REFERENCE_CYCLE_SCAN_LIMITS,
@@ -28,6 +31,7 @@ import type {
   McpConnectionFactory,
   McpLifecyclePolicy,
   McpPermissionPolicy,
+  McpPermissionRequest,
   McpToolFilterPolicy,
   McpToolRuntimeResult,
 } from "../../src/mcp/runtime-types.ts";
@@ -118,10 +122,15 @@ function fakeConnectionFactory(options: {
   let listCalls = 0;
   let callCalls = 0;
   let closeCalls = 0;
+  let authorizationIdentity: McpAuthorizationIdentity = {
+    kind: "anonymous",
+  };
+  let resolveAuthorizationIdentity = async () => authorizationIdentity;
   const connection: McpConnection = {
     protocolEra: "modern",
     protocolVersion: "2026-07-28",
     serverIdentity: "fake@1.0.0",
+    authorizationIdentity: async () => await resolveAuthorizationIdentity(),
     listCatalog: async () => {
       const catalog =
         options.catalogs[Math.min(listCalls, options.catalogs.length - 1)];
@@ -131,7 +140,7 @@ function fakeConnectionFactory(options: {
       }
       return catalog;
     },
-    callTool: async (tool, arguments_, signal) => {
+    callTool: async (tool, arguments_, _authorizationIdentity, signal) => {
       callCalls++;
       return (
         (await options.callTool?.(
@@ -159,6 +168,14 @@ function fakeConnectionFactory(options: {
     listCalls: () => listCalls,
     callCalls: () => callCalls,
     closeCalls: () => closeCalls,
+    setAuthorizationIdentity: (identity: McpAuthorizationIdentity) => {
+      authorizationIdentity = identity;
+    },
+    setAuthorizationIdentityResolver: (
+      resolver: () => Promise<McpAuthorizationIdentity>,
+    ) => {
+      resolveAuthorizationIdentity = resolver;
+    },
   };
 }
 
@@ -300,6 +317,7 @@ describe("MCP runtime", () => {
           protocolEra: "modern",
           protocolVersion: "2026-07-28",
           serverIdentity: "pending@1.0.0",
+          authorizationIdentity: async () => ({ kind: "anonymous" }),
           listCatalog: async (signal) => {
             catalogRequested.resolve();
             if (signal === undefined) {
@@ -602,6 +620,7 @@ describe("MCP runtime", () => {
           protocolEra: "modern",
           protocolVersion: "2026-07-28",
           serverIdentity: "post-load@1.0.0",
+          authorizationIdentity: async () => ({ kind: "anonymous" }),
           listCatalog: async () => {
             catalogRequested.resolve();
             return await releaseCatalog.promise;
@@ -1109,6 +1128,638 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given persisted MCP configuration changes while an exposed call is being approved,
+    When the old configuration's decision returns allow before the lifecycle poll,
+    Then execution synchronously reconciles the config and rejects remote dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let currentServer = testServerConfig;
+    let approvals = 0;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => [currentServer],
+      },
+      permission: {
+        review: () => {
+          approvals++;
+          currentServer = {
+            ...testServerConfig,
+            toolFilter: { allow: null, deny: ["search"] },
+          };
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      const toolCall = await activateExactSearch(runtime);
+
+      // When
+      const result = await runtime.execute(
+        toolCall,
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(approvals).toBe(1);
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("current tool filter denies");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given persisted MCP configuration changes during the final authorization check,
+    When that check returns the still-approved identity,
+    Then execution reconciles again and rejects the newly denied tool before dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let currentServer = testServerConfig;
+    let identityReads = 0;
+    fake.setAuthorizationIdentityResolver(async () => {
+      identityReads++;
+      if (identityReads === 2) {
+        currentServer = {
+          ...testServerConfig,
+          toolFilter: { allow: null, deny: ["search"] },
+        };
+      }
+      return { kind: "anonymous" };
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => [currentServer],
+      },
+    });
+
+    try {
+      const toolCall = await activateExactSearch(runtime);
+
+      // When
+      const result = await runtime.execute(
+        toolCall,
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(identityReads).toBe(2);
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("current tool filter denies");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given persisted MCP configuration cannot be loaded before execution begins,
+    When an exposed exact call is requested,
+    Then execution fails closed before approval or dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let configurationUnavailable = false;
+    let approvals = 0;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => {
+          if (configurationUnavailable) {
+            throw new Error("configuration unavailable");
+          }
+          return [testServerConfig];
+        },
+      },
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      const toolCall = await activateExactSearch(runtime);
+      configurationUnavailable = true;
+
+      // When
+      const result = await runtime.execute(
+        toolCall,
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(approvals).toBe(0);
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "could not verify the current server configuration",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given persisted MCP configuration becomes unavailable during approval,
+    When the decision returns allow,
+    Then execution fails closed before authorization revalidation or dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let configurationUnavailable = false;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => {
+          if (configurationUnavailable) {
+            throw new Error("configuration unavailable");
+          }
+          return [testServerConfig];
+        },
+      },
+      permission: {
+        review: () => {
+          configurationUnavailable = true;
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "could not revalidate the current server configuration after approval",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given persisted MCP configuration becomes unavailable during the final authorization check,
+    When the approved identity is unchanged,
+    Then execution fails closed at the last configuration boundary`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let configurationUnavailable = false;
+    let identityReads = 0;
+    fake.setAuthorizationIdentityResolver(async () => {
+      identityReads++;
+      if (identityReads === 2) configurationUnavailable = true;
+      return { kind: "anonymous" };
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => {
+          if (configurationUnavailable) {
+            throw new Error("configuration unavailable");
+          }
+          return [testServerConfig];
+        },
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(identityReads).toBe(2);
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "could not revalidate the current server configuration before dispatch",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given the current MCP authorization identity cannot be read before approval,
+    When an exact exposed call is requested,
+    Then execution fails closed with no permission prompt or dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    fake.setAuthorizationIdentityResolver(async () => {
+      throw new Error("credential store unavailable");
+    });
+    let approvals = 0;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(approvals).toBe(0);
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "could not verify the current authorization identity",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given the MCP authorization identity becomes unreadable after approval,
+    When the decision returns allow,
+    Then execution fails closed before remote dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let identityReads = 0;
+    fake.setAuthorizationIdentityResolver(async () => {
+      identityReads++;
+      if (identityReads === 2) {
+        throw new Error("credential store unavailable");
+      }
+      return { kind: "anonymous" };
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(identityReads).toBe(2);
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "could not revalidate the current authorization identity after approval",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test.each([
+    ["before approval", 1],
+    ["after approval", 2],
+  ] as const)(
+    `Given authorization identity loading is pending %s,
+    When the caller cancels,
+    Then execution propagates cancellation without dispatch`,
+    async (_stage, pendingRead) => {
+      // Given
+      const catalog = await fakeCatalog([
+        {
+          name: "search",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+      ]);
+      const fake = fakeConnectionFactory({ catalogs: [catalog] });
+      const identityRequested = Promise.withResolvers<void>();
+      let identityReads = 0;
+      fake.setAuthorizationIdentityResolver(async () => {
+        identityReads++;
+        if (identityReads === pendingRead) {
+          identityRequested.resolve();
+          return await new Promise<McpAuthorizationIdentity>(() => {});
+        }
+        return { kind: "anonymous" };
+      });
+      const runtime = runtimeWithFactory({
+        connectionFactory: fake.factory,
+      });
+      const controller = new AbortController();
+
+      try {
+        const execution = runtime.execute(
+          await activateExactSearch(runtime),
+          controller.signal,
+        );
+        await identityRequested.promise;
+
+        // When
+        controller.abort(new Error("cancel identity read"));
+
+        // Then
+        await expect(execution).rejects.toThrow("cancel identity read");
+        expect(fake.callCalls()).toBe(0);
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
+
+  test(`Given server availability changes during the final authorization check,
+    When the approved identity is unchanged,
+    Then execution suspends the owner and rejects before dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let available = true;
+    let identityReads = 0;
+    fake.setAuthorizationIdentityResolver(async () => {
+      identityReads++;
+      if (identityReads === 2) available = false;
+      return { kind: "anonymous" };
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => available,
+        listCurrent: async () => [testServerConfig],
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a digest-bound server field changes during the final authorization check,
+    When the approved identity is unchanged,
+    Then execution re-resolves the frozen reference and rejects it as stale`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let currentServer = testServerConfig;
+    let identityReads = 0;
+    fake.setAuthorizationIdentityResolver(async () => {
+      identityReads++;
+      if (identityReads === 2) {
+        currentServer = {
+          ...testServerConfig,
+          authenticationRequired: true,
+        };
+      }
+      return { kind: "anonymous" };
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => [currentServer],
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.execute(
+        await activateExactSearch(runtime),
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("changed before dispatch");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given cancellation occurs after final availability revalidation,
+    When execution reaches the dispatch boundary,
+    Then it aborts without calling the remote tool`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const controller = new AbortController();
+    let abortAtAvailability = false;
+    let identityReads = 0;
+    fake.setAuthorizationIdentityResolver(async () => {
+      identityReads++;
+      if (identityReads === 2) abortAtAvailability = true;
+      return { kind: "anonymous" };
+    });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => {
+          if (abortAtAvailability) {
+            abortAtAvailability = false;
+            controller.abort(new Error("cancel before MCP dispatch"));
+          }
+          return true;
+        },
+        listCurrent: async () => [testServerConfig],
+      },
+    });
+
+    try {
+      // When / Then
+      await expect(
+        runtime.execute(await activateExactSearch(runtime), controller.signal),
+      ).rejects.toThrow("cancel before MCP dispatch");
+      expect(fake.callCalls()).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given the OAuth authorization identity changes while a call is being approved,
+    When the saved decision returns allow for the prior identity,
+    Then execution rejects the call before remote dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const firstIdentity = {
+      kind: "oauth",
+      issuer: "https://auth.example",
+      clientId: "client",
+      grantId: "00000000-0000-4000-8000-000000000001",
+    } as const;
+    fake.setAuthorizationIdentity(firstIdentity);
+    let reviewedApproval: McpPermissionRequest | null = null;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      permission: {
+        review: (approval) => {
+          reviewedApproval = approval;
+          fake.setAuthorizationIdentity({
+            ...firstIdentity,
+            grantId: "00000000-0000-4000-8000-000000000002",
+          });
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      const toolCall = await activateExactSearch(runtime);
+
+      // When
+      const result = await runtime.execute(
+        toolCall,
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(reviewedApproval).toMatchObject({
+        origin: "https://catalog.example",
+        serverId: "catalog",
+        configurationDigest: toolCall.reference.configurationDigest,
+        rawToolName: "search",
+        descriptorDigest: toolCall.reference.descriptorDigest,
+        authorizationIdentity: firstIdentity,
+        arguments: { query: "otters" },
+      });
+      expect(fake.callCalls()).toBe(0);
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain(
+        "authorization identity changed during approval",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test(`Given a catalog descriptor changes while an exposed call awaits approval,
     When the user allows the old frozen reference,
     Then execution rejects it before dispatch and requires a new search`, async () => {
@@ -1591,6 +2242,7 @@ describe("MCP runtime", () => {
           protocolEra: "modern",
           protocolVersion: "2026-07-28",
           serverIdentity: "ttl-race@1.0.0",
+          authorizationIdentity: async () => ({ kind: "anonymous" }),
           listCatalog: async () => {
             listCalls++;
             if (listCalls === 1) return firstCatalog;
@@ -1648,6 +2300,7 @@ describe("MCP runtime", () => {
       protocolEra: "modern",
       protocolVersion: "2026-07-28",
       serverIdentity: "fake@1.0.0",
+      authorizationIdentity: async () => ({ kind: "anonymous" }),
       listCatalog: async () => {
         listCalls++;
         if (listCalls > 1) {
@@ -4193,6 +4846,7 @@ describe("MCP runtime", () => {
       protocolEra: "modern",
       protocolVersion: "2026-07-28",
       serverIdentity: null,
+      authorizationIdentity: async () => ({ kind: "anonymous" }),
       listCatalog: async () => {
         throw new Error(
           "bad\u0007 endpoint https://user:secret@example.com/mcp?token=hidden http://%",
@@ -4284,6 +4938,7 @@ describe("MCP runtime", () => {
       protocolEra: "modern",
       protocolVersion: "2026-07-28",
       serverIdentity: null,
+      authorizationIdentity: async () => ({ kind: "anonymous" }),
       listCatalog: async () => await pending.promise,
       callTool: async () => ({ content: [] }),
       close: async () => {
@@ -4482,6 +5137,7 @@ describe("MCP runtime", () => {
       protocolEra: "modern",
       protocolVersion: "2026-07-28",
       serverIdentity: null,
+      authorizationIdentity: async () => ({ kind: "anonymous" }),
       listCatalog: async () => {
         lists++;
         if (lists === 1) return catalog;
@@ -4551,6 +5207,7 @@ describe("MCP runtime", () => {
           protocolEra: "modern",
           protocolVersion: "2026-07-28",
           serverIdentity: null,
+          authorizationIdentity: async () => ({ kind: "anonymous" }),
           listCatalog: async () =>
             server.url.includes("a.example") ? aCatalog : bCatalog,
           callTool: async () => ({ content: [] }),

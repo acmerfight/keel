@@ -42,10 +42,7 @@ import {
   createLineReader,
   type LineReader,
 } from "./interactive-session/line-reader.ts";
-import {
-  createPromptedMcpPermissionPolicy,
-  denyMcpPermissionPolicy,
-} from "./mcp-approval.ts";
+import { createMcpPermissionPolicy } from "./mcp-approval.ts";
 import { listMcpServers } from "./mcp-config.ts";
 import {
   createCliMcpConnectionFactory,
@@ -64,6 +61,7 @@ import {
   loadRenderedProjectMemory,
   ProjectMemoryError,
 } from "./project-memory.ts";
+import { approvalProjectRoot } from "./project-root.ts";
 import {
   ProviderConfigError,
   requireKnownCostModel,
@@ -278,15 +276,24 @@ export async function runOneShotCli(
         servers: mcpServers,
         connectionFactory: createCliMcpConnectionFactory(runtime),
         lifecycle: createCliMcpLifecyclePolicy(runtime),
-        permission:
-          approvalLineReader === undefined
-            ? denyMcpPermissionPolicy(
-                "MCP calls require terminal approval; non-TTY one-shot runs fail closed.",
-              )
-            : createPromptedMcpPermissionPolicy(
-                approvalLineReader,
-                runtime.writeStderr,
-              ),
+        permission: createMcpPermissionPolicy({
+          runtime,
+          projectRoot: approvalProjectRoot(workspace),
+          prompt:
+            approvalLineReader === undefined
+              ? {
+                  kind: "headless",
+                  deniedMessage:
+                    "MCP calls require an exact saved project approval; non-TTY one-shot runs fail closed.",
+                }
+              : {
+                  kind: "interactive",
+                  lineReader: approvalLineReader,
+                  writeStderr: runtime.writeStderr,
+                  onPromptStart: () => {},
+                  onPromptEnd: () => {},
+                },
+        }),
         now: runtime.now,
         schemaTarget: mcpProviderSchemaTarget(
           resolved.providerId,

@@ -40,6 +40,16 @@ import {
   startMcpOAuthLoopbackCallback,
 } from "./mcp-oauth-loopback.ts";
 import {
+  clearMcpProjectApprovalGrants,
+  formatMcpProjectApprovalClearResult,
+  formatMcpProjectApprovalList,
+  formatMcpProjectApprovalRevoked,
+  listMcpProjectApprovalGrants,
+  McpProjectApprovalsError,
+  revokeMcpProjectApprovalGrant,
+} from "./mcp-project-approvals.ts";
+import { approvalProjectRoot } from "./project-root.ts";
+import {
   providerProfile,
   selectedModelFromProfile,
   selectedProviderId,
@@ -49,6 +59,12 @@ import type { CliRuntime } from "./runtime.ts";
 type McpCliArgs = Extract<CliArgs, { readonly command: "mcp" }>;
 const MCP_CLIENT_SECRET_MAX_BYTES = 64 * 1024;
 type McpCommandStatus = McpDiscoveryStatus | { readonly status: "disabled" };
+type McpApprovalsCliArgs = Extract<
+  McpCliArgs,
+  {
+    readonly mode: "approvals-list" | "approvals-revoke" | "approvals-clear";
+  }
+>;
 
 function displayMcpEndpoint(raw: string): string {
   const url = new URL(raw);
@@ -430,6 +446,42 @@ async function runMcpRemove(
   return 0;
 }
 
+async function runMcpApprovals(
+  cliArgs: McpApprovalsCliArgs,
+  runtime: CliRuntime,
+): Promise<number> {
+  const projectRoot = approvalProjectRoot(runtime.cwd());
+  if (cliArgs.mode === "approvals-list") {
+    runtime.writeStdout(
+      formatMcpProjectApprovalList(
+        await listMcpProjectApprovalGrants(runtime, projectRoot),
+      ),
+    );
+    return 0;
+  }
+  if (cliArgs.mode === "approvals-revoke") {
+    const revoked = await revokeMcpProjectApprovalGrant(
+      runtime,
+      projectRoot,
+      cliArgs.index,
+    );
+    if (revoked === null) {
+      runtime.writeStderr(
+        `Error: MCP project approval ${cliArgs.index} does not exist.\n`,
+      );
+      return 1;
+    }
+    runtime.writeStdout(formatMcpProjectApprovalRevoked(cliArgs.index));
+    return 0;
+  }
+  runtime.writeStdout(
+    formatMcpProjectApprovalClearResult(
+      await clearMcpProjectApprovalGrants(runtime, projectRoot),
+    ),
+  );
+  return 0;
+}
+
 async function runMcpCommandUnsafe(
   cliArgs: McpCliArgs,
   runtime: CliRuntime,
@@ -477,6 +529,13 @@ async function runMcpCommandUnsafe(
   if (cliArgs.mode === "remove") {
     return await runMcpRemove(cliArgs, runtime);
   }
+  if (
+    cliArgs.mode === "approvals-list" ||
+    cliArgs.mode === "approvals-revoke" ||
+    cliArgs.mode === "approvals-clear"
+  ) {
+    return await runMcpApprovals(cliArgs, runtime);
+  }
 
   const servers = await selectedServers(runtime, cliArgs.serverId);
   if (servers.length === 0) {
@@ -512,7 +571,8 @@ export async function runMcpCommand(
       error instanceof McpNetworkPolicyError ||
       error instanceof McpOAuthCallbackError ||
       error instanceof McpOAuthCredentialError ||
-      error instanceof McpOAuthLoginError
+      error instanceof McpOAuthLoginError ||
+      error instanceof McpProjectApprovalsError
     ) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;

@@ -110,6 +110,19 @@ export type McpCliArgs =
       readonly command: "mcp";
       readonly mode: "remove";
       readonly serverId: string;
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "approvals-list";
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "approvals-revoke";
+      readonly index: number;
+    }
+  | {
+      readonly command: "mcp";
+      readonly mode: "approvals-clear";
     };
 
 export interface SetupCliArgs {

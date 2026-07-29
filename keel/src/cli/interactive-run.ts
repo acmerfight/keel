@@ -1374,6 +1374,7 @@ async function runSessionCli(
                 lifecycle: createCliMcpLifecyclePolicy(runtime),
                 canPrompt:
                   mode.kind === "interactive" && runtime.input.isTTY === true,
+                approvalRuntime: runtime,
               },
             }
           : {}),

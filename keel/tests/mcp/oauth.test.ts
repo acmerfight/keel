@@ -10,6 +10,7 @@ import {
   McpOAuthAuthenticationRequiredError,
   McpOAuthServerUnavailableError,
   type McpSecretBackend,
+  sameMcpAuthorizationIdentity,
 } from "../../src/mcp/oauth.ts";
 
 const TEST_SERVER_INCARNATION = "00000000-0000-4000-8000-000000000001";
@@ -178,6 +179,76 @@ async function captureUnauthorizedResponse(
 }
 
 describe("MCP OAuth flow state", () => {
+  test(`Given anonymous and OAuth grant identities,
+    When authorization bindings are compared,
+    Then identities with different kinds never match`, () => {
+    // Given
+    const anonymous = { kind: "anonymous" } as const;
+    const oauth = {
+      kind: "oauth",
+      issuer: "https://auth.example",
+      clientId: "client",
+      grantId: "00000000-0000-4000-8000-000000000001",
+    } as const;
+
+    // When / Then
+    expect(sameMcpAuthorizationIdentity(anonymous, oauth)).toBe(false);
+    expect(sameMcpAuthorizationIdentity(oauth, anonymous)).toBe(false);
+  });
+
+  test(`Given bearer identity is requested with unavailable or malformed secure state,
+    When authentication is optional or required,
+    Then optional unavailability is anonymous while required and malformed state fail closed`, async () => {
+    // Given
+    const unavailableBackend: McpSecretBackend = {
+      getPassword: async () => {
+        throw new Error("keyring unavailable");
+      },
+      setPassword: async () => {},
+      deletePassword: async () => false,
+    };
+    const optional = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: false,
+      },
+      backend: unavailableBackend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+    const required = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: true,
+      },
+      backend: unavailableBackend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+    const malformedSecrets = testSecretBackend();
+    malformedSecrets.overrideValue("{");
+    const malformed = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: false,
+      },
+      backend: malformedSecrets.backend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+
+    // When / Then
+    await expect(optional.authorizationIdentity()).resolves.toEqual({
+      kind: "anonymous",
+    });
+    await expect(required.authorizationIdentity()).rejects.toThrow(
+      "secure credential access failed",
+    );
+    await expect(malformed.authorizationIdentity()).rejects.toThrow(
+      "credential record is invalid JSON",
+    );
+  });
+
   test(`Given a runtime server is disabled before credential access,
     When bearer authentication is requested,
     Then lifecycle rejects before reading or refreshing secure state`, async () => {
@@ -613,6 +684,118 @@ describe("MCP OAuth flow state", () => {
       issuer: "https://auth.example",
     });
     expect(secrets.values().join("\n")).toContain("stored-refresh-token");
+  });
+
+  test(`Given a user authorizes the same issuer and OAuth client again,
+    When the replacement token becomes active,
+    Then Keel assigns a new authorization grant identity for approval binding`, async () => {
+    // Given
+    const secrets = testSecretBackend();
+    const provider = await seedActiveCredential({
+      backend: secrets.backend,
+      refreshToken: "stored-refresh-token",
+    });
+    const bearer = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: true,
+      },
+      backend: secrets.backend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+    const firstIdentity = await bearer.authorizationIdentity();
+    const state = "s".repeat(43);
+    await bindPendingFlow(provider, state, 1_000);
+    await provider.validateCallbackState(
+      new URLSearchParams({ code: "replacement-code", state }),
+    );
+
+    // When
+    await provider.saveTokens(
+      {
+        access_token: "replacement-access-token",
+        refresh_token: "replacement-refresh-token",
+        token_type: "Bearer",
+        issuer: "https://auth.example",
+      },
+      { issuer: "https://auth.example" },
+    );
+    const secondIdentity = await bearer.authorizationIdentity();
+
+    // Then
+    expect(firstIdentity).toMatchObject({
+      kind: "oauth",
+      issuer: "https://auth.example",
+      clientId: "pre-registered-client",
+    });
+    expect(secondIdentity).toMatchObject({
+      kind: "oauth",
+      issuer: "https://auth.example",
+      clientId: "pre-registered-client",
+    });
+    expect(secondIdentity).not.toEqual(firstIdentity);
+  });
+
+  test(`Given an MCP call pins the approved OAuth grant through authenticated dispatch,
+    When a concurrent login replaces that grant after an initial 401,
+    Then token acquisition and the transport retry fail before using the replacement grant`, async () => {
+    // Given
+    const secrets = testSecretBackend();
+    const login = await seedActiveCredential({
+      backend: secrets.backend,
+      refreshToken: "first-refresh-token",
+    });
+    const bearer = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: true,
+      },
+      backend: secrets.backend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+    const approvedIdentity = await bearer.authorizationIdentity();
+
+    // When / Then
+    await bearer.withAuthorizationIdentity(approvedIdentity, async () => {
+      await expect(bearer.token()).resolves.toBe("expired-access-token");
+      const rejected = await captureUnauthorizedResponse(
+        bearer,
+        "expired-access-token",
+      );
+      const state = "r".repeat(43);
+      await bindPendingFlow(login, state, 0);
+      await login.validateCallbackState(
+        new URLSearchParams({ code: "replacement-code", state }),
+      );
+      await login.saveTokens(
+        {
+          access_token: "expired-access-token",
+          refresh_token: "replacement-refresh-token",
+          token_type: "Bearer",
+          issuer: "https://auth.example",
+        },
+        { issuer: "https://auth.example" },
+      );
+      let refreshRequests = 0;
+      await expect(
+        bearer.onUnauthorized({
+          response: rejected,
+          serverUrl: new URL("https://resource.example/mcp"),
+          fetchFn: async () => {
+            refreshRequests++;
+            return new Response(null, { status: 500 });
+          },
+        }),
+      ).rejects.toThrow(
+        "changed authorization identity before authenticated dispatch",
+      );
+      expect(refreshRequests).toBe(0);
+      await expect(bearer.token()).rejects.toThrow(
+        "changed authorization identity before authenticated dispatch",
+      );
+    });
   });
 
   test(`Given DCR client A and its token are stored for an issuer,

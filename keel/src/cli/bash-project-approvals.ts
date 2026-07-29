@@ -1,15 +1,10 @@
-import {
-  chmodSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { BashProjectApprovalGrant } from "../permissions/bash.ts";
 import { escapeApprovalText } from "./bash-approval-text.ts";
+import { approvalProjectRoot } from "./project-root.ts";
 import { sessionHome } from "./session-store.ts";
 
 interface BashProjectApprovalRuntime {
@@ -110,24 +105,7 @@ function writeApprovalsFile(
   }
 }
 
-function pathExists(path: string): boolean {
-  return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
-}
-
-export function bashApprovalProjectRoot(workspace: string): string {
-  const resolvedWorkspace = resolve(workspace);
-  let current = resolvedWorkspace;
-  while (true) {
-    if (pathExists(join(current, ".git"))) {
-      return current;
-    }
-    const parent = dirname(current);
-    if (parent === current) {
-      return resolvedWorkspace;
-    }
-    current = parent;
-  }
-}
+export const bashApprovalProjectRoot = approvalProjectRoot;
 
 function copyGrant(grant: BashProjectApprovalGrant): BashProjectApprovalGrant {
   return {
