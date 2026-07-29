@@ -1783,6 +1783,17 @@ describe("CLI Main - MCP", () => {
       expect(list.stdout()).toContain(`second: ${secondServer.url}\n`);
       expect(status.stdout()).toContain("MCP server: first\n");
       expect(status.stdout()).toContain("\n\nMCP server: second\n");
+
+      const disableSecond = createRuntime(["mcp", "disable", "second"], {
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disableSecond.runtime)).toBe(0);
+      const disabledStatus = createRuntime(["mcp", "status"], {
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(disabledStatus.runtime)).toBe(0);
+      expect(disabledStatus.stdout()).toContain("\n\nMCP server: second\n");
+      expect(disabledStatus.stdout()).toContain("status: disabled\n");
     } finally {
       await firstServer.close();
       await secondServer.close();

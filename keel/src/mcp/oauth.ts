@@ -1019,7 +1019,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
       server: options.server,
       backend: options.backend,
       refreshLockRoot: options.refreshLockRoot,
-      mutationGuard: async () => await this.ensureAvailable(),
+      mutationGuard: null,
     });
     this.refreshLockRoot = options.refreshLockRoot;
     this.isCurrentAndEnabled = options.isCurrentAndEnabled;

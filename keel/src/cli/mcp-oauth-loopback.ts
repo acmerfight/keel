@@ -41,6 +41,7 @@ export async function startMcpOAuthLoopbackCallback(
   const close = (): Promise<void> => {
     if (closePromise !== null) return closePromise;
     closePromise = (async () => {
+      /* v8 ignore next -- the callback handle is returned only after its timer is assigned. */
       if (timer !== null) clearTimeout(timer);
       if (!terminal) {
         terminal = true;

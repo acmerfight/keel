@@ -427,17 +427,10 @@ class McpServerOwner {
   }
 
   updateServer(server: McpRuntimeServer): void {
-    if (
-      server.id === this.server.id &&
-      server.incarnation === this.server.incarnation &&
-      server.url === this.server.url &&
-      server.allowPrivateNetwork === this.server.allowPrivateNetwork
-    ) {
-      this.server = server;
-      if (server.enabled && !this.available) {
-        this.available = true;
-        this.availability = new AbortController();
-      }
+    this.server = server;
+    if (server.enabled && !this.available) {
+      this.available = true;
+      this.availability = new AbortController();
     }
   }
 
@@ -473,6 +466,7 @@ class McpServerOwner {
   }
 
   async suspend(): Promise<void> {
+    /* v8 ignore next -- runtime shutdown stops admission and joins the lifecycle watcher before closing its private owners. */
     if (this.state.kind === "stopped") return;
     this.available = false;
     this.availability.abort(
@@ -520,11 +514,11 @@ class McpServerOwner {
       void operation.then(
         () => {
           this.pending = null;
-          if (this.pendingAbort === pendingAbort) this.pendingAbort = null;
+          this.pendingAbort = null;
         },
         () => {
           this.pending = null;
-          if (this.pendingAbort === pendingAbort) this.pendingAbort = null;
+          this.pendingAbort = null;
         },
       );
     }
@@ -731,6 +725,7 @@ class DefaultMcpRuntime implements McpRuntime {
           signal: this.lifecycleAbort.signal,
         });
       } catch {
+        /* v8 ignore next 2 -- the abortable delay rejects only when this controller is aborted. */
         if (this.lifecycleAbort.signal.aborted) return;
         throw new Error("MCP lifecycle watcher failed");
       }

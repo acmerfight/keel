@@ -436,6 +436,259 @@ describe("MCP runtime", () => {
     }
   });
 
+  test(`Given live configuration replaces a ready server with a new server,
+    When the next turn reconciles the runtime,
+    Then the removed transport closes and the replacement becomes searchable`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const replacement = {
+      ...testServerConfig,
+      id: "replacement",
+      incarnation: "00000000-0000-4000-8000-000000000002",
+      url: "https://replacement.example/mcp",
+    };
+    let current: readonly McpServerConfig[] = [testServerConfig];
+    const lifecycle: McpLifecyclePolicy = {
+      isCurrentAndEnabled: async (expected) =>
+        current.some(
+          (server) =>
+            server.enabled &&
+            server.id === expected.id &&
+            server.incarnation === expected.incarnation,
+        ),
+      listCurrent: async () => current,
+    };
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle,
+    });
+
+    try {
+      await activateExactSearch(runtime);
+
+      // When
+      current = [replacement];
+      await runtime.prepareTurn(testSchemaTarget, new AbortController().signal);
+      const result = await runtime.search(
+        { query: "search", server: "replacement", tool: "search" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok, result.content).toBe(true);
+      expect(fake.closeCalls()).toBe(1);
+      expect(
+        (await runtime.exposureSnapshot()).tools[0]?.reference.serverId,
+      ).toBe("replacement");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given lifecycle configuration becomes unreadable for a ready server,
+    When the background watcher reconciles it,
+    Then the existing transport is suspended instead of remaining exposed`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const closed = Promise.withResolvers<void>();
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let unreadable = false;
+    const runtime = runtimeWithFactory({
+      connectionFactory: {
+        connect: async (server, signal) => {
+          const connection = await fake.factory.connect(server, signal);
+          return {
+            ...connection,
+            close: async () => {
+              await connection.close();
+              closed.resolve();
+            },
+          };
+        },
+      },
+      lifecycle: {
+        isCurrentAndEnabled: async () => true,
+        listCurrent: async () => {
+          if (unreadable) throw new Error("config unavailable");
+          return [testServerConfig];
+        },
+      },
+    });
+
+    try {
+      await activateExactSearch(runtime);
+
+      // When
+      unreadable = true;
+      await closed.promise;
+
+      // Then
+      expect(fake.closeCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given lifecycle availability lookup fails before discovery,
+    When the user searches the configured server,
+    Then Keel fails closed without opening a transport`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => {
+          throw new Error("config unavailable");
+        },
+        listCurrent: async () => [testServerConfig],
+      },
+    });
+
+    try {
+      // When
+      const result = await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+      expect(fake.connectCalls()).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a server is disabled after its catalog finishes loading,
+    When search rechecks lifecycle before exposure,
+    Then the loaded catalog is discarded and its transport closes`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const catalogRequested = Promise.withResolvers<void>();
+    const releaseCatalog =
+      Promise.withResolvers<Awaited<ReturnType<typeof fakeCatalog>>>();
+    let enabled = true;
+    let closeCalls = 0;
+    const runtime = runtimeWithFactory({
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [testServerConfig],
+      },
+      connectionFactory: {
+        connect: async () => ({
+          protocolEra: "modern",
+          protocolVersion: "2026-07-28",
+          serverIdentity: "post-load@1.0.0",
+          listCatalog: async () => {
+            catalogRequested.resolve();
+            return await releaseCatalog.promise;
+          },
+          callTool: async () => ({ content: [] }),
+          close: async () => {
+            closeCalls++;
+          },
+        }),
+      },
+    });
+
+    try {
+      const search = runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        new AbortController().signal,
+      );
+      await catalogRequested.promise;
+
+      // When
+      enabled = false;
+      releaseCatalog.resolve(catalog);
+      const result = await search;
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+      expect(closeCalls).toBe(1);
+    } finally {
+      releaseCatalog.resolve(catalog);
+      await runtime.close();
+    }
+  });
+
+  test(`Given a previously exposed tool is disabled before execution starts,
+    When the model invokes that frozen reference,
+    Then Keel rejects it before approval or remote dispatch`, async () => {
+    // Given
+    const catalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    const fake = fakeConnectionFactory({ catalogs: [catalog] });
+    let enabled = true;
+    let approvals = 0;
+    const runtime = runtimeWithFactory({
+      connectionFactory: fake.factory,
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [testServerConfig],
+      },
+      permission: {
+        review: () => {
+          approvals++;
+          return { type: "allow" };
+        },
+      },
+    });
+
+    try {
+      const toolCall = await activateExactSearch(runtime);
+      enabled = false;
+
+      // When
+      const result = await runtime.execute(
+        toolCall,
+        new AbortController().signal,
+      );
+
+      // Then
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("disabled or removed");
+      expect(approvals).toBe(0);
+      expect(fake.callCalls()).toBe(0);
+      expect(fake.closeCalls()).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test(`Given an MCP call is in flight when its server is disabled,
     When the lifecycle watcher observes the mutation,
     Then the call signal aborts and no remote work remains live`, async () => {
@@ -1300,6 +1553,78 @@ describe("MCP runtime", () => {
         (await runtime.exposureSnapshot()).tools[0]?.description,
       ).toContain("After TTL refresh");
     } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`Given a server is disabled after an expired catalog refresh completes,
+    When the next turn rechecks lifecycle,
+    Then the refreshed transport is suspended before exposure`, async () => {
+    // Given
+    const firstCatalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const secondCatalog = await fakeCatalog([
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const refreshRequested = Promise.withResolvers<void>();
+    const releaseRefresh =
+      Promise.withResolvers<Awaited<ReturnType<typeof fakeCatalog>>>();
+    let listCalls = 0;
+    let closeCalls = 0;
+    let enabled = true;
+    let now = 0;
+    const runtime = runtimeWithFactory({
+      now: () => now,
+      lifecycle: {
+        isCurrentAndEnabled: async () => enabled,
+        listCurrent: async () => [testServerConfig],
+      },
+      connectionFactory: {
+        connect: async () => ({
+          protocolEra: "modern",
+          protocolVersion: "2026-07-28",
+          serverIdentity: "ttl-race@1.0.0",
+          listCatalog: async () => {
+            listCalls++;
+            if (listCalls === 1) return firstCatalog;
+            refreshRequested.resolve();
+            return await releaseRefresh.promise;
+          },
+          callTool: async () => ({ content: [] }),
+          close: async () => {
+            closeCalls++;
+          },
+        }),
+      },
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      await runtime.search(
+        { query: "search", server: "catalog", tool: "search" },
+        signal,
+      );
+      now = 5 * 60 * 1_000;
+      const preparation = runtime.prepareTurn(testSchemaTarget, signal);
+      await refreshRequested.promise;
+
+      // When
+      enabled = false;
+      releaseRefresh.resolve(secondCatalog);
+      await preparation;
+
+      // Then
+      expect((await runtime.exposureSnapshot()).tools).toEqual([]);
+      expect(closeCalls).toBe(1);
+    } finally {
+      releaseRefresh.resolve(secondCatalog);
       await runtime.close();
     }
   });

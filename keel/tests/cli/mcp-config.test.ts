@@ -21,6 +21,7 @@ import {
   listMcpServers,
   listMcpServersSync,
   type McpServerConfig,
+  monitorMcpServerLifecycle,
   removeMcpServer,
   setMcpServerAuthenticationRequired,
   setMcpServerEnabled,
@@ -263,6 +264,165 @@ describe("MCP config", () => {
       ).resolves.toBe(false);
       await expect(listMcpServers(runtime)).resolves.toEqual([]);
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a lifecycle monitor is watching current configuration,
+    When the persisted file becomes unreadable,
+    Then the monitor aborts the in-flight operation with that config failure`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-monitor-"));
+    const runtime = configRuntime(home);
+    const configured = await addMcpServer(runtime, {
+      id: "catalog",
+      url: "https://example.com/mcp",
+      enabled: true,
+      allowPrivateNetwork: false,
+      authenticationRequired: false,
+      toolFilter: noToolFilter,
+    });
+    const parent = new AbortController();
+    const monitor = monitorMcpServerLifecycle(
+      runtime,
+      configured,
+      parent.signal,
+    );
+
+    try {
+      // When
+      await writeFile(join(home, "mcp.json"), "{\n", "utf8");
+      await new Promise<void>((resolve) => {
+        if (monitor.signal.aborted) {
+          resolve();
+          return;
+        }
+        monitor.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+
+      // Then
+      expect(monitor.signal.reason).toBeInstanceOf(Error);
+      expect(String(monitor.signal.reason)).toContain("cannot read MCP config");
+    } finally {
+      parent.abort();
+      await monitor.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given lifecycle mutations carry a stale server identity,
+    When authentication, enablement, or removal tries to commit,
+    Then each mutation rejects without changing the current server`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-cas-"));
+    const runtime = configRuntime(home);
+    const configured = await addMcpServer(runtime, {
+      id: "catalog",
+      url: "https://example.com/mcp",
+      enabled: true,
+      allowPrivateNetwork: false,
+      authenticationRequired: false,
+      toolFilter: noToolFilter,
+    });
+    const stale = { ...configured, incarnation: randomUUID() };
+
+    try {
+      // When / Then
+      await expect(
+        setMcpServerAuthenticationRequired(runtime, stale, true),
+      ).rejects.toThrow("changed during the command");
+      await expect(setMcpServerEnabled(runtime, stale, false)).rejects.toThrow(
+        "changed during the command",
+      );
+      await expect(
+        removeMcpServer(runtime, stale, async () => {
+          throw new Error("stale removal must not clean credentials");
+        }),
+      ).rejects.toThrow("changed while it was being removed");
+      await expect(findMcpServer(runtime, "catalog")).resolves.toEqual(
+        configured,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given enabling one server while another server is configured,
+    When the mutation writes the sorted config,
+    Then the unrelated server record remains unchanged`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-sibling-"));
+    const runtime = configRuntime(home);
+    const first = await addMcpServer(runtime, {
+      id: "first",
+      url: "https://first.example/mcp",
+      enabled: false,
+      allowPrivateNetwork: false,
+      authenticationRequired: false,
+      toolFilter: noToolFilter,
+    });
+    const second = await addMcpServer(runtime, {
+      id: "second",
+      url: "https://second.example/mcp",
+      enabled: true,
+      allowPrivateNetwork: false,
+      authenticationRequired: false,
+      toolFilter: noToolFilter,
+    });
+
+    try {
+      // When
+      await expect(setMcpServerEnabled(runtime, first, true)).resolves.toBe(
+        true,
+      );
+
+      // Then
+      await expect(listMcpServers(runtime)).resolves.toEqual([
+        { ...first, enabled: true },
+        second,
+      ]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two removals race after credential cleanup starts,
+    When the second removal commits first,
+    Then the first removal also settles successfully without another config write`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-config-remove-race-"));
+    const runtime = configRuntime(home);
+    const configured = await addMcpServer(runtime, {
+      id: "catalog",
+      url: "https://example.com/mcp",
+      enabled: true,
+      allowPrivateNetwork: false,
+      authenticationRequired: true,
+      toolFilter: noToolFilter,
+    });
+    const cleanupStarted = Promise.withResolvers<void>();
+    const finishCleanup = Promise.withResolvers<void>();
+
+    try {
+      const firstRemoval = removeMcpServer(runtime, configured, async () => {
+        cleanupStarted.resolve();
+        await finishCleanup.promise;
+      });
+      await cleanupStarted.promise;
+      await expect(
+        removeMcpServer(runtime, configured, async () => {}),
+      ).resolves.toBe(true);
+
+      // When
+      finishCleanup.resolve();
+
+      // Then
+      await expect(firstRemoval).resolves.toBe(true);
+      await expect(listMcpServers(runtime)).resolves.toEqual([]);
+    } finally {
+      finishCleanup.resolve();
       await rm(home, { recursive: true, force: true });
     }
   });

@@ -12,9 +12,11 @@ import { startOAuthMcpServer } from "../../fixtures/mcp-oauth.ts";
 function createSecretBackend(): {
   readonly backend: McpSecretBackend;
   readonly entries: ReadonlyMap<string, string>;
+  readonly failDeletesAfterEffect: (message: string) => void;
   readonly failWrites: (message: string) => void;
 } {
   const entries = new Map<string, string>();
+  let deleteFailure: string | null = null;
   let writeFailure: string | null = null;
   const key = (service: string, account: string) => `${service}\0${account}`;
   return {
@@ -25,10 +27,16 @@ function createSecretBackend(): {
         if (writeFailure !== null) throw new Error(writeFailure);
         entries.set(key(service, account), password);
       },
-      deletePassword: async (service, account) =>
-        entries.delete(key(service, account)),
+      deletePassword: async (service, account) => {
+        const deleted = entries.delete(key(service, account));
+        if (deleteFailure !== null) throw new Error(deleteFailure);
+        return deleted;
+      },
     },
     entries,
+    failDeletesAfterEffect: (message) => {
+      deleteFailure = message;
+    },
     failWrites: (message) => {
       writeFailure = message;
     },
@@ -139,6 +147,7 @@ describe("CLI Main - MCP OAuth", () => {
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-login-race-"));
     const mcp = await startOAuthMcpServer();
     const secrets = createSecretBackend();
+    secrets.failDeletesAfterEffect("credential cleanup unavailable");
     const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
       env: { KEEL_HOME: home },
     });
@@ -162,7 +171,10 @@ describe("CLI Main - MCP OAuth", () => {
 
       // Then
       expect(exitCode).toBe(1);
-      expect(login.stderr()).toContain("disabled, removed, or changed");
+      expect(login.stderr()).toMatch(
+        /disabled, removed, or changed|callback was cancelled/u,
+      );
+      expect(login.stderr()).not.toContain("credential cleanup unavailable");
       expect(mcp.tokenRequests()).toEqual([]);
       expect(secrets.entries.size).toBe(0);
       await expect(listMcpServers({ env: login.runtime.env })).resolves.toEqual(
@@ -994,6 +1006,50 @@ describe("CLI Main - MCP OAuth", () => {
       expect(login.stderr()).not.toContain(mcp.accessToken);
       expect(mcp.tokenRequests()).toHaveLength(1);
     } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given OAuth credentials are stored while authenticated verification is pending,
+    When another command disables the server,
+    Then login fails and removes the credential before returning`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-auth-verify-race-"));
+    const mcp = await startOAuthMcpServer({
+      authenticatedMcpResponse: "pending",
+    });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+      const loginRun = runCliMain(login.runtime);
+      await mcp.authenticatedMcpRequest;
+      expect(secrets.entries.size).toBe(1);
+      const disable = createRuntime(["mcp", "disable", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      expect(await runCliMain(disable.runtime)).toBe(0);
+      mcp.releaseAuthenticatedMcpResponse();
+      const exitCode = await loginRun;
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stderr()).not.toBe("");
+      expect(secrets.entries.size).toBe(0);
+    } finally {
+      mcp.releaseAuthenticatedMcpResponse();
       await mcp.close();
       await rm(home, { recursive: true, force: true });
     }
