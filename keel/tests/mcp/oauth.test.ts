@@ -178,6 +178,59 @@ async function captureUnauthorizedResponse(
 }
 
 describe("MCP OAuth flow state", () => {
+  test(`Given bearer identity is requested with unavailable or malformed secure state,
+    When authentication is optional or required,
+    Then optional unavailability is anonymous while required and malformed state fail closed`, async () => {
+    // Given
+    const unavailableBackend: McpSecretBackend = {
+      getPassword: async () => {
+        throw new Error("keyring unavailable");
+      },
+      setPassword: async () => {},
+      deletePassword: async () => false,
+    };
+    const optional = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: false,
+      },
+      backend: unavailableBackend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+    const required = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: true,
+      },
+      backend: unavailableBackend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+    const malformedSecrets = testSecretBackend();
+    malformedSecrets.overrideValue("{");
+    const malformed = createMcpBearerAuthProvider({
+      server: {
+        url: "https://resource.example/mcp",
+        allowPrivateNetwork: false,
+        authenticationRequired: false,
+      },
+      backend: malformedSecrets.backend,
+      refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
+    });
+
+    // When / Then
+    await expect(optional.authorizationIdentity()).resolves.toEqual({
+      kind: "anonymous",
+    });
+    await expect(required.authorizationIdentity()).rejects.toThrow(
+      "secure credential access failed",
+    );
+    await expect(malformed.authorizationIdentity()).rejects.toThrow(
+      "credential record is invalid JSON",
+    );
+  });
+
   test(`Given a runtime server is disabled before credential access,
     When bearer authentication is requested,
     Then lifecycle rejects before reading or refreshing secure state`, async () => {

@@ -20,7 +20,7 @@ import { sessionHome } from "./session-store.ts";
 
 const MCP_PROJECT_APPROVALS_SCHEMA_VERSION = 1;
 const MCP_PROJECT_APPROVALS_MAX_BYTES = 1024 * 1024;
-const MCP_PROJECT_APPROVALS_MAX_GRANTS = 4_096;
+const MCP_PROJECT_APPROVALS_MAX_GRANTS = 1_024;
 const MCP_PROJECT_APPROVALS_LOCK_TIMEOUT_MS = 5_000;
 const MCP_PROJECT_APPROVALS_STALE_LOCK_MS = 30_000;
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -90,9 +90,9 @@ function canonicalJson(value: ToolJsonValue): string {
   if (Array.isArray(value)) {
     return `[${value.map(canonicalJson).join(",")}]`;
   }
-  return `{${Object.keys(value)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key] ?? null)}`)
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
     .join(",")}}`;
 }
 
@@ -180,6 +180,7 @@ async function readApprovalsFile(
       };
     }
     if (error instanceof McpProjectApprovalsError) throw error;
+    /* v8 ignore next 3 -- requires an injected stat fault other than missing/oversized; ordinary malformed states continue through bounded read and schema validation. */
     approvalError(
       `Error: cannot inspect MCP project approvals ${filePath}: ${errorMessage(error)}.`,
     );
@@ -275,6 +276,7 @@ async function removeStaleLock(lockPath: string): Promise<boolean> {
   } catch (error) {
     /* v8 ignore next -- another process may remove the lock between open and stat. */
     if (hasNodeErrorCode(error, "ENOENT")) return true;
+    /* v8 ignore next 3 -- requires an injected stat/removal fault; live and stale lock behavior is covered with the real filesystem. */
     approvalError(
       `Error: cannot inspect MCP project approval lock ${lockPath}: ${errorMessage(error)}.`,
     );
