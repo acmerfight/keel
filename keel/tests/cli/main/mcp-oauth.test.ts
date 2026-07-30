@@ -6,12 +6,23 @@ import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { listMcpServers } from "../../../src/cli/mcp-config.ts";
+import {
+  hasMcpProjectApprovalGrant,
+  mcpProjectApprovalGrant,
+  saveMcpProjectApprovalGrant,
+} from "../../../src/cli/mcp-project-approvals.ts";
 import type { McpSecretBackend } from "../../../src/mcp/oauth.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import { startOAuthMcpServer } from "../../fixtures/mcp-oauth.ts";
 
 const mutableOAuthCredentialRecordSchema = z.looseObject({
-  activeAuthorization: z.unknown().nullable(),
+  activeAuthorization: z
+    .looseObject({
+      issuer: z.string().url(),
+      clientId: z.string(),
+      grantId: z.uuid(),
+    })
+    .nullable(),
   credentials: z.array(
     z.looseObject({
       issuer: z.string().url(),
@@ -25,6 +36,7 @@ const mutableOAuthCredentialRecordSchema = z.looseObject({
         .looseObject({
           access_token: z.string(),
           refresh_token: z.string().optional(),
+          scope: z.string().optional(),
           issuer: z.string().url(),
         })
         .nullable(),
@@ -45,6 +57,9 @@ function createSecretBackend(): {
   readonly backend: McpSecretBackend;
   readonly entries: ReadonlyMap<string, string>;
   readonly failWrites: (message: string) => void;
+  readonly readOnlyEntry: () => z.infer<
+    typeof mutableOAuthCredentialRecordSchema
+  >;
   readonly mutateOnlyEntry: (
     mutate: (
       record: z.infer<typeof mutableOAuthCredentialRecordSchema>,
@@ -68,6 +83,13 @@ function createSecretBackend(): {
     entries,
     failWrites: (message) => {
       writeFailure = message;
+    },
+    readOnlyEntry: () => {
+      const serialized = [...entries.values()];
+      expect(serialized).toHaveLength(1);
+      return mutableOAuthCredentialRecordSchema.parse(
+        JSON.parse(z.string().parse(serialized[0])),
+      );
     },
     mutateOnlyEntry: (mutate) => {
       const entry = [...entries.entries()];
@@ -350,6 +372,289 @@ describe("CLI Main - MCP OAuth", () => {
       ].join("\n");
       expect(visibleOutput).not.toContain(mcp.accessToken);
       expect(visibleOutput).not.toContain(mcp.refreshedAccessToken);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an MCP credential lacks a newly required authorization scope,
+    When the user logs in again after the server reports insufficient scope,
+    Then Keel completes step-up authorization and reports the server ready`, async () => {
+    // Given
+    const {
+      home,
+      mcp,
+      secrets,
+      login: initialLogin,
+    } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      stepUp: {
+        initialScope: "mcp:read",
+        requiredScope: "mcp:tools",
+      },
+    });
+
+    try {
+      const initialRecord = secrets.readOnlyEntry();
+      const initialAuthorization = initialRecord.activeAuthorization;
+      if (initialAuthorization === null) {
+        throw new Error("Initial MCP login did not publish a grant identity");
+      }
+      expect(initialRecord.credentials[0]?.tokens?.scope).toBe("mcp:read");
+      const permissionRequest = {
+        origin: new URL(mcp.url).origin,
+        serverId: "refreshable",
+        configurationDigest: "a".repeat(64),
+        rawToolName: "search",
+        descriptorDigest: "b".repeat(64),
+        arguments: { query: "otters" },
+        signal: AbortSignal.abort(),
+      };
+      const priorApproval = mcpProjectApprovalGrant(home, {
+        ...permissionRequest,
+        authorizationIdentity: {
+          kind: "oauth",
+          ...initialAuthorization,
+        },
+      });
+      expect(
+        await saveMcpProjectApprovalGrant(initialLogin.runtime, priorApproval),
+      ).toBe(true);
+      mcp.requireStepUp();
+      const insufficient = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+      expect(
+        await runCliMain(insufficient.runtime),
+        insufficient.stderr(),
+      ).toBe(0);
+      expect(insufficient.stdout()).toContain(
+        "authorization: insufficient-scope\n",
+      );
+      expect(insufficient.stdout()).toContain("required scope: mcp:tools\n");
+      const login = createRuntime(["mcp", "login", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+      const status = createRuntime(["mcp", "status", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+      const statusExitCode = await runCliMain(status.runtime);
+
+      // Then
+      expect(exitCode, login.stderr()).toBe(0);
+      expect(login.stdout()).toBe('Logged in to MCP server "refreshable".\n');
+      expect(statusExitCode, status.stderr()).toBe(0);
+      expect(status.stdout()).toContain("status: ready\n");
+      const authorizationRequests = mcp.authorizationRequests();
+      expect(authorizationRequests[0]?.scope).toBe("mcp:read");
+      expect(new Set(authorizationRequests[1]?.scope.split(/\s+/u))).toEqual(
+        new Set(["mcp:read", "mcp:tools"]),
+      );
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "authorization_code",
+      ]);
+      expect(
+        mcp
+          .authorizationRequests()
+          .every((request) => request.resource === mcp.url),
+      ).toBe(true);
+      expect(
+        mcp.tokenRequests().every((request) => request.resource === mcp.url),
+      ).toBe(true);
+      const steppedUpRecord = secrets.readOnlyEntry();
+      const steppedUpAuthorization = steppedUpRecord.activeAuthorization;
+      if (steppedUpAuthorization === null) {
+        throw new Error("Step-up login did not publish a grant identity");
+      }
+      expect(steppedUpAuthorization).toMatchObject({
+        issuer: initialAuthorization.issuer,
+        clientId: initialAuthorization.clientId,
+      });
+      expect(steppedUpAuthorization.grantId).not.toBe(
+        initialAuthorization.grantId,
+      );
+      const steppedUpApproval = mcpProjectApprovalGrant(home, {
+        ...permissionRequest,
+        authorizationIdentity: {
+          kind: "oauth",
+          ...steppedUpAuthorization,
+        },
+      });
+      expect(
+        await hasMcpProjectApprovalGrant(initialLogin.runtime, priorApproval),
+      ).toBe(true);
+      expect(
+        await hasMcpProjectApprovalGrant(
+          initialLogin.runtime,
+          steppedUpApproval,
+        ),
+      ).toBe(false);
+      expect(steppedUpRecord.credentials[0]?.tokens).toMatchObject({
+        access_token: mcp.stepUpAccessToken,
+        scope: "mcp:read mcp:tools",
+      });
+      const visibleOutput = [
+        insufficient.stdout(),
+        insufficient.stderr(),
+        login.stdout(),
+        login.stderr(),
+        status.stdout(),
+        status.stderr(),
+      ].join("\n");
+      expect(visibleOutput).not.toContain(mcp.accessToken);
+      expect(visibleOutput).not.toContain(mcp.stepUpAccessToken);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an MCP server still rejects a grant after step-up authorization,
+    When the user logs in again with the required scope,
+    Then Keel stops after one bounded step-up and reports an actionable scope failure`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      stepUp: {
+        initialScope: "mcp:read",
+        requiredScope: "mcp:tools",
+        outcome: "repeat-forbidden",
+      },
+    });
+
+    try {
+      mcp.requireStepUp();
+      const login = createRuntime(["mcp", "login", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stdout()).toBe("");
+      expect(login.stderr()).toContain(
+        "MCP authorization scope remains insufficient",
+      );
+      const authorizationRequests = mcp.authorizationRequests();
+      expect(authorizationRequests[0]?.scope).toBe("mcp:read");
+      expect(new Set(authorizationRequests[1]?.scope.split(/\s+/u))).toEqual(
+        new Set(["mcp:read", "mcp:tools"]),
+      );
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "authorization_code",
+      ]);
+      expect(login.stdout()).not.toContain(mcp.accessToken);
+      expect(login.stderr()).not.toContain(mcp.accessToken);
+      expect(login.stdout()).not.toContain(mcp.stepUpAccessToken);
+      expect(login.stderr()).not.toContain(mcp.stepUpAccessToken);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an insufficient-scope challenge omits the required scope,
+    When the user attempts step-up login,
+    Then Keel fails without inventing a scope and stops after one bounded attempt`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      stepUp: {
+        initialScope: "mcp:read",
+        requiredScope: "mcp:tools",
+        challengeScope: "omitted",
+      },
+    });
+
+    try {
+      mcp.requireStepUp();
+      const login = createRuntime(["mcp", "login", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(
+        mcp.authorizationRequests().map((request) => request.scope),
+      ).toEqual(["mcp:read", "mcp:read"]);
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+        "authorization_code",
+      ]);
+      expect(exitCode).toBe(1);
+      expect(login.stdout()).toBe("");
+      expect(login.stderr()).toContain(
+        "MCP authorization scope remains insufficient",
+      );
+      expect(
+        [
+          login.stdout(),
+          login.stderr(),
+          JSON.stringify(mcp.authorizationRequests()),
+        ].join("\n"),
+      ).not.toContain("mcp:tools");
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an OAuth-authenticated MCP server denies access with an ordinary HTTP 403,
+    When login verifies the new credential,
+    Then Keel reports a neutral authorization denial instead of claiming insufficient scope`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-forbidden-home-"));
+    const mcp = await startOAuthMcpServer({
+      authenticatedMcpResponse: "forbidden",
+    });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "forbidden"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
+      const login = createRuntime(["mcp", "login", "forbidden"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stdout()).toBe("");
+      expect(login.stderr()).toContain(
+        "MCP authorization was rejected with HTTP 403",
+      );
+      expect(login.stderr()).toContain("server access policy");
+      expect(login.stderr()).not.toContain("scope remains insufficient");
+      expect(mcp.authorizationRequests()).toHaveLength(1);
+      expect(mcp.tokenRequests().map((request) => request.grantType)).toEqual([
+        "authorization_code",
+      ]);
+      expect(login.stdout()).not.toContain(mcp.accessToken);
+      expect(login.stderr()).not.toContain(mcp.accessToken);
     } finally {
       await mcp.close();
       await rm(home, { recursive: true, force: true });
