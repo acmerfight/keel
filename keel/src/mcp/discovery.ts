@@ -5,6 +5,7 @@ import {
   type CallToolResult,
   Client,
   fromJsonSchema,
+  InsufficientScopeError,
   type JsonSchemaType,
   type jsonSchemaValidator,
   type ProtocolEra,
@@ -205,6 +206,16 @@ export interface McpCatalog {
   readonly cacheTtlMs: number;
 }
 
+type McpDiscoveryFailure =
+  | {
+      readonly kind: "error";
+      readonly error: string;
+    }
+  | {
+      readonly kind: "insufficient-scope";
+      readonly requiredScope: string | null;
+    };
+
 export type McpDiscoveryStatus =
   | {
       readonly status: "ready";
@@ -221,7 +232,7 @@ export type McpDiscoveryStatus =
     }
   | {
       readonly status: "failed";
-      readonly error: string;
+      readonly failure: McpDiscoveryFailure;
       readonly latencyMs: number;
     };
 
@@ -787,6 +798,7 @@ export async function connectMcpServer(
   const transport = new StreamableHTTPClientTransport(validated.url, {
     authProvider: authProvider ?? { token: async () => undefined },
     fetch: authProvider?.wrapFetch(network.fetch) ?? network.fetch,
+    onInsufficientScope: "throw",
   });
   const client = createMcpSdkClient();
   try {
@@ -893,6 +905,19 @@ function sanitizedError(error: unknown): string {
   return firstLine.slice(0, MCP_ERROR_MAX_LENGTH) || "MCP discovery failed";
 }
 
+function insufficientScopeFailure(
+  error: unknown,
+): Extract<
+  McpDiscoveryFailure,
+  { readonly kind: "insufficient-scope" }
+> | null {
+  if (!(error instanceof InsufficientScopeError)) return null;
+  return {
+    kind: "insufficient-scope",
+    requiredScope: error.requiredScope ?? null,
+  };
+}
+
 export async function discoverMcpServer(options: {
   readonly server: McpServerEndpoint;
   readonly now: () => number;
@@ -927,9 +952,13 @@ export async function discoverMcpServer(options: {
         latencyMs: Math.max(0, now() - startedAt),
       };
     } else {
+      const scopeFailure = insufficientScopeFailure(error);
       status = {
         status: "failed",
-        error: sanitizedError(error),
+        failure: scopeFailure ?? {
+          kind: "error",
+          error: sanitizedError(error),
+        },
         latencyMs: Math.max(0, now() - startedAt),
       };
     }
@@ -943,7 +972,10 @@ export async function discoverMcpServer(options: {
   if (cleanupFailure?.status === "rejected") {
     return {
       status: "failed",
-      error: `MCP cleanup failed: ${sanitizedError(cleanupFailure.reason)}`,
+      failure: {
+        kind: "error",
+        error: `MCP cleanup failed: ${sanitizedError(cleanupFailure.reason)}`,
+      },
       latencyMs: Math.max(0, now() - startedAt),
     };
   }

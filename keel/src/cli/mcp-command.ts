@@ -48,6 +48,7 @@ import {
   McpProjectApprovalsError,
   revokeMcpProjectApprovalGrant,
 } from "./mcp-project-approvals.ts";
+import { sanitizeStatusLineText } from "./output.ts";
 import { approvalProjectRoot } from "./project-root.ts";
 import {
   providerProfile,
@@ -144,9 +145,22 @@ function formatDiscoveryStatus(
       `latency: ${status.latencyMs}ms`,
     ].join("\n");
   }
+  if (status.failure.kind === "insufficient-scope") {
+    const requiredScope =
+      status.failure.requiredScope === null
+        ? "unknown"
+        : sanitizeStatusLineText(status.failure.requiredScope);
+    return [
+      ...common,
+      "authorization: insufficient-scope",
+      `required scope: ${requiredScope}`,
+      `action: run keel mcp login "${server.id}" to authorize with the required scope`,
+      `latency: ${status.latencyMs}ms`,
+    ].join("\n");
+  }
   return [
     ...common,
-    `error: ${status.error}`,
+    `error: ${status.failure.error}`,
     `latency: ${status.latencyMs}ms`,
   ].join("\n");
 }
