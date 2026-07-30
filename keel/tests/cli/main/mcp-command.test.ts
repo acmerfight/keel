@@ -509,8 +509,8 @@ describe("CLI Main - MCP", () => {
   });
 
   test(`Given a reachable Streamable HTTP MCP server,
-    When the user adds it and checks its status,
-    Then Keel persists it and shows bounded modern discovery`, async () => {
+    When the user adds it and checks its status and diagnostics,
+    Then Keel persists it and every command shows bounded modern discovery`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-home-"));
     const server = await startModernMcpServer();
@@ -538,6 +538,10 @@ describe("CLI Main - MCP", () => {
         env: { KEEL_HOME: home },
       });
       const statusExitCode = await runCliMain(status.runtime);
+      const doctor = createRuntime(["mcp", "doctor", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      const doctorExitCode = await runCliMain(doctor.runtime);
       const list = createRuntime(["mcp", "list"], {
         env: { KEEL_HOME: home },
       });
@@ -556,6 +560,10 @@ describe("CLI Main - MCP", () => {
       expect(status.stdout()).toContain(`endpoint: ${server.url}\n`);
       expect(status.stdout()).toContain("status: ready\n");
       expect(status.stdout()).toContain("protocol: modern (2026-07-28)\n");
+      expect(doctorExitCode).toBe(0);
+      expect(doctor.stderr()).toBe("");
+      expect(doctor.stdout()).toContain("status: ready\n");
+      expect(doctor.stdout()).toContain("protocol: modern (2026-07-28)\n");
       expect(status.stdout()).toContain(
         "tools: 1 catalog-valid, 0 catalog-quarantined, 1 total\n",
       );
