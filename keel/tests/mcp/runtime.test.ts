@@ -1200,6 +1200,11 @@ describe("MCP runtime", () => {
       "MCP protocol result is invalid: invalid tools/call result",
     ],
     [
+      "returns input_required without an MRTR payload",
+      { resultType: "input_required" },
+      "MCP protocol result is invalid: input_required is missing inputRequests or requestState",
+    ],
+    [
       "returns an unknown resultType",
       {
         resultType: "future_result",

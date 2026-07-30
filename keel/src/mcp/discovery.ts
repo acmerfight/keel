@@ -123,7 +123,9 @@ const inputObjectJsonSchema = jsonObjectSchema.superRefine(
 const sdkProtocolResultErrorDataSchema = z
   .object({
     resultType: z.unknown().optional(),
-    violation: z.string().optional(),
+    violation: z
+      .enum(["missing-resultType", "input-required-missing-both"])
+      .optional(),
   })
   .passthrough();
 const toolDescriptorSchema = z
@@ -233,6 +235,7 @@ type McpProtocolResultFailure =
       readonly kind: "invalid";
       readonly reason:
         | "missing required resultType"
+        | "input_required is missing inputRequests or requestState"
         | "invalid tools/call result";
     };
 
@@ -263,7 +266,10 @@ export class McpProtocolResultError extends Error {
       reason:
         parsed.success && parsed.data.violation === "missing-resultType"
           ? "missing required resultType"
-          : "invalid tools/call result",
+          : parsed.success &&
+              parsed.data.violation === "input-required-missing-both"
+            ? "input_required is missing inputRequests or requestState"
+            : "invalid tools/call result",
     });
   }
 }
