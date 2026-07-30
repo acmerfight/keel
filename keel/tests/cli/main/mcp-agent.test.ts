@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
   createMcpHandler,
+  inputRequired,
   legacyStatelessFallback,
   McpServer,
 } from "@modelcontextprotocol/server";
@@ -129,6 +130,50 @@ async function startUnionMcpToolServer(): Promise<TestMcpServer> {
             },
           ],
         };
+      },
+    );
+    return server;
+  });
+  const server = createServer((request, response) => {
+    void toNodeHandler(handler)(
+      {
+        headers: request.headers,
+        ...(request.method !== undefined ? { method: request.method } : {}),
+        ...(request.url !== undefined ? { url: request.url } : {}),
+        [Symbol.asyncIterator]: () => request[Symbol.asyncIterator](),
+      },
+      response,
+    );
+  });
+  await listen(server);
+  return {
+    url: `http://127.0.0.1:${getPort(server)}/mcp`,
+    calls: () => [...calls],
+    close: async () => {
+      await handler.close?.();
+      await close(server);
+    },
+  };
+}
+
+async function startInputRequiredMcpToolServer(): Promise<TestMcpServer> {
+  const calls: string[] = [];
+  const handler = createMcpHandler(() => {
+    const server = new McpServer(
+      { name: "keel-input-required-agent-test", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    server.registerTool(
+      "search",
+      {
+        description: "Search after requesting more input",
+        inputSchema: z.object({ query: z.string() }),
+      },
+      async ({ query }) => {
+        calls.push(query);
+        return inputRequired({
+          requestState: `attempt-${calls.length}`,
+        });
       },
     );
     return server;
@@ -468,6 +513,74 @@ describe("CLI Main - MCP agent tools", () => {
       }
     },
   );
+
+  test(`Given a final MCP tool requires an unsupported multi-round-trip response,
+    When the user approves one remote call,
+    Then Keel reports a clear protocol error without automatically calling the tool again`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-mcp-input-required-agent-home-"),
+    );
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-mcp-input-required-agent-workspace-"),
+    );
+    const mcp = await startInputRequiredMcpToolServer();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+      env: { KEEL_HOME: home },
+    });
+    expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
+
+    const capturedBodies: unknown[] = [];
+    const provider = mcpAgentProvider(capturedBodies);
+    await listen(provider);
+    const input = new PassThrough();
+    let approvalAnswered = false;
+    const run = createRuntime(["use the catalog MCP to search for otters"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      onStderr: (text) => {
+        if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
+          approvalAnswered = true;
+          input.end("y\n");
+        }
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(run.stdout()).toBe("Found one remote match.\n");
+      expect(mcp.calls()).toEqual(["otters"]);
+      const recoveryRequest = requestWithMessagesSchema.parse(
+        capturedBodies[2],
+      );
+      expect(recoveryRequest.messages).toContainEqual({
+        role: "tool",
+        tool_call_id: "call_remote_search",
+        content: expect.stringContaining(
+          "MCP protocol result is unsupported: input_required",
+        ),
+      });
+      expect(JSON.stringify(capturedBodies)).not.toContain(
+        "multi-round-trip auto-fulfilment",
+      );
+    } finally {
+      input.end();
+      await close(provider);
+      await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 
   test(`Given the user logged in and the protected MCP server rejects the expired access token,
     When Keel discovers and invokes one approved remote tool,

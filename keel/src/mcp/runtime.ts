@@ -13,7 +13,12 @@ import {
 } from "../tools/tool-call.ts";
 import type { ProviderToolInputSchema } from "../tools/tool-schema.ts";
 import type { ToolOutputArtifact } from "../tools/types.ts";
-import type { McpCatalog, McpCatalogTool, McpConnection } from "./discovery.ts";
+import {
+  type McpCatalog,
+  type McpCatalogTool,
+  type McpConnection,
+  McpProtocolResultError,
+} from "./discovery.ts";
 import {
   isMcpAuthenticationRequiredError,
   type McpAuthorizationIdentity,
@@ -1315,6 +1320,24 @@ class DefaultMcpRuntime implements McpRuntime {
             tool.descriptor.name,
             {
               error: "MCP authorization required",
+            },
+          ),
+        };
+      }
+      if (error instanceof McpProtocolResultError) {
+        const detail =
+          error.failure.kind === "unsupported"
+            ? `unsupported: ${error.failure.resultType}`
+            : `invalid: ${error.failure.reason}`;
+        return {
+          identity: "identified",
+          content: `MCP protocol result is ${detail}. Keel did not continue or retry the remote call; any remote side effect remains unverified.`,
+          ok: false,
+          preserved: preservedExternalResult(
+            owner.server.id,
+            tool.descriptor.name,
+            {
+              error: "MCP protocol result failure",
             },
           ),
         };

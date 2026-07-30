@@ -9,6 +9,8 @@ import {
   type JsonSchemaType,
   type jsonSchemaValidator,
   type ProtocolEra,
+  SdkError,
+  SdkErrorCode,
   StreamableHTTPClientTransport,
   specTypeSchemas,
   type Tool,
@@ -118,6 +120,14 @@ const inputObjectJsonSchema = jsonObjectSchema.superRefine(
     }
   },
 );
+const sdkProtocolResultErrorDataSchema = z
+  .object({
+    resultType: z.unknown().optional(),
+    violation: z
+      .enum(["missing-resultType", "input-required-missing-both"])
+      .optional(),
+  })
+  .passthrough();
 const toolDescriptorSchema = z
   .object({
     name: z.string().min(1).max(128),
@@ -216,6 +226,54 @@ type McpDiscoveryFailure =
       readonly requiredScope: string | null;
     };
 
+type McpProtocolResultFailure =
+  | {
+      readonly kind: "unsupported";
+      readonly resultType: "input_required" | "unknown";
+    }
+  | {
+      readonly kind: "invalid";
+      readonly reason:
+        | "missing required resultType"
+        | "input_required is missing inputRequests or requestState"
+        | "invalid tools/call result";
+    };
+
+export class McpProtocolResultError extends Error {
+  readonly failure: McpProtocolResultFailure;
+
+  constructor(failure: McpProtocolResultFailure) {
+    super("MCP tools/call returned a non-complete protocol result");
+    this.name = "McpProtocolResultError";
+    this.failure = failure;
+  }
+
+  static rethrow(error: unknown): never {
+    if (!SdkError.isInstance(error)) throw error;
+    const parsed = sdkProtocolResultErrorDataSchema.safeParse(error.data);
+    if (error.code === SdkErrorCode.UnsupportedResultType) {
+      throw new McpProtocolResultError({
+        kind: "unsupported",
+        resultType:
+          parsed.success && parsed.data.resultType === "input_required"
+            ? "input_required"
+            : "unknown",
+      });
+    }
+    if (error.code !== SdkErrorCode.InvalidResult) throw error;
+    throw new McpProtocolResultError({
+      kind: "invalid",
+      reason:
+        parsed.success && parsed.data.violation === "missing-resultType"
+          ? "missing required resultType"
+          : parsed.success &&
+              parsed.data.violation === "input-required-missing-both"
+            ? "input_required is missing inputRequests or requestState"
+            : "invalid tools/call result",
+    });
+  }
+}
+
 export type McpDiscoveryStatus =
   | {
       readonly status: "ready";
@@ -287,6 +345,9 @@ export function createMcpSdkClient(): Client {
     { name: MCP_CLIENT_NAME, version: keelVersion() },
     {
       listMaxPages: MCP_MAX_CATALOG_PAGES,
+      inputRequired: {
+        autoFulfill: false,
+      },
       versionNegotiation: {
         mode: "auto",
         probe: {
@@ -839,17 +900,22 @@ export async function connectMcpServer(
         expectedAuthorizationIdentity,
         signal,
       ) => {
-        const action = async () =>
-          await client.callTool(
-            { name: tool.descriptor.name, arguments: arguments_ },
-            {
-              signal,
-              timeout: MCP_CALL_TIMEOUT_MS,
-              maxTotalTimeout: MCP_CALL_MAX_TOTAL_TIMEOUT_MS,
-              resetTimeoutOnProgress: false,
-              toolDefinition: tool.descriptor,
-            },
-          );
+        const action = async () => {
+          try {
+            return await client.callTool(
+              { name: tool.descriptor.name, arguments: arguments_ },
+              {
+                signal,
+                timeout: MCP_CALL_TIMEOUT_MS,
+                maxTotalTimeout: MCP_CALL_MAX_TOTAL_TIMEOUT_MS,
+                resetTimeoutOnProgress: false,
+                toolDefinition: tool.descriptor,
+              },
+            );
+          } catch (error) {
+            McpProtocolResultError.rethrow(error);
+          }
+        };
         if (authProvider !== undefined) {
           return await authProvider.withAuthorizationIdentity(
             expectedAuthorizationIdentity,

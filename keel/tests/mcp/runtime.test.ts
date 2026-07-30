@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
   createMcpHandler,
@@ -15,6 +16,7 @@ import {
   MCP_DEFAULT_CATALOG_CACHE_TTL_MS,
   type McpConnection,
   type McpJsonValue,
+  McpProtocolResultError,
 } from "../../src/mcp/discovery.ts";
 import {
   type McpAuthorizationIdentity,
@@ -322,7 +324,12 @@ async function requestBody(request: AsyncIterable<unknown>): Promise<string> {
   return body;
 }
 
-async function startFinalSpecCatalogServer(): Promise<FinalSpecCatalogServer> {
+async function startFinalSpecCatalogServer(
+  callResult: unknown = {
+    resultType: "complete",
+    content: [{ type: "text", text: "final result" }],
+  },
+): Promise<FinalSpecCatalogServer> {
   const requests: FinalSpecRequestHeaders[] = [];
   let listCalls = 0;
   const server = createServer((request, response) => {
@@ -391,10 +398,7 @@ async function startFinalSpecCatalogServer(): Promise<FinalSpecCatalogServer> {
           JSON.stringify({
             jsonrpc: "2.0",
             id: parsed.id,
-            result: {
-              resultType: "complete",
-              content: [{ type: "text", text: "final result" }],
-            },
+            result: callResult,
           }),
         );
         return;
@@ -1180,6 +1184,112 @@ describe("MCP runtime", () => {
       await server.close();
     }
   });
+
+  test.each([
+    [
+      "omits resultType",
+      { content: [{ type: "text", text: "missing discriminator" }] },
+      "MCP protocol result is invalid: missing required resultType",
+    ],
+    [
+      "returns a non-string resultType",
+      {
+        resultType: 7,
+        content: [{ type: "text", text: "invalid discriminator" }],
+      },
+      "MCP protocol result is invalid: invalid tools/call result",
+    ],
+    [
+      "returns input_required without an MRTR payload",
+      { resultType: "input_required" },
+      "MCP protocol result is invalid: input_required is missing inputRequests or requestState",
+    ],
+    [
+      "returns an unknown resultType",
+      {
+        resultType: "future_result",
+        content: [{ type: "text", text: "unknown discriminator" }],
+      },
+      "MCP protocol result is unsupported: unknown",
+    ],
+  ] satisfies readonly [string, unknown, string][])(
+    `Given a final MCP server %s,
+    When Keel invokes the approved remote tool,
+    Then the typed protocol failure is clear and the call is not retried`,
+    async (_caseName, callResult, expectedDiagnostic) => {
+      // Given
+      const server = await startFinalSpecCatalogServer(callResult);
+      const servers = [
+        {
+          id: "catalog",
+          incarnation: "00000000-0000-4000-8000-000000000004",
+          url: server.url,
+          enabled: true,
+          allowPrivateNetwork: true,
+          authenticationRequired: false,
+          toolFilter: { allow: null, deny: [] },
+        },
+      ];
+      const runtime = createMcpRuntime({
+        servers,
+        connectionFactory: { connect: connectMcpServer },
+        lifecycle: staticLifecycle(servers),
+        permission: allowPermission,
+        schemaTarget: testSchemaTarget,
+      });
+      const signal = new AbortController().signal;
+
+      try {
+        await runtime.search(
+          { query: "search", server: "catalog", tool: "search" },
+          signal,
+        );
+
+        // When
+        const result = await runtime.execute(
+          await exposedToolCall(runtime),
+          signal,
+        );
+
+        // Then
+        expect(result.ok).toBe(false);
+        expect(result.content).toContain(expectedDiagnostic);
+        expect(result.content).toContain("did not continue or retry");
+        expect(
+          server
+            .requests()
+            .filter((request) => request.mcpMethod === "tools/call"),
+        ).toHaveLength(1);
+      } finally {
+        await runtime.close();
+        await server.close();
+      }
+    },
+  );
+
+  test.each([
+    ["an ordinary transport error", new Error("connection reset")],
+    [
+      "an unrelated typed SDK error",
+      new SdkError(SdkErrorCode.RequestTimeout, "request timed out"),
+    ],
+  ])(
+    `Given tools/call throws %s,
+    When Keel checks whether it is a final-result protocol failure,
+    Then the original error is preserved without reclassification`,
+    (_caseName, originalError) => {
+      // When
+      let caught: unknown;
+      try {
+        McpProtocolResultError.rethrow(originalError);
+      } catch (error) {
+        caught = error;
+      }
+
+      // Then
+      expect(caught).toBe(originalError);
+    },
+  );
 
   test(`Given a tool was exposed and the current policy changes before dispatch,
     When the model invokes the frozen tool reference,
