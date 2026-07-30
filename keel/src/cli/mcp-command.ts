@@ -9,6 +9,7 @@ import {
   deleteMcpOAuthCredentialsUnderLock,
   McpOAuthCredentialError,
   type McpPreRegisteredClient,
+  revokeAndDeleteMcpOAuthCredentialsUnderLock,
   withMcpOAuthCredentialLock,
 } from "../mcp/oauth.ts";
 import {
@@ -395,18 +396,24 @@ async function runMcpLogout(
   runtime: CliRuntime,
 ): Promise<number> {
   const server = await findMcpServer(runtime, cliArgs.serverId);
-  await withMcpOAuthCredentialLock(
+  const logoutResult = await withMcpOAuthCredentialLock(
     server,
     mcpOAuthRefreshLockRoot(runtime),
     async () => {
-      await deleteMcpOAuthCredentialsUnderLock(
+      const result = await revokeAndDeleteMcpOAuthCredentialsUnderLock(
         server,
         runtime.mcpSecretBackend,
         mcpOAuthRefreshLockRoot(runtime),
       );
       await setMcpServerAuthenticationRequired(runtime, server, false);
+      return result;
     },
   );
+  if (logoutResult === "remote-revocation-failed") {
+    throw new McpOAuthCredentialError(
+      "Error: Logged out locally, but remote OAuth grant revocation could not be confirmed.",
+    );
+  }
   runtime.writeStdout(`Logged out of MCP server "${server.id}".\n`);
   return 0;
 }
