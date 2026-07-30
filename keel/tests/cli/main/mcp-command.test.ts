@@ -197,16 +197,21 @@ async function startRejectedMcpServer(
   return { ...server, requestCount: () => requests };
 }
 
-async function startInsufficientScopeMcpServer(): Promise<CountingTestMcpServer> {
+async function startInsufficientScopeMcpServer(
+  requiredScope: string | null = "mcp:tools",
+): Promise<CountingTestMcpServer> {
   let requests = 0;
   const server = await startMcpServer({
     fetch: async () => {
       requests += 1;
+      const challenge =
+        requiredScope === null
+          ? 'Bearer error="insufficient_scope"'
+          : `Bearer error="insufficient_scope", scope="${requiredScope}"`;
       return new Response("scope upgrade required", {
         status: 403,
         headers: {
-          "www-authenticate":
-            'Bearer error="insufficient_scope", scope="mcp:tools"',
+          "www-authenticate": challenge,
         },
       });
     },
@@ -933,11 +938,91 @@ describe("CLI Main - MCP", () => {
       expect(exitCode).toBe(1);
       expect(add.stderr()).toBe("");
       expect(add.stdout()).toContain("status: failed\n");
-      expect(add.stdout()).toContain(
-        'error: Insufficient scope: required "mcp:tools"',
-      );
+      expect(add.stdout()).toContain("authorization: insufficient-scope\n");
+      expect(add.stdout()).toContain("required scope: mcp:tools\n");
       expect(add.stdout()).not.toContain("protocol: legacy");
       expect(server.requestCount()).toBe(1);
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a configured MCP server requires broader authorization scope,
+    When the user checks MCP status and doctor,
+    Then Keel reports an actionable step-up authorization diagnostic`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-status-scope-home-"));
+    const server = await startInsufficientScopeMcpServer();
+    const add = createRuntime(
+      ["mcp", "add", server.url, "--name", "scope-required"],
+      { env: { KEEL_HOME: home } },
+    );
+
+    try {
+      expect(await runCliMain(add.runtime), add.stdout()).toBe(1);
+      const status = createRuntime(["mcp", "status", "scope-required"], {
+        env: { KEEL_HOME: home },
+      });
+      const doctor = createRuntime(["mcp", "doctor", "scope-required"], {
+        env: { KEEL_HOME: home },
+      });
+
+      // When
+      const statusExitCode = await runCliMain(status.runtime);
+      const doctorExitCode = await runCliMain(doctor.runtime);
+
+      // Then
+      expect(statusExitCode).toBe(0);
+      expect(doctorExitCode).toBe(1);
+      expect(status.stderr()).toBe("");
+      expect(doctor.stderr()).toBe("");
+      for (const output of [status.stdout(), doctor.stdout()]) {
+        expect(output).toContain("status: failed\n");
+        expect(output).toContain("authorization: insufficient-scope\n");
+        expect(output).toContain("required scope: mcp:tools\n");
+        expect(output).toContain(
+          'action: run keel mcp login "scope-required" to authorize with the required scope',
+        );
+        expect(output).not.toContain("HTTP 403");
+        expect(output).not.toContain("catalog failure");
+      }
+      expect(server.requestCount()).toBe(3);
+    } finally {
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a configured MCP server omits the required scope hint,
+    When the user checks MCP status,
+    Then Keel reports step-up authorization without inventing a scope`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-mcp-status-scope-unknown-home-"),
+    );
+    const server = await startInsufficientScopeMcpServer(null);
+    const add = createRuntime(
+      ["mcp", "add", server.url, "--name", "scope-unknown"],
+      { env: { KEEL_HOME: home } },
+    );
+
+    try {
+      expect(await runCliMain(add.runtime), add.stdout()).toBe(1);
+      const status = createRuntime(["mcp", "status", "scope-unknown"], {
+        env: { KEEL_HOME: home },
+      });
+
+      // When
+      const statusExitCode = await runCliMain(status.runtime);
+
+      // Then
+      expect(statusExitCode).toBe(0);
+      expect(status.stderr()).toBe("");
+      expect(status.stdout()).toContain("authorization: insufficient-scope\n");
+      expect(status.stdout()).toContain("required scope: unknown\n");
+      expect(status.stdout()).not.toContain("mcp:tools");
+      expect(server.requestCount()).toBe(2);
     } finally {
       await server.close();
       await rm(home, { recursive: true, force: true });
