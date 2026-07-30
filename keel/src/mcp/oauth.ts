@@ -3,11 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type {
   AuthProvider,
+  ClientAuthMethod,
   FetchLike,
   OAuthClientInformationContext,
   OAuthClientMetadata,
   OAuthClientProvider,
   OAuthDiscoveryState,
+  OAuthTokenRevocationRequest,
   StoredOAuthClientInformation,
   StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
@@ -15,14 +17,16 @@ import {
   OAuthError,
   OAuthErrorCode,
   refreshAuthorization,
+  selectClientAuthMethod,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import { z } from "zod";
 import type { McpServerEndpoint } from "./discovery.ts";
+import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 import { withMcpOAuthRefreshLock } from "./oauth-refresh-lock.ts";
 
 const MCP_OAUTH_SECRET_SERVICE = "Keel MCP OAuth";
-const MCP_OAUTH_SECRET_SCHEMA_VERSION = 3;
+const MCP_OAUTH_SECRET_SCHEMA_VERSION = 4;
 const MCP_OAUTH_MAX_ISSUERS = 16;
 const MCP_OAUTH_MAX_SECRET_BYTES = 1024 * 1024;
 const MCP_OAUTH_FLOW_LIFETIME_MS = 2 * 60 * 1000;
@@ -73,6 +77,8 @@ const oauthAuthorizationServerMetadataSchema = z
     response_modes_supported: z.array(z.string()).optional(),
     grant_types_supported: z.array(z.string()).optional(),
     token_endpoint_auth_methods_supported: z.array(z.string()).optional(),
+    revocation_endpoint: z.string().url().optional(),
+    revocation_endpoint_auth_methods_supported: z.array(z.string()).optional(),
     code_challenge_methods_supported: z.array(z.string()).optional(),
     client_id_metadata_document_supported: z.boolean().optional(),
     authorization_response_iss_parameter_supported: z.boolean().optional(),
@@ -96,14 +102,23 @@ const oauthDiscoveryStateSchema = z
     resourceMetadata: oauthProtectedResourceMetadataSchema.optional(),
   })
   .strict();
-const storedOAuthDiscoveryStateSchema = z.custom<OAuthDiscoveryState>(
+type StoredOAuthDiscoveryState = OAuthDiscoveryState &
+  z.infer<typeof oauthDiscoveryStateSchema>;
+const storedOAuthDiscoveryStateSchema = z.custom<StoredOAuthDiscoveryState>(
   (value) => oauthDiscoveryStateSchema.safeParse(value).success,
 );
+const oauthRevocationMetadataSchema = z
+  .object({
+    endpoint: z.string().url(),
+    authMethods: z.array(z.string()).optional(),
+  })
+  .strict();
 const issuerCredentialsSchema = z
   .object({
     issuer: z.string().url(),
     client: storedOAuthClientInformationSchema,
     tokens: storedOAuthTokensSchema.nullable(),
+    revocation: oauthRevocationMetadataSchema.nullable(),
   })
   .strict()
   .superRefine((credentials, context) => {
@@ -184,6 +199,12 @@ const oauthCredentialRecordSchema = z
 
 type OAuthCredentialRecord = z.infer<typeof oauthCredentialRecordSchema>;
 type IssuerCredentials = z.infer<typeof issuerCredentialsSchema>;
+type OAuthIssuerGrant = IssuerCredentials & {
+  readonly tokens: NonNullable<IssuerCredentials["tokens"]>;
+};
+type RevocableOAuthIssuerGrant = OAuthIssuerGrant & {
+  readonly revocation: NonNullable<IssuerCredentials["revocation"]>;
+};
 type UnauthorizedHandler = NonNullable<AuthProvider["onUnauthorized"]>;
 type UnauthorizedContext = Parameters<UnauthorizedHandler>[0];
 
@@ -456,6 +477,28 @@ function replaceIssuerValue<T extends { readonly issuer: string }>(
   return [...retained, next];
 }
 
+function issuerRevocationMetadata(
+  discovery: StoredOAuthDiscoveryState | null,
+  issuer: string,
+): z.infer<typeof oauthRevocationMetadataSchema> | null {
+  const metadata = discovery?.authorizationServerMetadata;
+  if (
+    metadata === undefined ||
+    metadata.revocation_endpoint === undefined ||
+    new URL(metadata.issuer).href !== new URL(issuer).href
+  ) {
+    return null;
+  }
+  return {
+    endpoint: metadata.revocation_endpoint,
+    ...(metadata.revocation_endpoint_auth_methods_supported === undefined
+      ? {}
+      : {
+          authMethods: [...metadata.revocation_endpoint_auth_methods_supported],
+        }),
+  };
+}
+
 function contextIssuer(
   context: OAuthClientInformationContext | undefined,
 ): string {
@@ -652,6 +695,7 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
             issuer,
             client: value,
             tokens: identityMatches ? existing.tokens : null,
+            revocation: issuerRevocationMetadata(record.discovery, issuer),
           }),
           flow:
             record.flow.status === "awaiting-callback"
@@ -780,6 +824,17 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
         next: {
           ...record,
           discovery,
+          credentials: record.credentials.map((credentials) =>
+            new URL(credentials.issuer).href === new URL(expectedIssuer).href
+              ? {
+                  ...credentials,
+                  revocation: issuerRevocationMetadata(
+                    discovery,
+                    credentials.issuer,
+                  ),
+                }
+              : credentials,
+          ),
           flow:
             record.flow.status === "awaiting-callback"
               ? { ...record.flow, expectedIssuer }
@@ -870,13 +925,13 @@ const activeRefreshes = new Map<string, Promise<void>>();
 
 function activeCredentials(
   record: OAuthCredentialRecord,
-): IssuerCredentials | null {
+): OAuthIssuerGrant | null {
   const active = record.activeAuthorization;
   if (active === null) return null;
   /* v8 ignore next -- parsed credential records guarantee that an active binding identifies one stored non-null token entry. */
   return (
     record.credentials.find(
-      (entry) =>
+      (entry): entry is OAuthIssuerGrant =>
         entry.issuer === active.issuer &&
         entry.client.client_id === active.clientId &&
         entry.tokens !== null,
@@ -974,7 +1029,7 @@ async function refreshRejectedCredential(options: {
         options.expectedAuthorizationIdentity,
       );
       const credentials = activeCredentials(record);
-      if (credentials === null || credentials.tokens === null) {
+      if (credentials === null) {
         authenticationRequired("requires an active OAuth credential");
       }
       if (credentials.tokens.access_token !== options.rejectedAccessToken) {
@@ -1117,7 +1172,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
       record,
       this.expectedAuthorization.getStore() ?? null,
     );
-    const accessToken = activeCredentials(record)?.tokens?.access_token;
+    const accessToken = activeCredentials(record)?.tokens.access_token;
     if (accessToken === undefined && this.server.authenticationRequired) {
       throw new McpOAuthAuthenticationRequiredError(
         "Error: MCP authorization requires an active OAuth credential.",
@@ -1230,4 +1285,165 @@ export async function deleteMcpOAuthCredentialsUnderLock(
     mutationGuard: null,
   });
   return await store.deleteUnderLock();
+}
+
+function formEncoded(value: string): string {
+  const encoded = new URLSearchParams({ value }).toString();
+  return encoded.slice("value=".length);
+}
+
+function revocationClientSecret(client: StoredOAuthClientInformation): string {
+  if (client.client_secret === undefined) {
+    credentialError(
+      "cannot authenticate grant revocation without a client secret",
+    );
+  }
+  return client.client_secret;
+}
+
+function applyRevocationClientAuthentication(
+  method: ClientAuthMethod,
+  client: StoredOAuthClientInformation,
+  headers: Headers,
+  body: URLSearchParams,
+): void {
+  switch (method) {
+    case "client_secret_basic": {
+      const credentials = `${formEncoded(client.client_id)}:${formEncoded(revocationClientSecret(client))}`;
+      headers.set(
+        "authorization",
+        `Basic ${Buffer.from(credentials).toString("base64")}`,
+      );
+      return;
+    }
+    case "client_secret_post":
+      body.set("client_id", client.client_id);
+      body.set("client_secret", revocationClientSecret(client));
+      return;
+    case "none":
+      body.set("client_id", client.client_id);
+      return;
+    /* v8 ignore next 5 -- ClientAuthMethod is an exhaustive SDK union; the default keeps future SDK additions compile-time visible. */
+    default: {
+      const unsupported: never = method;
+      throw new Error(
+        `Unsupported OAuth client authentication: ${unsupported}`,
+      );
+    }
+  }
+}
+
+async function revokeMcpOAuthGrant(
+  server: McpOAuthServerEndpoint,
+  credentials: RevocableOAuthIssuerGrant,
+): Promise<void> {
+  const request: OAuthTokenRevocationRequest & {
+    readonly token_type_hint: "access_token" | "refresh_token";
+  } =
+    credentials.tokens.refresh_token === undefined
+      ? {
+          token: credentials.tokens.access_token,
+          token_type_hint: "access_token",
+        }
+      : {
+          token: credentials.tokens.refresh_token,
+          token_type_hint: "refresh_token",
+        };
+  const body = new URLSearchParams({
+    token: request.token,
+    token_type_hint: request.token_type_hint,
+  });
+  const headers = new Headers({
+    "content-type": "application/x-www-form-urlencoded",
+  });
+  const supportedAuthMethods = credentials.revocation.authMethods ?? [
+    "client_secret_basic",
+  ];
+  const authMethod = selectClientAuthMethod(
+    credentials.client,
+    supportedAuthMethods,
+  );
+  if (
+    supportedAuthMethods.length > 0 &&
+    !supportedAuthMethods.includes(authMethod)
+  ) {
+    credentialError(
+      "authorization server does not advertise a supported client authentication method for grant revocation",
+    );
+  }
+  applyRevocationClientAuthentication(
+    authMethod,
+    credentials.client,
+    headers,
+    body,
+  );
+
+  const validated = validateMcpServerUrl(
+    server.url,
+    server.allowPrivateNetwork,
+  );
+  // Keel's MCP egress policy deliberately retains the project-wide loopback
+  // HTTP development exception; production and cross-origin OAuth targets
+  // remain HTTPS-only.
+  const network = createMcpPolicyFetch(validated);
+  try {
+    let response: Response;
+    try {
+      response = await network.fetch(credentials.revocation.endpoint, {
+        method: "POST",
+        headers,
+        body,
+        redirect: "error",
+      });
+    } catch {
+      credentialError("OAuth grant revocation request failed");
+    }
+    await response.body?.cancel();
+    if (response.status !== 200) {
+      credentialError(
+        `OAuth grant revocation failed with HTTP ${response.status}`,
+      );
+    }
+  } finally {
+    await network.close();
+  }
+}
+
+async function revokeStoredMcpOAuthGrants(
+  server: McpOAuthServerEndpoint,
+  record: OAuthCredentialRecord,
+): Promise<void> {
+  const revocable = record.credentials.filter(
+    (credentials): credentials is RevocableOAuthIssuerGrant =>
+      credentials.tokens !== null && credentials.revocation !== null,
+  );
+  const results = await Promise.allSettled(
+    revocable.map(
+      async (credentials) => await revokeMcpOAuthGrant(server, credentials),
+    ),
+  );
+  if (results.some((result) => result.status === "rejected")) {
+    credentialError("one or more OAuth grants could not be revoked");
+  }
+}
+
+export async function revokeAndDeleteMcpOAuthCredentialsUnderLock(
+  server: McpOAuthServerEndpoint,
+  backend: McpSecretBackend,
+  refreshLockRoot: string,
+): Promise<"complete" | "remote-revocation-failed"> {
+  const store = new OAuthCredentialStore({
+    server,
+    backend,
+    refreshLockRoot,
+    mutationGuard: null,
+  });
+  let result: "complete" | "remote-revocation-failed" = "complete";
+  try {
+    await revokeStoredMcpOAuthGrants(server, await store.load());
+  } catch {
+    result = "remote-revocation-failed";
+  }
+  await store.deleteUnderLock();
+  return result;
 }

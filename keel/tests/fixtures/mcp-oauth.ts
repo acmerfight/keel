@@ -33,12 +33,22 @@ export interface OAuthAuthorizationRequest {
 export interface OAuthTokenRequest {
   readonly authorization: string | null;
   readonly clientId: string;
+  readonly clientSecret: string;
   readonly code: string;
   readonly codeVerifier: string;
   readonly grantType: string;
   readonly refreshToken: string;
   readonly redirectUri: string;
   readonly resource: string;
+}
+
+export interface OAuthRevocationRequest {
+  readonly path: string;
+  readonly authorization: string | null;
+  readonly clientId: string;
+  readonly clientSecret: string;
+  readonly token: string;
+  readonly tokenTypeHint: string;
 }
 
 export interface TestOAuthMcpServer {
@@ -48,6 +58,9 @@ export interface TestOAuthMcpServer {
   readonly authorizationRequests: () => readonly OAuthAuthorizationRequest[];
   readonly registrationRequests: () => number;
   readonly tokenRequests: () => readonly OAuthTokenRequest[];
+  readonly revocationRequests: () => readonly OAuthRevocationRequest[];
+  readonly revocationRedirectRequests: () => number;
+  readonly rotateRevocationEndpoint: () => void;
   readonly calls: () => readonly string[];
   readonly authenticatedMcpRequest: Promise<void>;
   readonly releaseAuthenticatedMcpResponse: () => void;
@@ -72,7 +85,10 @@ export async function startOAuthMcpServer(
     readonly registration?: "dcr" | "none";
     readonly callbackState?: "valid" | "missing" | "wrong";
     readonly callbackIssuer?: "valid" | "missing" | "mismatch";
-    readonly tokenEndpointAuthMethod?: "none" | "client_secret_basic";
+    readonly tokenEndpointAuthMethod?:
+      | "none"
+      | "client_secret_basic"
+      | "client_secret_post";
     readonly authChallenge?: "connect" | "tools-list";
     readonly authentication?: "required" | "optional";
     readonly tokenResponse?: "valid" | "malformed";
@@ -81,6 +97,9 @@ export async function startOAuthMcpServer(
       | "rotate"
       | "omit-refresh-token-and-scope"
       | "invalid-grant";
+    readonly revocationResponse?: "success" | "server-error" | "redirect";
+    readonly revocationAuthMethods?: readonly string[] | "omitted";
+    readonly revocationEndpoint?: "same-origin" | "unsafe-cross-origin";
     readonly refreshDelayMs?: number;
   } = {},
 ): Promise<TestOAuthMcpServer> {
@@ -91,6 +110,9 @@ export async function startOAuthMcpServer(
   const authorizationCode = "keel-mcp-oauth-test-code";
   const authorizationRequests: OAuthAuthorizationRequest[] = [];
   const tokenRequests: OAuthTokenRequest[] = [];
+  const revocationRequests: OAuthRevocationRequest[] = [];
+  let revocationRedirectRequests = 0;
+  let revocationPath = "/revoke";
   const calls: string[] = [];
   let registrationRequests = 0;
   let origin = "";
@@ -150,6 +172,23 @@ export async function startOAuthMcpServer(
           token_endpoint_auth_methods_supported: [
             options.tokenEndpointAuthMethod ?? "none",
           ],
+          ...(options.revocationResponse === undefined
+            ? {}
+            : {
+                revocation_endpoint:
+                  options.revocationEndpoint === "unsafe-cross-origin"
+                    ? "http://127.0.0.1:1/revoke"
+                    : `${origin}${revocationPath}`,
+                ...(options.revocationAuthMethods === "omitted"
+                  ? {}
+                  : {
+                      revocation_endpoint_auth_methods_supported: [
+                        ...(options.revocationAuthMethods ?? [
+                          options.tokenEndpointAuthMethod ?? "none",
+                        ]),
+                      ],
+                    }),
+              }),
           authorization_response_iss_parameter_supported: true,
           scopes_supported: ["mcp:tools"],
         });
@@ -211,6 +250,7 @@ export async function startOAuthMcpServer(
         const tokenRequest: OAuthTokenRequest = {
           authorization: request.headers.get("authorization"),
           clientId: body.get("client_id") ?? "",
+          clientSecret: body.get("client_secret") ?? "",
           code: body.get("code") ?? "",
           codeVerifier: body.get("code_verifier") ?? "",
           grantType: body.get("grant_type") ?? "",
@@ -265,6 +305,33 @@ export async function startOAuthMcpServer(
             ? {}
             : { refresh_token: refreshToken }),
         });
+      }
+      if (
+        ["/revoke", "/revoke-rotated"].includes(url.pathname) &&
+        request.method === "POST"
+      ) {
+        const body = new URLSearchParams(await request.text());
+        revocationRequests.push({
+          path: url.pathname,
+          authorization: request.headers.get("authorization"),
+          clientId: body.get("client_id") ?? "",
+          clientSecret: body.get("client_secret") ?? "",
+          token: body.get("token") ?? "",
+          tokenTypeHint: body.get("token_type_hint") ?? "",
+        });
+        if (options.revocationResponse === "server-error") {
+          return jsonResponse({ error: "temporarily_unavailable" }, 503);
+        }
+        return options.revocationResponse === "redirect"
+          ? new Response(null, {
+              status: 307,
+              headers: { location: `${origin}/revocation-redirect-target` },
+            })
+          : new Response(null, { status: 200 });
+      }
+      if (url.pathname === "/revocation-redirect-target") {
+        revocationRedirectRequests += 1;
+        return new Response(null, { status: 200 });
       }
       if (url.pathname === "/mcp") {
         const authenticated =
@@ -326,6 +393,11 @@ export async function startOAuthMcpServer(
     authorizationRequests: () => [...authorizationRequests],
     registrationRequests: () => registrationRequests,
     tokenRequests: () => [...tokenRequests],
+    revocationRequests: () => [...revocationRequests],
+    revocationRedirectRequests: () => revocationRedirectRequests,
+    rotateRevocationEndpoint: () => {
+      revocationPath = "/revoke-rotated";
+    },
     calls: () => [...calls],
     authenticatedMcpRequest: authenticatedMcpRequest.promise,
     releaseAuthenticatedMcpResponse: () => {

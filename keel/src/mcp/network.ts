@@ -344,6 +344,10 @@ class PolicyFetch implements McpPolicyFetch {
       ) {
         return responseFromUndici(response);
       }
+      if (request.redirect === "error") {
+        await response.body?.cancel();
+        networkPolicyError("Error: MCP request refused an HTTP redirect.");
+      }
       if (redirectCount === MCP_MAX_REDIRECTS) {
         await response.body?.cancel();
         networkPolicyError(

@@ -3,16 +3,53 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test, vi } from "vitest";
+import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { listMcpServers } from "../../../src/cli/mcp-config.ts";
 import type { McpSecretBackend } from "../../../src/mcp/oauth.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import { startOAuthMcpServer } from "../../fixtures/mcp-oauth.ts";
 
+const mutableOAuthCredentialRecordSchema = z.looseObject({
+  activeAuthorization: z.unknown().nullable(),
+  credentials: z.array(
+    z.looseObject({
+      issuer: z.string().url(),
+      client: z.looseObject({
+        client_id: z.string(),
+        client_secret: z.string().optional(),
+        issuer: z.string().url(),
+        token_endpoint_auth_method: z.string().optional(),
+      }),
+      tokens: z
+        .looseObject({
+          access_token: z.string(),
+          refresh_token: z.string().optional(),
+          issuer: z.string().url(),
+        })
+        .nullable(),
+    }),
+  ),
+  discovery: z
+    .looseObject({
+      authorizationServerMetadata: z
+        .looseObject({
+          issuer: z.string(),
+        })
+        .optional(),
+    })
+    .nullable(),
+});
+
 function createSecretBackend(): {
   readonly backend: McpSecretBackend;
   readonly entries: ReadonlyMap<string, string>;
   readonly failWrites: (message: string) => void;
+  readonly mutateOnlyEntry: (
+    mutate: (
+      record: z.infer<typeof mutableOAuthCredentialRecordSchema>,
+    ) => void,
+  ) => void;
 } {
   const entries = new Map<string, string>();
   let writeFailure: string | null = null;
@@ -31,6 +68,18 @@ function createSecretBackend(): {
     entries,
     failWrites: (message) => {
       writeFailure = message;
+    },
+    mutateOnlyEntry: (mutate) => {
+      const entry = [...entries.entries()];
+      expect(entry).toHaveLength(1);
+      const [key, serialized] = z
+        .tuple([z.string(), z.string()])
+        .parse(entry[0]);
+      const record = mutableOAuthCredentialRecordSchema.parse(
+        JSON.parse(serialized),
+      );
+      mutate(record);
+      entries.set(key, JSON.stringify(record));
     },
   };
 }
@@ -568,6 +617,7 @@ describe("CLI Main - MCP OAuth", () => {
           ?.authenticationRequired,
       ).toBe(false);
       expect(secrets.entries.size).toBe(0);
+      expect(mcp.revocationRequests()).toEqual([]);
 
       const authorization = mcp.authorizationRequests();
       expect(authorization).toHaveLength(1);
@@ -603,6 +653,424 @@ describe("CLI Main - MCP OAuth", () => {
       ].join("\n");
       expect(visibleOutput).not.toContain(mcp.accessToken);
       expect(visibleOutput).not.toContain("keel-mcp-oauth-test-code");
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a logged-in MCP server advertises RFC 7009 token revocation,
+    When the user logs out,
+    Then Keel revokes the refresh token before deleting the local credential`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode, logout.stderr()).toBe(0);
+      expect(logout.stdout()).toBe('Logged out of MCP server "refreshable".\n');
+      expect(mcp.revocationRequests()).toEqual([
+        {
+          authorization: null,
+          path: "/revoke",
+          clientId: "keel-oauth-test-client",
+          clientSecret: "",
+          token: "keel-mcp-oauth-test-refresh-token",
+          tokenTypeHint: "refresh_token",
+        },
+      ]);
+      expect(secrets.entries.size).toBe(0);
+      expect(
+        (await listMcpServers(logout.runtime))[0]?.authenticationRequired,
+      ).toBe(false);
+      expect([logout.stdout(), logout.stderr()].join("\n")).not.toContain(
+        "keel-mcp-oauth-test-refresh-token",
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an advertised OAuth revocation endpoint cannot confirm revocation,
+    When the user logs out,
+    Then Keel reports remote failure after disabling local credential use`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "server-error",
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(logout.stdout()).toBe("");
+      expect(logout.stderr()).toContain(
+        "Logged out locally, but remote OAuth grant revocation could not be confirmed",
+      );
+      expect(secrets.entries.size).toBe(0);
+      expect(
+        (await listMcpServers(logout.runtime))[0]?.authenticationRequired,
+      ).toBe(false);
+      expect([logout.stdout(), logout.stderr()].join("\n")).not.toContain(
+        "keel-mcp-oauth-test-refresh-token",
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an OAuth revocation endpoint requires an unsupported client authentication method,
+    When the user logs out,
+    Then Keel does not disclose the token and disables local credential use`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+      revocationAuthMethods: ["private_key_jwt"],
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(logout.stdout()).toBe("");
+      expect(logout.stderr()).toContain(
+        "Logged out locally, but remote OAuth grant revocation could not be confirmed",
+      );
+      expect(mcp.revocationRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+      expect([logout.stdout(), logout.stderr()].join("\n")).not.toContain(
+        "keel-mcp-oauth-test-refresh-token",
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given OAuth discovery advertises a revocation endpoint denied by MCP network policy,
+    When the user logs out,
+    Then Keel does not disclose the token and disables local credential use`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+      revocationEndpoint: "unsafe-cross-origin",
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(logout.stdout()).toBe("");
+      expect(logout.stderr()).toContain(
+        "Logged out locally, but remote OAuth grant revocation could not be confirmed",
+      );
+      expect(mcp.revocationRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+      expect([logout.stdout(), logout.stderr()].join("\n")).not.toContain(
+        "keel-mcp-oauth-test-refresh-token",
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an OAuth revocation endpoint redirects a credential-bearing request,
+    When the user logs out,
+    Then Keel refuses the redirect and disables local credential use`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "redirect",
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(logout.stderr()).toContain(
+        "Logged out locally, but remote OAuth grant revocation could not be confirmed",
+      );
+      expect(mcp.revocationRequests()).toHaveLength(1);
+      expect(mcp.revocationRedirectRequests()).toBe(0);
+      expect(secrets.entries.size).toBe(0);
+      expect(
+        (await listMcpServers(logout.runtime))[0]?.authenticationRequired,
+      ).toBe(false);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given revocation authentication methods are omitted for a public OAuth client,
+    When the user logs out,
+    Then Keel applies the RFC 8414 client_secret_basic default without sending the token`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+      revocationAuthMethods: "omitted",
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(mcp.revocationRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+      expect(
+        (await listMcpServers(logout.runtime))[0]?.authenticationRequired,
+      ).toBe(false);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an MCP server has no stored OAuth authorization,
+    When the user logs out,
+    Then Keel completes the local logout without attempting revocation`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-empty-logout-home-"));
+    const mcp = await startOAuthMcpServer({
+      revocationResponse: "success",
+    });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const logout = createRuntime(["mcp", "logout", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode, logout.stderr()).toBe(0);
+      expect(mcp.revocationRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+      expect(
+        (await listMcpServers(logout.runtime))[0]?.authenticationRequired,
+      ).toBe(false);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given active OAuth credentials lack the secret required by the revocation endpoint,
+    When the user logs out,
+    Then Keel fails before disclosure and disables local credential use`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+      revocationAuthMethods: ["client_secret_basic"],
+    });
+    secrets.mutateOnlyEntry((record) => {
+      const client = record.credentials[0]?.client;
+      expect(client).toBeDefined();
+      if (client !== undefined) {
+        delete client.client_secret;
+        client.token_endpoint_auth_method = "client_secret_basic";
+      }
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(logout.stderr()).toContain(
+        "Logged out locally, but remote OAuth grant revocation could not be confirmed",
+      );
+      expect(mcp.revocationRequests()).toEqual([]);
+      expect(secrets.entries.size).toBe(0);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given stored OAuth discovery later drifts from the active grant issuer,
+    When the user logs out,
+    Then Keel uses issuer-bound revocation metadata rather than the stale global snapshot`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+    });
+    secrets.mutateOnlyEntry((record) => {
+      const metadata = record.discovery?.authorizationServerMetadata;
+      expect(metadata).toBeDefined();
+      if (metadata !== undefined) {
+        metadata.issuer = "https://different-issuer.example";
+      }
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode, logout.stderr()).toBe(0);
+      expect(mcp.revocationRequests()).toHaveLength(1);
+      expect(secrets.entries.size).toBe(0);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given secure storage contains active and inactive OAuth grants with revocation support,
+    When the user logs out,
+    Then Keel revokes every stored grant before deleting the credential record`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+    });
+    const inactiveRefreshToken = "keel-mcp-inactive-refresh-token";
+    secrets.mutateOnlyEntry((record) => {
+      const active = record.credentials[0];
+      expect(active).toBeDefined();
+      if (active === undefined || active.tokens === null) return;
+      const inactive = structuredClone(active);
+      const inactiveIssuer = new URL("/inactive-issuer", mcp.url).href;
+      inactive.issuer = inactiveIssuer;
+      inactive.client.client_id = "keel-inactive-client";
+      inactive.client.issuer = inactiveIssuer;
+      expect(inactive.tokens).not.toBeNull();
+      if (inactive.tokens === null) return;
+      inactive.tokens.issuer = inactiveIssuer;
+      inactive.tokens.refresh_token = inactiveRefreshToken;
+      record.credentials.push(inactive);
+    });
+    const logout = createRuntime(["mcp", "logout", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode, logout.stderr()).toBe(0);
+      expect(mcp.revocationRequests()).toHaveLength(2);
+      expect(mcp.revocationRequests()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            token: "keel-mcp-oauth-test-refresh-token",
+          }),
+          expect.objectContaining({ token: inactiveRefreshToken }),
+        ]),
+      );
+      expect(secrets.entries.size).toBe(0);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given trusted discovery rotates the revocation endpoint for a reusable OAuth client,
+    When the user authorizes again and later logs out,
+    Then Keel revokes through the refreshed issuer-bound endpoint`, async () => {
+    // Given
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
+      refreshResponse: "rotate",
+      revocationResponse: "success",
+    });
+    mcp.rotateRevocationEndpoint();
+    secrets.mutateOnlyEntry((record) => {
+      record.activeAuthorization = null;
+      record.discovery = null;
+      const credentials = record.credentials[0];
+      expect(credentials).toBeDefined();
+      if (credentials !== undefined) credentials.tokens = null;
+    });
+    const login = createRuntime(["mcp", "login", "refreshable"], {
+      env: { KEEL_HOME: home },
+      mcpSecretBackend: secrets.backend,
+      openExternalUrl: mcp.openAuthorizationUrl,
+    });
+
+    try {
+      expect(await runCliMain(login.runtime), login.stderr()).toBe(0);
+      const logout = createRuntime(["mcp", "logout", "refreshable"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+      });
+
+      // When
+      const exitCode = await runCliMain(logout.runtime);
+
+      // Then
+      expect(exitCode, logout.stderr()).toBe(0);
+      expect(mcp.registrationRequests()).toBe(1);
+      expect(mcp.revocationRequests()).toHaveLength(1);
+      expect(mcp.revocationRequests()[0]?.path).toBe("/revoke-rotated");
+      expect(secrets.entries.size).toBe(0);
     } finally {
       await mcp.close();
       await rm(home, { recursive: true, force: true });
@@ -687,58 +1155,117 @@ describe("CLI Main - MCP OAuth", () => {
     }
   });
 
-  test(`Given a pre-registered confidential OAuth client is required,
-    When the user supplies its secret on stdin,
-    Then Keel authenticates the token request without placing the secret in arguments or output`, async () => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-mcp-client-secret-home-"));
-    const mcp = await startOAuthMcpServer({
-      registration: "none",
-      tokenEndpointAuthMethod: "client_secret_basic",
-    });
-    const secrets = createSecretBackend();
-    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
-      env: { KEEL_HOME: home },
-    });
-    const clientSecret = " confidential-client-secret ";
-    const input = new PassThrough();
-    input.setEncoding("utf8");
-    input.end(`${clientSecret}\r\n`);
-
-    try {
-      expect(await runCliMain(add.runtime)).toBe(0);
-      const login = createRuntime(
-        [
-          "mcp",
-          "login",
-          "protected",
-          "--client-id",
-          "confidential-client",
-          "--with-client-secret",
-        ],
+  test.each([
+    {
+      authMethod: "client_secret_basic" as const,
+      tokenAuthorization: (secret: string) =>
+        `Basic ${Buffer.from(`confidential-client:${secret}`).toString("base64")}`,
+      tokenClientSecret: "",
+      revocationAuthorization: `Basic ${Buffer.from(
+        "confidential-client:+confidential-client-secret+",
+      ).toString("base64")}`,
+      revocationClientId: "",
+      revocationClientSecret: "",
+    },
+    {
+      authMethod: "client_secret_post" as const,
+      tokenAuthorization: () => null,
+      tokenClientSecret: " confidential-client-secret ",
+      revocationAuthorization: null,
+      revocationClientId: "confidential-client",
+      revocationClientSecret: " confidential-client-secret ",
+    },
+  ])(
+    `Given a pre-registered confidential OAuth client and revocation endpoint are required,
+    When the user supplies its secret on stdin and later logs out,
+    Then Keel uses $authMethod without placing the secret in arguments or output`,
+    async ({
+      authMethod,
+      tokenAuthorization,
+      tokenClientSecret,
+      revocationAuthorization,
+      revocationClientId,
+      revocationClientSecret,
+    }) => {
+      // Given
+      const home = await mkdtemp(
+        join(tmpdir(), "keel-mcp-client-secret-home-"),
+      );
+      const mcp = await startOAuthMcpServer({
+        registration: "none",
+        tokenEndpointAuthMethod: authMethod,
+        revocationResponse: "success",
+      });
+      const secrets = createSecretBackend();
+      const add = createRuntime(
+        ["mcp", "add", mcp.url, "--name", "protected"],
         {
           env: { KEEL_HOME: home },
-          input,
-          mcpSecretBackend: secrets.backend,
-          openExternalUrl: mcp.openAuthorizationUrl,
         },
       );
+      const clientSecret = " confidential-client-secret ";
+      const input = new PassThrough();
+      input.setEncoding("utf8");
+      input.end(`${clientSecret}\r\n`);
 
-      // When
-      const exitCode = await runCliMain(login.runtime);
+      try {
+        expect(await runCliMain(add.runtime)).toBe(0);
+        const login = createRuntime(
+          [
+            "mcp",
+            "login",
+            "protected",
+            "--client-id",
+            "confidential-client",
+            "--with-client-secret",
+          ],
+          {
+            env: { KEEL_HOME: home },
+            input,
+            mcpSecretBackend: secrets.backend,
+            openExternalUrl: mcp.openAuthorizationUrl,
+          },
+        );
 
-      // Then
-      expect(exitCode, login.stderr()).toBe(0);
-      expect(mcp.tokenRequests()[0]?.authorization).toBe(
-        `Basic ${Buffer.from(`confidential-client:${clientSecret}`).toString("base64")}`,
-      );
-      expect(login.stdout()).not.toContain(clientSecret);
-      expect(login.stderr()).not.toContain(clientSecret);
-    } finally {
-      await mcp.close();
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+        // When
+        const exitCode = await runCliMain(login.runtime);
+        const logout = createRuntime(["mcp", "logout", "protected"], {
+          env: { KEEL_HOME: home },
+          mcpSecretBackend: secrets.backend,
+        });
+        const logoutExitCode = await runCliMain(logout.runtime);
+
+        // Then
+        expect(exitCode, login.stderr()).toBe(0);
+        expect(logoutExitCode, logout.stderr()).toBe(0);
+        expect(mcp.tokenRequests()[0]?.authorization).toBe(
+          tokenAuthorization(clientSecret),
+        );
+        expect(mcp.tokenRequests()[0]?.clientSecret).toBe(tokenClientSecret);
+        expect(mcp.revocationRequests()).toEqual([
+          {
+            authorization: revocationAuthorization,
+            path: "/revoke",
+            clientId: revocationClientId,
+            clientSecret: revocationClientSecret,
+            token: mcp.accessToken,
+            tokenTypeHint: "access_token",
+          },
+        ]);
+        expect(
+          [
+            login.stdout(),
+            login.stderr(),
+            logout.stdout(),
+            logout.stderr(),
+          ].join("\n"),
+        ).not.toContain(clientSecret.trim());
+      } finally {
+        await mcp.close();
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given confidential client input is attached to an echoing terminal,
     When the user requests MCP login with a client secret,
