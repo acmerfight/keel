@@ -11,6 +11,10 @@ import {
   mcpProjectApprovalGrant,
   saveMcpProjectApprovalGrant,
 } from "../../../src/cli/mcp-project-approvals.ts";
+import {
+  MCP_CIMD_CLIENT_ID,
+  MCP_CIMD_REDIRECT_URIS,
+} from "../../../src/mcp/cimd.ts";
 import type { McpSecretBackend } from "../../../src/mcp/oauth.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import { startOAuthMcpServer } from "../../fixtures/mcp-oauth.ts";
@@ -1382,12 +1386,14 @@ describe("CLI Main - MCP OAuth", () => {
     }
   });
 
-  test(`Given an authorization server does not advertise dynamic registration,
+  test(`Given an authorization server supports CIMD and the user supplies a pre-registered client,
     When the user logs in with a pre-registered public client,
-    Then Keel uses that issuer-bound client before considering DCR`, async () => {
+    Then Keel uses that issuer-bound client before considering CIMD or DCR`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-preregistered-home-"));
-    const mcp = await startOAuthMcpServer({ registration: "none" });
+    const mcp = await startOAuthMcpServer({
+      registration: "cimd-and-dcr",
+    });
     const secrets = createSecretBackend();
     const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
       env: { KEEL_HOME: home },
@@ -1415,6 +1421,131 @@ describe("CLI Main - MCP OAuth", () => {
         "pre-registered-client",
       );
       expect(mcp.tokenRequests()[0]?.clientId).toBe("pre-registered-client");
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an authorization server supports Keel's release-hosted client identity,
+    When the user logs in without a pre-registered client,
+    Then Keel authorizes through CIMD without dynamic registration`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-cimd-home-"));
+    const mcp = await startOAuthMcpServer({
+      registration: "cimd-and-dcr",
+    });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode, login.stderr()).toBe(0);
+      expect(login.stdout()).toBe('Logged in to MCP server "protected".\n');
+      expect(mcp.registrationRequests()).toBe(0);
+      expect(mcp.authorizationRequests()).toHaveLength(1);
+      expect(mcp.authorizationRequests()[0]?.clientId).toBe(MCP_CIMD_CLIENT_ID);
+      expect(MCP_CIMD_REDIRECT_URIS).toContain(
+        mcp.authorizationRequests()[0]?.redirectUri,
+      );
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an authorization server advertises CIMD without a registration endpoint,
+    When the user logs in without a reusable or pre-registered client,
+    Then Keel authorizes through the release identity without requiring DCR`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-cimd-only-home-"));
+    const mcp = await startOAuthMcpServer({ registration: "cimd" });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const login = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode, login.stderr()).toBe(0);
+      expect(mcp.registrationRequests()).toBe(0);
+      expect(mcp.authorizationRequests()[0]?.clientId).toBe(MCP_CIMD_CLIENT_ID);
+    } finally {
+      await mcp.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an issuer-bound client was stored before CIMD discovery,
+    When the user authorizes again without explicit client credentials,
+    Then Keel reuses the issuer-bound client before considering CIMD or DCR`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-reusable-cimd-home-"));
+    const mcp = await startOAuthMcpServer({
+      registration: "cimd-and-dcr",
+    });
+    const secrets = createSecretBackend();
+    const add = createRuntime(["mcp", "add", mcp.url, "--name", "protected"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(add.runtime)).toBe(0);
+      const firstLogin = createRuntime(
+        ["mcp", "login", "protected", "--client-id", "issuer-bound-client"],
+        {
+          env: { KEEL_HOME: home },
+          mcpSecretBackend: secrets.backend,
+          openExternalUrl: mcp.openAuthorizationUrl,
+        },
+      );
+      expect(await runCliMain(firstLogin.runtime), firstLogin.stderr()).toBe(0);
+      secrets.mutateOnlyEntry((record) => {
+        record.activeAuthorization = null;
+        record.discovery = null;
+        const credentials = record.credentials[0];
+        expect(credentials).toBeDefined();
+        if (credentials !== undefined) credentials.tokens = null;
+      });
+      const secondLogin = createRuntime(["mcp", "login", "protected"], {
+        env: { KEEL_HOME: home },
+        mcpSecretBackend: secrets.backend,
+        openExternalUrl: mcp.openAuthorizationUrl,
+      });
+
+      // When
+      const exitCode = await runCliMain(secondLogin.runtime);
+
+      // Then
+      expect(exitCode, secondLogin.stderr()).toBe(0);
+      expect(mcp.registrationRequests()).toBe(0);
+      expect(mcp.authorizationRequests()).toHaveLength(2);
+      expect(mcp.authorizationRequests()[1]?.clientId).toBe(
+        "issuer-bound-client",
+      );
+      expect(mcp.tokenRequests()[1]?.clientId).toBe("issuer-bound-client");
     } finally {
       await mcp.close();
       await rm(home, { recursive: true, force: true });

@@ -1,0 +1,27 @@
+{
+  "client_id": "https://acmerfight.github.io/keel/oauth/client-metadata.json",
+  "client_name": "Keel",
+  "client_uri": "https://github.com/acmerfight/keel",
+  "redirect_uris": [
+    "http://127.0.0.1:55970/oauth/callback",
+    "http://127.0.0.1:55971/oauth/callback",
+    "http://127.0.0.1:55972/oauth/callback",
+    "http://127.0.0.1:55973/oauth/callback",
+    "http://127.0.0.1:55974/oauth/callback",
+    "http://127.0.0.1:55975/oauth/callback",
+    "http://127.0.0.1:55976/oauth/callback",
+    "http://127.0.0.1:55977/oauth/callback",
+    "http://127.0.0.1:55978/oauth/callback",
+    "http://127.0.0.1:55979/oauth/callback",
+    "http://127.0.0.1:55980/oauth/callback",
+    "http://127.0.0.1:55981/oauth/callback",
+    "http://127.0.0.1:55982/oauth/callback",
+    "http://127.0.0.1:55983/oauth/callback",
+    "http://127.0.0.1:55984/oauth/callback",
+    "http://127.0.0.1:55985/oauth/callback"
+  ],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "native"
+}
