@@ -13,3 +13,6 @@
 [submodule "kimi-code"]
 	path = kimi-code
 	url = https://github.com/MoonshotAI/kimi-code.git
+[submodule "oh-my-pi"]
+	path = oh-my-pi
+	url = https://github.com/can1357/oh-my-pi.git

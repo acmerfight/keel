@@ -30,6 +30,7 @@ Read-only reference agents for architectural study.
 - `claude-code/` — Anthropic Claude Code CLI (leaked source, Mar 2026)
 - `codex/` — OpenAI Codex CLI (local coding agent)
 - `kimi-code/` — Moonshot AI Kimi Code CLI (terminal coding agent)
+- `oh-my-pi/` — can1357 Oh My Pi terminal coding agent
 - `opencode/` — opencode.ai (Effect TS coding agent)
 - `pi/` — Pi Agent Harness (pi.dev, self-extensible coding agent)
 
