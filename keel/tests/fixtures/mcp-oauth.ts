@@ -27,6 +27,7 @@ export interface OAuthAuthorizationRequest {
   readonly codeChallengeMethod: string;
   readonly redirectUri: string;
   readonly resource: string;
+  readonly scope: string;
   readonly state: string;
 }
 
@@ -55,6 +56,7 @@ export interface TestOAuthMcpServer {
   readonly url: string;
   readonly accessToken: string;
   readonly refreshedAccessToken: string;
+  readonly stepUpAccessToken: string;
   readonly authorizationRequests: () => readonly OAuthAuthorizationRequest[];
   readonly registrationRequests: () => number;
   readonly tokenRequests: () => readonly OAuthTokenRequest[];
@@ -65,6 +67,7 @@ export interface TestOAuthMcpServer {
   readonly authenticatedMcpRequest: Promise<void>;
   readonly releaseAuthenticatedMcpResponse: () => void;
   readonly expireAccessToken: () => void;
+  readonly requireStepUp: () => void;
   readonly openAuthorizationUrl: (url: URL) => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -92,7 +95,11 @@ export async function startOAuthMcpServer(
     readonly authChallenge?: "connect" | "tools-list";
     readonly authentication?: "required" | "optional";
     readonly tokenResponse?: "valid" | "malformed";
-    readonly authenticatedMcpResponse?: "valid" | "server-error" | "pending";
+    readonly authenticatedMcpResponse?:
+      | "valid"
+      | "forbidden"
+      | "server-error"
+      | "pending";
     readonly refreshResponse?:
       | "rotate"
       | "omit-refresh-token-and-scope"
@@ -101,10 +108,17 @@ export async function startOAuthMcpServer(
     readonly revocationAuthMethods?: readonly string[] | "omitted";
     readonly revocationEndpoint?: "same-origin" | "unsafe-cross-origin";
     readonly refreshDelayMs?: number;
+    readonly stepUp?: {
+      readonly initialScope: string;
+      readonly requiredScope: string;
+      readonly challengeScope?: "required" | "omitted";
+      readonly outcome?: "success" | "repeat-forbidden";
+    };
   } = {},
 ): Promise<TestOAuthMcpServer> {
   const accessToken = "keel-mcp-oauth-test-access-token";
   const refreshedAccessToken = "keel-mcp-oauth-test-refreshed-access-token";
+  const stepUpAccessToken = "keel-mcp-oauth-test-step-up-access-token";
   const refreshToken = "keel-mcp-oauth-test-refresh-token";
   const rotatedRefreshToken = "keel-mcp-oauth-test-rotated-refresh-token";
   const authorizationCode = "keel-mcp-oauth-test-code";
@@ -118,6 +132,8 @@ export async function startOAuthMcpServer(
   let origin = "";
   let resourceUrl = "";
   let acceptedAccessToken = accessToken;
+  let acceptedAccessScope = options.stepUp?.initialScope ?? "mcp:tools";
+  let stepUpRequired = false;
   const authenticatedMcpRequest = Promise.withResolvers<void>();
   const authenticatedMcpResponse = Promise.withResolvers<void>();
 
@@ -149,7 +165,7 @@ export async function startOAuthMcpServer(
         return jsonResponse({
           resource: resourceUrl,
           authorization_servers: [origin],
-          scopes_supported: ["mcp:tools"],
+          scopes_supported: [options.stepUp?.initialScope ?? "mcp:tools"],
         });
       }
       if (
@@ -190,7 +206,7 @@ export async function startOAuthMcpServer(
                     }),
               }),
           authorization_response_iss_parameter_supported: true,
-          scopes_supported: ["mcp:tools"],
+          scopes_supported: [options.stepUp?.initialScope ?? "mcp:tools"],
         });
       }
       if (url.pathname === "/register" && request.method === "POST") {
@@ -219,6 +235,7 @@ export async function startOAuthMcpServer(
             url.searchParams.get("code_challenge_method") ?? "",
           redirectUri: url.searchParams.get("redirect_uri") ?? "",
           resource: url.searchParams.get("resource") ?? "",
+          scope: url.searchParams.get("scope") ?? "",
           state: url.searchParams.get("state") ?? "",
         };
         authorizationRequests.push(authorization);
@@ -272,6 +289,7 @@ export async function startOAuthMcpServer(
             return jsonResponse({ error: "invalid_grant" }, 400);
           }
           acceptedAccessToken = refreshedAccessToken;
+          acceptedAccessScope = "mcp:tools";
           return jsonResponse({
             access_token: refreshedAccessToken,
             token_type: "Bearer",
@@ -297,10 +315,18 @@ export async function startOAuthMcpServer(
             headers: { "content-type": "application/json" },
           });
         }
+        const isStepUpAuthorization =
+          stepUpRequired && options.stepUp !== undefined;
+        if (isStepUpAuthorization) {
+          acceptedAccessToken = stepUpAccessToken;
+        }
+        acceptedAccessScope =
+          authorization.scope || options.stepUp?.initialScope || "mcp:tools";
         return jsonResponse({
-          access_token: accessToken,
+          access_token: isStepUpAuthorization ? stepUpAccessToken : accessToken,
           token_type: "Bearer",
-          scope: "mcp:tools",
+          scope:
+            authorization.scope || options.stepUp?.initialScope || "mcp:tools",
           ...(options.refreshResponse === undefined
             ? {}
             : { refresh_token: refreshToken }),
@@ -334,9 +360,34 @@ export async function startOAuthMcpServer(
         return new Response(null, { status: 200 });
       }
       if (url.pathname === "/mcp") {
-        const authenticated =
-          request.headers.get("authorization") ===
-          `Bearer ${acceptedAccessToken}`;
+        const authorization = request.headers.get("authorization");
+        const acceptedScopeTokens = new Set(
+          acceptedAccessScope.split(/\s+/u).filter(Boolean),
+        );
+        const lacksRequiredStepUpScope =
+          options.stepUp?.requiredScope
+            .split(/\s+/u)
+            .filter(Boolean)
+            .some((scope) => !acceptedScopeTokens.has(scope)) ?? false;
+        const stepUpChallenge =
+          stepUpRequired &&
+          options.stepUp !== undefined &&
+          (authorization === `Bearer ${accessToken}` ||
+            (authorization === `Bearer ${acceptedAccessToken}` &&
+              lacksRequiredStepUpScope) ||
+            options.stepUp.outcome === "repeat-forbidden");
+        if (stepUpChallenge) {
+          return new Response(null, {
+            status: 403,
+            headers: {
+              "www-authenticate":
+                options.stepUp.challengeScope === "omitted"
+                  ? 'Bearer error="insufficient_scope"'
+                  : `Bearer error="insufficient_scope", scope="${options.stepUp.requiredScope}"`,
+            },
+          });
+        }
+        const authenticated = authorization === `Bearer ${acceptedAccessToken}`;
         if (!authenticated && options.authentication !== "optional") {
           const requestMessage = jsonRpcRequestSchema.safeParse(
             await request.clone().json(),
@@ -359,6 +410,9 @@ export async function startOAuthMcpServer(
           options.authenticatedMcpResponse === "server-error"
         ) {
           return new Response(null, { status: 500 });
+        }
+        if (authenticated && options.authenticatedMcpResponse === "forbidden") {
+          return new Response(null, { status: 403 });
         }
         if (authenticated) {
           authenticatedMcpRequest.resolve();
@@ -390,6 +444,7 @@ export async function startOAuthMcpServer(
     url: resourceUrl,
     accessToken,
     refreshedAccessToken,
+    stepUpAccessToken,
     authorizationRequests: () => [...authorizationRequests],
     registrationRequests: () => registrationRequests,
     tokenRequests: () => [...tokenRequests],
@@ -405,6 +460,9 @@ export async function startOAuthMcpServer(
     },
     expireAccessToken: () => {
       acceptedAccessToken = "expired";
+    },
+    requireStepUp: () => {
+      stepUpRequired = true;
     },
     openAuthorizationUrl: async (url) => {
       const response = await fetch(url, { redirect: "follow" });

@@ -1,9 +1,11 @@
 import {
   AuthorizationServerMismatchError,
+  InsufficientScopeError,
   IssuerMismatchError,
   OAuthClientFlowError,
   OAuthError,
   SdkError,
+  SdkErrorCode,
   StreamableHTTPClientTransport,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
@@ -42,7 +44,10 @@ function expectedNestedLoginError(error: unknown): Error | null {
       current instanceof McpOAuthLoginError ||
       current instanceof McpNetworkPolicyError ||
       current instanceof IssuerMismatchError ||
-      current instanceof AuthorizationServerMismatchError
+      current instanceof AuthorizationServerMismatchError ||
+      current instanceof InsufficientScopeError ||
+      (SdkError.isInstance(current) &&
+        current.code === SdkErrorCode.ClientHttpForbidden)
     ) {
       return current;
     }
@@ -58,6 +63,19 @@ function expectedNestedLoginError(error: unknown): Error | null {
 
 function normalizedLoginError(error: unknown): Error {
   const expected = expectedNestedLoginError(error);
+  if (expected instanceof InsufficientScopeError) {
+    return new McpOAuthLoginError(
+      "Error: MCP authorization scope remains insufficient. Verify the server's required OAuth scopes and try again.",
+    );
+  }
+  if (
+    SdkError.isInstance(expected) &&
+    expected.code === SdkErrorCode.ClientHttpForbidden
+  ) {
+    return new McpOAuthLoginError(
+      "Error: MCP authorization was rejected with HTTP 403. Verify the required OAuth scopes and server access policy before trying again.",
+    );
+  }
   if (
     expected instanceof IssuerMismatchError ||
     expected instanceof AuthorizationServerMismatchError
