@@ -10,6 +10,7 @@ import {
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import { z } from "zod";
+import type { McpCimdRedirectUri } from "./cimd.ts";
 import { connectMcpServer, createMcpSdkClient } from "./discovery.ts";
 import {
   createMcpPolicyFetch,
@@ -107,7 +108,7 @@ export async function authorizeMcpServer(options: {
   readonly server: McpOAuthServerEndpoint;
   readonly backend: McpSecretBackend;
   readonly refreshLockRoot: string;
-  readonly redirectUrl: string;
+  readonly redirectUrl: McpCimdRedirectUri;
   readonly state: string;
   readonly startedAt: number;
   readonly preRegisteredClient: McpPreRegisteredClient | null;

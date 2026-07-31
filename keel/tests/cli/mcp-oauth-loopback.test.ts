@@ -1,6 +1,10 @@
 import { createServer, type Server } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import { startMcpOAuthLoopbackCallback } from "../../src/cli/mcp-oauth-loopback.ts";
+import {
+  MCP_CIMD_CALLBACKS,
+  MCP_CIMD_REDIRECT_URIS,
+} from "../../src/mcp/cimd.ts";
 
 async function bindPort(port: number): Promise<Server> {
   const server = createServer((_request, response) => {
@@ -26,6 +30,29 @@ async function closeServer(server: Server): Promise<void> {
 }
 
 describe("MCP OAuth loopback callback", () => {
+  test(`Given the first release-declared callback port is occupied,
+    When Keel starts an OAuth callback listener,
+    Then it selects another redirect URI declared by the release identity`, async () => {
+    // Given
+    const occupied = await bindPort(MCP_CIMD_CALLBACKS[0].port);
+    let callback: Awaited<
+      ReturnType<typeof startMcpOAuthLoopbackCallback>
+    > | null = null;
+    try {
+      // When
+      callback = await startMcpOAuthLoopbackCallback("s".repeat(43));
+
+      // Then
+      expect(callback.redirectUrl).not.toContain(
+        `:${MCP_CIMD_CALLBACKS[0].port}/`,
+      );
+      expect(MCP_CIMD_REDIRECT_URIS).toContain(callback.redirectUrl);
+    } finally {
+      await callback?.close();
+      await closeServer(occupied);
+    }
+  });
+
   test(`Given a callback listener is bound to its exact loopback path,
     When one valid terminal callback arrives,
     Then all callback parameters are preserved and the listener releases its port`, async () => {

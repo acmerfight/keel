@@ -19,8 +19,10 @@ import {
   refreshAuthorization,
   selectClientAuthMethod,
   UnauthorizedError,
+  validateClientMetadataUrl,
 } from "@modelcontextprotocol/client";
 import { z } from "zod";
+import { MCP_CIMD_CLIENT_ID, type McpCimdRedirectUri } from "./cimd.ts";
 import type { McpServerEndpoint } from "./discovery.ts";
 import { createMcpPolicyFetch, validateMcpServerUrl } from "./network.ts";
 import { withMcpOAuthRefreshLock } from "./oauth-refresh-lock.ts";
@@ -537,7 +539,8 @@ function withoutRefreshToken(tokens: StoredOAuthTokens): StoredOAuthTokens {
 }
 
 class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
-  readonly redirectUrl: string;
+  readonly clientMetadataUrl = MCP_CIMD_CLIENT_ID;
+  readonly redirectUrl: McpCimdRedirectUri;
   readonly clientMetadata: OAuthClientMetadata;
   private readonly store: OAuthCredentialStore;
   private readonly openAuthorizationUrl: (url: URL) => Promise<void>;
@@ -552,7 +555,7 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
     readonly isCurrentAndEnabled: (
       server: McpOAuthServerEndpoint,
     ) => boolean | Promise<boolean>;
-    readonly redirectUrl: string;
+    readonly redirectUrl: McpCimdRedirectUri;
     readonly openAuthorizationUrl: (url: URL) => Promise<void>;
     readonly preRegisteredClient: McpPreRegisteredClient | null;
     readonly now: () => number;
@@ -574,9 +577,7 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
     this.preRegisteredClient = options.preRegisteredClient;
     this.resource = new URL(options.server.url).href;
     this.now = options.now;
-    // CIMD requires a stable, publicly hosted HTTPS metadata document. Keel is
-    // pre-release and has no such release artifact yet, so clientMetadataUrl is
-    // intentionally omitted and selection continues with pre-registration/DCR.
+    validateClientMetadataUrl(this.clientMetadataUrl);
     this.clientMetadata = {
       redirect_uris: [options.redirectUrl],
       client_name: "Keel",
@@ -657,8 +658,10 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
         };
       }
       if (
+        record.discovery?.authorizationServerMetadata
+          ?.client_id_metadata_document_supported !== true &&
         record.discovery?.authorizationServerMetadata?.registration_endpoint ===
-        undefined
+          undefined
       ) {
         credentialError(
           "server has no reusable client and does not advertise dynamic registration; configure a pre-registered client",
@@ -913,7 +916,7 @@ export function createMcpOAuthLoginProvider(options: {
   readonly isCurrentAndEnabled: (
     server: McpOAuthServerEndpoint,
   ) => boolean | Promise<boolean>;
-  readonly redirectUrl: string;
+  readonly redirectUrl: McpCimdRedirectUri;
   readonly openAuthorizationUrl: (url: URL) => Promise<void>;
   readonly preRegisteredClient: McpPreRegisteredClient | null;
   readonly now: () => number;

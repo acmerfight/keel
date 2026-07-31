@@ -85,7 +85,7 @@ function base64UrlSha256(value: string): string {
 
 export async function startOAuthMcpServer(
   options: {
-    readonly registration?: "dcr" | "none";
+    readonly registration?: "cimd" | "cimd-and-dcr" | "dcr" | "none";
     readonly callbackState?: "valid" | "missing" | "wrong";
     readonly callbackIssuer?: "valid" | "missing" | "mismatch";
     readonly tokenEndpointAuthMethod?:
@@ -176,9 +176,15 @@ export async function startOAuthMcpServer(
           issuer: origin,
           authorization_endpoint: `${origin}/authorize`,
           token_endpoint: `${origin}/token`,
-          ...(options.registration === "none"
-            ? {}
-            : { registration_endpoint: `${origin}/register` }),
+          ...(options.registration === "cimd" ||
+          options.registration === "cimd-and-dcr"
+            ? { client_id_metadata_document_supported: true }
+            : {}),
+          ...(options.registration === undefined ||
+          options.registration === "dcr" ||
+          options.registration === "cimd-and-dcr"
+            ? { registration_endpoint: `${origin}/register` }
+            : {}),
           response_types_supported: ["code"],
           grant_types_supported:
             options.refreshResponse === undefined
@@ -211,7 +217,10 @@ export async function startOAuthMcpServer(
       }
       if (url.pathname === "/register" && request.method === "POST") {
         registrationRequests += 1;
-        if (options.registration === "none") {
+        if (
+          options.registration === "cimd" ||
+          options.registration === "none"
+        ) {
           return new Response(null, { status: 404 });
         }
         const registration = registrationRequestSchema.parse(

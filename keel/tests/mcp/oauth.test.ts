@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { MCP_CIMD_CALLBACKS } from "../../src/mcp/cimd.ts";
 import {
   createMcpOAuthLoginProvider,
   createMcpBearerAuthProvider as createProductionMcpBearerAuthProvider,
@@ -81,7 +82,7 @@ function oauthProvider(options: {
     backend: options.backend,
     refreshLockRoot: TEST_REFRESH_LOCK_ROOT,
     isCurrentAndEnabled: async () => true,
-    redirectUrl: "http://127.0.0.1:43123/oauth/callback",
+    redirectUrl: MCP_CIMD_CALLBACKS[0].redirectUri,
     openAuthorizationUrl: async () => {},
     preRegisteredClient:
       options.client === undefined
@@ -483,7 +484,7 @@ describe("MCP OAuth flow state", () => {
       backend: secrets.backend,
       refreshLockRoot,
       isCurrentAndEnabled: async () => true,
-      redirectUrl: "http://127.0.0.1:43123/oauth/callback",
+      redirectUrl: MCP_CIMD_CALLBACKS[0].redirectUri,
       openAuthorizationUrl: async () => {},
       preRegisteredClient: {
         clientId: "replacement-client",

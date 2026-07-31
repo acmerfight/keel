@@ -1,10 +1,16 @@
 import { createServer, type Server } from "node:http";
+import { z } from "zod";
+import {
+  MCP_CIMD_CALLBACK_PATH,
+  MCP_CIMD_CALLBACKS,
+  type McpCimdRedirectUri,
+} from "../mcp/cimd.ts";
 
-const MCP_OAUTH_CALLBACK_PATH = "/oauth/callback";
 const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 2 * 60 * 1000;
+const listenErrorSchema = z.object({ code: z.string() }).passthrough();
 
 export interface McpOAuthLoopbackCallback {
-  readonly redirectUrl: string;
+  readonly redirectUrl: McpCimdRedirectUri;
   readonly waitForCallback: () => Promise<URLSearchParams>;
   readonly close: () => Promise<void>;
 }
@@ -66,7 +72,7 @@ export async function startMcpOAuthLoopbackCallback(
       return;
     }
     /* v8 ignore stop */
-    if (url.pathname !== MCP_OAUTH_CALLBACK_PATH) {
+    if (url.pathname !== MCP_CIMD_CALLBACK_PATH) {
       response.writeHead(404, {
         connection: "close",
         "content-type": "text/plain; charset=utf-8",
@@ -114,17 +120,35 @@ export async function startMcpOAuthLoopbackCallback(
     void close().catch(() => {});
   });
 
-  await new Promise<void>((resolve, reject) => {
-    /* v8 ignore next 3 -- ephemeral literal-loopback bind failures require OS/socket fault injection. */
-    const onError = (error: Error) => {
-      reject(error);
-    };
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", onError);
-      resolve();
-    });
-  });
+  let selectedCallback: (typeof MCP_CIMD_CALLBACKS)[number] | null = null;
+  for (const callbackIdentity of MCP_CIMD_CALLBACKS) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          server.off("listening", onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          server.off("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(callbackIdentity.port, "127.0.0.1");
+      });
+      selectedCallback = callbackIdentity;
+      break;
+    } catch (error) {
+      const parsed = listenErrorSchema.safeParse(error);
+      /* v8 ignore next -- non-EADDRINUSE listen failures require OS/socket fault injection and must propagate unchanged. */
+      if (!parsed.success || parsed.data.code !== "EADDRINUSE") throw error;
+    }
+  }
+  if (selectedCallback === null) {
+    throw callbackError(
+      `could not bind any release callback port (${MCP_CIMD_CALLBACKS.map(({ port }) => port).join(", ")})`,
+    );
+  }
   /* v8 ignore start -- post-listen server faults require OS/socket fault injection; cleanup remains fail closed. */
   server.on("error", () => {
     if (terminal) return;
@@ -139,7 +163,7 @@ export async function startMcpOAuthLoopbackCallback(
     await closeServer(server);
     throw callbackError("could not bind the loopback callback");
   }
-  const redirectUrl = `http://127.0.0.1:${address.port}${MCP_OAUTH_CALLBACK_PATH}`;
+  const redirectUrl = selectedCallback.redirectUri;
   timer = setTimeout(() => {
     /* v8 ignore next -- terminal command cleanup clears this timer; guard against future lifecycle changes. */
     if (terminal) return;
