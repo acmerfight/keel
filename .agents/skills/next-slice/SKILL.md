@@ -59,6 +59,7 @@ Use current state, not memory.
    - `opencode/`
    - `kimi-code/`
    - `pi/`
+   - `oh-my-pi/`
 
 Do not modify submodule contents. Treat reference agents as read-only evidence.
 

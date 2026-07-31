@@ -1,6 +1,6 @@
 ---
 name: agent-research
-description: 'Explicit-only research workflow for peer-agent implementations or external industry practice on one unresolved Keel architecture or product-design question before implementation. Use when the user invokes `/agent-research <question>` to compare codex/claude/opencode/pi/kimi, research industry practice, or decide an unclear design. Do not use implicitly during `/slice` implementation, PR review, QA, CI fixing, merge cleanup, or ordinary best-practice checks.'
+description: 'Explicit-only research workflow for peer-agent implementations or external industry practice on one unresolved Keel architecture or product-design question before implementation. Use when the user invokes `/agent-research <question>` to compare codex/claude/opencode/pi/kimi/oh-my-pi, research industry practice, or decide an unclear design. Do not use implicitly during `/slice` implementation, PR review, QA, CI fixing, merge cleanup, or ordinary best-practice checks.'
 argument-hint: "<question>"
 user-invocable: true
 ---
@@ -37,7 +37,7 @@ If the request omits the research target, infer it only when the current convers
 Use the repo as primary evidence.
 
 - Keel implementation: `keel/`
-- Reference agents: `codex/`, `claude-code/`, `opencode/`, `kimi-code/`, `pi/`
+- Reference agents: `codex/`, `claude-code/`, `opencode/`, `kimi-code/`, `pi/`, `oh-my-pi/`
 - Project guidance: root `AGENTS.md`, plus `keel/CLAUDE.md`, `keel/DEVELOPMENT.md`, `keel/TESTING.md`, `keel/SLICING.md`, `keel/ROADMAP.md`, and `keel/EVALS.md` when they affect the recommendation
 
 Do not modify submodule contents. Treat reference agents as read-only evidence.
