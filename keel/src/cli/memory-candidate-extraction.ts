@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import {
   CostBudgetAdmissionError,
@@ -420,7 +419,10 @@ function candidateAdmissionCheck(
   }
 }
 
-async function withAccountingLockRetry<T>(action: () => T): Promise<T> {
+async function withAccountingLockRetry<T>(
+  runtime: Pick<CliRuntime, "sleep">,
+  action: () => T,
+): Promise<T> {
   const attempt = async (remainingAttempts: number): Promise<T> => {
     try {
       return action();
@@ -434,7 +436,7 @@ async function withAccountingLockRetry<T>(action: () => T): Promise<T> {
       if (remainingAttempts === 1) {
         throw error;
       }
-      await delay(ACCOUNTING_LOCK_RETRY_DELAY_MS);
+      await runtime.sleep(ACCOUNTING_LOCK_RETRY_DELAY_MS);
       return attempt(remainingAttempts - 1);
     }
   };
@@ -550,7 +552,7 @@ export async function extractProjectMemoryCandidates(
       ...(modelMaxOutputTokens === undefined ? {} : { modelMaxOutputTokens }),
     });
 
-    releaseMemoryWrite = await withAccountingLockRetry(() =>
+    releaseMemoryWrite = await withAccountingLockRetry(runtime, () =>
       acquireProjectMemoryWriteLock(directory),
     );
     phase = "provider";
@@ -665,7 +667,7 @@ export async function extractProjectMemoryCandidates(
         operation,
       );
     } else {
-      await withAccountingLockRetry(() =>
+      await withAccountingLockRetry(runtime, () =>
         recordCandidateExtractionOutcome(runtime, workspace, operation),
       );
     }

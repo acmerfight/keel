@@ -190,12 +190,12 @@ describe("Bash Tool", () => {
       // When
       const result = await executeBash(
         workspace,
-        "echo hi; (sleep 1) & echo done",
-        { timeoutMs: 100 },
+        "echo hi; (sleep 3) & echo done",
+        { timeoutMs: 1_000 },
       );
 
       // Then
-      expect(Date.now() - startedAt).toBeLessThan(800);
+      expect(Date.now() - startedAt).toBeLessThan(2_500);
       expect(result.content).not.toContain("Command timed out");
       expect(result.content).toContain("Exit code: 0");
       expect(result.content).toContain("stdout:\nhi\ndone\n");

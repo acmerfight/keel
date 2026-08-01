@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ import {
 } from "../../../src/mcp/discovery.ts";
 import { mcpProviderSchemaTarget } from "../../../src/mcp/provider-schema.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
+import { removeTemporaryDirectory } from "../../../src/testing/temporary-directory.ts";
 
 interface TestMcpServer {
   readonly url: string;
@@ -504,7 +505,7 @@ describe("CLI Main - MCP", () => {
         expect(command.stderr()).toBe("");
       }
     } finally {
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -585,7 +586,7 @@ describe("CLI Main - MCP", () => {
       }
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -684,7 +685,7 @@ describe("CLI Main - MCP", () => {
       expect(removedList.stderr()).toBe("");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -723,7 +724,7 @@ describe("CLI Main - MCP", () => {
       expect(disable.stderr()).toBe("");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -759,7 +760,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).toContain("status: ready\n");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -787,7 +788,7 @@ describe("CLI Main - MCP", () => {
       );
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -838,7 +839,7 @@ describe("CLI Main - MCP", () => {
       );
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -867,7 +868,7 @@ describe("CLI Main - MCP", () => {
       expect((await readdir(home)).sort()).toEqual(["mcp.json"]);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -895,7 +896,7 @@ describe("CLI Main - MCP", () => {
       expect(server.requestCount()).toBe(1);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -923,7 +924,7 @@ describe("CLI Main - MCP", () => {
       expect(server.requestCount()).toBe(1);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -952,7 +953,7 @@ describe("CLI Main - MCP", () => {
       expect(server.requestCount()).toBe(1);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -998,7 +999,7 @@ describe("CLI Main - MCP", () => {
       expect(server.requestCount()).toBe(3);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1033,7 +1034,7 @@ describe("CLI Main - MCP", () => {
       expect(server.requestCount()).toBe(2);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1060,7 +1061,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).not.toContain("status: failed");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1119,7 +1120,7 @@ describe("CLI Main - MCP", () => {
       expect(doctor.stdout()).not.toContain("provider-quarantined tools:");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1185,7 +1186,7 @@ describe("CLI Main - MCP", () => {
       );
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1300,7 +1301,7 @@ describe("CLI Main - MCP", () => {
       ).toHaveLength(10);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1353,7 +1354,7 @@ describe("CLI Main - MCP", () => {
       );
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1521,7 +1522,7 @@ describe("CLI Main - MCP", () => {
       );
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1551,7 +1552,7 @@ describe("CLI Main - MCP", () => {
       );
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1575,7 +1576,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).toContain("tools/list exceeded 64 pages");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1605,7 +1606,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).not.toContain("token=hidden");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1635,7 +1636,7 @@ describe("CLI Main - MCP", () => {
       expect(add.stdout()).toContain("catalog contains more than 1000 tools");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1666,7 +1667,7 @@ describe("CLI Main - MCP", () => {
       );
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1763,7 +1764,7 @@ describe("CLI Main - MCP", () => {
         expect(add.stderr()).not.toContain(secret);
         expect(await readdir(home)).toEqual([]);
       } finally {
-        await rm(home, { recursive: true, force: true });
+        await removeTemporaryDirectory(home);
       }
     },
   );
@@ -1800,7 +1801,7 @@ describe("CLI Main - MCP", () => {
       expect(list.stdout()).not.toContain("private-value");
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1827,7 +1828,7 @@ describe("CLI Main - MCP", () => {
       expect(list.stdout()).toBe("");
       expect(list.stderr()).toContain("cannot read MCP config");
     } finally {
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1869,7 +1870,7 @@ describe("CLI Main - MCP", () => {
       expect(list.stdout()).toContain(`redirecting: ${server.url}\n`);
     } finally {
       await server.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1928,7 +1929,7 @@ describe("CLI Main - MCP", () => {
     } finally {
       await firstServer.close();
       await secondServer.close();
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(home);
     }
   });
 
@@ -1998,9 +1999,9 @@ describe("CLI Main - MCP", () => {
         "Error: MCP project approval 2 does not exist.\n",
       );
     } finally {
-      await rm(firstProject, { recursive: true, force: true });
-      await rm(secondProject, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
+      await removeTemporaryDirectory(firstProject);
+      await removeTemporaryDirectory(secondProject);
+      await removeTemporaryDirectory(home);
     }
   });
 });

@@ -1,14 +1,12 @@
 import {
   access,
   mkdir,
-  mkdtemp,
   readdir,
   readFile,
   realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KeelErrorCode } from "../../src/core/error.ts";
@@ -16,6 +14,7 @@ import {
   createGitWorkspace,
   runGit as git,
 } from "../../src/testing/cli-harness.ts";
+import { createTemporaryDirectory } from "../../src/testing/temporary-directory.ts";
 import {
   createProjectInstructionVisibilityState,
   type ProjectInstructionVisibilityState,
@@ -100,7 +99,9 @@ describe("Apply Patch Tool Race Handling", () => {
     // Given
     const workspace = await createGitWorkspace("keel-patch-parent-race-");
     const checkpoint = await checkpointPath(workspace);
-    const outside = await mkdtemp(join(tmpdir(), "keel-patch-parent-outside-"));
+    const outside = await createTemporaryDirectory(
+      "keel-patch-parent-outside-",
+    );
     const targetPath = join(workspace, "race", "nested", "new.txt");
     const outsideNestedPath = join(outside, "nested");
     const patch = [
@@ -153,10 +154,10 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch publishes the new file,
     Then it rejects the escaped target without creating or checkpointing outside content`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-race-"));
+    const workspace = await createTemporaryDirectory("keel-patch-race-");
     const parentPath = join(workspace, "race");
     const targetPath = join(parentPath, "new.txt");
-    const outside = await mkdtemp(join(tmpdir(), "keel-patch-toc-outside-"));
+    const outside = await createTemporaryDirectory("keel-patch-toc-outside-");
     const patch = [
       "*** Begin Patch",
       "*** Add File: race/new.txt",
@@ -197,7 +198,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch aborts the add,
     Then it removes the fresh empty parent directories`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-add-parent-"));
+    const workspace = await createTemporaryDirectory("keel-patch-add-parent-");
     const patch = [
       "*** Begin Patch",
       "*** Add File: fresh/nested/new.txt",
@@ -231,8 +232,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch aborts before writing the file,
     Then it removes the fresh empty parent directories`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-add-parent-validate-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-add-parent-validate-",
     );
     const patch = [
       "*** Begin Patch",
@@ -270,7 +271,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch publishes the new file,
     Then it reports the existing file and preserves the concurrent content`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-add-exists-"));
+    const workspace = await createTemporaryDirectory("keel-patch-add-exists-");
     const targetPath = join(workspace, "new.txt");
     const patch = [
       "*** Begin Patch",
@@ -313,7 +314,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch publishes the destination,
     Then it reports the existing file without deleting the source or concurrent destination`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-move-exists-"));
+    const workspace = await createTemporaryDirectory("keel-patch-move-exists-");
     const sourcePath = join(workspace, "old.txt");
     const destinationPath = join(workspace, "new.txt");
     await writeFile(sourcePath, "old\n", "utf8");
@@ -357,7 +358,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch publishes the copied file,
     Then it reports the copy-specific guidance and preserves the concurrent content`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-copy-exists-"));
+    const workspace = await createTemporaryDirectory("keel-patch-copy-exists-");
     const sourcePath = join(workspace, "source.txt");
     const targetPath = join(workspace, "copied.txt");
     await writeFile(sourcePath, "source\n", "utf8");
@@ -402,7 +403,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch revalidates the target before mutation,
     Then it reports the new ignore rule without creating the file`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-add-ignored-"));
+    const workspace = await createTemporaryDirectory("keel-patch-add-ignored-");
     const targetPath = join(workspace, "new.txt");
     const patch = [
       "*** Begin Patch",
@@ -447,8 +448,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch resolves the temp path before writing,
     Then it removes the moved temp identity and preserves the original file`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-update-temp-moved-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-update-temp-moved-",
     );
     const targetPath = join(workspace, "note.txt");
     const movedTempPath = join(workspace, "moved-temp.txt");
@@ -492,13 +493,13 @@ describe("Apply Patch Tool Race Handling", () => {
     When a later patch operation fails during publish,
     Then rollback removes the created workspace file without touching outside content`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-rollback-race-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-rollback-race-",
     );
     const parentPath = join(workspace, "race");
     const backupParentPath = join(workspace, "race-backup");
-    const outside = await mkdtemp(
-      join(tmpdir(), "keel-patch-rollback-outside-"),
+    const outside = await createTemporaryDirectory(
+      "keel-patch-rollback-outside-",
     );
     await mkdir(parentPath);
     await writeFile(join(outside, "new.txt"), "created\n", "utf8");
@@ -543,8 +544,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rolls back the transaction,
     Then it restores the owned target while preserving a discovered path that loses the identity`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-update-rollback-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-update-rollback-",
     );
     const targetPath = join(workspace, "updated.txt");
     const aliasPath = join(workspace, "updated-alias.txt");
@@ -606,8 +607,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When rollback rechecks the discovered target before restoration,
     Then it preserves the concurrent replacement`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-update-rollback-recheck-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-update-rollback-recheck-",
     );
     const targetPath = join(workspace, "updated.txt");
     const replacementPath = join(workspace, "replacement.txt");
@@ -666,14 +667,14 @@ describe("Apply Patch Tool Race Handling", () => {
     When a later patch operation fails,
     Then rollback tolerates the missing Keel identity without touching unrelated outside content`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-rollback-outside-missing-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-rollback-outside-missing-",
     );
     const parentPath = join(workspace, "race");
     const targetPath = join(parentPath, "new.txt");
     const lateTargetPath = join(workspace, "late.txt");
-    const outside = await mkdtemp(
-      join(tmpdir(), "keel-patch-rollback-owned-outside-"),
+    const outside = await createTemporaryDirectory(
+      "keel-patch-rollback-owned-outside-",
     );
     const outsideParentPath = join(outside, "moved-race");
     const outsideMarkerPath = join(outside, "marker.txt");
@@ -727,8 +728,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rolls back the earlier add,
     Then it removes the fresh empty parent directories`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-add-parent-rollback-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-add-parent-rollback-",
     );
     const patch = [
       "*** Begin Patch",
@@ -763,8 +764,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When a later patch operation fails after an earlier add was published,
     Then apply_patch surfaces the rollback verification failure`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-rollback-unexpected-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-rollback-unexpected-",
     );
     const patch = [
       "*** Begin Patch",
@@ -807,8 +808,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When a later patch operation fails,
     Then rollback skips the missing update target and preserves the original failure`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-update-rollback-missing-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-update-rollback-missing-",
     );
     const workspacePath = await realpath(workspace);
     const updatePath = join(workspacePath, "updated.txt");
@@ -856,8 +857,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When a later patch operation fails,
     Then rollback preserves the concurrent content instead of removing the file`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-add-rollback-changed-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-add-rollback-changed-",
     );
     const firstTargetPath = join(workspace, "first.txt");
     const lateTargetPath = join(workspace, "late.txt");
@@ -898,8 +899,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When a later patch operation fails,
     Then rollback preserves both concurrent replacements`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-update-rollback-identity-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-update-rollback-identity-",
     );
     const targetPath = join(workspace, "updated.txt");
     const movedPath = join(workspace, "moved-updated.txt");
@@ -965,8 +966,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When a later patch operation fails during publish,
     Then rollback tolerates the ENOTDIR target verification race`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-rollback-enotdir-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-rollback-enotdir-",
     );
     const parentPath = join(workspace, "race");
     const movedParentPath = join(workspace, "race-moved");
@@ -1008,13 +1009,13 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the published target before checkpointing,
     Then it rejects without returning an outside checkpoint path`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-checkpoint-race-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-checkpoint-race-",
     );
     const parentPath = join(workspace, "race");
     const backupParentPath = join(workspace, "race-backup");
-    const outside = await mkdtemp(
-      join(tmpdir(), "keel-patch-checkpoint-outside-"),
+    const outside = await createTemporaryDirectory(
+      "keel-patch-checkpoint-outside-",
     );
     await mkdir(parentPath);
     await writeFile(join(outside, "new.txt"), "outside\n", "utf8");
@@ -1059,7 +1060,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the applied identity,
     Then it rejects without deleting the concurrent replacement`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-verify-race-"));
+    const workspace = await createTemporaryDirectory("keel-patch-verify-race-");
     const parentPath = join(workspace, "race");
     const targetPath = join(parentPath, "new.txt");
     const replacementPath = join(parentPath, "replacement.txt");
@@ -1105,8 +1106,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the checkpoint identity,
     Then it rejects without deleting the concurrent replacement`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-checkpoint-id-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-checkpoint-id-",
     );
     const parentPath = join(workspace, "race");
     const targetPath = join(parentPath, "new.txt");
@@ -1154,7 +1155,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the published file identity,
     Then it removes the ignored file before reporting the ignored path`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-add-ignore-"));
+    const workspace = await createTemporaryDirectory("keel-patch-add-ignore-");
     const parentPath = join(workspace, "race");
     const backupParentPath = join(workspace, "race-backup");
     const ignoredPath = join(workspace, "private");
@@ -1203,7 +1204,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch checks read-before-edit against the access-time target,
     Then it rejects without patching the unread file`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-read-race-"));
+    const workspace = await createTemporaryDirectory("keel-patch-read-race-");
     const targetPath = join(workspace, "note.txt");
     const backupTargetPath = join(workspace, "note-original.txt");
     const alternatePath = join(workspace, "alternate.txt");
@@ -1256,7 +1257,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks the opened descriptor path,
     Then it rejects before reading ignored content for matching`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-open-ignore-"));
+    const workspace = await createTemporaryDirectory("keel-patch-open-ignore-");
     const targetPath = join(workspace, "note.txt");
     const ignoredPath = join(workspace, "private");
     const ignoredTargetPath = join(ignoredPath, "note.txt");
@@ -1306,8 +1307,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks the opened descriptor path,
     Then it rejects before reading ignored content for copying`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-copy-open-ignore-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-copy-open-ignore-",
     );
     const sourcePath = join(workspace, "note.txt");
     const copiedPath = join(workspace, "copied.txt");
@@ -1358,8 +1359,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks the opened descriptor path,
     Then it rejects before recording or removing ignored content`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-delete-open-ignore-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-delete-open-ignore-",
     );
     const targetPath = join(workspace, "note.txt");
     const ignoredPath = join(workspace, "private");
@@ -1407,8 +1408,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks read-before-edit on the opened descriptor path,
     Then it rejects without deleting the unread file`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-delete-open-unread-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-delete-open-unread-",
     );
     const targetPath = join(workspace, "note.txt");
     const alternatePath = join(workspace, "alternate.txt");
@@ -1457,7 +1458,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks read-before-edit on the opened descriptor path,
     Then it rejects without patching the unread file`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-open-unread-"));
+    const workspace = await createTemporaryDirectory("keel-patch-open-unread-");
     const targetPath = join(workspace, "note.txt");
     const alternatePath = join(workspace, "alternate.txt");
     await writeFile(targetPath, "old\n", "utf8");
@@ -1508,8 +1509,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks read-before-edit on the opened descriptor path,
     Then it rejects without copying the unread file`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-copy-open-unread-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-copy-open-unread-",
     );
     const sourcePath = join(workspace, "note.txt");
     const alternatePath = join(workspace, "alternate.txt");
@@ -1561,8 +1562,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch performs the delete access check,
     Then it rejects without deleting ignored content`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-delete-apply-ignore-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-delete-apply-ignore-",
     );
     const parentPath = join(workspace, "race");
     const backupParentPath = join(workspace, "race-backup");
@@ -1621,7 +1622,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch checks the target identity at access time,
     Then it rejects without deleting the alternate file`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-delete-swap-"));
+    const workspace = await createTemporaryDirectory("keel-patch-delete-swap-");
     const targetPath = join(workspace, "note.txt");
     const backupTargetPath = join(workspace, "note-original.txt");
     const alternatePath = join(workspace, "alternate.txt");
@@ -1675,9 +1676,11 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch renames the replacement through the raced path,
     Then it restores the escaped file content before reporting the boundary failure`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-rename-race-"));
+    const workspace = await createTemporaryDirectory("keel-patch-rename-race-");
     const parentPath = join(workspace, "race");
-    const outside = await mkdtemp(join(tmpdir(), "keel-patch-rename-outside-"));
+    const outside = await createTemporaryDirectory(
+      "keel-patch-rename-outside-",
+    );
     const outsideParentPath = join(outside, "race");
     const targetPath = join(parentPath, "note.txt");
     await mkdir(parentPath);
@@ -1731,8 +1734,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the published file identity,
     Then it restores the ignored file before reporting the ignored path`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-publish-ignore-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-publish-ignore-",
     );
     const parentPath = join(workspace, "race");
     const backupParentPath = join(workspace, "race-backup");
@@ -1796,8 +1799,8 @@ describe("Apply Patch Tool Race Handling", () => {
     Then it removes the ignored destination before reporting the ignored path`,
     async () => {
       // Given
-      const workspace = await mkdtemp(
-        join(tmpdir(), "keel-patch-move-publish-ignore-"),
+      const workspace = await createTemporaryDirectory(
+        "keel-patch-move-publish-ignore-",
       );
       const parentPath = join(workspace, "race");
       const backupParentPath = join(workspace, "race-backup");
@@ -1861,8 +1864,8 @@ describe("Apply Patch Tool Race Handling", () => {
     Then it removes the new destination before reporting the ignored source`,
     async () => {
       // Given
-      const workspace = await mkdtemp(
-        join(tmpdir(), "keel-patch-move-source-ignore-"),
+      const workspace = await createTemporaryDirectory(
+        "keel-patch-move-source-ignore-",
       );
       const sourceParentPath = join(workspace, "src");
       const backupSourceParentPath = join(workspace, "src-backup");
@@ -1926,8 +1929,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks the source identity before deleting it,
     Then it removes the new destination before reporting the changed source`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-move-source-replaced-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-move-source-replaced-",
     );
     const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
     const workspacePath = actualFs.realpathSync(workspace);
@@ -1983,8 +1986,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch rechecks the source identity before deleting it,
     Then it preserves the user-replaced destination while reporting the changed source`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-move-source-and-destination-replaced-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-move-source-and-destination-replaced-",
     );
     const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
     const workspacePath = actualFs.realpathSync(workspace);
@@ -2047,8 +2050,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the moved destination identity,
     Then rollback restores the source without deleting the user-replaced destination`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-move-verify-destination-replaced-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-move-verify-destination-replaced-",
     );
     const sourcePath = join(workspace, "old.txt");
     const destinationPath = join(workspace, "new.txt");
@@ -2097,8 +2100,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the deletion,
     Then it reports the race without overwriting the recreated file`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-delete-recreated-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-delete-recreated-",
     );
     const targetPath = join(workspace, "old.txt");
     const backupPath = join(workspace, "old-backup.txt");
@@ -2143,8 +2146,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch records the deletion checkpoint,
     Then it reports the race without overwriting the recreated file`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-delete-checkpoint-race-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-delete-checkpoint-race-",
     );
     const targetPath = join(workspace, "old.txt");
     const backupPath = join(workspace, "old-backup.txt");
@@ -2192,8 +2195,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the move,
     Then rollback removes its destination without overwriting the recreated source`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-move-source-recreated-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-move-source-recreated-",
     );
     const sourcePath = join(workspace, "old.txt");
     const backupPath = join(workspace, "old-backup.txt");
@@ -2241,11 +2244,13 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the opened descriptor before reading hunks,
     Then it rejects before matching outside content`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-source-race-"));
+    const workspace = await createTemporaryDirectory("keel-patch-source-race-");
     const parentPath = join(workspace, "race");
     const backupParentPath = join(workspace, "race-backup");
     const targetPath = join(parentPath, "note.txt");
-    const outside = await mkdtemp(join(tmpdir(), "keel-patch-source-outside-"));
+    const outside = await createTemporaryDirectory(
+      "keel-patch-source-outside-",
+    );
     await mkdir(parentPath);
     await writeFile(targetPath, "old\n", "utf8");
     await writeFile(join(outside, "note.txt"), "outside\n", "utf8");
@@ -2303,7 +2308,7 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch verifies the opened descriptor and publish target,
     Then it rejects without patching ignored content`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-patch-ignore-race-"));
+    const workspace = await createTemporaryDirectory("keel-patch-ignore-race-");
     const parentPath = join(workspace, "race");
     const ignoredPath = join(workspace, "private");
     const targetPath = join(parentPath, "note.txt");
@@ -2356,8 +2361,8 @@ describe("Apply Patch Tool Race Handling", () => {
     When apply_patch performs the pre-write access check,
     Then it rejects before writing replacement content`, async () => {
     // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-patch-prewrite-ignore-"),
+    const workspace = await createTemporaryDirectory(
+      "keel-patch-prewrite-ignore-",
     );
     const parentPath = join(workspace, "race");
     const ignoredPath = join(workspace, "private");

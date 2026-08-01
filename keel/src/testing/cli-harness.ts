@@ -1,8 +1,11 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  createTemporaryDirectory,
+  removeTemporaryDirectory,
+} from "./temporary-directory.ts";
 
 const SOURCE_CLI_PATH = join(import.meta.dirname, "../cli/index.ts");
 const DIST_CLI_PATH = join(import.meta.dirname, "../../dist/cli/index.js");
@@ -145,7 +148,7 @@ export async function runGit(
 export async function createGitWorkspace(
   prefix = "keel-git-",
 ): Promise<string> {
-  const workspace = await mkdtemp(join(tmpdir(), prefix));
+  const workspace = await createTemporaryDirectory(prefix);
   await runGit(workspace, ["init", "--quiet", "--initial-branch=main"]);
   await runGit(workspace, ["config", "user.name", "Keel Test"]);
   await runGit(workspace, ["config", "user.email", "keel@example.com"]);
@@ -170,6 +173,6 @@ export async function withGitWorkspace(
   try {
     await action(workspace);
   } finally {
-    await rm(workspace, { recursive: true, force: true });
+    await removeTemporaryDirectory(workspace);
   }
 }

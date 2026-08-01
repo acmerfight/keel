@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { createTemporaryDirectory } from "../../src/testing/temporary-directory.ts";
 
 class MockRipgrepProcess extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -46,7 +46,7 @@ describe("Glob Subprocess Race Handling", () => {
     When glob validates the streamed matches,
     Then it omits the raced paths and returns only the visible file`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-glob-race-"));
+    const workspace = await createTemporaryDirectory("keel-glob-race-");
     const hiddenPath = join(workspace, "private");
     mockRipgrepResult({
       lines: [
@@ -75,7 +75,7 @@ describe("Glob Subprocess Race Handling", () => {
     When glob reports the subprocess failure,
     Then it preserves both the unknown exit status and stderr`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-glob-race-"));
+    const workspace = await createTemporaryDirectory("keel-glob-race-");
     mockRipgrepResult({
       stderr: "terminated by an external signal\n",
       code: null,
@@ -98,7 +98,7 @@ describe("Glob Subprocess Race Handling", () => {
     When glob reports the subprocess failure,
     Then it keeps the failure generic without an empty stderr suffix`, async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-glob-race-"));
+    const workspace = await createTemporaryDirectory("keel-glob-race-");
     mockRipgrepResult({ code: 2 });
     const { executeGlob } = await import("../../src/tools/glob.ts");
 
