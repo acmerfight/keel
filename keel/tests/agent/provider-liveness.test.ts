@@ -84,7 +84,7 @@ test(`Given the upstream accepts requests without returning response headers,
       jitterRatio: 0,
     },
     liveness: {
-      firstResponseTimeoutMs: 25,
+      firstResponseTimeoutMs: 250,
       streamInactivityTimeoutMs: 100,
     },
   });

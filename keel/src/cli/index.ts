@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { parseCliArgs, USAGE } from "./args.ts";
@@ -122,6 +123,9 @@ function defaultRuntime(): CliRuntime {
     mcpSecretBackend: createNativeMcpSecretBackend(),
     openExternalUrl: async (url) =>
       await openExternalUrl(url, process.platform),
+    sleep: async (milliseconds) => {
+      await delay(milliseconds);
+    },
     stderrIsTTY: process.stderr.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
     createInteractiveTerminal: () => new ProcessTerminal(),

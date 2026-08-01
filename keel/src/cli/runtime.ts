@@ -17,6 +17,7 @@ export interface CliRuntime extends SessionStoreRuntime {
   readonly platform: NodeJS.Platform;
   readonly mcpSecretBackend: McpSecretBackend;
   readonly openExternalUrl: (url: URL) => Promise<void>;
+  readonly sleep: (milliseconds: number) => Promise<void>;
   readonly stderrIsTTY?: boolean;
   readonly stdoutIsTTY?: boolean;
   readonly createInteractiveTerminal?: () => Terminal;

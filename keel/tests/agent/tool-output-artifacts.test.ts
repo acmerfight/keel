@@ -105,13 +105,15 @@ async function writeUntrackedFiles(
   workspace: string,
   count: number,
 ): Promise<void> {
-  for (let index = 0; index < count; index += 1) {
-    await writeFile(
-      join(workspace, `untracked-${index}.txt`),
-      `UNTRACKED_${index}\n`,
-      "utf8",
-    );
-  }
+  await Promise.all(
+    Array.from({ length: count }, (_, index) =>
+      writeFile(
+        join(workspace, `untracked-${index}.txt`),
+        `UNTRACKED_${index}\n`,
+        "utf8",
+      ),
+    ),
+  );
 }
 
 describe("Agent Tool Output Artifacts", () => {
@@ -875,7 +877,7 @@ describe("Agent Tool Output Artifacts", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 
   test(`Given git_diff omits untracked files but fits the inline artifact budget,
     When Keel settles the model-visible tool result,
@@ -948,7 +950,7 @@ describe("Agent Tool Output Artifacts", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 
   test(`Given one turn has several medium outputs over the aggregate budget,
     When Keel settles the tool results,

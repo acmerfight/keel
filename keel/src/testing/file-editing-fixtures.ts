@@ -1,7 +1,5 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AgentEvent } from "../agent/events.ts";
+import { createTemporaryDirectory } from "./temporary-directory.ts";
 
 export async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -18,5 +16,5 @@ export function freshSignal(): AbortSignal {
 }
 
 export async function createWorkspace(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "keel-edit-"));
+  return await createTemporaryDirectory("keel-edit-");
 }

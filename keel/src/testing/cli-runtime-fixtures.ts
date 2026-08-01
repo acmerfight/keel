@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Terminal } from "@earendil-works/pi-tui";
 import type { CliRuntime } from "../cli/runtime.ts";
 import type { McpSecretBackend } from "../mcp/oauth.ts";
@@ -29,6 +30,7 @@ export function createRuntime(
     readonly onSigint?: (handler: () => void) => void;
     readonly offSigint?: (handler: () => void) => void;
     readonly now?: () => number;
+    readonly sleep?: (milliseconds: number) => Promise<void>;
     readonly mcpSecretBackend?: McpSecretBackend;
     readonly openExternalUrl?: (url: URL) => Promise<void>;
   } = {},
@@ -81,6 +83,11 @@ export function createRuntime(
         ? { createInteractiveTerminal: options.createInteractiveTerminal }
         : {}),
       now: options.now ?? (() => 0),
+      sleep:
+        options.sleep ??
+        (async (milliseconds) => {
+          await delay(milliseconds);
+        }),
       writeStdout: (text) => {
         stdout += text;
         options.onStdout?.(text);

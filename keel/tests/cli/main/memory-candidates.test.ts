@@ -54,6 +54,7 @@ async function runInProcess(
   options: {
     readonly cwd: string;
     readonly env: Readonly<Record<string, string>>;
+    readonly sleep?: (milliseconds: number) => Promise<void>;
   },
 ): Promise<{
   readonly exitCode: number;
@@ -64,6 +65,7 @@ async function runInProcess(
     cwd: options.cwd,
     env: options.env,
     now: Date.now,
+    ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
   });
   const exitCode = await runCliMain(fixture.runtime);
   return {
@@ -698,12 +700,11 @@ describe("CLI memory candidate inbox", () => {
       reason: "turn",
     });
     const storeRuntime = runtime(keelHome, Date.now());
-    const releaseWriteLock = acquireProjectMemoryWriteLock(
-      projectMemoryDirectory(
-        storeRuntime,
-        resolveProjectMemoryScope(workspace),
-      ),
+    const memoryDirectory = projectMemoryDirectory(
+      storeRuntime,
+      resolveProjectMemoryScope(workspace),
     );
+    const releaseWriteLock = acquireProjectMemoryWriteLock(memoryDirectory);
     let providerRequests = 0;
     const server = createServer((_request, response) => {
       providerRequests += 1;
@@ -712,12 +713,16 @@ describe("CLI memory candidate inbox", () => {
     });
     await listen(server);
     const env = providerEnv(keelHome, getPort(server));
-    void delay(1_200).then(releaseWriteLock);
+    let requestedWaitMs = 0;
+    const releaseAfterAdmissionWait = async (milliseconds: number) => {
+      requestedWaitMs += milliseconds;
+      if (requestedWaitMs >= 1_000) releaseWriteLock();
+    };
     try {
       // When
       const extracted = await runInProcess(
         ["memory", "candidates", "extract", sessionId, "--max-cost", "0.05"],
-        { cwd: workspace, env },
+        { cwd: workspace, env, sleep: releaseAfterAdmissionWait },
       );
 
       // Then
