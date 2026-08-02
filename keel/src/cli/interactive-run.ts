@@ -6,6 +6,7 @@ import {
   type SessionGoal,
   type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
+import type { UndoProtectionTracker } from "../core/undo-protection.ts";
 import type { Message } from "../llm/types.ts";
 import type {
   BashApprovalGrant,
@@ -37,9 +38,14 @@ import {
   headlessGoalRunReportStopReason,
   requireHeadlessGoalOutcome,
 } from "./headless-goal-outcome.ts";
-import { createStableInteractiveDisplay } from "./interactive-session/display.ts";
+import {
+  createStableInteractiveDisplay,
+  type StableInteractiveDisplay,
+} from "./interactive-session/display.ts";
+import type { InteractiveLineInput } from "./interactive-session/line-reader.ts";
 import {
   type InteractiveForkSessionRequest,
+  type InteractiveInvocationAccounting,
   type InteractiveSession,
   type InteractiveSessionMemoryBinding,
   type InteractiveSessionOptions,
@@ -78,7 +84,10 @@ import {
   reportActiveSkills,
   writeRunReport,
 } from "./report.ts";
-import { createAgentEventReportRecorder } from "./report-events.ts";
+import {
+  type AgentEventReportRecorder,
+  createAgentEventReportRecorder,
+} from "./report-events.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import {
@@ -191,9 +200,14 @@ async function runInteractiveSessionWithTerminalDisplay(
   terminalDisplay: InteractiveTerminalDisplay | undefined,
 ) {
   try {
-    return await runInteractiveSession(options);
-  } finally {
+    const result = await runInteractiveSession(options);
+    if (result.switchSession === undefined) {
+      terminalDisplay?.stop();
+    }
+    return result;
+  } catch (error) {
     terminalDisplay?.stop();
+    throw error;
   }
 }
 type DirectInteractiveSessionCliIntent = Exclude<
@@ -499,6 +513,34 @@ export type HeadlessSessionCliResult =
       readonly outcome: HeadlessGoalOutcome;
     };
 
+interface SessionCliContinuation {
+  readonly preacquiredSessionLock: SessionLock;
+  readonly lineInput: InteractiveLineInput;
+  readonly initialInputLines: readonly string[];
+  readonly terminalDisplay: InteractiveTerminalDisplay | undefined;
+  readonly stableDisplay: StableInteractiveDisplay | undefined;
+  readonly reportRecorder: AgentEventReportRecorder;
+  readonly startedAt: number;
+  readonly accounting: InteractiveInvocationAccounting;
+  readonly undoProtection: UndoProtectionTracker;
+  readonly explicitSkillActivations: readonly SkillActivationRecord[];
+  readonly agentMemory: ReturnType<typeof createAgentProjectMemory>;
+  readonly memoryReportState: InteractiveMemoryReportState;
+  readonly sourceHandoff?: {
+    readonly lock: SessionLock;
+    readonly consumeSourceInputs: () => void;
+    readonly targetSessionId: string;
+  };
+}
+
+interface InteractiveMemoryReportState {
+  loadedMemory: RenderedProjectMemory | undefined;
+  memoryLoadError: string | undefined;
+  readonly exposedEntries: Map<string, RunReportMemoryEntry>;
+  exposedBytes: number;
+  exposedTokens: number;
+}
+
 function sessionCliExit(
   mode: SessionCliMode,
   exitCode: number,
@@ -510,16 +552,19 @@ async function runSessionCli(
   cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
   mode: InteractiveSessionCliMode,
+  continuation?: SessionCliContinuation,
 ): Promise<number>;
 async function runSessionCli(
   cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
   mode: HeadlessGoalSessionCliMode,
+  continuation?: SessionCliContinuation,
 ): Promise<HeadlessSessionCliResult>;
 async function runSessionCli(
   cliArgs: InteractiveRunCliArgs,
   runtime: CliRuntime,
   mode: SessionCliMode,
+  continuation?: SessionCliContinuation,
 ): Promise<number | HeadlessSessionCliResult> {
   let exitCode = 0;
 
@@ -549,7 +594,10 @@ async function runSessionCli(
     );
     return sessionCliExit(mode, 1);
   }
-  let sessionLock: SessionLock | undefined;
+  let sessionLock: SessionLock | undefined =
+    continuation?.preacquiredSessionLock;
+  const continuationSourceHandoff = continuation?.sourceHandoff;
+  let handoffSourceLock = continuationSourceHandoff?.lock;
   let sourceSessionLock: SessionLock | undefined;
   try {
     const workspace = runtime.cwd();
@@ -573,7 +621,8 @@ async function runSessionCli(
         : undefined;
     let sessionStart: InteractiveSessionStart;
     let initialInputLines: readonly string[] =
-      mode.kind === "headless-goal" ? [mode.initialCommand] : [];
+      continuation?.initialInputLines ??
+      (mode.kind === "headless-goal" ? [mode.initialCommand] : []);
     if (cliArgs.session.kind === "resume-pick") {
       const pickedSession = await pickedSessionIdForWorkspace({
         workspace,
@@ -633,7 +682,7 @@ async function runSessionCli(
         });
       }
       const sessionIdForLock = activeSessionIdForStart(sessionStart);
-      if (sessionIdForLock !== null) {
+      if (sessionIdForLock !== null && sessionLock === undefined) {
         sessionLock = acquireSessionLock({
           sessionId: sessionIdForLock,
           runtime,
@@ -1156,7 +1205,7 @@ async function runSessionCli(
       const projectInstructions = loadProjectInstructions(workspace);
       const mcpServers = listMcpServersSync(runtime);
       const [firstMcpServer, ...remainingMcpServers] = mcpServers;
-      const startedAt = runtime.now();
+      const startedAt = continuation?.startedAt ?? runtime.now();
       void cleanupExpiredToolOutputArtifacts({ runtime });
       const toolOutputArtifactScope =
         activeSessionId === undefined
@@ -1178,7 +1227,8 @@ async function runSessionCli(
             } as const);
       let activeSigintHandler: (() => void) | null = null;
       const interactiveTerminalDisplay =
-        mode.kind === "interactive" &&
+        continuation?.terminalDisplay ??
+        (mode.kind === "interactive" &&
         runtime.input.isTTY === true &&
         runtime.stdoutIsTTY === true &&
         runtime.stderrIsTTY === true &&
@@ -1197,25 +1247,31 @@ async function runSessionCli(
                 },
               },
             )
-          : undefined;
+          : undefined);
       const stableInteractiveDisplay =
-        interactiveTerminalDisplay === undefined &&
+        continuation?.stableDisplay ??
+        (interactiveTerminalDisplay === undefined &&
         mode.kind === "interactive" &&
         runtime.input.isTTY === true
           ? createStableInteractiveDisplay(runtime, {
               inputEchoesToDisplay: runtime.stderrIsTTY === true,
               session: displaySession,
             })
-          : undefined;
+          : undefined);
       const interactiveDisplay =
         interactiveTerminalDisplay ?? stableInteractiveDisplay;
-      const reportRecorder = createAgentEventReportRecorder();
-      let loadedMemory: RenderedProjectMemory | undefined;
-      let memoryLoadError: string | undefined;
-      const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
-      let exposedMemoryBytes = 0;
-      let exposedMemoryTokens = 0;
-      const agentMemory = createAgentProjectMemory({ runtime, workspace });
+      const reportRecorder =
+        continuation?.reportRecorder ?? createAgentEventReportRecorder();
+      const memoryReportState = continuation?.memoryReportState ?? {
+        loadedMemory: undefined,
+        memoryLoadError: undefined,
+        exposedEntries: new Map<string, RunReportMemoryEntry>(),
+        exposedBytes: 0,
+        exposedTokens: 0,
+      };
+      const agentMemory =
+        continuation?.agentMemory ??
+        createAgentProjectMemory({ runtime, workspace });
       const disabledMemoryReport = (): RunReportMemory => ({
         status: "disabled",
         scope: null,
@@ -1236,54 +1292,64 @@ async function runSessionCli(
         estimatedTokens: memory.estimatedTokens,
         operations: agentMemory.operations(),
       });
-      const lastLoadedMemoryScope = () => loadedMemory?.scope ?? null;
+      const lastLoadedMemoryScope = () =>
+        memoryReportState.loadedMemory?.scope ?? null;
       const readMemory = (): RenderedProjectMemory => {
         try {
-          loadedMemory = loadRenderedProjectMemory(runtime, workspace);
-          memoryLoadError = undefined;
-          return loadedMemory;
+          memoryReportState.loadedMemory = loadRenderedProjectMemory(
+            runtime,
+            workspace,
+          );
+          memoryReportState.memoryLoadError = undefined;
+          return memoryReportState.loadedMemory;
         } catch (error) {
-          memoryLoadError = errorMessage(error);
+          memoryReportState.memoryLoadError = errorMessage(error);
           throw error;
         }
       };
       const loadMemoryPrompt = (): string => {
         const memory = readMemory();
         for (const entry of memory.entries) {
-          exposedMemoryEntries.set(entry.id, projectMemoryReportEntry(entry));
+          memoryReportState.exposedEntries.set(
+            entry.id,
+            projectMemoryReportEntry(entry),
+          );
         }
-        exposedMemoryBytes = Math.max(exposedMemoryBytes, memory.renderedBytes);
-        exposedMemoryTokens = Math.max(
-          exposedMemoryTokens,
+        memoryReportState.exposedBytes = Math.max(
+          memoryReportState.exposedBytes,
+          memory.renderedBytes,
+        );
+        memoryReportState.exposedTokens = Math.max(
+          memoryReportState.exposedTokens,
           memory.estimatedTokens,
         );
         return memory.prompt;
       };
       const memoryReport = (): RunReportMemory => {
         if (!cliArgs.memoryEnabled) return disabledMemoryReport();
-        if (memoryLoadError !== undefined) {
+        if (memoryReportState.memoryLoadError !== undefined) {
           return {
             status: "error",
             scope: lastLoadedMemoryScope(),
-            loadedIds: [...exposedMemoryEntries.keys()],
-            loadedEntries: [...exposedMemoryEntries.values()],
-            renderedBytes: exposedMemoryBytes,
-            estimatedTokens: exposedMemoryTokens,
+            loadedIds: [...memoryReportState.exposedEntries.keys()],
+            loadedEntries: [...memoryReportState.exposedEntries.values()],
+            renderedBytes: memoryReportState.exposedBytes,
+            estimatedTokens: memoryReportState.exposedTokens,
             operations: agentMemory.operations(),
-            error: memoryLoadError,
+            error: memoryReportState.memoryLoadError,
           };
         }
-        let currentMemory = loadedMemory;
+        let currentMemory = memoryReportState.loadedMemory;
         try {
           currentMemory ??= readMemory();
         } catch (error) {
           return {
             status: "error",
             scope: lastLoadedMemoryScope(),
-            loadedIds: [...exposedMemoryEntries.keys()],
-            loadedEntries: [...exposedMemoryEntries.values()],
-            renderedBytes: exposedMemoryBytes,
-            estimatedTokens: exposedMemoryTokens,
+            loadedIds: [...memoryReportState.exposedEntries.keys()],
+            loadedEntries: [...memoryReportState.exposedEntries.values()],
+            renderedBytes: memoryReportState.exposedBytes,
+            estimatedTokens: memoryReportState.exposedTokens,
             operations: agentMemory.operations(),
             error: errorMessage(error),
           };
@@ -1291,10 +1357,10 @@ async function runSessionCli(
         return {
           status: "available",
           scope: currentMemory.scope,
-          loadedIds: [...exposedMemoryEntries.keys()],
-          loadedEntries: [...exposedMemoryEntries.values()],
-          renderedBytes: exposedMemoryBytes,
-          estimatedTokens: exposedMemoryTokens,
+          loadedIds: [...memoryReportState.exposedEntries.keys()],
+          loadedEntries: [...memoryReportState.exposedEntries.values()],
+          renderedBytes: memoryReportState.exposedBytes,
+          estimatedTokens: memoryReportState.exposedTokens,
           operations: agentMemory.operations(),
         };
       };
@@ -1315,8 +1381,10 @@ async function runSessionCli(
           };
         }
       };
-      interactiveDisplay?.writeIntro();
-      interactiveTerminalDisplay?.start();
+      if (continuation === undefined) {
+        interactiveDisplay?.writeIntro();
+        interactiveTerminalDisplay?.start();
+      }
       const sessionMemory: InteractiveSessionMemoryBinding =
         cliArgs.memoryEnabled &&
         mode.kind === "interactive" &&
@@ -1347,6 +1415,14 @@ async function runSessionCli(
         cliArgs,
         workspace,
         reportRecorder,
+        ...(continuation !== undefined
+          ? {
+              initialInvocationAccounting: continuation.accounting,
+              undoProtection: continuation.undoProtection,
+              priorExplicitSkillActivations:
+                continuation.explicitSkillActivations,
+            }
+          : {}),
         ...sessionMemory,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
@@ -1383,6 +1459,18 @@ async function runSessionCli(
           : {}),
         ...(restoredSessionOptions !== undefined ? restoredSessionOptions : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
+        ...(continuationSourceHandoff !== undefined
+          ? {
+              onInitialInputLinesAdmitted: () => {
+                continuationSourceHandoff.consumeSourceInputs();
+                handoffSourceLock?.release();
+                handoffSourceLock = undefined;
+                runtime.writeStderr(
+                  `Switched session: ${continuationSourceHandoff.targetSessionId}\n`,
+                );
+              },
+            }
+          : {}),
         ...(projectBashApprovals !== undefined
           ? {
               projectRoot: projectBashApprovals.projectRoot,
@@ -1394,8 +1482,23 @@ async function runSessionCli(
           : {}),
         toolOutputArtifacts,
         input: runtime.input,
-        ...(interactiveTerminalDisplay !== undefined
-          ? { lineInput: interactiveTerminalDisplay.lineInput }
+        ...(continuation?.lineInput !== undefined
+          ? { lineInput: continuation.lineInput }
+          : interactiveTerminalDisplay !== undefined
+            ? { lineInput: interactiveTerminalDisplay.lineInput }
+            : {}),
+        ...(mode.kind === "interactive" && interactiveSession.kind === "saved"
+          ? {
+              sessionPicker: () => {
+                const catalog = listSessionCatalog({ workspace, runtime });
+                runtime.writeStderr(
+                  formatSessionCatalogWarnings(catalog.warnings),
+                );
+                return buildSessionPickerView(catalog, {
+                  activeSessionId: interactiveSession.id,
+                });
+              },
+            }
           : {}),
         writeStdout: (text) => {
           (interactiveDisplay ?? runtime).writeStdout(text);
@@ -1469,6 +1572,88 @@ async function runSessionCli(
         interactiveSessionOptions,
         interactiveTerminalDisplay,
       );
+      if (interactiveResult.switchSession !== undefined) {
+        const switchRequest = interactiveResult.switchSession;
+        let nextSessionId = switchRequest.targetSessionId;
+        let nextSessionLock: SessionLock;
+        let nextInitialInputLines = switchRequest.initialInputLines;
+        let nextSourceHandoff:
+          | SessionCliContinuation["sourceHandoff"]
+          | undefined;
+        let acquiredTargetLock: SessionLock | undefined;
+        try {
+          acquiredTargetLock = acquireSessionLock({
+            sessionId: nextSessionId,
+            runtime,
+          });
+          resumeSessionStore({
+            sessionId: nextSessionId,
+            workspace,
+            runtime,
+          });
+          /* v8 ignore next 8: a switch request can only come from the saved interactive session that owns sessionLock. */
+          if (
+            sessionLock === undefined ||
+            interactiveSession.kind !== "saved"
+          ) {
+            throw new SessionStoreError(
+              "Error: cannot transfer an unlocked interactive session.",
+            );
+          }
+          nextSessionLock = acquiredTargetLock;
+          nextSourceHandoff = {
+            lock: sessionLock,
+            consumeSourceInputs: () => {
+              interactiveSession.consumeQueuedInputs(
+                switchRequest.sourceInputIds,
+              );
+            },
+            targetSessionId: nextSessionId,
+          };
+          sessionLock = undefined;
+        } catch (error) {
+          acquiredTargetLock?.release();
+          runtime.writeStderr(
+            `Session switch failed: ${errorMessage(error)}\n`,
+          );
+          /* v8 ignore next 3: both source identities remain owned until a validated target handoff succeeds. */
+          if (sessionLock === undefined || activeSessionId === undefined) {
+            throw error;
+          }
+          nextSessionId = activeSessionId;
+          nextSessionLock = sessionLock;
+          nextInitialInputLines = [];
+          sessionLock = undefined;
+        }
+        const nextCliArgs: InteractiveRunCliArgs = {
+          ...cliArgs,
+          session: { kind: "resume", sessionId: nextSessionId },
+        };
+        const nextContinuation: SessionCliContinuation = {
+          preacquiredSessionLock: nextSessionLock,
+          lineInput: switchRequest.lineInput,
+          initialInputLines: nextInitialInputLines,
+          terminalDisplay: interactiveTerminalDisplay,
+          stableDisplay: stableInteractiveDisplay,
+          reportRecorder,
+          startedAt,
+          accounting: switchRequest.accounting,
+          undoProtection: switchRequest.undoProtection,
+          explicitSkillActivations: switchRequest.explicitSkillActivations,
+          agentMemory,
+          memoryReportState,
+          ...(nextSourceHandoff !== undefined
+            ? { sourceHandoff: nextSourceHandoff }
+            : {}),
+        };
+        /* v8 ignore next 5: /sessions is only exposed by the interactive-mode session loop. */
+        if (mode.kind !== "interactive") {
+          throw new Error(
+            "internal: a headless session cannot switch sessions",
+          );
+        }
+        return runSessionCli(nextCliArgs, runtime, mode, nextContinuation);
+      }
       let headlessGoalOutcome: HeadlessGoalOutcome | undefined;
       if (mode.kind === "headless-goal" && exitCode === 0) {
         headlessGoalOutcome = requireHeadlessGoalOutcome(
@@ -1523,6 +1708,7 @@ async function runSessionCli(
     } finally {
       sourceSessionLock?.release();
       sessionLock?.release();
+      handoffSourceLock?.release();
     }
   } catch (error) {
     if (error instanceof ProviderConfigError) {

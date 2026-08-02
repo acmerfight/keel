@@ -162,6 +162,165 @@ describe("Interactive Session - Lifecycle", () => {
     },
   );
 
+  test.each([
+    {
+      command: "/sessions",
+      error: "Error: /sessions requires a saved interactive session.\n",
+    },
+    {
+      command: "/sessions extra",
+      error: "Error: /sessions does not accept arguments.\n",
+    },
+  ])(
+    `Given an ephemeral interactive session,
+    When user enters $command,
+    Then Keel rejects the unavailable session switch without starting a model turn`,
+    async ({ command, error }) => {
+      const result = await runInteractiveLocalCommand(command, process.cwd());
+
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(error);
+      expect(result.providerResolved).toBe(false);
+    },
+  );
+
+  test(`Given a saved session is run without a session catalog,
+    When user enters /sessions,
+    Then Keel reports that switching is unavailable without starting a model turn`, async () => {
+    // Given
+    const input = new PassThrough();
+    let stderr = "";
+    let providerResolved = false;
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "ask" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      session: savedInteractiveSession({ id: "current" }),
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => {
+        providerResolved = true;
+        throw new Error("/sessions should not resolve a provider");
+      },
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error("/sessions should not start a model turn");
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.end("/sessions\n");
+    await session;
+
+    // Then
+    expect(stderr).toBe(
+      "Error: /sessions requires a saved interactive session.\n",
+    );
+    expect(providerResolved).toBe(false);
+  });
+
+  test.each([
+    {
+      inputText: "/sessions\nq\n",
+      expectedStdout: "session picker\nSession switch cancelled.\n",
+    },
+    {
+      inputText: "/sessions\n",
+      expectedStdout: "session picker\n",
+    },
+    {
+      inputText: "/sessions\n1\n",
+      expectedStdout: "session picker\nSession already active: current\n",
+    },
+  ])(
+    `Given the graph picker contains only the current session,
+    When the picker receives $inputText,
+    Then Keel leaves the current session active without starting a model turn`,
+    async ({ inputText, expectedStdout }) => {
+      // Given
+      const input = new PassThrough();
+      let stdout = "";
+      let stderr = "";
+      let providerResolved = false;
+      const session = runInteractiveSession({
+        cliArgs: { bashMode: "ask" },
+        workspace: process.cwd(),
+        platform: process.platform,
+        session: savedInteractiveSession({ id: "current" }),
+        sessionPicker: () => ({
+          prompt: "session picker\n",
+          sessions: [
+            {
+              id: "current",
+              workspace: process.cwd(),
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              graph: {
+                graphId: "current",
+                rootSessionId: "current",
+                parentSessionId: null,
+                branchTitle: "main",
+                forkPoint: null,
+                forkPolicy: {
+                  transcript: "copy_prefix",
+                  pendingInputs: "drop",
+                  queuedInputs: "drop",
+                  bashApprovalGrants: "drop",
+                },
+              },
+              workflowSkills: [],
+              preview: "current session",
+              pendingInputCount: 0,
+              taskProgress: { tasks: [] },
+            },
+          ],
+        }),
+        input,
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => {
+          providerResolved = true;
+          throw new Error("/sessions should not resolve a provider");
+        },
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async () => {
+          throw new Error("/sessions should not start a model turn");
+        },
+        formatCostReport: () => "",
+      });
+
+      // When
+      input.end(inputText);
+      const result = await session;
+
+      // Then
+      expect(result.switchSession).toBeUndefined();
+      expect(stdout).toBe(expectedStdout);
+      expect(stderr).toBe("");
+      expect(providerResolved).toBe(false);
+    },
+  );
+
   test(`Given staged unstaged and untracked workspace changes,
     When user enters /diff,
     Then Keel prints current git changes without starting a model turn`, async () => {

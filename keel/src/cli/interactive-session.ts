@@ -157,10 +157,12 @@ import {
   executeModelSwitchCompaction,
   modelSwitchRequiresCompaction,
 } from "./interactive-session/model-switch-compact.ts";
+import { readNumberedPickerSelection } from "./interactive-session/numbered-picker.ts";
 import type {
   EndEvent,
   EndEventWithCost,
   InteractiveComposerMode,
+  InteractiveInvocationAccounting,
   InteractiveResolvedProvider,
   InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
@@ -193,6 +195,7 @@ import type { SessionModelSelection } from "./session-store.ts";
 
 export type {
   InteractiveForkSessionRequest,
+  InteractiveInvocationAccounting,
   InteractiveResolvedProvider,
   InteractiveSession,
   InteractiveSessionMemoryBinding,
@@ -430,7 +433,8 @@ export async function runInteractiveSession(
   const savedSession =
     options.session.kind === "saved" ? options.session : null;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
-  const undoProtection = createUndoProtectionTracker();
+  const undoProtection =
+    options.undoProtection ?? createUndoProtectionTracker();
   const skillRuntime = options.skills;
   const managedSkills: ManagedInteractiveSkillRuntime | null =
     skillRuntime.kind === "managed" ? skillRuntime : null;
@@ -439,7 +443,12 @@ export async function runInteractiveSession(
       ? []
       : managedSkills.activation.active().map(workflowSkillFromActivation);
   const explicitSkillActivations: SkillActivationRecord[] =
-    managedSkills === null ? [] : [...managedSkills.initialActivationRecords];
+    managedSkills === null
+      ? [...(options.priorExplicitSkillActivations ?? [])]
+      : [
+          ...(options.priorExplicitSkillActivations ?? []),
+          ...managedSkills.initialActivationRecords,
+        ];
   const inactiveImplicitSkills = () => {
     if (managedSkills === null) return [];
     const activePackageIds = new Set(
@@ -726,13 +735,17 @@ export async function runInteractiveSession(
     return cleared;
   };
   let activeAbortController: AbortController | null = null;
-  let sessionUsage = EMPTY_USAGE;
-  let sessionAgentLoopTurns = 0;
-  let sessionPromptTurnAttempted = false;
-  let sessionEndObserved = false;
-  let sessionCostUsd = 0;
-  let sessionCostBudgetLimited = false;
-  let sessionStopReason = "completed";
+  const initialInvocationAccounting = options.initialInvocationAccounting;
+  let sessionUsage = initialInvocationAccounting?.usage ?? EMPTY_USAGE;
+  let sessionAgentLoopTurns = initialInvocationAccounting?.agentLoopTurns ?? 0;
+  let sessionPromptTurnAttempted =
+    initialInvocationAccounting?.promptTurnAttempted ?? false;
+  let sessionEndObserved = initialInvocationAccounting?.endObserved ?? false;
+  let sessionCostUsd = initialInvocationAccounting?.costUsd ?? 0;
+  let sessionCostBudgetLimited =
+    initialInvocationAccounting?.costBudgetLimited ?? false;
+  let sessionStopReason =
+    initialInvocationAccounting?.stopReason ?? "completed";
   let modelSwitchCount = options.initialModelSwitchCount ?? 0;
   const resolveActiveProvider = (
     userMessage: string,
@@ -878,6 +891,10 @@ export async function runInteractiveSession(
       ? []
       : [
           {
+            label: "sessions",
+            command: "/sessions",
+          },
+          {
             label: "fork-points",
             command: "/fork-points",
           },
@@ -914,6 +931,15 @@ export async function runInteractiveSession(
     sessionCostUsd += turnCostUsd;
     return currentSessionCostReport();
   };
+  const invocationAccounting = (): InteractiveInvocationAccounting => ({
+    usage: sessionUsage,
+    agentLoopTurns: sessionAgentLoopTurns,
+    promptTurnAttempted: sessionPromptTurnAttempted,
+    endObserved: sessionEndObserved,
+    costUsd: sessionCostUsd,
+    costBudgetLimited: sessionCostBudgetLimited,
+    stopReason: sessionStopReason,
+  });
   const readVisibility = createReadVisibilityState();
   const projectInstructionVisibility = createProjectInstructionVisibilityState(
     options.workspace,
@@ -1590,7 +1616,9 @@ export async function runInteractiveSession(
   };
 
   options.onSigint(abortActiveTurn);
+  let preserveInputForSessionSwitch = false;
   try {
+    options.onInitialInputLinesAdmitted?.();
     for (;;) {
       if (pendingGoalDrive !== null) {
         if (sessionGoal?.status !== "active") {
@@ -1720,6 +1748,65 @@ export async function runInteractiveSession(
         );
         consumeQueuedInputLines([rawInput]);
         continue;
+      }
+      if (interactiveCommand?.kind === "sessions") {
+        if (savedSession === null || options.sessionPicker === undefined) {
+          options.writeStderr(
+            "Error: /sessions requires a saved interactive session.\n",
+          );
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        const pickerView = options.sessionPicker();
+        options.writeStdout(pickerView.prompt);
+        const pickerResult = await readNumberedPickerSelection({
+          minChoice: 1,
+          maxChoice: pickerView.sessions.length,
+          prompt: pickerView.prompt,
+          invalidSelectionMessage: `Enter a session number from 1 to ${pickerView.sessions.length}, or q to cancel.`,
+          lineReader,
+          writeStdout: options.writeStdout,
+          writeStderr: options.writeStderr,
+        });
+        const consumedLines = [rawInput, ...pickerResult.consumedLines];
+        if (pickerResult.kind === "cancelled") {
+          if (pickerResult.explicit) {
+            options.writeStdout("Session switch cancelled.\n");
+          }
+          consumeQueuedInputLines(consumedLines);
+          continue;
+        }
+        const selectedSession =
+          pickerView.sessions[pickerResult.selection.choice - 1];
+        /* v8 ignore next 3: the picker validates the choice against this view. */
+        if (selectedSession === undefined) {
+          throw new Error("Error: selected session is not available.");
+        }
+        if (selectedSession.id === savedSession.id) {
+          options.writeStdout(`Session already active: ${savedSession.id}\n`);
+          consumeQueuedInputLines(consumedLines);
+          continue;
+        }
+        const selectionLine = pickerResult.consumedLines.at(-1);
+        /* v8 ignore next 3: a selected picker result always includes the line that supplied its validated choice. */
+        if (selectionLine === undefined) {
+          throw new Error("Error: selected session input is not available.");
+        }
+        const selectionSequence = selectionLine.sequence;
+        const carriedLines = lineReader.drainLinesAfter(selectionSequence);
+        consumeQueuedInputLines(consumedLines);
+        preserveInputForSessionSwitch = true;
+        return {
+          switchSession: {
+            targetSessionId: selectedSession.id,
+            lineInput: input,
+            initialInputLines: carriedLines.map((line) => line.line),
+            sourceInputIds: queuedInputIds(carriedLines),
+            accounting: invocationAccounting(),
+            undoProtection,
+            explicitSkillActivations,
+          },
+        };
       }
       if (interactiveCommand?.kind === "title") {
         if (interactiveCommand.title === undefined) {
@@ -2642,7 +2729,10 @@ export async function runInteractiveSession(
   } finally {
     options.offSigint(abortActiveTurn);
     await mcpRuntime?.close().catch(() => undefined);
-    input.close();
+    lineReader.dispose();
+    if (!preserveInputForSessionSwitch) {
+      input.close();
+    }
   }
   const finalGoal =
     sessionGoal === undefined ? {} : { goal: copySessionGoal(sessionGoal) };

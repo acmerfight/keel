@@ -261,11 +261,12 @@ function sessionPickerEntryLines(
   entry: SessionCatalogEntry,
   index: number,
   depth: number,
+  active: boolean,
 ): readonly string[] {
   const indent = "  ".repeat(depth);
   const detailIndent = `${indent}   `;
   return [
-    `${indent}${index + 1}. ${formatSessionDetailText(entry.id)}  updated ${formatSessionDetailText(entry.updatedAt)}`,
+    `${indent}${index + 1}. ${formatSessionDetailText(entry.id)}${active ? " (active)" : ""}  updated ${formatSessionDetailText(entry.updatedAt)}`,
     `${detailIndent}branch: ${formatSessionDetailText(entry.graph.branchTitle)}`,
     ...(entry.title !== undefined
       ? [`${detailIndent}title: ${formatSessionDetailText(entry.title)}`]
@@ -287,6 +288,7 @@ function sessionPickerEntryLines(
 
 export function buildSessionPickerView(
   catalog: SessionCatalog,
+  options: { readonly activeSessionId?: string } = {},
 ): SessionPickerView {
   const lines = [
     `Sessions for workspace ${formatSessionDetailText(catalog.workspace)}:`,
@@ -298,7 +300,14 @@ export function buildSessionPickerView(
       `graph ${formatSessionDetailText(group.graphId)} root ${formatSessionDetailText(group.rootSessionId)}  updated ${formatSessionDetailText(group.updatedAt)}`,
     );
     for (const { entry, depth } of sessionCatalogTreeEntries(group.entries)) {
-      lines.push(...sessionPickerEntryLines(entry, sessions.length, depth));
+      lines.push(
+        ...sessionPickerEntryLines(
+          entry,
+          sessions.length,
+          depth,
+          entry.id === options.activeSessionId,
+        ),
+      );
       sessions.push(entry);
     }
   }

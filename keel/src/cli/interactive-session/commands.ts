@@ -68,6 +68,10 @@ interface StatusCommand {
   readonly kind: "status";
 }
 
+interface SessionsCommand {
+  readonly kind: "sessions";
+}
+
 interface TitleCommand {
   readonly kind: "title";
   readonly title?: string;
@@ -165,6 +169,7 @@ export type InteractiveCommand =
   | ModelCommand
   | SkillCommand
   | StatusCommand
+  | SessionsCommand
   | TitleCommand
   | GoalCommand
   | TasksCommand
@@ -203,6 +208,7 @@ export function formatInteractiveHelp(): string {
     "  /skill reload <qualified-id>",
     "                     Explicitly replace a snapshot from disk.",
     "  /status            Show session state and recovery commands.",
+    "  /sessions          Choose another saved session in this workspace.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
     '  /goal --objective "<condition>"',
@@ -839,6 +845,18 @@ export function parseInteractiveCommand(
       };
     }
     return { kind: "status" };
+  }
+
+  const sessionsMatch = /^\/sessions(?:\s+(.*))?$/u.exec(trimmed);
+  if (sessionsMatch !== null) {
+    const extraArgs = sessionsMatch[1]?.trim();
+    if (extraArgs !== undefined && extraArgs !== "") {
+      return {
+        kind: "invalid",
+        message: "Error: /sessions does not accept arguments.",
+      };
+    }
+    return { kind: "sessions" };
   }
 
   const titleMatch = /^\/title(?:\s+(.*))?$/u.exec(trimmed);

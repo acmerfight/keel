@@ -14,6 +14,7 @@ function lineReaderReturning(answer: string | null): LineReader {
     sequence: () => 7,
     needsInput: () => true,
     pendingInputCount: () => 0,
+    dispose: () => {},
   };
 }
 
