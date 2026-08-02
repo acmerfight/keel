@@ -1433,6 +1433,34 @@ describe("tool registry", () => {
     expect(description).toContain("reported matching locations");
   });
 
+  test(`Given edit and apply_patch can both update existing text,
+    When their descriptions are rendered for the model,
+    Then they identify edit as the ordinary single-file choice and apply_patch as the coordinated or lifecycle choice`, () => {
+    // Given
+    const tools = openAICompatibleTools({ kind: "auto" });
+    const editDescription =
+      tools.find((tool) => tool.function.name === "edit")?.function
+        .description ?? "";
+    const applyPatchDescription =
+      tools.find((tool) => tool.function.name === "apply_patch")?.function
+        .description ?? "";
+
+    // When / Then
+    expect(editDescription).toContain("exactly one existing text file");
+    expect(editDescription).toContain(
+      "two or more files, even if each replacement is simple (use apply_patch)",
+    );
+    expect(applyPatchDescription).toContain(
+      "the requested change affects two or more files, even if each individual replacement is simple",
+    );
+    expect(applyPatchDescription).toContain(
+      "ordinary text replacements in one existing file (use edit)",
+    );
+    expect(applyPatchDescription).toContain(
+      "creating one standalone new file (use write)",
+    );
+  });
+
   test(`Given a provider returns an ls call,
     When the registry parses and serializes the call,
     Then the path and optional limit are preserved for tool execution`, () => {
