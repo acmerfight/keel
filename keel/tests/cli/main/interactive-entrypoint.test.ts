@@ -2495,9 +2495,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
-  test(`Given the current saved session has a newer fork,
-    When the user opens the in-session graph picker and selects that fork,
-    Then Keel stays in the same process and continues the exact branch`, async () => {
+  test(`Given two related saved sessions,
+    When the user switches to the fork and back in one interactive invocation,
+    Then each prompt uses the active branch while invocation reporting stays continuous`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-switch-"));
     const ledgerWorkspace = await realpath(workspace);
@@ -2633,6 +2633,28 @@ describe("CLI Main - Interactive Entrypoint", () => {
           fixture.stdout().includes("status:\n  session: database-index\n"),
         "selected session did not become active",
       );
+      input.write("what did I ask you to remember?\n");
+      await waitForCondition(
+        () =>
+          fixture
+            .stdout()
+            .includes("Earlier you said: remember the database index branch\n"),
+        "target session did not answer before switching back",
+      );
+      input.write("/sessions\n");
+      await waitForCondition(
+        () =>
+          fixture.stdout().split("Select session [1-2], or q to cancel:")
+            .length >= 3,
+        "in-session graph picker did not render for the return switch",
+      );
+      input.write("1\n/status\n");
+      await waitForCondition(
+        () =>
+          fixture.stderr().includes("Switched session: login-timeout\n") &&
+          fixture.stdout().includes("status:\n  session: login-timeout\n"),
+        "source session did not become active again",
+      );
       input.end("what did I ask you to remember?\n");
       const exitCode = await run;
 
@@ -2653,6 +2675,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
         ].join("\n"),
       );
       expect(stdout).toContain("status:\n  session: database-index\n");
+      expect(stdout).toContain("status:\n  session: login-timeout\n");
       expect(stdout).toContain("  active model: fake/fake\n");
       expect(stdout).toContain("  model switches: 1\n");
       expect(stdout).toContain(
@@ -2665,7 +2688,15 @@ describe("CLI Main - Interactive Entrypoint", () => {
           "Earlier you said: remember the database index branch\n",
         ),
       );
+      expect(
+        stdout.indexOf("Earlier you said: which marker should I remember?\n"),
+      ).toBeGreaterThan(
+        stdout.indexOf(
+          "Earlier you said: remember the database index branch\n",
+        ),
+      );
       expect(fixture.stderr()).toContain("Switched session: database-index\n");
+      expect(fixture.stderr()).toContain("Switched session: login-timeout\n");
       const sourceLedger = await readFile(
         join(home, "sessions", "login-timeout", "ledger.jsonl"),
         "utf8",
@@ -2680,13 +2711,14 @@ describe("CLI Main - Interactive Entrypoint", () => {
         runtime: fixture.runtime,
       });
       expect(restoredSource.pendingInputs).toEqual([]);
-      expect(restoredSource.messages).not.toContainEqual(
+      expect(restoredSource.messages).toContainEqual(
         expect.objectContaining({
           role: "user",
           content: "what did I ask you to remember?",
         }),
       );
-      expect(sourceLedger).not.toContain("what did I ask you to remember?");
+      expect(sourceLedger).toContain("which marker should I remember?");
+      expect(sourceLedger).toContain("what did I ask you to remember?");
       expect(sourceLedger).toContain('"type":"input_consumed"');
       expect(targetLedger).toContain("what did I ask you to remember?");
       const report = z
@@ -2697,9 +2729,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
           memory: z.object({ loadedIds: z.array(z.string()) }),
         })
         .parse(JSON.parse(await readFile(reportFile, "utf8")));
-      expect(report.agentLoopTurns).toBe(2);
-      expect(report.providerRequestAttemptCount).toBe(2);
-      expect(report.tasks).toHaveLength(2);
+      expect(report.agentLoopTurns).toBe(3);
+      expect(report.providerRequestAttemptCount).toBe(3);
+      expect(report.tasks).toHaveLength(3);
       expect(report.memory.loadedIds).toContain(memoryId);
     } finally {
       await rm(workspace, { recursive: true, force: true });

@@ -71,6 +71,12 @@ export interface InteractiveInvocationAccounting {
   readonly stopReason: string;
 }
 
+export interface InteractiveInvocationState {
+  readonly accounting: InteractiveInvocationAccounting;
+  readonly undoProtection: UndoProtectionTracker;
+  readonly explicitSkillActivations: readonly SkillActivationRecord[];
+}
+
 export interface InteractiveForkSessionRequest {
   readonly targetSessionId: string;
   readonly beforeMessageId?: string;
@@ -300,15 +306,13 @@ interface InteractiveReportModelUsage {
 }
 
 export interface InteractiveSessionResult {
+  readonly invocationState: InteractiveInvocationState;
   readonly goal?: SessionGoal;
   readonly switchSession?: {
     readonly targetSessionId: string;
     readonly lineInput: InteractiveLineInput;
     readonly initialInputLines: readonly string[];
     readonly sourceInputIds: readonly string[];
-    readonly accounting: InteractiveInvocationAccounting;
-    readonly undoProtection: UndoProtectionTracker;
-    readonly explicitSkillActivations: readonly SkillActivationRecord[];
   };
   readonly report?: {
     readonly tasks: readonly RunReportTask[];

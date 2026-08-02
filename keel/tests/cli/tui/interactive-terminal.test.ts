@@ -1,4 +1,7 @@
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Terminal } from "@earendil-works/pi-tui";
@@ -25,6 +28,11 @@ import {
   getPort,
   listen,
 } from "../../../src/testing/provider-sse-fixtures.ts";
+import {
+  appendSessionRecordLine,
+  endForkGraph,
+  writeSessionLedger,
+} from "../../../src/testing/session-ledger-fixtures.ts";
 import { parseGitDiffOutput } from "../../../src/tools/git-diff-document.ts";
 
 class TestTerminal implements Terminal {
@@ -1049,6 +1057,88 @@ describe("Interactive Terminal Display", () => {
     } finally {
       server.closeAllConnections();
       await close(server);
+    }
+  });
+
+  test(`Given the user switches saved sessions in a real terminal,
+    When they interrupt the newly active session,
+    Then Keel exits the same interactive invocation as interrupted`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tui-switch-sigint-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-tui-home-"));
+    const rootLastMessageId = "msg_append-2026-01-01T00_00_01_000Z_2";
+    await writeSessionLedger({
+      home,
+      id: "tui-source",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
+          {
+            role: "user",
+            content: "source context",
+            origin: { type: "user_prompt" },
+          },
+          { role: "assistant", content: "source", toolCalls: [] },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "tui-target",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      graph: endForkGraph({
+        sessionId: "tui-target",
+        parentSessionId: "tui-source",
+        sourceLastMessageId: rootLastMessageId,
+        sourceOrdinal: 2,
+      }),
+      records: [],
+    });
+    const terminal = new TestTerminal();
+    const fixture = createRuntime(["--resume", "tui-source"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake", KEEL_HOME: home },
+      input: new PassThrough(),
+      inputIsTTY: true,
+      stdoutIsTTY: true,
+      stderrIsTTY: true,
+      createInteractiveTerminal: () => terminal,
+    });
+
+    try {
+      const run = runCliMain(fixture.runtime);
+      await terminal.waitForText("keel>");
+      terminal.input("/sessions");
+      terminal.input("\r");
+      await terminal.waitForText("Select session [1-2], or q to cancel:");
+      terminal.input("2");
+      terminal.input("\r");
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (fixture.stderr().includes("Switched session: tui-target\n")) break;
+        await delay(5);
+      }
+      expect(fixture.stderr()).toContain("Switched session: tui-target\n");
+
+      // When
+      terminal.input("\x03");
+      const outcome = await Promise.race([
+        run.then((exitCode) => ({ kind: "finished" as const, exitCode })),
+        delay(500).then(() => ({ kind: "timeout" as const })),
+      ]);
+      if (outcome.kind === "timeout") {
+        terminal.input("\x04");
+        await run;
+      }
+
+      // Then
+      expect(outcome).toEqual({ kind: "finished", exitCode: 130 });
+      expect(terminal.stopCount).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 });

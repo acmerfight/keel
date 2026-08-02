@@ -195,7 +195,7 @@ import type { SessionModelSelection } from "./session-store.ts";
 
 export type {
   InteractiveForkSessionRequest,
-  InteractiveInvocationAccounting,
+  InteractiveInvocationState,
   InteractiveResolvedProvider,
   InteractiveSession,
   InteractiveSessionMemoryBinding,
@@ -1797,14 +1797,16 @@ export async function runInteractiveSession(
         consumeQueuedInputLines(consumedLines);
         preserveInputForSessionSwitch = true;
         return {
+          invocationState: {
+            accounting: invocationAccounting(),
+            undoProtection,
+            explicitSkillActivations,
+          },
           switchSession: {
             targetSessionId: selectedSession.id,
             lineInput: input,
             initialInputLines: carriedLines.map((line) => line.line),
             sourceInputIds: queuedInputIds(carriedLines),
-            accounting: invocationAccounting(),
-            undoProtection,
-            explicitSkillActivations,
           },
         };
       }
@@ -2736,16 +2738,22 @@ export async function runInteractiveSession(
   }
   const finalGoal =
     sessionGoal === undefined ? {} : { goal: copySessionGoal(sessionGoal) };
+  const invocationState = {
+    accounting: invocationAccounting(),
+    undoProtection,
+    explicitSkillActivations,
+  };
   if (options.cliArgs.reportFile !== undefined) {
     const reportEnd = currentReportEnd();
     if (reportEnd === undefined) {
-      return finalGoal;
+      return { ...finalGoal, invocationState };
     }
     const operationAccounting = accountModelOperations(
       reportRecorder.modelOperations(),
     );
     return {
       ...finalGoal,
+      invocationState,
       report: {
         tasks: reportRecorder.tasks(),
         modelsUsed: operationAccounting.modelsUsed,
@@ -2767,5 +2775,5 @@ export async function runInteractiveSession(
       },
     };
   }
-  return finalGoal;
+  return { ...finalGoal, invocationState };
 }
