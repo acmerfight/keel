@@ -6,7 +6,10 @@ import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
-import type { UndoProtectionSummary } from "../../core/undo-protection.ts";
+import type {
+  UndoProtectionSummary,
+  UndoProtectionTracker,
+} from "../../core/undo-protection.ts";
 import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
 import type {
   McpConnectionFactory,
@@ -38,6 +41,7 @@ import type {
   RunReportModelOperation,
   RunReportTask,
 } from "../report-events.ts";
+import type { SessionPickerView } from "../session-catalog-format.ts";
 import type {
   SessionModelSelection,
   SessionPersistenceReason,
@@ -55,6 +59,16 @@ export interface InteractiveSessionArgs {
   readonly bashMode: BashMode;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
+}
+
+export interface InteractiveInvocationAccounting {
+  readonly usage: Usage;
+  readonly agentLoopTurns: number;
+  readonly promptTurnAttempted: boolean;
+  readonly endObserved: boolean;
+  readonly costUsd: number;
+  readonly costBudgetLimited: boolean;
+  readonly stopReason: string;
 }
 
 export interface InteractiveForkSessionRequest {
@@ -218,12 +232,17 @@ interface InteractiveSessionOptionsBase {
   readonly initialModelSwitchCount?: number;
   readonly initialQueuedInputs?: readonly SessionQueuedInput[];
   readonly initialInputLines?: readonly string[];
+  readonly onInitialInputLinesAdmitted?: () => void;
   readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly projectRoot?: string;
   readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];
   readonly bashPermission?: SessionBashPermissionPolicy;
   readonly goalAutomaticContinuationTurnLimit?: number;
   readonly reportRecorder?: AgentEventReportRecorder;
+  readonly priorExplicitSkillActivations?: readonly SkillActivationRecord[];
+  readonly undoProtection?: UndoProtectionTracker;
+  readonly initialInvocationAccounting?: InteractiveInvocationAccounting;
+  readonly sessionPicker?: () => SessionPickerView;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
   readonly persistProjectBashApprovalGrant?: (
@@ -282,6 +301,15 @@ interface InteractiveReportModelUsage {
 
 export interface InteractiveSessionResult {
   readonly goal?: SessionGoal;
+  readonly switchSession?: {
+    readonly targetSessionId: string;
+    readonly lineInput: InteractiveLineInput;
+    readonly initialInputLines: readonly string[];
+    readonly sourceInputIds: readonly string[];
+    readonly accounting: InteractiveInvocationAccounting;
+    readonly undoProtection: UndoProtectionTracker;
+    readonly explicitSkillActivations: readonly SkillActivationRecord[];
+  };
   readonly report?: {
     readonly tasks: readonly RunReportTask[];
     readonly modelsUsed: readonly {

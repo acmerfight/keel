@@ -134,6 +134,7 @@ export function createInteractiveTerminalDisplay(
       },
     },
     { name: "status", description: "Show current session state." },
+    { name: "sessions", description: "Switch saved sessions." },
     { name: "title", description: "Show or set the session title." },
     { name: "goal", description: "Show or update the session goal." },
     { name: "tasks", description: "Show current task progress." },

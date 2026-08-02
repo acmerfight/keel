@@ -161,14 +161,14 @@ What a user can do today:
 
 Known limits that shape the priorities below:
 
-- Interactive sessions have a minimal stable terminal display, but no
-  full-screen TUI or in-session branch navigator. Persisted sessions restore
+- Interactive sessions have a minimal stable terminal display and a
+  graph-aware in-session branch navigator. Persisted sessions restore
   transcript context, pending queued input, active model switches, and exact
   active workflow-skill snapshots, and can fork a completed restored history or
   a restored user-message point into an independent named session.
-  `--resume --pick` groups related sessions into a graph-aware numbered tree,
-  and `/fork --pick` provides an interactive fork-point picker, but an
-  in-session branch navigator and future sub-agent state are still absent.
+  `--resume --pick` and `/sessions` group related sessions into a graph-aware
+  numbered tree, while `/fork --pick` provides an interactive fork-point
+  picker. Future sub-agent state is still absent.
   Forks do not copy bash approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
@@ -235,9 +235,9 @@ Known limits that shape the priorities below:
    history draft restoration, and resize handling, plus active-turn steering,
    deferred-command, approval, and operation-queue modes, transient activity,
    and persistent durable Goal status. The startup and `--resume --pick`
-   session picker groups independent fork ledgers into a numbered branch tree.
-   Remaining work includes in-session branch navigation and future sub-agent
-   state.
+   session picker groups independent fork ledgers into a numbered branch tree;
+   `/sessions` reuses that graph in a running process and transfers queued input
+   to the selected ledger. Remaining work includes future sub-agent state.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -331,8 +331,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   `keel --resume <id> --fork-points`, and interactive
   `/fork [--before-message <id>|--pick]` create independent forks from restored
   history without copying pending queued input. `keel --resume --pick` groups
-  those ledgers into a graph-aware numbered tree. Remaining work is an
-  in-session branch navigator and future sub-agent state.
+  those ledgers into a graph-aware numbered tree, and `/sessions` switches the
+  active ledger from the same graph without restarting Keel. Remaining work is
+  future sub-agent state.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports

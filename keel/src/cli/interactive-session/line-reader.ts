@@ -6,6 +6,10 @@ export interface InteractiveLineInput {
     listener: (line: string) => void,
   ) => InteractiveLineInput;
   readonly once: (event: "close", listener: () => void) => InteractiveLineInput;
+  readonly off: (
+    event: "line" | "close",
+    listener: ((line: string) => void) | (() => void),
+  ) => InteractiveLineInput;
   readonly close: () => void;
 }
 
@@ -20,6 +24,7 @@ export interface LineReader {
   readonly sequence: () => number;
   readonly needsInput: () => boolean;
   readonly pendingInputCount: () => number;
+  readonly dispose: () => void;
 }
 
 export interface QueuedLine {
@@ -111,7 +116,7 @@ export function createLineReader(
 
   // Approval answers must be typed after the approval prompt appears. The
   // sequence lets approval waits ignore already-queued user messages.
-  input.on("line", (line) => {
+  const onLine = (line: string) => {
     if (inputFailure !== null) return;
     options.onLineSubmitted?.(line);
     currentSequence++;
@@ -152,9 +157,10 @@ export function createLineReader(
         admittedInput?.id,
       ),
     );
-  });
+  };
+  input.on("line", onLine);
 
-  input.once("close", () => {
+  const onClose = () => {
     closed = true;
     for (;;) {
       const waiter = waiters.shift();
@@ -166,7 +172,8 @@ export function createLineReader(
       if (waiter === undefined) return;
       waiter.resolve(null);
     }
-  });
+  };
+  input.once("close", onClose);
 
   return {
     readLine: () => {
@@ -243,5 +250,9 @@ export function createLineReader(
     needsInput: () => queued.length === 0 && !closed,
     pendingInputCount: () =>
       queued.filter((queuedLine) => queuedLine.line.trim() !== "").length,
+    dispose: () => {
+      input.off("line", onLine);
+      input.off("close", onClose);
+    },
   };
 }

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { chmodSync, renameSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -17,6 +18,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
+import {
+  acquireSessionLock,
+  resumeSessionStore,
+} from "../../../src/cli/session-store.ts";
 import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
 import {
   createRuntime,
@@ -117,7 +122,7 @@ async function writeWorkflowSkill(options: {
 
 function savedSessionIntroFromStderr(stderr: string): string {
   const match =
-    /^Keel interactive session\nsession: ([^\n]+)\nContinue the task here; send follow-ups or corrections until it is done\.\nAfter a completed turn, resume with: keel --resume \1\nCommands: \/status \/tasks \/diff \/undo \/help\n/u.exec(
+    /^Keel interactive session\nsession: ([^\n]+)\nContinue the task here; send follow-ups or corrections until it is done\.\nAfter a completed turn, resume with: keel --resume \1\nCommands: \/sessions \/status \/tasks \/diff \/undo \/help\n/u.exec(
       stderr,
     );
   if (match === null) {
@@ -2490,6 +2495,464 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
+  test(`Given the current saved session has a newer fork,
+    When the user opens the in-session graph picker and selects that fork,
+    Then Keel stays in the same process and continues the exact branch`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-switch-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const reportFile = join(home, "switch-report.json");
+    execFileSync("git", ["init", "-q"], { cwd: workspace });
+    const memoryFixture = createRuntime(
+      ["memory", "add", "Source session memory exposure."],
+      {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      },
+    );
+    expect(await runCliMain(memoryFixture.runtime)).toBe(0);
+    const savedMemory =
+      /^Saved project memory (mem_[a-f0-9-]+) for ([a-f0-9-]+)\.\n$/u.exec(
+        memoryFixture.stdout(),
+      );
+    expect(savedMemory).not.toBeNull();
+    const memoryId = savedMemory?.[1];
+    const memoryProjectId = savedMemory?.[2];
+    if (memoryId === undefined || memoryProjectId === undefined) {
+      throw new Error("project memory fixture did not return its identities");
+    }
+    const memoryEventsPath = join(
+      home,
+      "memory",
+      "projects",
+      memoryProjectId,
+      "events.jsonl",
+    );
+    let memoryRemovedAfterSourceTurn = false;
+    const rootLastMessageId = "msg_append-2026-01-01T00_00_05_000Z_2";
+    await writeSessionLedger({
+      home,
+      id: "login-timeout",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember the login timeout task",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the login timeout task.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "database-index",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-03T00:00:00.000Z",
+      graph: endForkGraph({
+        sessionId: "database-index",
+        parentSessionId: "login-timeout",
+        sourceLastMessageId: rootLastMessageId,
+        sourceOrdinal: 2,
+      }),
+      records: [
+        appendSessionRecordLine("2026-01-03T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember the database index branch",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the database index branch.",
+            toolCalls: [],
+          },
+        ]),
+        JSON.stringify({
+          schemaVersion: 4,
+          type: "model_switch",
+          timestamp: "2026-01-03T00:00:05.000Z",
+          from: null,
+          to: { providerId: "fake", model: "fake" },
+        }),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime(
+      ["--resume", "login-timeout", "--report", reportFile],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_HOME: home,
+        },
+        input,
+        inputIsTTY: true,
+        stderrIsTTY: false,
+        onStdout: (text) => {
+          if (
+            !memoryRemovedAfterSourceTurn &&
+            text.includes("Select session [1-2], or q to cancel:")
+          ) {
+            renameSync(memoryEventsPath, `${memoryEventsPath}.removed`);
+            memoryRemovedAfterSourceTurn = true;
+          }
+        },
+      },
+    );
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("which marker should I remember?\n");
+      await waitForCondition(
+        () =>
+          fixture
+            .stdout()
+            .includes("Earlier you said: remember the login timeout task\n"),
+        "source session did not answer before switching",
+      );
+      input.write("/sessions\n");
+      await waitForCondition(
+        () =>
+          fixture.stdout().includes("Select session [1-2], or q to cancel:"),
+        "in-session graph picker did not render",
+      );
+      input.write("2\n/status\n");
+      await waitForCondition(
+        () =>
+          fixture.stderr().includes("Switched session: database-index\n") &&
+          fixture.stdout().includes("status:\n  session: database-index\n"),
+        "selected session did not become active",
+      );
+      input.end("what did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(
+        [
+          "graph login-timeout root login-timeout  updated 2026-01-03T00:00:05.000Z",
+          "1. login-timeout (active)  updated 1970-01-01T00:00:00.000Z",
+          "   branch: main",
+          "   preview: remember the login timeout task",
+          "  2. database-index  updated 2026-01-03T00:00:05.000Z",
+          "     branch: database-index",
+          "     parent: login-timeout",
+          `     fork point: full restored history from login-timeout through message ${rootLastMessageId} (message 2)`,
+          "     preview: remember the database index branch",
+        ].join("\n"),
+      );
+      expect(stdout).toContain("status:\n  session: database-index\n");
+      expect(stdout).toContain("  active model: fake/fake\n");
+      expect(stdout).toContain("  model switches: 1\n");
+      expect(stdout).toContain(
+        "Earlier you said: remember the database index branch\n",
+      );
+      expect(
+        stdout.indexOf("Earlier you said: remember the login timeout task\n"),
+      ).toBeLessThan(
+        stdout.indexOf(
+          "Earlier you said: remember the database index branch\n",
+        ),
+      );
+      expect(fixture.stderr()).toContain("Switched session: database-index\n");
+      const sourceLedger = await readFile(
+        join(home, "sessions", "login-timeout", "ledger.jsonl"),
+        "utf8",
+      );
+      const targetLedger = await readFile(
+        join(home, "sessions", "database-index", "ledger.jsonl"),
+        "utf8",
+      );
+      const restoredSource = resumeSessionStore({
+        sessionId: "login-timeout",
+        workspace: ledgerWorkspace,
+        runtime: fixture.runtime,
+      });
+      expect(restoredSource.pendingInputs).toEqual([]);
+      expect(restoredSource.messages).not.toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "what did I ask you to remember?",
+        }),
+      );
+      expect(sourceLedger).not.toContain("what did I ask you to remember?");
+      expect(sourceLedger).toContain('"type":"input_consumed"');
+      expect(targetLedger).toContain("what did I ask you to remember?");
+      const report = z
+        .object({
+          agentLoopTurns: z.number(),
+          providerRequestAttemptCount: z.number(),
+          tasks: z.array(z.unknown()),
+          memory: z.object({ loadedIds: z.array(z.string()) }),
+        })
+        .parse(JSON.parse(await readFile(reportFile, "utf8")));
+      expect(report.agentLoopTurns).toBe(2);
+      expect(report.providerRequestAttemptCount).toBe(2);
+      expect(report.tasks).toHaveLength(2);
+      expect(report.memory.loadedIds).toContain(memoryId);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given another process holds the selected session lock,
+    When the user tries to switch and immediately sends a follow-up,
+    Then Keel keeps the current session active and preserves its context`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-switch-lock-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "current-task",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember the current task",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the current task.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "busy-task",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember the busy task",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the busy task.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime(["--resume", "current-task"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+    const busyLock = acquireSessionLock({
+      sessionId: "busy-task",
+      runtime: fixture.runtime,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("/sessions\n");
+      await waitForCondition(
+        () =>
+          fixture.stdout().includes("Select session [1-2], or q to cancel:"),
+        "in-session picker did not render before the lock test",
+      );
+      input.end("1\n/status\nwhat did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stderr()).toContain(
+        'Session switch failed: Error: session "busy-task" is already active.',
+      );
+      expect(fixture.stdout()).toContain("status:\n  session: current-task\n");
+      expect(fixture.stdout()).toContain(
+        "Earlier you said: remember the current task\n",
+      );
+      expect(fixture.stdout()).not.toContain(
+        "Earlier you said: remember the busy task\n",
+      );
+      const currentLedger = await readFile(
+        join(home, "sessions", "current-task", "ledger.jsonl"),
+        "utf8",
+      );
+      const busyLedger = await readFile(
+        join(home, "sessions", "busy-task", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(currentLedger).toContain("what did I ask you to remember?");
+      expect(busyLedger).not.toContain("what did I ask you to remember?");
+    } finally {
+      busyLock.release();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the target ledger fails after switch validation,
+    When queued follow-up admission cannot finish,
+    Then both locks are released and the source session retains the input`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-switch-fail-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "recoverable-source",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:01.000Z", [
+          {
+            role: "user",
+            content: "remember the recoverable source",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the recoverable source.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "failing-target",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:01.000Z", [
+          {
+            role: "user",
+            content: "remember the failing target",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the failing target.",
+            toolCalls: [],
+          },
+        ]),
+        sessionGoalRecordLine({
+          timestamp: "2026-01-02T00:00:02.000Z",
+          goal: {
+            objective: "Keep the target active until resume",
+            status: "active",
+            budget: { turns: 2 },
+            usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          },
+        }),
+      ],
+    });
+    const targetLedgerPath = join(
+      home,
+      "sessions",
+      "failing-target",
+      "ledger.jsonl",
+    );
+    const input = new PassThrough();
+    let targetMadeReadOnly = false;
+    const fixture = createRuntime(["--resume", "recoverable-source"], {
+      cwd: workspace,
+      env: { KEEL_PROVIDER: "fake", KEEL_HOME: home },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+      onStdout: (text) => {
+        if (
+          !targetMadeReadOnly &&
+          text.includes("Select session [1-2], or q to cancel:")
+        ) {
+          chmodSync(targetLedgerPath, 0o400);
+          targetMadeReadOnly = true;
+        }
+      },
+    });
+
+    try {
+      const failedRun = runCliMain(fixture.runtime);
+      input.write("/sessions\n");
+      await waitForCondition(
+        () => targetMadeReadOnly,
+        "target ledger was not sabotaged after catalog validation",
+      );
+
+      // When
+      input.end("1\nwhat did I ask you to remember?\n");
+      const failedExitCode = await failedRun;
+
+      // Then
+      expect(failedExitCode).toBe(1);
+      expect(fixture.stderr()).not.toContain("Switched session:");
+      const sourceAfterFailure = resumeSessionStore({
+        sessionId: "recoverable-source",
+        workspace: ledgerWorkspace,
+        runtime: fixture.runtime,
+      });
+      expect(
+        sourceAfterFailure.pendingInputs.map((entry) => entry.line),
+      ).toEqual(["what did I ask you to remember?"]);
+
+      chmodSync(targetLedgerPath, 0o600);
+      const targetInput = new PassThrough();
+      targetInput.end();
+      const targetRetry = createRuntime(["--resume", "failing-target"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: targetInput,
+      });
+      expect(await runCliMain(targetRetry.runtime)).toBe(0);
+
+      const sourceInput = new PassThrough();
+      sourceInput.end();
+      const sourceRetry = createRuntime(["--resume", "recoverable-source"], {
+        cwd: workspace,
+        env: {
+          KEEL_PROVIDER: "fake",
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+        },
+        input: sourceInput,
+      });
+      expect(await runCliMain(sourceRetry.runtime)).toBe(0);
+      expect(sourceRetry.stdout()).toBe(
+        "Earlier you said: remember the recoverable source\n",
+      );
+    } finally {
+      chmodSync(targetLedgerPath, 0o600);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given saved sessions contain a parent cycle in current graph metadata,
     When the user browses resume choices and selects a numbered session,
     Then Keel keeps every session visible and resumes the selected task`, async () => {
@@ -3645,7 +4108,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
       await waitForCondition(() => {
         const stderr = fixture.stderr();
         return (
-          stderr.includes("Commands: /status /tasks /diff /undo /help\n") &&
+          stderr.includes(
+            "Commands: /sessions /status /tasks /diff /undo /help\n",
+          ) &&
           stderr === `${savedSessionIntroFromStderr(stderr)}keel> /help\nkeel> `
         );
       }, "interactive help did not return to a visible prompt");
