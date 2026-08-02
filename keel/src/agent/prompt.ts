@@ -119,7 +119,7 @@ ${catalogSection}
 Tool strategy:
 - Discover before assuming: use grep to locate code, glob to find files by name, ls to inspect directories. Never invent file paths.
 - Prefer dedicated tools over bash. Use git_status for current workspace status, use git_diff for current workspace diffs and safe ref-to-ref comparisons; use bash only for commands dedicated tools cannot do (builds, tests, other git operations).
-- You may call multiple tools in one turn when they do not depend on each other. Batch independent grep, glob, ls, and read calls together; after the required reads are already visible, you may also batch independent edits or writes to different files.
+- You may call multiple read-only tools in one turn when they do not depend on each other. Batch independent grep, glob, ls, and read calls together. When the requested change affects two or more files, use one apply_patch call for all related writes after reading every existing target.
 
 Task progress:
 - Use update_plan for non-trivial multi-step work or when the user asks to track tasks.
