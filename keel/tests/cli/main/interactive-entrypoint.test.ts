@@ -32,6 +32,7 @@ import {
 } from "../../../src/testing/provider-sse-fixtures.ts";
 import {
   appendSessionRecordLine,
+  endForkGraph,
   inputAdmittedRecordLine,
   sessionGoalRecordLine,
   taskProgressRecordLine,
@@ -1795,6 +1796,12 @@ describe("CLI Main - Interactive Entrypoint", () => {
       id: "latest",
       workspace: ledgerWorkspace,
       createdAt: "2026-01-02T00:00:00.000Z",
+      graph: endForkGraph({
+        sessionId: "latest",
+        parentSessionId: "older",
+        sourceLastMessageId: "msg_append-2026-01-01T00_00_05_000Z_2",
+        sourceOrdinal: 2,
+      }),
       records: [
         appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
           {
@@ -1838,8 +1845,8 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(fixture.stdout()).toContain(
         "Select session [1-2], or q to cancel:",
       );
-      expect(fixture.stdout()).toContain("Earlier you said: remember alpha\n");
-      expect(fixture.stderr()).toContain("Resuming selected session: older\n");
+      expect(fixture.stdout()).toContain("Earlier you said: remember beta\n");
+      expect(fixture.stderr()).toContain("Resuming selected session: latest\n");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -2347,6 +2354,251 @@ describe("CLI Main - Interactive Entrypoint", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(otherWorkspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a saved task has a newer fork beside another session,
+    When the user browses resume choices and selects the fork,
+    Then Keel shows the task graph and continues the numbered branch`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-graph-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const rootLastMessageId = "msg_append-2026-01-01T00_00_05_000Z_2";
+    await writeSessionLedger({
+      home,
+      id: "login-timeout",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember the login timeout task",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the login timeout task.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "database-index",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-03T00:00:00.000Z",
+      graph: endForkGraph({
+        sessionId: "database-index",
+        parentSessionId: "login-timeout",
+        sourceLastMessageId: rootLastMessageId,
+        sourceOrdinal: 2,
+      }),
+      records: [
+        appendSessionRecordLine("2026-01-03T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember the database index branch",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the database index branch.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "unrelated",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember the unrelated task",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered the unrelated task.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime(["--resume", "--pick"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () =>
+          fixture.stdout().includes("Select session [1-3], or q to cancel:"),
+        "graph-aware resume picker did not render",
+      );
+      input.end("2\n\nwhat did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      const stdout = fixture.stdout();
+      expect(stdout).toContain(
+        [
+          "graph login-timeout root login-timeout  updated 2026-01-03T00:00:05.000Z",
+          "1. login-timeout  updated 2026-01-01T00:00:05.000Z",
+          "   branch: main",
+          "   preview: remember the login timeout task",
+          "  2. database-index  updated 2026-01-03T00:00:05.000Z",
+          "     branch: database-index",
+          "     parent: login-timeout",
+          `     fork point: full restored history from login-timeout through message ${rootLastMessageId} (message 2)`,
+          "     preview: remember the database index branch",
+        ].join("\n"),
+      );
+      expect(stdout).toContain(
+        [
+          "graph unrelated root unrelated  updated 2026-01-02T00:00:05.000Z",
+          "3. unrelated  updated 2026-01-02T00:00:05.000Z",
+        ].join("\n"),
+      );
+      expect(stdout).toContain(
+        "Earlier you said: remember the database index branch\n",
+      );
+      expect(fixture.stderr()).toContain(
+        "Resuming selected session: database-index\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given saved sessions contain a parent cycle in current graph metadata,
+    When the user browses resume choices and selects a numbered session,
+    Then Keel keeps every session visible and resumes the selected task`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-cycle-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    await writeSessionLedger({
+      home,
+      id: "cycle-a",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      graph: {
+        ...endForkGraph({
+          sessionId: "cycle-a",
+          parentSessionId: "cycle-b",
+          sourceLastMessageId: "msg_cycle_b",
+          sourceOrdinal: 2,
+        }),
+        graphId: "cycle",
+        rootSessionId: "cycle-a",
+      },
+      records: [
+        appendSessionRecordLine("2026-01-01T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember cycle alpha",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered cycle alpha.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await writeSessionLedger({
+      home,
+      id: "cycle-b",
+      workspace: ledgerWorkspace,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      graph: {
+        ...endForkGraph({
+          sessionId: "cycle-b",
+          parentSessionId: "cycle-a",
+          sourceLastMessageId: "msg_cycle_a",
+          sourceOrdinal: 2,
+        }),
+        graphId: "cycle",
+        rootSessionId: "cycle-a",
+      },
+      records: [
+        appendSessionRecordLine("2026-01-02T00:00:05.000Z", [
+          {
+            role: "user",
+            content: "remember cycle beta",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "Remembered cycle beta.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+
+    const input = new PassThrough();
+    const fixture = createRuntime(["--resume", "--pick"], {
+      cwd: workspace,
+      env: {
+        KEEL_PROVIDER: "fake",
+        KEEL_HOME: home,
+      },
+      input,
+      inputIsTTY: true,
+      stderrIsTTY: false,
+    });
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      await waitForCondition(
+        () => fixture.stdout().includes("Select session ["),
+        "resume picker did not render the cyclic graph",
+      );
+      input.end("2\n\nwhat did I ask you to remember?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(fixture.stdout()).toContain(
+        "graph cycle root cycle-a  updated 2026-01-02T00:00:05.000Z\n",
+      );
+      expect(fixture.stdout()).toContain(
+        "1. cycle-b  updated 2026-01-02T00:00:05.000Z\n",
+      );
+      expect(fixture.stdout()).toContain(
+        "  2. cycle-a  updated 2026-01-01T00:00:05.000Z\n",
+      );
+      expect(fixture.stdout()).toContain(
+        "Earlier you said: remember cycle alpha\n",
+      );
+      expect(fixture.stderr()).toContain(
+        "Resuming selected session: cycle-a\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });
