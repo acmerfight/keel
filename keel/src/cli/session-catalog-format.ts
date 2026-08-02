@@ -130,6 +130,16 @@ interface SessionCatalogGraphGroup {
   readonly entries: readonly SessionCatalogEntry[];
 }
 
+interface SessionCatalogTreeEntry {
+  readonly entry: SessionCatalogEntry;
+  readonly depth: number;
+}
+
+export interface SessionPickerView {
+  readonly prompt: string;
+  readonly sessions: readonly SessionCatalogEntry[];
+}
+
 function compareSessionCatalogGraphGroups(
   left: SessionCatalogGraphGroup,
   right: SessionCatalogGraphGroup,
@@ -169,9 +179,9 @@ function sessionCatalogGraphGroups(
   return [...groupsById.values()].sort(compareSessionCatalogGraphGroups);
 }
 
-function sessionCatalogTreeLines(
+function sessionCatalogTreeEntries(
   entries: readonly SessionCatalogEntry[],
-): readonly string[] {
+): readonly SessionCatalogTreeEntry[] {
   const entryIds = new Set(entries.map((entry) => entry.id));
   const childrenByParent = new Map<string, SessionCatalogEntry[]>();
   const roots: SessionCatalogEntry[] = [];
@@ -186,9 +196,14 @@ function sessionCatalogTreeLines(
     childrenByParent.set(parentSessionId, children);
   }
 
-  const lines: string[] = [];
+  const treeEntries: SessionCatalogTreeEntry[] = [];
+  const visitedEntryIds = new Set<string>();
   const appendEntry = (entry: SessionCatalogEntry, depth: number): void => {
-    lines.push(...sessionCatalogEntryLines(entry, depth));
+    if (visitedEntryIds.has(entry.id)) {
+      return;
+    }
+    visitedEntryIds.add(entry.id);
+    treeEntries.push({ entry, depth });
     for (const child of (childrenByParent.get(entry.id) ?? []).sort(
       compareSessionCatalogEntriesForFormat,
     )) {
@@ -198,7 +213,20 @@ function sessionCatalogTreeLines(
   for (const root of roots.sort(compareSessionCatalogEntriesForFormat)) {
     appendEntry(root, 0);
   }
-  return lines;
+  for (const unvisitedEntry of [...entries].sort(
+    compareSessionCatalogEntriesForFormat,
+  )) {
+    appendEntry(unvisitedEntry, 0);
+  }
+  return treeEntries;
+}
+
+function sessionCatalogTreeLines(
+  entries: readonly SessionCatalogEntry[],
+): readonly string[] {
+  return sessionCatalogTreeEntries(entries).flatMap(({ entry, depth }) =>
+    sessionCatalogEntryLines(entry, depth),
+  );
 }
 
 function compareSessionCatalogEntriesForFormat(
@@ -232,29 +260,53 @@ export function formatSessionCatalog(catalog: SessionCatalog): string {
 function sessionPickerEntryLines(
   entry: SessionCatalogEntry,
   index: number,
+  depth: number,
 ): readonly string[] {
-  const detailIndent = "   ";
+  const indent = "  ".repeat(depth);
+  const detailIndent = `${indent}   `;
   return [
-    `${index + 1}. ${formatSessionDetailText(entry.id)}  updated ${formatSessionDetailText(entry.updatedAt)}`,
+    `${indent}${index + 1}. ${formatSessionDetailText(entry.id)}  updated ${formatSessionDetailText(entry.updatedAt)}`,
     `${detailIndent}branch: ${formatSessionDetailText(entry.graph.branchTitle)}`,
     ...(entry.title !== undefined
       ? [`${detailIndent}title: ${formatSessionDetailText(entry.title)}`]
+      : []),
+    ...(entry.graph.parentSessionId !== null
+      ? [
+          `${detailIndent}parent: ${formatSessionDetailText(entry.graph.parentSessionId)}`,
+        ]
+      : []),
+    ...(entry.graph.forkPoint !== null
+      ? [
+          `${detailIndent}fork point: ${formatSessionForkPoint(entry.graph.forkPoint)}`,
+        ]
       : []),
     `${detailIndent}preview: ${formatSessionDetailText(entry.preview)}`,
     ...sessionRecoveryStateLines(entry, detailIndent),
   ];
 }
 
-export function formatSessionPicker(catalog: SessionCatalog): string {
+export function buildSessionPickerView(
+  catalog: SessionCatalog,
+): SessionPickerView {
   const lines = [
     `Sessions for workspace ${formatSessionDetailText(catalog.workspace)}:`,
     "Keep one saved session open per task; resume it for follow-ups until the task is done.",
   ];
-  for (const [index, entry] of catalog.sessions.entries()) {
-    lines.push(...sessionPickerEntryLines(entry, index));
+  const sessions: SessionCatalogEntry[] = [];
+  for (const group of sessionCatalogGraphGroups(catalog.sessions)) {
+    lines.push(
+      `graph ${formatSessionDetailText(group.graphId)} root ${formatSessionDetailText(group.rootSessionId)}  updated ${formatSessionDetailText(group.updatedAt)}`,
+    );
+    for (const { entry, depth } of sessionCatalogTreeEntries(group.entries)) {
+      lines.push(...sessionPickerEntryLines(entry, sessions.length, depth));
+      sessions.push(entry);
+    }
   }
-  lines.push(`Select session [1-${catalog.sessions.length}], or q to cancel:`);
-  return `${lines.join("\n")}\n`;
+  lines.push(`Select session [1-${sessions.length}], or q to cancel:`);
+  return {
+    prompt: `${lines.join("\n")}\n`,
+    sessions,
+  };
 }
 
 export function formatSessionStartupPrompt(options: {

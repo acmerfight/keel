@@ -82,9 +82,9 @@ import { createAgentEventReportRecorder } from "./report-events.ts";
 import type { CliRuntime } from "./runtime.ts";
 import { formatCliRuntimeError } from "./runtime-error.ts";
 import {
+  buildSessionPickerView,
   formatSessionCatalogWarnings,
   formatSessionForkCreated,
-  formatSessionPicker,
   formatSessionStartupPrompt,
 } from "./session-catalog-format.ts";
 import { createAutomaticSessionId } from "./session-id.ts";
@@ -378,12 +378,13 @@ async function promptedSessionStartForBareKeel(options: {
     workspace: catalog.workspace,
     latestSession,
   });
+  const pickerView = buildSessionPickerView(catalog);
   runtime.writeStdout(startupPrompt);
   const startupSelection = await readSessionStartupSelection({
     input: runtime.input,
-    maxChoice: catalog.sessions.length,
+    maxChoice: pickerView.sessions.length,
     startupPrompt,
-    pickerPrompt: formatSessionPicker(catalog),
+    pickerPrompt: pickerView.prompt,
     writeStdout: runtime.writeStdout,
     writeStderr: runtime.writeStderr,
   });
@@ -397,7 +398,7 @@ async function promptedSessionStartForBareKeel(options: {
       };
     case "pick": {
       const selectedSession =
-        catalog.sessions[startupSelection.selection.choice - 1];
+        pickerView.sessions[startupSelection.selection.choice - 1];
       /* v8 ignore next 3: the picker validates the choice range against this catalog length. */
       if (selectedSession === undefined) {
         throw new SessionStoreError(
@@ -448,10 +449,11 @@ async function pickedSessionIdForWorkspace(options: {
       `Error: no saved sessions for workspace ${catalog.workspace}. Complete an interactive turn before running keel --resume --pick.`,
     );
   }
-  runtime.writeStdout(formatSessionPicker(catalog));
+  const pickerView = buildSessionPickerView(catalog);
+  runtime.writeStdout(pickerView.prompt);
   const pickerResult = await readSessionPickerSelection({
     input: runtime.input,
-    maxChoice: catalog.sessions.length,
+    maxChoice: pickerView.sessions.length,
     writeStdout: runtime.writeStdout,
     writeStderr: runtime.writeStderr,
   });
@@ -461,7 +463,8 @@ async function pickedSessionIdForWorkspace(options: {
     }
     return null;
   }
-  const selectedSession = catalog.sessions[pickerResult.selection.choice - 1];
+  const selectedSession =
+    pickerView.sessions[pickerResult.selection.choice - 1];
   /* v8 ignore next 3: the picker validates the choice range against this catalog length. */
   if (selectedSession === undefined) {
     throw new SessionStoreError("Error: selected session is not available.");
