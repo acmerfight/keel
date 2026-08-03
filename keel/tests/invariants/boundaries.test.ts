@@ -182,6 +182,39 @@ function importedNamesFromResolvedSpecifier(
   return names;
 }
 
+function namedExports(file: string, source: string): readonly string[] {
+  const sourceFile = parseSource(file, source);
+  const names: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isExportDeclaration(node) &&
+      node.exportClause !== undefined &&
+      ts.isNamedExports(node.exportClause)
+    ) {
+      for (const element of node.exportClause.elements) {
+        names.push(element.name.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return names;
+}
+
+function nonNamedExportStatements(
+  file: string,
+  source: string,
+): readonly ts.Statement[] {
+  return parseSource(file, source).statements.filter(
+    (statement) =>
+      !ts.isExportDeclaration(statement) ||
+      statement.exportClause === undefined ||
+      !ts.isNamedExports(statement.exportClause),
+  );
+}
+
 function wildcardReExportSpecifiers(
   file: string,
   source: string,
@@ -557,6 +590,110 @@ describe("module boundaries", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  test(`Given MCP OAuth has independent credential, login, runtime-auth, and revocation owners,
+    When facade and internal dependencies are inspected,
+    Then consumers enter through the facade and OAuth flows do not depend on each other`, () => {
+    const facade = "src/mcp/oauth.ts";
+    const internalRoot = "src/mcp/oauth/";
+    const credentialStore = "src/mcp/oauth/credential-store.ts";
+    const flowFiles = new Set([
+      "src/mcp/oauth/login-provider.ts",
+      "src/mcp/oauth/runtime-auth.ts",
+      "src/mcp/oauth/revocation.ts",
+    ]);
+    const internalFiles = layerFiles("src/mcp/oauth");
+    const facadeSource = readFileSync(facade, "utf8");
+    const facadeSpecifiers = importSpecifiers(facade, facadeSource);
+    const facadeTargets = facadeSpecifiers.flatMap((specifier) => {
+      const resolved = resolvedRelativeSpecifier(facade, specifier);
+      return resolved?.startsWith(internalRoot) === true ? [resolved] : [];
+    });
+    expect(new Set(facadeTargets)).toEqual(
+      new Set([credentialStore, ...flowFiles]),
+    );
+    expect(
+      facadeSpecifiers.filter((specifier) => !specifier.startsWith("./oauth/")),
+    ).toEqual([]);
+    expect(nonNamedExportStatements(facade, facadeSource)).toEqual([]);
+    expect(new Set(namedExports(facade, facadeSource))).toEqual(
+      new Set([
+        "McpOAuthServerEndpoint",
+        "McpSecretBackend",
+        "McpOAuthCredentialError",
+        "McpOAuthServerUnavailableError",
+        "McpOAuthLoginProvider",
+        "McpPreRegisteredClient",
+        "createMcpOAuthLoginProvider",
+        "deleteMcpOAuthCredentials",
+        "deleteMcpOAuthCredentialsUnderLock",
+        "revokeAndDeleteMcpOAuthCredentialsUnderLock",
+        "withMcpOAuthCredentialLock",
+        "McpAuthorizationIdentity",
+        "McpRuntimeAuthProvider",
+        "createMcpBearerAuthProvider",
+        "isMcpAuthenticationRequiredError",
+        "McpOAuthAuthenticationRequiredError",
+        "sameMcpAuthorizationIdentity",
+      ]),
+    );
+
+    const violations: string[] = [];
+    for (const file of sourceAndTestFiles()) {
+      if (file === facade || file.startsWith(internalRoot)) {
+        continue;
+      }
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("oauth/")) {
+        continue;
+      }
+      for (const specifier of importSpecifiers(file, source)) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved?.startsWith(internalRoot) === true) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+
+    for (const file of internalFiles) {
+      for (const specifier of importSpecifiers(
+        file,
+        readFileSync(file, "utf8"),
+      )) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved === facade) {
+          violations.push(`${file} imports OAuth facade ${specifier}`);
+        }
+        if (
+          resolved?.startsWith(internalRoot) === true &&
+          !(flowFiles.has(file) && resolved === credentialStore)
+        ) {
+          violations.push(`${file} imports forbidden OAuth owner ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  test(`Given the OAuth facade permits only explicit named re-exports,
+    When direct exported declarations are inspected,
+    Then the architecture detector rejects every direct declaration form`, () => {
+    const directExports = nonNamedExportStatements(
+      "inline.ts",
+      `export const value = 1;
+       export function operation(): void {}
+       export interface Contract { readonly value: number; }`,
+    );
+    const namedReExports = nonNamedExportStatements(
+      "inline.ts",
+      `export { value } from "./value.ts";
+       export type { Contract } from "./contract.ts";`,
+    );
+
+    expect(directExports).toHaveLength(3);
+    expect(namedReExports).toEqual([]);
   });
 
   test(`Given CLI command parsers share common argument contracts,

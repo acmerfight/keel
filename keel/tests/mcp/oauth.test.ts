@@ -299,9 +299,10 @@ describe("MCP OAuth flow state", () => {
     ["invalid JSON", "{", "invalid JSON"],
     ["wrong schema", "{}", "current schema"],
     [
-      "issuer-inconsistent",
+      "client-issuer-inconsistent",
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 4,
+        incarnation: TEST_SERVER_INCARNATION,
         resource: "https://resource.example/mcp",
         activeAuthorization: null,
         credentials: [
@@ -312,6 +313,34 @@ describe("MCP OAuth flow state", () => {
               issuer: "https://other-auth.example",
             },
             tokens: null,
+            revocation: null,
+          },
+        ],
+        discovery: null,
+        flow: { status: "idle" },
+      }),
+      "current schema",
+    ],
+    [
+      "token-issuer-inconsistent",
+      JSON.stringify({
+        schemaVersion: 4,
+        incarnation: TEST_SERVER_INCARNATION,
+        resource: "https://resource.example/mcp",
+        activeAuthorization: null,
+        credentials: [
+          {
+            issuer: "https://auth.example",
+            client: {
+              client_id: "client",
+              issuer: "https://auth.example",
+            },
+            tokens: {
+              access_token: "access-token",
+              token_type: "Bearer",
+              issuer: "https://other-auth.example",
+            },
+            revocation: null,
           },
         ],
         discovery: null,
@@ -322,11 +351,13 @@ describe("MCP OAuth flow state", () => {
     [
       "active-client-inconsistent",
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 4,
+        incarnation: TEST_SERVER_INCARNATION,
         resource: "https://resource.example/mcp",
         activeAuthorization: {
           issuer: "https://auth.example",
           clientId: "missing-client",
+          grantId: "00000000-0000-4000-8000-000000000099",
         },
         credentials: [],
         discovery: null,
