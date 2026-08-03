@@ -563,6 +563,53 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
+  test(`Given tool execution has domain-owned internals behind a public facade,
+    When execution dependencies are inspected,
+    Then consumers enter through the facade and internal ownership stays one-way`, () => {
+    const facade = "src/tools/execution.ts";
+    const internalRoot = "src/tools/execution/";
+    const goalOwner = "src/tools/execution/goal.ts";
+    const facadeSource = readFileSync(facade, "utf8");
+    const facadeTargets = importSpecifiers(facade, facadeSource).flatMap(
+      (specifier) => {
+        const resolved = resolvedRelativeSpecifier(facade, specifier);
+        return resolved?.startsWith(internalRoot) === true ? [resolved] : [];
+      },
+    );
+
+    expect(facadeTargets).toContain(goalOwner);
+
+    const violations: string[] = [];
+    for (const file of sourceAndTestFiles()) {
+      if (file === facade || file.startsWith(internalRoot)) {
+        continue;
+      }
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("execution/")) {
+        continue;
+      }
+      for (const specifier of importSpecifiers(file, source)) {
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved?.startsWith(internalRoot) === true) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+
+    for (const file of layerFiles("src/tools/execution")) {
+      for (const specifier of importSpecifiers(
+        file,
+        readFileSync(file, "utf8"),
+      )) {
+        if (resolvedRelativeSpecifier(file, specifier) === facade) {
+          violations.push(`${file} imports execution facade ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   test(`Given apply-patch internals have a public facade,
     When external imports are inspected,
     Then consumers do not bypass the apply-patch facade`, () => {
