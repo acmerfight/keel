@@ -43,13 +43,14 @@ import {
 } from "./interactive-session/display.ts";
 import type { InteractiveLineInput } from "./interactive-session/line-reader.ts";
 import {
+  type InteractiveActiveSession,
+  type InteractiveActiveSessionState,
   type InteractiveForkSessionRequest,
   type InteractiveInvocationState,
-  type InteractiveSession,
-  type InteractiveSessionMemoryBinding,
   type InteractiveSessionOptions,
   type InteractiveSkillRuntime,
   runInteractiveSession,
+  type SavedInteractiveSession,
 } from "./interactive-session.ts";
 import { listMcpServersSync, McpConfigError } from "./mcp-config.ts";
 import {
@@ -981,20 +982,14 @@ async function runActiveSessionCli(
           `Warning: workflow skill ${status.activation.qualifiedName} ${status.diskStatus}; continuing with session snapshot sha256:${status.activation.digest}.\n`,
         );
       }
-      let interactiveSession: InteractiveSession = { kind: "ephemeral" };
-      let restoredSessionOptions:
-        | Pick<
-            InteractiveSessionOptions,
-            | "initialMessages"
-            | "initialSessionTitle"
-            | "initialSessionGoal"
-            | "initialTaskProgress"
-            | "initialModelSelection"
-            | "initialModelSwitchCount"
-            | "initialQueuedInputs"
-            | "initialBashApprovalGrants"
-          >
-        | undefined;
+      let savedInteractiveSession: SavedInteractiveSession | null = null;
+      let initialActiveSessionState: InteractiveActiveSessionState = {
+        messages: [],
+        taskProgress: { tasks: [] },
+        modelSwitchCount: 0,
+        queuedInputs: [],
+        bashApprovalGrants: [],
+      };
       let headlessGoalActivated = false;
       if (savedSessionOwner !== null) {
         const sessionId = savedSessionOwner.id;
@@ -1071,23 +1066,25 @@ async function runActiveSessionCli(
           );
           return pausedGoal;
         })();
-        restoredSessionOptions = {
-          initialMessages: initialSession?.messages ?? [],
+        initialActiveSessionState = {
+          messages: initialSession?.messages ?? [],
           ...(initialSession?.title !== undefined
-            ? { initialSessionTitle: initialSession.title }
+            ? { title: initialSession.title }
             : {}),
-          ...(initialSessionGoal !== undefined ? { initialSessionGoal } : {}),
-          initialTaskProgress: initialSession?.taskProgress ?? {
+          ...(initialSessionGoal !== undefined
+            ? { goal: initialSessionGoal }
+            : {}),
+          taskProgress: initialSession?.taskProgress ?? {
             tasks: [],
           },
           ...(initialModelSelection !== undefined
-            ? { initialModelSelection }
+            ? { modelSelection: initialModelSelection }
             : {}),
-          initialModelSwitchCount: initialSession?.modelSwitches.length ?? 0,
-          initialQueuedInputs: initialSession?.pendingInputs ?? [],
-          initialBashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
+          modelSwitchCount: initialSession?.modelSwitches.length ?? 0,
+          queuedInputs: initialSession?.pendingInputs ?? [],
+          bashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
         };
-        interactiveSession = {
+        savedInteractiveSession = {
           kind: "saved",
           id: sessionId,
           resumeAvailable: () => session !== undefined,
@@ -1403,13 +1400,15 @@ async function runActiveSessionCli(
         interactiveDisplay?.writeIntro();
         interactiveTerminalDisplay?.start();
       }
-      const sessionMemory: InteractiveSessionMemoryBinding =
+      const activeSession: InteractiveActiveSession =
         cliArgs.memoryEnabled &&
         mode.kind === "interactive" &&
-        interactiveSession.kind === "saved" &&
+        savedInteractiveSession !== null &&
         runtime.input.isTTY === true
           ? {
-              session: interactiveSession,
+              kind: "saved",
+              persistence: savedInteractiveSession,
+              state: initialActiveSessionState,
               memory: {
                 kind: "reviewed",
                 prompt: loadMemoryPrompt,
@@ -1418,17 +1417,32 @@ async function runActiveSessionCli(
                 status: inspectMemoryStatus,
               },
             }
-          : {
-              session: interactiveSession,
-              memory: !cliArgs.memoryEnabled
-                ? { kind: "disabled", status: inspectMemoryStatus }
-                : {
-                    kind: "direct",
-                    prompt: loadMemoryPrompt,
-                    mutation: agentMemory.capability,
-                    status: inspectMemoryStatus,
-                  },
-            };
+          : savedInteractiveSession === null
+            ? {
+                kind: "ephemeral",
+                state: initialActiveSessionState,
+                memory: !cliArgs.memoryEnabled
+                  ? { kind: "disabled", status: inspectMemoryStatus }
+                  : {
+                      kind: "direct",
+                      prompt: loadMemoryPrompt,
+                      mutation: agentMemory.capability,
+                      status: inspectMemoryStatus,
+                    },
+              }
+            : {
+                kind: "saved",
+                persistence: savedInteractiveSession,
+                state: initialActiveSessionState,
+                memory: !cliArgs.memoryEnabled
+                  ? { kind: "disabled", status: inspectMemoryStatus }
+                  : {
+                      kind: "direct",
+                      prompt: loadMemoryPrompt,
+                      mutation: agentMemory.capability,
+                      status: inspectMemoryStatus,
+                    },
+              };
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
@@ -1441,7 +1455,7 @@ async function runActiveSessionCli(
                 invocation.state.explicitSkillActivations,
             }
           : {}),
-        ...sessionMemory,
+        activeSession,
         ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
         platform: runtime.platform,
         ...(mode.kind === "headless-goal" ? { exitOnTurnAbort: true } : {}),
@@ -1475,7 +1489,6 @@ async function runActiveSessionCli(
               },
             }
           : {}),
-        ...(restoredSessionOptions !== undefined ? restoredSessionOptions : {}),
         ...(initialInputLines.length > 0 ? { initialInputLines } : {}),
         ...(sourceHandoff !== undefined
           ? {
@@ -1505,7 +1518,7 @@ async function runActiveSessionCli(
           : interactiveTerminalDisplay !== undefined
             ? { lineInput: interactiveTerminalDisplay.lineInput }
             : {}),
-        ...(mode.kind === "interactive" && interactiveSession.kind === "saved"
+        ...(mode.kind === "interactive" && savedInteractiveSession !== null
           ? {
               sessionPicker: () => {
                 const catalog = listSessionCatalog({ workspace, runtime });
@@ -1513,7 +1526,7 @@ async function runActiveSessionCli(
                   formatSessionCatalogWarnings(catalog.warnings),
                 );
                 return buildSessionPickerView(catalog, {
-                  activeSessionId: interactiveSession.id,
+                  activeSessionId: savedInteractiveSession.id,
                 });
               },
             }
@@ -1610,10 +1623,7 @@ async function runActiveSessionCli(
             runtime,
           });
           /* v8 ignore next 8: a switch request can only come from the saved interactive session that owns sessionLock. */
-          if (
-            sessionLock === undefined ||
-            interactiveSession.kind !== "saved"
-          ) {
+          if (sessionLock === undefined || savedInteractiveSession === null) {
             throw new SessionStoreError(
               "Error: cannot transfer an unlocked interactive session.",
             );
@@ -1622,7 +1632,7 @@ async function runActiveSessionCli(
           nextSourceHandoff = {
             lock: sessionLock,
             consumeSourceInputs: () => {
-              interactiveSession.consumeQueuedInputs(
+              savedInteractiveSession.consumeQueuedInputs(
                 switchRequest.sourceInputIds,
               );
             },

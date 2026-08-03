@@ -6,9 +6,10 @@ import { expect } from "vitest";
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
 import type {
+  InteractiveActiveSession,
+  InteractiveActiveSessionState,
   InteractiveMemoryRuntime,
   InteractiveResolvedProvider,
-  InteractiveSession,
   InteractiveSessionOptions,
   InteractiveSessionResult,
   InteractiveSkillRuntime,
@@ -16,10 +17,17 @@ import type {
 } from "../cli/interactive-session/types.ts";
 import { runInteractiveSession as runProductionInteractiveSession } from "../cli/interactive-session.ts";
 import type { ModelSource } from "../cli/provider-config.ts";
+import type {
+  SessionModelSelection,
+  SessionQueuedInput,
+} from "../cli/session-store.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { ModelMetadata } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
-import type { LLMProvider, Usage } from "../llm/types.ts";
+import type { SessionGoal } from "../core/session-goal.ts";
+import type { SessionTaskProgress } from "../core/task-progress.ts";
+import type { LLMProvider, Message, Usage } from "../llm/types.ts";
+import type { BashApprovalGrant } from "../permissions/bash.ts";
 
 export const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -37,7 +45,11 @@ export const ZERO_COST_MODEL: CostModel = {
 
 export const EPHEMERAL_INTERACTIVE_SESSION = {
   kind: "ephemeral",
-} satisfies InteractiveSession;
+} as const;
+
+type InteractiveSessionFixture =
+  | typeof EPHEMERAL_INTERACTIVE_SESSION
+  | SavedInteractiveSession;
 
 const DISABLED_TEST_MEMORY = {
   kind: "disabled",
@@ -57,16 +69,63 @@ const EMPTY_TEST_SKILLS = {
 } satisfies InteractiveSkillRuntime;
 
 export function runInteractiveSessionWithoutMemory(
-  options: Omit<InteractiveSessionOptions, "session" | "memory" | "skills"> & {
-    readonly session: InteractiveSession;
+  options: Omit<InteractiveSessionOptions, "activeSession" | "skills"> & {
+    readonly session: InteractiveSessionFixture;
     readonly skills?: InteractiveSkillRuntime;
+    readonly initialSessionTitle?: string;
+    readonly initialSessionGoal?: SessionGoal;
+    readonly initialMessages?: readonly Message[];
+    readonly initialTaskProgress?: SessionTaskProgress;
+    readonly initialModelSelection?: SessionModelSelection;
+    readonly initialModelSwitchCount?: number;
+    readonly initialQueuedInputs?: readonly SessionQueuedInput[];
+    readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   },
 ): Promise<InteractiveSessionResult> {
-  const { skills = EMPTY_TEST_SKILLS, ...sessionOptions } = options;
+  const {
+    skills = EMPTY_TEST_SKILLS,
+    session,
+    initialSessionTitle,
+    initialSessionGoal,
+    initialMessages = [],
+    initialTaskProgress = { tasks: [] },
+    initialModelSelection,
+    initialModelSwitchCount = 0,
+    initialQueuedInputs = [],
+    initialBashApprovalGrants = [],
+    ...sessionOptions
+  } = options;
+  const state: InteractiveActiveSessionState = {
+    ...(initialSessionTitle !== undefined
+      ? { title: initialSessionTitle }
+      : {}),
+    ...(initialSessionGoal !== undefined ? { goal: initialSessionGoal } : {}),
+    messages: initialMessages,
+    taskProgress: initialTaskProgress,
+    ...(initialModelSelection !== undefined
+      ? { modelSelection: initialModelSelection }
+      : {}),
+    modelSwitchCount: initialModelSwitchCount,
+    queuedInputs: initialQueuedInputs,
+    bashApprovalGrants: initialBashApprovalGrants,
+  };
+  const activeSession: InteractiveActiveSession =
+    session.kind === "saved"
+      ? {
+          kind: "saved",
+          persistence: session,
+          state,
+          memory: DISABLED_TEST_MEMORY,
+        }
+      : {
+          kind: "ephemeral",
+          state,
+          memory: DISABLED_TEST_MEMORY,
+        };
   return runProductionInteractiveSession({
     ...sessionOptions,
+    activeSession,
     skills,
-    memory: DISABLED_TEST_MEMORY,
   });
 }
 

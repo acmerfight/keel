@@ -45,7 +45,6 @@ import {
 } from "../core/session-goal.ts";
 import {
   copySessionTaskProgress,
-  emptySessionTaskProgress,
   type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../core/task-progress.ts";
@@ -161,15 +160,15 @@ import { readNumberedPickerSelection } from "./interactive-session/numbered-pick
 import type {
   EndEvent,
   EndEventWithCost,
+  InteractiveActiveSession,
   InteractiveComposerMode,
   InteractiveInvocationAccounting,
   InteractiveResolvedProvider,
-  InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
   InteractiveSkillRuntime,
   ProviderSelection,
-  ReviewedInteractiveSessionMemoryBinding,
+  ReviewedInteractiveActiveSession,
   SavedInteractiveSession,
 } from "./interactive-session/types.ts";
 import { createMcpPermissionPolicy } from "./mcp-approval.ts";
@@ -194,14 +193,15 @@ import {
 import type { SessionModelSelection } from "./session-store.ts";
 
 export type {
+  InteractiveActiveSession,
+  InteractiveActiveSessionState,
   InteractiveForkSessionRequest,
   InteractiveInvocationState,
   InteractiveResolvedProvider,
-  InteractiveSession,
-  InteractiveSessionMemoryBinding,
   InteractiveSessionOptions,
   InteractiveSessionResult,
   InteractiveSkillRuntime,
+  SavedInteractiveSession,
 } from "./interactive-session/types.ts";
 
 type ManagedInteractiveSkillRuntime = Extract<
@@ -420,18 +420,20 @@ function resolveSelectedProvider(
   return next;
 }
 
-function isReviewedInteractiveMemoryBinding(
-  binding: InteractiveSessionMemoryBinding,
-): binding is ReviewedInteractiveSessionMemoryBinding {
-  return binding.memory.kind === "reviewed";
+function isReviewedInteractiveActiveSession(
+  activeSession: InteractiveActiveSession,
+): activeSession is ReviewedInteractiveActiveSession {
+  return activeSession.memory.kind === "reviewed";
 }
 
 export async function runInteractiveSession(
   options: InteractiveSessionOptions,
 ): Promise<InteractiveSessionResult> {
   const now = options.now ?? Date.now;
+  const activeSession = options.activeSession;
+  const initialState = activeSession.state;
   const savedSession =
-    options.session.kind === "saved" ? options.session : null;
+    activeSession.kind === "saved" ? activeSession.persistence : null;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const undoProtection =
     options.undoProtection ?? createUndoProtectionTracker();
@@ -478,15 +480,13 @@ export async function runInteractiveSession(
     });
   let systemPrompt = rebuildSystemPrompt();
   let catalogDiagnosticSignature: string | null = null;
-  const messages: Message[] = [...(options.initialMessages ?? [])];
-  let taskProgress = copySessionTaskProgress(
-    options.initialTaskProgress ?? emptySessionTaskProgress(),
-  );
-  let sessionTitle = options.initialSessionTitle;
+  const messages: Message[] = [...initialState.messages];
+  let taskProgress = copySessionTaskProgress(initialState.taskProgress);
+  let sessionTitle = initialState.title;
   let sessionGoal =
-    options.initialSessionGoal === undefined
+    initialState.goal === undefined
       ? undefined
-      : copySessionGoal(options.initialSessionGoal);
+      : copySessionGoal(initialState.goal);
   let pendingGoalDrive: PendingGoalDrive | null = null;
   const reportRecorder =
     options.reportRecorder ?? createAgentEventReportRecorder();
@@ -560,7 +560,7 @@ export async function runInteractiveSession(
   };
   let resolved: InteractiveResolvedProvider | null = null;
   let inactiveBashApprovalGrants: BashApprovalGrant[] = [
-    ...(options.initialBashApprovalGrants ?? []),
+    ...initialState.bashApprovalGrants,
   ];
   let activeProjectBashApprovalGrants: BashProjectApprovalGrant[] = [
     ...(options.initialProjectBashApprovalGrants ?? []),
@@ -584,9 +584,7 @@ export async function runInteractiveSession(
       crlfDelay: Number.POSITIVE_INFINITY,
     });
   const lineReader = createLineReader(input, {
-    ...(options.initialQueuedInputs !== undefined
-      ? { initialQueuedInputs: options.initialQueuedInputs }
-      : {}),
+    initialQueuedInputs: initialState.queuedInputs,
     ...(options.initialInputLines !== undefined
       ? { initialInputLines: options.initialInputLines }
       : {}),
@@ -639,10 +637,9 @@ export async function runInteractiveSession(
     });
     return mcpRuntime;
   };
-  const memoryBinding: InteractiveSessionMemoryBinding = options;
-  const reviewedMemory = isReviewedInteractiveMemoryBinding(memoryBinding)
+  const reviewedMemory = isReviewedInteractiveActiveSession(activeSession)
     ? {
-        ...memoryBinding,
+        ...activeSession,
         review: createInteractiveMemoryProposalReview(
           lineReader,
           options.writeStderr,
@@ -672,10 +669,10 @@ export async function runInteractiveSession(
     if (reviewedMemory === null) {
       return;
     }
-    const messageId = reviewedMemory.session.reserveMessageId();
+    const messageId = reviewedMemory.persistence.reserveMessageId();
     reservedSessionMessageIds.push({ message, id: messageId });
     memoryProposalSources.set(message, {
-      sessionId: reviewedMemory.session.id,
+      sessionId: reviewedMemory.persistence.id,
       messageId,
       providerId: provider.providerId,
       model: provider.model,
@@ -691,9 +688,7 @@ export async function runInteractiveSession(
             permission:
               options.bashPermission ??
               interactiveBashPermissionPolicy(lineReader, options.writeStderr, {
-                ...(options.initialBashApprovalGrants !== undefined
-                  ? { initialGrants: options.initialBashApprovalGrants }
-                  : {}),
+                initialGrants: initialState.bashApprovalGrants,
                 onGrant: (grant) => {
                   savedSession?.persistBashApprovalGrant(grant);
                 },
@@ -746,13 +741,13 @@ export async function runInteractiveSession(
     initialInvocationAccounting?.costBudgetLimited ?? false;
   let sessionStopReason =
     initialInvocationAccounting?.stopReason ?? "completed";
-  let modelSwitchCount = options.initialModelSwitchCount ?? 0;
+  let modelSwitchCount = initialState.modelSwitchCount;
   const resolveActiveProvider = (
     userMessage: string,
   ): InteractiveResolvedProvider => {
     resolved ??= options.resolveProvider(
       userMessage,
-      options.initialModelSelection,
+      initialState.modelSelection,
     );
     return resolved;
   };
@@ -872,11 +867,11 @@ export async function runInteractiveSession(
   };
   const activeModelStatus = (): string =>
     resolved === null
-      ? options.initialModelSelection === undefined
+      ? initialState.modelSelection === undefined
         ? options.configuredModelSelection === undefined
           ? "(default for next prompt)"
           : formatConfiguredModelSelection(options.configuredModelSelection)
-        : formatModelSelection(options.initialModelSelection)
+        : formatModelSelection(initialState.modelSelection)
       : formatActiveModel(resolved);
   const statusRecoveryActions = () => [
     ...(savedSession === null || savedSession.resumeAvailable() === false
@@ -1104,7 +1099,7 @@ export async function runInteractiveSession(
                 ...request.consumedInputLines,
                 ...drainedInjectedLines,
               ]);
-              reviewedMemory.session.persistMessages({
+              reviewedMemory.persistence.persistMessages({
                 messages: sourceMessages,
                 reason: "turn",
                 consumedInputIds: sourceInputIds,
@@ -1124,18 +1119,18 @@ export async function runInteractiveSession(
             review: reviewedMemory.review,
           };
     const agentMemory =
-      options.memory.kind === "disabled"
+      activeSession.memory.kind === "disabled"
         ? undefined
         : memoryProposal === null
           ? {
               kind: "direct" as const,
-              prompt: options.memory.prompt,
-              mutation: options.memory.mutation,
+              prompt: activeSession.memory.prompt,
+              mutation: activeSession.memory.mutation,
             }
           : {
               kind: "reviewed" as const,
-              prompt: options.memory.prompt,
-              mutation: options.memory.mutation,
+              prompt: activeSession.memory.prompt,
+              mutation: activeSession.memory.mutation,
               proposal: memoryProposal,
             };
     let deferRemainingInjectedInput = false;
@@ -1742,7 +1737,7 @@ export async function runInteractiveSession(
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
             undoProtection: undoProtection.summary(),
-            memory: options.memory.status(),
+            memory: activeSession.memory.status(),
             recoveryActions: statusRecoveryActions(),
           }),
         );
@@ -2386,7 +2381,7 @@ export async function runInteractiveSession(
 
           let previousResolved: InteractiveResolvedProvider | null =
             resolved ??
-            (options.initialModelSelection !== undefined
+            (initialState.modelSelection !== undefined
               ? resolveActiveProvider(userMessage)
               : null);
           if (
