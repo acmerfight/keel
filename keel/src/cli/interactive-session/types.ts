@@ -160,10 +160,6 @@ export interface SavedInteractiveSession {
   }) => void;
 }
 
-export type InteractiveSession =
-  | { readonly kind: "ephemeral" }
-  | SavedInteractiveSession;
-
 type EnabledInteractiveMemoryRuntime =
   AgentMemoryRuntime<AgentMemoryProposalCapability> & {
     readonly status: () => RunReportMemory;
@@ -181,20 +177,40 @@ type NonReviewedInteractiveMemoryRuntime = Exclude<
   { readonly kind: "reviewed" }
 >;
 
-export interface ReviewedInteractiveSessionMemoryBinding {
-  readonly session: SavedInteractiveSession;
+export interface InteractiveActiveSessionState {
+  readonly title?: string;
+  readonly goal?: SessionGoal;
+  readonly messages: readonly Message[];
+  readonly taskProgress: SessionTaskProgress;
+  readonly modelSelection?: SessionModelSelection;
+  readonly modelSwitchCount: number;
+  readonly queuedInputs: readonly SessionQueuedInput[];
+  readonly bashApprovalGrants: readonly BashApprovalGrant[];
+}
+
+export interface ReviewedInteractiveActiveSession {
+  readonly kind: "saved";
+  readonly persistence: SavedInteractiveSession;
+  readonly state: InteractiveActiveSessionState;
   readonly memory: Extract<
     InteractiveMemoryRuntime,
     { readonly kind: "reviewed" }
   >;
 }
 
-export type InteractiveSessionMemoryBinding =
+export type InteractiveActiveSession =
   | {
-      readonly session: InteractiveSession;
+      readonly kind: "ephemeral";
+      readonly state: InteractiveActiveSessionState;
       readonly memory: NonReviewedInteractiveMemoryRuntime;
     }
-  | ReviewedInteractiveSessionMemoryBinding;
+  | {
+      readonly kind: "saved";
+      readonly persistence: SavedInteractiveSession;
+      readonly state: InteractiveActiveSessionState;
+      readonly memory: NonReviewedInteractiveMemoryRuntime;
+    }
+  | ReviewedInteractiveActiveSession;
 
 export type InteractiveSkillRuntime =
   | { readonly kind: "empty" }
@@ -211,6 +227,7 @@ export type InteractiveSkillRuntime =
     };
 
 interface InteractiveSessionOptionsBase {
+  readonly activeSession: InteractiveActiveSession;
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -229,17 +246,9 @@ interface InteractiveSessionOptionsBase {
       readonly env: (key: string) => string | undefined;
     };
   };
-  readonly initialSessionTitle?: string;
-  readonly initialSessionGoal?: SessionGoal;
-  readonly initialMessages?: readonly Message[];
-  readonly initialTaskProgress?: SessionTaskProgress;
-  readonly initialModelSelection?: SessionModelSelection;
   readonly configuredModelSelection?: ProviderSelection;
-  readonly initialModelSwitchCount?: number;
-  readonly initialQueuedInputs?: readonly SessionQueuedInput[];
   readonly initialInputLines?: readonly string[];
   readonly onInitialInputLinesAdmitted?: () => void;
-  readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   readonly projectRoot?: string;
   readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];
   readonly bashPermission?: SessionBashPermissionPolicy;
@@ -286,8 +295,7 @@ interface InteractiveSessionOptionsBase {
   readonly formatCostReport: (cost: CostReport) => string;
 }
 
-export type InteractiveSessionOptions = InteractiveSessionOptionsBase &
-  InteractiveSessionMemoryBinding;
+export type InteractiveSessionOptions = InteractiveSessionOptionsBase;
 
 export type InteractiveComposerMode = "approval" | "queue" | "ready" | "steer";
 

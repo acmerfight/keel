@@ -275,25 +275,57 @@ describe("Interactive Session - Interrupts", () => {
     let persistedMessages: readonly Message[] = [];
     const persistedInputIdBatches: string[][] = [];
     let reservedMessageOrdinal = 0;
+    const persistence = savedInteractiveSession({
+      id: "reviewed-abort",
+      reserveMessageId: () => `message_${++reservedMessageOrdinal}`,
+      persistMessages: ({
+        messages,
+        reason: _reason,
+        consumedInputIds: inputIds,
+      }) => {
+        persistedMessages = structuredClone(messages);
+        persistedInputIdBatches.push([...inputIds]);
+      },
+    });
     const session = runInteractiveSessionWithMemory({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
       platform: process.platform,
       skills: { kind: "empty" },
-      session: savedInteractiveSession({
-        id: "reviewed-abort",
-        reserveMessageId: () => `message_${++reservedMessageOrdinal}`,
-        persistMessages: ({
-          messages,
-          reason: _reason,
-          consumedInputIds: inputIds,
-        }) => {
-          persistedMessages = structuredClone(messages);
-          persistedInputIdBatches.push([...inputIds]);
+      activeSession: {
+        kind: "saved",
+        persistence,
+        state: {
+          messages: [],
+          taskProgress: { tasks: [] },
+          modelSwitchCount: 0,
+          queuedInputs: [queuedSource],
+          bashApprovalGrants: [],
         },
-      }),
-
-      initialQueuedInputs: [queuedSource],
+        memory: {
+          kind: "reviewed",
+          prompt: () => "",
+          mutation: {
+            list: () => [],
+            add: () => {
+              throw new Error("memory_add is not expected");
+            },
+            forget: () => {
+              throw new Error("memory_forget is not expected");
+            },
+          },
+          proposal: memoryProposal,
+          status: () => ({
+            status: "available",
+            scope: { kind: "project", id: "project_reviewed_abort" },
+            loadedIds: [],
+            loadedEntries: [],
+            renderedBytes: 0,
+            estimatedTokens: 0,
+            operations: [],
+          }),
+        },
+      },
       input,
       writeStdout: (text) => {
         stdout += text;
@@ -331,29 +363,6 @@ describe("Interactive Session - Interrupts", () => {
         return finalEnd;
       },
       formatCostReport: () => "",
-      memory: {
-        kind: "reviewed",
-        prompt: () => "",
-        mutation: {
-          list: () => [],
-          add: () => {
-            throw new Error("memory_add is not expected");
-          },
-          forget: () => {
-            throw new Error("memory_forget is not expected");
-          },
-        },
-        proposal: memoryProposal,
-        status: () => ({
-          status: "available",
-          scope: { kind: "project", id: "project_reviewed_abort" },
-          loadedIds: [],
-          loadedEntries: [],
-          renderedBytes: 0,
-          estimatedTokens: 0,
-          operations: [],
-        }),
-      },
     });
 
     // When
