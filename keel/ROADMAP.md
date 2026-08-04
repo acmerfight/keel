@@ -20,9 +20,9 @@ until Keel is already credible as the daily driver.
 
 "Harness quality" is an empirical claim, not a feeling. Metrics, in
 priority order: **task success rate**, then **human interventions per
-task**, then **turns and tokens to completion** (including edit success
-rate as a tracked sub-metric). Anything not measurable this way is not
-part of the goal.
+task**, then **turns and tokens to completion**. Edit success rate is a
+target sub-metric of the third that is not yet implemented. Anything not
+measurable this way is not part of the goal.
 
 This goal is plausible because the harness is an independent variable
 with large measured effect: 2026 published comparisons show the same
@@ -158,7 +158,7 @@ What a user can do today:
   provider/model/API-key/base-url/context/cost-model state; by default it also
   verifies real provider auth with a low-cost online models endpoint, while
   `--offline` keeps the check local-only.
-- `keel mcp add <url>` / `keel mcp login <server>` / `keel mcp list|status|doctor`
+- `keel mcp add <url>` / `keel mcp login|logout <server>` / `keel mcp list|status|doctor`
   / `keel mcp enable|disable|remove` / `keel mcp approvals` — register remote
   Streamable HTTP MCP servers, complete standards-compliant OAuth, inspect
   bounded catalog and health diagnostics, and manage exact project-scoped call
@@ -315,9 +315,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   additions, deletions, and renames. Stale or ambiguous edit failures include
   bounded current-file diagnostics for retry. The remaining gap is fuller diff
   semantics such as copies, file modes, and binary patches. Edit success rate is
-  named as a target sub-metric but is not implemented: `keel eval compare`
-  currently reports pass/outcome, human-intervention, turn, token, cost, and
-  wall-time deltas only.
+  named as a target sub-metric but is not implemented; `keel eval compare`
+  reports the pass, outcome, human-intervention, turn, token, cost, wall-time,
+  harness-failure, and regression transcript-path deltas listed above.
 - **Project context injection** — ✅ Partial (2026-06): root `AGENTS.md` is
   loaded into the system prompt with safety checks. Nested `AGENTS.md` files are
   discovered for scoped paths, shown through read/search outputs, restored after

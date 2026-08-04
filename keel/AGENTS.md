@@ -32,7 +32,7 @@ src/
   permissions/ -> Tool permission policies
   testing/     -> Test support code (CLI harnesses, fixture factories)
   tools/       -> read, ls, glob, grep, git_status, git_diff, edit, write, apply_patch, bash,
-                  update_plan, update_goal, memory_*, skill_*, mcp_search
+                  update_plan, update_goal, memory_*, skill, skill_*, mcp_search (19 total)
   mcp/         -> MCP client runtime, discovery, OAuth
   skills/      -> Skill discovery, audit, catalog, activation lifecycle
   eval/        -> Harness eval runner and result comparison
