@@ -20,9 +20,9 @@ until Keel is already credible as the daily driver.
 
 "Harness quality" is an empirical claim, not a feeling. Metrics, in
 priority order: **task success rate**, then **human interventions per
-task**, then **turns and tokens to completion** (including edit success
-rate as a tracked sub-metric). Anything not measurable this way is not
-part of the goal.
+task**, then **turns and tokens to completion**. Edit success rate is a
+target sub-metric of the third that is not yet implemented. Anything not
+measurable this way is not part of the goal.
 
 This goal is plausible because the harness is an independent variable
 with large measured effect: 2026 published comparisons show the same
@@ -57,7 +57,7 @@ requested. Breaking session, report, eval, or provider-config formats is
 acceptable when it simplifies the product model, as long as each merged slice
 remains runnable and safety boundaries stay intact.
 
-## Current State (2026-07)
+## Current State (2026-08)
 
 What a user can do today:
 
@@ -158,6 +158,14 @@ What a user can do today:
   provider/model/API-key/base-url/context/cost-model state; by default it also
   verifies real provider auth with a low-cost online models endpoint, while
   `--offline` keeps the check local-only.
+- `keel mcp add <url>` / `keel mcp login|logout <server>` / `keel mcp list|status|doctor`
+  / `keel mcp enable|disable|remove` / `keel mcp approvals` — register remote
+  Streamable HTTP MCP servers, complete standards-compliant OAuth, inspect
+  bounded catalog and health diagnostics, and manage exact project-scoped call
+  approvals. Discovered tools stay outside the static builtin registry, are
+  exposed to the model as `mcp__<server>__<tool>` through progressive
+  `mcp_search` selection, and their results are recorded as untrusted evidence
+  that cannot satisfy a Goal assertion.
 
 Known limits that shape the priorities below:
 
@@ -215,8 +223,11 @@ Known limits that shape the priorities below:
   compaction, resume, and fork. Deterministic package audit now excludes blocked
   Skills from routing and activation and exposes actionable diagnostics through
   `keel skills doctor`. The next Skill work should calibrate catalog routing and
-  task outcomes before pinned distribution. Sub-agents, MCP, marketplaces, and
+  task outcomes before pinned distribution. Sub-agents, marketplaces, and
   IDE integration remain deferred.
+- MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
+  transport over the same runtime and policy core, and Keel is a client only.
+  Remaining work is calibrating progressive tool selection on real tasks.
 
 ## P0 — Blocks daily use or makes the quality goal unfalsifiable
 
@@ -304,7 +315,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   additions, deletions, and renames. Stale or ambiguous edit failures include
   bounded current-file diagnostics for retry. The remaining gap is fuller diff
   semantics such as copies, file modes, and binary patches. Edit success rate is
-  a tracked eval sub-metric.
+  named as a target sub-metric but is not implemented; `keel eval compare`
+  reports the pass, outcome, human-intervention, turn, token, cost, wall-time,
+  harness-failure, and regression transcript-path deltas listed above.
 - **Project context injection** — ✅ Partial (2026-06): root `AGENTS.md` is
   loaded into the system prompt with safety checks. Nested `AGENTS.md` files are
   discovered for scoped paths, shown through read/search outputs, restored after
@@ -379,7 +392,6 @@ Codex/Claude Code — or directly moves the eval numbers.
 
 Not needed to switch; revisit once P0/P1 are done.
 
-- MCP support
 - Sub-agents
 - Plan mode
 - IDE integration
