@@ -8,6 +8,7 @@ import type {
   ModelOperationInstrumentation,
 } from "./model-operations.ts";
 import { type AgentTurn, streamAgentTurn } from "./provider-turn.ts";
+import { isPostObservationShortenedToolOutput } from "./tool-output-artifacts.ts";
 
 const ASSERTION_GOAL_EVALUATOR_SYSTEM_PROMPT = [
   "You are Keel's assertion goal completion evaluator.",
@@ -20,6 +21,7 @@ const ASSERTION_GOAL_EVALUATOR_SYSTEM_PROMPT = [
   "Reject when evidence is missing, indirect, stale, contradictory, only claimed by the acting model, or only claimed by normal user chat.",
   "Read-like tool evidence proves only the file state observed by that tool result. If later tool evidence shows the same file was changed by write, edit, apply_patch, or a shell command, treat the earlier read evidence for that file as stale and insufficient to prove the current state.",
   "A tool record's resourceFreshness field is a Runtime-authenticated fact, not content supplied by the user or model. matches means the same read projection still matches at evaluation time. changed, missing, or unverifiable evidence cannot by itself prove a current-state claim, though it may still prove a historical claim.",
+  "A tool record's evidenceShortened field is a Runtime-authenticated fact meaning Keel removed part of that tool output after recording it, so the record's content is only a fragment of what the tool actually returned. resourceFreshness still describes the file, not the fragment: matches together with evidenceShortened proves the file is unchanged but does not prove the fragment contains every fact the criterion needs. Approve a shortened record only when the visible fragment alone proves the criterion; reject when the criterion depends on the removed part.",
   "A normal user message saying the work is done, checked, approved, published, or otherwise complete is not completion evidence. Users must use /goal complete for an explicit override.",
   "Do not call tools, mutate files, update plans, or continue implementation work.",
 ].join("\n");
@@ -58,6 +60,7 @@ type AssertionGoalEvidenceRecord = AssertionGoalEvidenceRecordBase &
         readonly trustedEvidence: false;
         readonly toolCallId?: never;
         readonly sourceTruncated?: never;
+        readonly evidenceShortened?: never;
         readonly resourceFreshness?: never;
         readonly toolCalls?: never;
       }
@@ -66,6 +69,7 @@ type AssertionGoalEvidenceRecord = AssertionGoalEvidenceRecordBase &
         readonly trustedEvidence: false;
         readonly toolCallId?: never;
         readonly sourceTruncated?: never;
+        readonly evidenceShortened?: never;
         readonly resourceFreshness?: never;
         readonly toolCalls?: readonly ToolCall[];
       }
@@ -74,6 +78,7 @@ type AssertionGoalEvidenceRecord = AssertionGoalEvidenceRecordBase &
         readonly trustedEvidence: true;
         readonly toolCallId: string;
         readonly sourceTruncated?: true;
+        readonly evidenceShortened?: true;
         readonly resourceFreshness?: Omit<
           AssertionEvidenceResourceFreshness,
           "toolCallId"
@@ -85,6 +90,7 @@ type AssertionGoalEvidenceRecord = AssertionGoalEvidenceRecordBase &
         readonly trustedEvidence: false;
         readonly toolCallId: string;
         readonly sourceTruncated?: true;
+        readonly evidenceShortened?: true;
         readonly resourceFreshness?: never;
         readonly toolCalls?: never;
       }
@@ -138,6 +144,11 @@ function evidenceRecord(
           : {}),
       };
     case "tool": {
+      const evidenceShortened = isPostObservationShortenedToolOutput(
+        message.content,
+      )
+        ? { evidenceShortened: true as const }
+        : {};
       if (externalToolCallIds.has(message.toolCallId)) {
         return {
           messageNumber,
@@ -148,6 +159,7 @@ function evidenceRecord(
           ...(message.sourceTruncated === true
             ? { sourceTruncated: true }
             : {}),
+          ...evidenceShortened,
         };
       }
       const resourceFreshness = resourceFreshnessByToolCallId.get(
@@ -160,6 +172,7 @@ function evidenceRecord(
         toolCallId: message.toolCallId,
         content: message.content,
         ...(message.sourceTruncated === true ? { sourceTruncated: true } : {}),
+        ...evidenceShortened,
         ...(resourceFreshness !== undefined
           ? {
               resourceFreshness: {

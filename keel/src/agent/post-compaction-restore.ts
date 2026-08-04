@@ -17,7 +17,10 @@ import {
   clearReadVisibilityState,
   type ReadVisibilityState,
 } from "./read-visibility.ts";
-import { toolMessageSourceTruncationMetadata } from "./tool-output-artifacts.ts";
+import {
+  POST_COMPACTION_READ_SNAPSHOT_TRUNCATED_PREFIX,
+  toolMessageSourceTruncationMetadata,
+} from "./tool-output-artifacts.ts";
 
 const POST_COMPACTION_MAX_RESTORED_FILES = 5;
 const POST_COMPACTION_MAX_FILE_CHARS = 20_000;
@@ -53,7 +56,7 @@ function fitPostCompactionReadContent(
   }
   let omittedChars = content.length - maxChars;
   for (;;) {
-    const marker = `\n\n[Post-compaction read snapshot truncated: omitted ${omittedChars} chars]`;
+    const marker = `\n\n${POST_COMPACTION_READ_SNAPSHOT_TRUNCATED_PREFIX}${omittedChars} chars]`;
     if (marker.length >= maxChars) {
       return { content: marker.slice(0, maxChars), complete: false };
     }

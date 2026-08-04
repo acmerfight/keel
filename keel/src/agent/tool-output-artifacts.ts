@@ -28,6 +28,16 @@ export function sourceStatusFromToolOutputText(
     : "complete";
 }
 
+export const POST_COMPACTION_READ_SNAPSHOT_TRUNCATED_PREFIX =
+  "[Post-compaction read snapshot truncated: omitted ";
+
+const POST_OBSERVATION_SHORTENED_PATTERN =
+  /\n\[(?:tool output shortened|tool output projected|stale tool output compacted|current tool output compacted before provider request|current tool output compacted after context overflow|Post-compaction read snapshot truncated): (?:approximately )?omitted [0-9]+ chars[;\]]/u;
+
+export function isPostObservationShortenedToolOutput(content: string): boolean {
+  return POST_OBSERVATION_SHORTENED_PATTERN.test(content);
+}
+
 export function toolMessageSourceTruncationMetadata(input: {
   readonly content: string;
   readonly sourceTruncated: boolean;

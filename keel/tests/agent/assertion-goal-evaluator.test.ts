@@ -701,4 +701,126 @@ describe("Assertion Goal Evaluator", () => {
       "\n\n---\n\nMessage 99 [tool read_1]\nRELEASE.md:",
     );
   });
+
+  test(`Given a read result was shortened after Runtime recorded its observation,
+    When Keel formats that read as completion evidence,
+    Then the judge is told the record holds only a fragment of the tool output`, async () => {
+    // Given
+    const providerRequests: { readonly messages: readonly Message[] }[] = [];
+    const provider: LLMProvider = {
+      id: "shortened-evidence-provider",
+      async *stream(options) {
+        providerRequests.push({ messages: options.messages });
+        yield {
+          type: "text",
+          text: JSON.stringify({
+            completed: false,
+            reason: "The visible fragment does not prove the criterion.",
+          }),
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const messages: readonly Message[] = [
+      { role: "user", content: "Audit audit.txt." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "read_1", tool: "read", path: "audit.txt" }],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_1",
+        content:
+          "audit row 0\naudit row 1\n[tool output shortened: omitted 6308 chars; full output artifact: tool-output:run/read_1; inspect with: keel artifacts show tool-output:run/read_1; source status: complete]",
+      },
+    ];
+
+    // When
+    const evaluation = await evaluateAssertionGoalCompletionWithProvider({
+      provider,
+      signal: freshSignal(),
+      goal: {
+        objective: "Audit the file",
+        completionCriterion: "audit.txt contains no TODO markers.",
+      },
+      evidenceMessages: messages,
+      resourceFreshness: [
+        {
+          toolCallId: "read_1",
+          kind: "read_projection",
+          status: "matches",
+          reason:
+            "The current file projection matches the recorded read evidence.",
+        },
+      ],
+      modelOperations: null,
+    });
+
+    // Then
+    expect(evaluation.completed).toBe(false);
+    const prompt = providerRequests[0]?.messages[0]?.content ?? "";
+    expect(prompt).toContain('"evidenceShortened": true');
+    expect(prompt).toContain('"status": "matches"');
+  });
+
+  test(`Given a read result reached the judge whole,
+    When Keel formats that read as completion evidence,
+    Then no shortened-evidence flag is attached`, async () => {
+    // Given
+    const providerRequests: { readonly messages: readonly Message[] }[] = [];
+    const provider: LLMProvider = {
+      id: "whole-evidence-provider",
+      async *stream(options) {
+        providerRequests.push({ messages: options.messages });
+        yield {
+          type: "text",
+          text: JSON.stringify({
+            completed: true,
+            reason: DEFAULT_APPROVAL_REASON,
+          }),
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const messages: readonly Message[] = [
+      { role: "user", content: "Audit audit.txt." },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "read_1", tool: "read", path: "audit.txt" }],
+      },
+      {
+        role: "tool",
+        toolCallId: "read_1",
+        content: "audit row 0\naudit row 1\naudit row 2\n",
+      },
+    ];
+
+    // When
+    await evaluateAssertionGoalCompletionWithProvider({
+      provider,
+      signal: freshSignal(),
+      goal: {
+        objective: "Audit the file",
+        completionCriterion: "audit.txt contains no TODO markers.",
+      },
+      evidenceMessages: messages,
+      resourceFreshness: [
+        {
+          toolCallId: "read_1",
+          kind: "read_projection",
+          status: "matches",
+          reason:
+            "The current file projection matches the recorded read evidence.",
+        },
+      ],
+      modelOperations: null,
+    });
+
+    // Then
+    expect(providerRequests[0]?.messages[0]?.content).not.toContain(
+      "evidenceShortened",
+    );
+  });
 });
