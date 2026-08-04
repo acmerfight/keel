@@ -50,7 +50,15 @@ export function assertionEvidenceResourceFreshness(input: {
       });
       continue;
     }
-    if (isCompactionTruncatedToolOutput(message.content)) {
+    const current = revalidateReadResource({
+      workspace: input.workspace,
+      toolCall,
+      observation: message.resourceObservation,
+    });
+    if (
+      current.status === "matches" &&
+      isCompactionTruncatedToolOutput(message.content)
+    ) {
       freshness.push({
         toolCallId: message.toolCallId,
         kind: "read_projection",
@@ -60,11 +68,6 @@ export function assertionEvidenceResourceFreshness(input: {
       });
       continue;
     }
-    const current = revalidateReadResource({
-      workspace: input.workspace,
-      toolCall,
-      observation: message.resourceObservation,
-    });
     freshness.push({
       toolCallId: message.toolCallId,
       kind: "read_projection",

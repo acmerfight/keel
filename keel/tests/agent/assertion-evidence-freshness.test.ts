@@ -224,6 +224,66 @@ describe("Assertion Evidence Freshness", () => {
     }
   });
 
+  test(`Given a compaction-truncated read whose file also changed on disk,
+    When Keel prepares assertion evidence for the completion judge,
+    Then the stronger changed verdict is kept instead of being weakened to unverifiable`, () => {
+    // Given
+    const workspace = realpathSync(
+      mkdtempSync(join(tmpdir(), "keel-changed-evidence-")),
+    );
+    try {
+      const targetPath = join(workspace, "report.txt");
+      const fileContent = `${Array.from(
+        { length: 400 },
+        (_unused, index) => `row ${index}`,
+      ).join("\n")}\n`;
+      writeFileSync(targetPath, fileContent);
+
+      const messages: readonly Message[] = [
+        { role: "user", content: "Summarize report.txt." },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "read_1", tool: "read", path: "report.txt" }],
+        },
+        {
+          role: "tool",
+          toolCallId: "read_1",
+          content: fileContent,
+          resourceObservation: observeReadResource({
+            workspace,
+            targetPath,
+            content: fileContent,
+          }),
+        },
+      ];
+      const compacted = compactCurrentToolOutputs(messages, 500, {
+        policy: { reason: "preflight" },
+        settledMaxChars: 500,
+      });
+      expect(compacted.stats.toolOutputsCompacted).toBe(1);
+
+      // When
+      writeFileSync(targetPath, "rewritten after the read\n");
+      const freshness = assertionEvidenceResourceFreshness({
+        workspace,
+        messages: compacted.messages,
+      });
+
+      // Then
+      expect(freshness).toEqual([
+        {
+          toolCallId: "read_1",
+          kind: "read_projection",
+          status: "changed",
+          reason:
+            "The current file projection no longer matches the recorded read evidence.",
+        },
+      ]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
   test(`Given a live agent turn compacted a read out of the model's view,
     When the model then proposes assertion-goal completion,
     Then the completion judge is told that read is unverifiable instead of current`, async () => {
