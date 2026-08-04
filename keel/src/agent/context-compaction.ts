@@ -48,6 +48,7 @@ export {
   compactCurrentToolOutputsWithArtifacts,
   compactStaleToolOutputs,
   compactStaleToolOutputsWithArtifacts,
+  isCompactionTruncatedToolOutput,
 } from "./context-compaction/stale-tool-output.ts";
 export { projectCompactedToolOutput } from "./context-compaction/tool-output-preview.ts";
 

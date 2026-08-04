@@ -4,6 +4,7 @@ import {
   revalidateReadResource,
 } from "../tools/read-resource-observation.ts";
 import { isMcpToolInvocation } from "../tools/tool-call.ts";
+import { isCompactionTruncatedToolOutput } from "./context-compaction.ts";
 
 type ReadToolCall = Extract<ToolCall, { readonly tool: "read" }>;
 
@@ -46,6 +47,16 @@ export function assertionEvidenceResourceFreshness(input: {
         status: "unverifiable",
         reason:
           "Runtime has no resource observation for this historical read result.",
+      });
+      continue;
+    }
+    if (isCompactionTruncatedToolOutput(message.content)) {
+      freshness.push({
+        toolCallId: message.toolCallId,
+        kind: "read_projection",
+        status: "unverifiable",
+        reason:
+          "Context compaction removed part of this read projection, so Runtime cannot confirm the surfaced evidence is still current.",
       });
       continue;
     }

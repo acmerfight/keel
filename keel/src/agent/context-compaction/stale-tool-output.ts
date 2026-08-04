@@ -204,6 +204,13 @@ export function isCompactedCurrentToolOutput(text: string): boolean {
   );
 }
 
+export function isCompactionTruncatedToolOutput(text: string): boolean {
+  return (
+    STALE_TOOL_OUTPUT_COMPACTED_SUFFIX_PATTERN.test(text) ||
+    isCompactedCurrentToolOutput(text)
+  );
+}
+
 function isAlreadyCompactedCurrentToolOutput(options: {
   readonly text: string;
   readonly policy: CurrentToolOutputCompactionPolicy;
