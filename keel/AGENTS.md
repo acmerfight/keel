@@ -31,7 +31,11 @@ src/
   llm/         -> Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
   permissions/ -> Tool permission policies
   testing/     -> Test support code (CLI harnesses, fixture factories)
-  tools/       -> bash, edit, glob, grep, ls, read, write
+  tools/       -> read, ls, glob, grep, git_status, git_diff, edit, write, apply_patch, bash,
+                  update_plan, update_goal, memory_*, skill_*, mcp_search
+  mcp/         -> MCP client runtime, discovery, OAuth
+  skills/      -> Skill discovery, audit, catalog, activation lifecycle
+  eval/        -> Harness eval runner and result comparison
 ```
 
 Layer rules are enforced by `tests/invariants/boundaries.test.ts`:
@@ -39,6 +43,11 @@ Layer rules are enforced by `tests/invariants/boundaries.test.ts`:
 - `agent/` does not import `fs`, `child_process`, or `cli/`
 - `llm/` does not import `cli/` or `agent/`
 - `cli/` does not import `testing/`
+- `eval/` does not import `agent/`, `llm/`, `cli/`, or `testing/`, so evals measure
+  keel only through the spawned CLI
+
+That file also owns facade, single-owner, and no-wildcard-re-export rules beyond
+these four. Read it before moving a module or adding a re-export.
 
 ## Core Principles
 
