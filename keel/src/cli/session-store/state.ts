@@ -107,6 +107,7 @@ function messagesEqual(left: Message, right: Message): boolean {
         left.toolCallId === right.toolCallId &&
         left.content === right.content &&
         left.sourceTruncated === right.sourceTruncated &&
+        left.evidenceShortened === right.evidenceShortened &&
         stableValuesEqual(
           left.resourceObservation ?? null,
           right.resourceObservation ?? null,

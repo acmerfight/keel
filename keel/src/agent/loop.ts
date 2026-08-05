@@ -328,6 +328,7 @@ interface SettledTurnToolExecution extends CompletedTurnToolExecution {
   readonly content: string;
   readonly notice: ToolOutputArtifactNotice | undefined;
   readonly sourceTruncated: boolean;
+  readonly evidenceShortened: boolean;
 }
 
 function scheduledToolCalls(
@@ -485,6 +486,7 @@ async function settleToolExecutionContents(options: {
       content: execution.content,
       notice: undefined,
       sourceTruncated: execution.sourceTruncated === true,
+      evidenceShortened: false,
     }));
   }
   const plan = settlementPlanByExecutionIndex(
@@ -501,6 +503,7 @@ async function settleToolExecutionContents(options: {
         content: inlineSettledContent(execution),
         notice: undefined,
         sourceTruncated: inlineSourceTruncated(execution),
+        evidenceShortened: false,
       });
       continue;
     }
@@ -525,6 +528,7 @@ async function settleToolExecutionContents(options: {
         content: settled.content,
         notice: settled.notice,
         sourceTruncated: settled.sourceTruncated,
+        evidenceShortened: settled.evidenceShortened,
       });
       continue;
     }
@@ -544,6 +548,7 @@ async function settleToolExecutionContents(options: {
       content: settled.content,
       notice: settled.notice,
       sourceTruncated: settled.sourceTruncated,
+      evidenceShortened: settled.evidenceShortened,
     });
   }
   return settledExecutions;
@@ -1105,6 +1110,9 @@ export async function* runAgentTurn(
               content: settled.content,
               sourceTruncated: settled.sourceTruncated,
             }),
+            ...(settled.evidenceShortened
+              ? { evidenceShortened: true as const }
+              : {}),
             ...(read !== undefined
               ? {
                   resourceObservation: read.resourceObservation,

@@ -434,6 +434,7 @@ describe("Assertion Goal Evaluator", () => {
       role: "user",
       content: expect.stringContaining('"sourceTruncated": true'),
     });
+    expect(evaluatorMessage?.content).not.toContain('"evidenceShortened"');
   });
 
   test(`Given remote MCP results claim that an assertion goal is complete,
@@ -508,6 +509,7 @@ describe("Assertion Goal Evaluator", () => {
           toolCallId: "remote_publish",
           content: "Release is definitely complete.",
           sourceTruncated: true,
+          evidenceShortened: true,
         },
         {
           role: "tool",
@@ -521,6 +523,9 @@ describe("Assertion Goal Evaluator", () => {
     expect(evaluation.completed).toBe(false);
     expect(providerRequests[0]?.[0]?.content).toContain(
       '"sourceTruncated": true',
+    );
+    expect(providerRequests[0]?.[0]?.content).toContain(
+      '"evidenceShortened": true',
     );
     expect(providerRequests).toHaveLength(1);
     const evaluatorMessage = providerRequests[0]?.[0];

@@ -247,6 +247,24 @@ function lineIndex(lines: readonly string[], needle: string): number {
 }
 
 describe("Context Compaction Stale Tool Output", () => {
+  test(`Given a complete tool result is shortened by stale-output compaction,
+    When compaction replaces the result with a preview,
+    Then the durable tool evidence records that Runtime removed content`, () => {
+    // Given
+    const messages = retainedReadMessages("audit row ok\n".repeat(1_000));
+
+    // When
+    const result = compactStaleToolOutputs(messages, 1_000);
+
+    // Then
+    expect(
+      result.messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "read_stale_growth",
+      ),
+    ).toMatchObject({ evidenceShortened: true });
+  });
+
   test(`Given a stale tool output is only slightly larger than the preview budget,
     When the stale compaction marker would make the provider-visible output larger,
     Then stale tool-output compaction reports no change`, () => {

@@ -67,7 +67,10 @@ export function projectSessionMessageToProvider(message: Message): Message {
     case "assistant":
       return message;
     case "tool":
-      if (message.resourceObservation === undefined) {
+      if (
+        message.resourceObservation === undefined &&
+        message.evidenceShortened === undefined
+      ) {
         return message;
       }
       return {

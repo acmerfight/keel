@@ -291,6 +291,7 @@ export async function restorePostCompactionReads(options: {
         content: instruction.content,
         sourceTruncated: !instruction.complete,
       }),
+      ...(!instruction.complete ? { evidenceShortened: true as const } : {}),
     });
   }
   for (const read of restored) {
@@ -303,6 +304,7 @@ export async function restorePostCompactionReads(options: {
         sourceTruncated:
           read.execution.sourceTruncated === true || !read.complete,
       }),
+      ...(!read.complete ? { evidenceShortened: true as const } : {}),
       resourceObservation: read.resourceObservation,
     });
   }

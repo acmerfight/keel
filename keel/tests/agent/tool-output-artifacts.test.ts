@@ -193,6 +193,12 @@ describe("Agent Tool Output Artifacts", () => {
       expect(saved[0]?.content).not.toContain(
         "[bash stdout truncated: showing first",
       );
+      expect(
+        messages.find(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "noisy_bash",
+        ),
+      ).toMatchObject({ evidenceShortened: true });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

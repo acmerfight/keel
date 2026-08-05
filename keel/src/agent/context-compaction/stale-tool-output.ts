@@ -368,7 +368,7 @@ function rejectedToolOutputCompactionAttempt(options: {
 }
 
 function buildToolOutputCompactionAttempt(options: {
-  readonly message: Message;
+  readonly message: Extract<Message, { readonly role: "tool" }>;
   readonly compactedContent: string;
   readonly scope: ToolOutputCompactionStatsScope;
   readonly artifactNotice?: ToolOutputArtifactNotice;
@@ -388,6 +388,7 @@ function buildToolOutputCompactionAttempt(options: {
       message: {
         ...options.message,
         content: options.compactedContent,
+        evidenceShortened: true,
       },
       stats: toolOutputCompactionStats(
         options.message.content,
