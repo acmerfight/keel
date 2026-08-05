@@ -142,6 +142,7 @@ export interface ToolOutputArtifactSettlementResult {
   readonly content: string;
   readonly notice: ToolOutputArtifactNotice;
   readonly sourceTruncated: boolean;
+  readonly evidenceShortened: true;
 }
 
 export interface GeneratedToolOutputArtifactMarker {
@@ -264,6 +265,7 @@ export async function settleOversizedToolOutput(options: {
     return {
       content: `${preview}\n${marker}`,
       sourceTruncated: options.sourceStatus === "source-truncated",
+      evidenceShortened: true,
       notice: {
         status: "stored",
         ref: saveResult.ref,
@@ -280,6 +282,7 @@ export async function settleOversizedToolOutput(options: {
   return {
     content: `${preview}\n${marker}`,
     sourceTruncated: true,
+    evidenceShortened: true,
     notice: {
       status: "failed",
       reason: saveResult.reason,
@@ -319,6 +322,7 @@ export async function settleProjectedToolOutput(options: {
     return {
       content: `${options.previewContent}\n${marker}`,
       sourceTruncated: options.sourceStatus === "source-truncated",
+      evidenceShortened: true,
       notice: {
         status: "stored",
         ref: saveResult.ref,
@@ -335,6 +339,7 @@ export async function settleProjectedToolOutput(options: {
   return {
     content: `${options.previewContent}\n${marker}`,
     sourceTruncated: true,
+    evidenceShortened: true,
     notice: {
       status: "failed",
       reason: saveResult.reason,

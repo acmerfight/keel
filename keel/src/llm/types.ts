@@ -74,6 +74,7 @@ interface ToolMessage {
   readonly toolCallId: string;
   readonly content: string;
   readonly sourceTruncated?: boolean;
+  readonly evidenceShortened?: true;
   readonly resourceObservation?: ReadResourceObservation;
 }
 

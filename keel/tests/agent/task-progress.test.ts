@@ -1670,6 +1670,153 @@ describe("Task Progress", () => {
     }
   });
 
+  test(`Given an assertion goal depends on bytes omitted from a settled read,
+    When the model proposes completion from the shortened evidence,
+    Then Keel tells the evaluator the evidence is incomplete and keeps the goal active`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-goal-shortened-read-evidence-"),
+    );
+    const hiddenTail = "TODO_HIDDEN_IN_OMITTED_TAIL\n";
+    const auditContent = `${"audit row ok\n".repeat(850)}${hiddenTail}`;
+    await writeFile(join(workspace, "audit.txt"), auditContent);
+    const savedArtifacts: ToolOutputArtifactSaveInput[] = [];
+    const messages: Message[] = [
+      { role: "user", content: "Verify that the audit is complete." },
+    ];
+    const evaluatorPrompts: string[] = [];
+    const evaluatorSystemPrompts: string[] = [];
+    let actingRequests = 0;
+    const sessionGoal: SessionGoal = {
+      objective: "Verify the audit",
+      status: "active",
+      budget: {},
+      usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+      completion: {
+        kind: "assertion",
+        assertion:
+          "The current complete contents of audit.txt contain no TODO markers.",
+      },
+    };
+    const provider: LLMProvider = {
+      id: "goal-shortened-read-evidence-provider",
+      async *stream(options) {
+        if (options.toolExposure?.kind === "none") {
+          const prompt = options.messages[0]?.content ?? "";
+          evaluatorPrompts.push(prompt);
+          evaluatorSystemPrompts.push(options.systemPrompt);
+          const evidenceShortened = prompt.includes(
+            '"evidenceShortened": true',
+          );
+          const shorteningExplained = options.systemPrompt.includes(
+            "matches together with evidenceShortened proves the file is unchanged but does not prove the visible fragment",
+          );
+          yield {
+            type: "text",
+            text: JSON.stringify({
+              completed: !(evidenceShortened && shorteningExplained),
+              reason:
+                evidenceShortened && shorteningExplained
+                  ? "The visible read fragment cannot prove the omitted tail contains no TODO markers."
+                  : "The matching read appears to prove the complete file contains no TODO markers.",
+            }),
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        actingRequests++;
+        if (actingRequests === 1) {
+          yield {
+            type: "tool_call",
+            id: "read_1",
+            tool: "read",
+            path: "audit.txt",
+          };
+          yield {
+            type: "tool_call",
+            id: "goal_1",
+            tool: "update_goal",
+            status: "completed",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield {
+          type: "text",
+          text: "I need complete evidence before completing the audit goal.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      // When
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          messages,
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          sessionGoal,
+          toolOutputArtifacts: {
+            maxInlineChars: 5_000,
+            store: {
+              verifyReusable: async () => ({ status: "not_reusable" }),
+              save: async (input) => {
+                savedArtifacts.push(input);
+                return {
+                  status: "stored",
+                  ref: "tool-output:test/shortened-read-evidence",
+                  contentSha256: "0".repeat(64),
+                };
+              },
+              discard: async () => {
+                savedArtifacts.pop();
+              },
+            },
+          },
+        }),
+      );
+
+      // Then
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_goal_updated",
+          goal: expect.objectContaining({
+            status: "active",
+            latestRuntimeOutcome: {
+              kind: "completion_rejected",
+              reason:
+                "The visible read fragment cannot prove the omitted tail contains no TODO markers.",
+            },
+          }),
+        }),
+      );
+      expect(savedArtifacts).toHaveLength(1);
+      expect(evaluatorPrompts).toHaveLength(1);
+      expect(evaluatorSystemPrompts).toHaveLength(1);
+      expect(evaluatorPrompts[0]).toContain('"evidenceShortened": true');
+      expect(evaluatorPrompts[0]).toContain('"status": "matches"');
+      expect(evaluatorPrompts[0]).not.toContain(hiddenTail.trim());
+      expect(
+        messages.find(
+          (message) =>
+            message.role === "tool" && message.toolCallId === "read_1",
+        ),
+      ).toMatchObject({ evidenceShortened: true });
+      expect(messages.at(-1)).toEqual({
+        role: "assistant",
+        content: "I need complete evidence before completing the audit goal.",
+        toolCalls: [],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an assertion completion proposal has a later mutation in the same turn,
     When Runtime reaches update_goal before that mutation,
     Then it rejects completion before calling the evaluator`, async () => {

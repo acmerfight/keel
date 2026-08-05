@@ -150,6 +150,7 @@ const toolMessageSchema = z
     toolCallId: z.string(),
     content: z.string(),
     sourceTruncated: z.boolean().optional(),
+    evidenceShortened: z.literal(true).optional(),
     resourceObservation: readResourceObservationSchema.optional(),
   })
   .strict();
@@ -593,6 +594,9 @@ function toMessage(message: RawMessage): SessionMessage {
         ...(message.sourceTruncated !== undefined
           ? { sourceTruncated: message.sourceTruncated }
           : {}),
+        ...(message.evidenceShortened === true
+          ? { evidenceShortened: true as const }
+          : {}),
         ...(message.resourceObservation !== undefined
           ? {
               resourceObservation: copyReadResourceObservation(
@@ -635,6 +639,9 @@ function copyMessage(message: SessionMessage): SessionMessage {
         content: message.content,
         ...(message.sourceTruncated !== undefined
           ? { sourceTruncated: message.sourceTruncated }
+          : {}),
+        ...(message.evidenceShortened === true
+          ? { evidenceShortened: true as const }
           : {}),
         ...(message.resourceObservation !== undefined
           ? {

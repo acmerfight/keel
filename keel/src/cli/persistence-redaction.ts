@@ -174,6 +174,9 @@ export function redactMessageForPersistence(message: Message): Message {
         ...(message.sourceTruncated !== undefined
           ? { sourceTruncated: message.sourceTruncated }
           : {}),
+        ...(message.evidenceShortened === true
+          ? { evidenceShortened: true as const }
+          : {}),
         ...(message.resourceObservation !== undefined
           ? {
               resourceObservation: copyReadResourceObservation(

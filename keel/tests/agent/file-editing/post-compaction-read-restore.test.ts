@@ -784,6 +784,14 @@ describe("File Editing Post-Compaction Read Restore", () => {
       expect(restoredReadMessage?.content).not.toContain(
         "target current value",
       );
+      expect(restoredReadMessage?.evidenceShortened).toBeUndefined();
+      expect(
+        messages.find(
+          (message) =>
+            message.role === "tool" &&
+            message.toolCallId.includes("post_compaction_read"),
+        ),
+      ).toMatchObject({ evidenceShortened: true });
       const editMessage = finalMessages.find(
         (message) =>
           message.role === "tool" &&
