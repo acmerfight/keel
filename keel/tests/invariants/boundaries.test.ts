@@ -242,6 +242,20 @@ function wildcardReExportSpecifiers(
 }
 
 describe("module boundaries", () => {
+  test(`Given provider message contracts define the LLM boundary,
+    When their source dependencies and fields are inspected,
+    Then Runtime-only ledger evidence stays outside the provider layer`, () => {
+    const providerTypesFile = "src/llm/types.ts";
+    const providerTypes = readFileSync(providerTypesFile, "utf8");
+
+    expect(importSpecifiers(providerTypesFile, providerTypes)).not.toContain(
+      "../core/resource-observation.ts",
+    );
+    expect(providerTypes).not.toMatch(
+      /\b(?:SessionMessage|UserMessageOrigin|contextCompaction|sourceTruncated|evidenceShortened|resourceObservation)\b/u,
+    );
+  });
+
   for (const { layer, contract, forbidden } of layerRules) {
     test(`Given files in ${layer}/,
       When their imports are inspected,

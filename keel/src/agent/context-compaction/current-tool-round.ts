@@ -1,19 +1,19 @@
-import type { Message } from "../../llm/types.ts";
+import type { SessionMessage } from "../session-message.ts";
 
 interface CurrentToolRoundOutput {
   readonly messageIndex: number;
-  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly message: Extract<SessionMessage, { readonly role: "tool" }>;
 }
 
 interface CurrentToolRound {
   readonly instructionStartIndex: number;
   readonly toolRequestIndex: number;
-  readonly toolRequest: Extract<Message, { readonly role: "assistant" }>;
+  readonly toolRequest: Extract<SessionMessage, { readonly role: "assistant" }>;
   readonly toolOutputs: readonly CurrentToolRoundOutput[];
 }
 
 function currentToolRoundInstructionStartIndex(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolRequestIndex: number,
 ): number {
   for (
@@ -29,7 +29,7 @@ function currentToolRoundInstructionStartIndex(
 }
 
 export function currentToolRound(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): CurrentToolRound | null {
   const toolRequestIndex = messages.findLastIndex(
     (message) => message.role === "assistant",

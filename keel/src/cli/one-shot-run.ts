@@ -5,10 +5,10 @@ import {
   appendWorkflowSkillsToSystemPrompt,
   buildAgentSystemPrompt,
 } from "../agent/prompt.ts";
+import type { SessionMessage } from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
-import type { Message } from "../llm/types.ts";
 import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
@@ -372,7 +372,7 @@ export async function runOneShotCli(
     const reportRecorder = createAgentEventReportRecorder();
     reportRecorder.beginTask("user_prompt");
     reportRecorder.beginAgentRun("user_prompt");
-    let transcriptMessages: readonly Message[] | undefined;
+    let transcriptMessages: readonly SessionMessage[] | undefined;
     const stream = runAgent({
       workspace,
       provider: resolved.provider,

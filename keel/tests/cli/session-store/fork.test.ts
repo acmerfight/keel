@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   forkSessionStore,
@@ -18,7 +19,6 @@ import {
   persistSessionModelSwitch,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import {
   appendLine,
@@ -36,7 +36,7 @@ describe("Session Store Fork", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const firstTurn: readonly Message[] = [
+    const firstTurn: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -48,7 +48,7 @@ describe("Session Store Fork", () => {
         toolCalls: [],
       },
     ];
-    const allMessages: readonly Message[] = [
+    const allMessages: readonly SessionMessage[] = [
       ...firstTurn,
       {
         role: "user",
@@ -150,7 +150,7 @@ describe("Session Store Fork", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const sourceMessages: readonly Message[] = [
+    const sourceMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -297,7 +297,7 @@ describe("Session Store Fork", () => {
     expect(contentLength).toBeLessThan(
       resumeCapBytes - Buffer.byteLength(emptySnapshotLine, "utf8"),
     );
-    const snapshottedMessages: readonly Message[] = [
+    const snapshottedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(contentLength),
@@ -432,7 +432,7 @@ describe("Session Store Fork", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const sourceMessages: readonly Message[] = [
+    const sourceMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -532,7 +532,7 @@ describe("Session Store Fork", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const retainedMessages: readonly Message[] = [
+    const retainedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "inspect workspace",
@@ -556,7 +556,7 @@ describe("Session Store Fork", () => {
         toolCalls: [],
       },
     ];
-    const sourceMessages: readonly Message[] = [
+    const sourceMessages: readonly SessionMessage[] = [
       ...retainedMessages,
       {
         role: "user",
@@ -636,7 +636,7 @@ describe("Session Store Fork", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const retainedMessages: readonly Message[] = [
+    const retainedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -648,7 +648,7 @@ describe("Session Store Fork", () => {
         toolCalls: [],
       },
     ];
-    const sourceMessages: readonly Message[] = [
+    const sourceMessages: readonly SessionMessage[] = [
       ...retainedMessages,
       {
         role: "user",

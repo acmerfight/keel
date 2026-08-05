@@ -1,6 +1,7 @@
 import type { ContextCompactionOptions } from "../../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../../agent/events.ts";
 import type { ProjectInstructions } from "../../agent/prompt.ts";
+import type { SessionMessage } from "../../agent/session-message.ts";
 import type { ToolOutputArtifactsOptions } from "../../agent/tool-output-artifacts.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
@@ -10,7 +11,7 @@ import type {
   UndoProtectionSummary,
   UndoProtectionTracker,
 } from "../../core/undo-protection.ts";
-import type { LLMProvider, Message, Usage } from "../../llm/types.ts";
+import type { LLMProvider, Usage } from "../../llm/types.ts";
 import type {
   McpConnectionFactory,
   McpLifecyclePolicy,
@@ -121,12 +122,12 @@ export interface SavedInteractiveSession {
   }) => SessionQueuedInput;
   readonly consumeQueuedInputs: (inputIds: readonly string[]) => void;
   readonly persistMessages: (request: {
-    readonly messages: readonly Message[];
+    readonly messages: readonly SessionMessage[];
     readonly reason: SessionPersistenceReason;
     readonly consumedInputIds: readonly string[];
     readonly skillState: SkillLifecycleState | null;
     readonly reservedMessageIds: readonly {
-      readonly message: Message;
+      readonly message: SessionMessage;
       readonly id: string;
     }[];
   }) => void;
@@ -180,7 +181,7 @@ type NonReviewedInteractiveMemoryRuntime = Exclude<
 export interface InteractiveActiveSessionState {
   readonly title?: string;
   readonly goal?: SessionGoal;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly taskProgress: SessionTaskProgress;
   readonly modelSelection?: SessionModelSelection;
   readonly modelSwitchCount: number;

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   persistSessionBashApprovalGrant,
@@ -16,7 +17,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -665,7 +666,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
     const outsideSecret = join(tmpdir(), "keel-outside-secret.txt");
     const outsideEmpty = join(tmpdir(), "keel-outside-empty.txt");
     const command = `git diff --no-index ${outsideSecret} ${outsideEmpty}`;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -767,7 +768,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
         now: () => 0,
       },
     });
-    let persistedMessages: readonly Message[] = session.messages;
+    let persistedMessages: readonly SessionMessage[] = session.messages;
     let firstApprovalPrompts = 0;
     const firstInput = new PassThrough();
     const firstProvider = createFakeProvider([
@@ -948,7 +949,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
         now: () => 0,
       },
     });
-    let persistedMessages: readonly Message[] = session.messages;
+    let persistedMessages: readonly SessionMessage[] = session.messages;
     let firstApprovalPrompts = 0;
     const firstInput = new PassThrough();
     const firstProvider = createFakeProvider([

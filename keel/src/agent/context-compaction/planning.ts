@@ -1,4 +1,4 @@
-import type { Message } from "../../llm/types.ts";
+import type { SessionMessage } from "../session-message.ts";
 import { currentToolRound } from "./current-tool-round.ts";
 import type { ResolvedContextCompactionOptions } from "./options.ts";
 import { compactStaleToolOutputs } from "./stale-tool-output.ts";
@@ -13,18 +13,18 @@ export interface CompactionSplit {
 
 export interface CompactionPlan {
   readonly firstRetainedIndex: number;
-  readonly messagesToSummarize: readonly Message[];
+  readonly messagesToSummarize: readonly SessionMessage[];
 }
 
 interface SplitTurnCandidate {
   readonly messageIndex: number;
-  readonly message: Message;
-  readonly nextMessage: Message;
+  readonly message: SessionMessage;
+  readonly nextMessage: SessionMessage;
 }
 
 function canSplitAfter(
-  message: Message,
-  nextMessage: Message | undefined,
+  message: SessionMessage,
+  nextMessage: SessionMessage | undefined,
 ): boolean {
   if (message.role === "user") {
     return false;
@@ -36,7 +36,7 @@ function canSplitAfter(
 }
 
 function firstIndexWithRecentBudget(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   keepRecentTokens: number,
 ): number {
   let recentTokens = 0;
@@ -51,7 +51,7 @@ function firstIndexWithRecentBudget(
 }
 
 export function selectCompactionSplit(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   options: { readonly keepRecentTokens: number },
 ): CompactionSplit | null {
   if (messages.length < 2) {
@@ -91,8 +91,8 @@ export function selectCompactionSplit(
 function canSplitTurnAfter(
   lastAssistantIndex: number,
   messageIndex: number,
-  message: Message,
-  nextMessage: Message,
+  message: SessionMessage,
+  nextMessage: SessionMessage,
 ): boolean {
   if (message.role === "user") {
     return nextMessage.role === "user";
@@ -107,7 +107,7 @@ function canSplitTurnAfter(
 }
 
 function selectSplitTurnBoundary(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   keepRecentTokens: number,
 ): number | null {
   if (messages.length < 2) {
@@ -160,7 +160,7 @@ function selectSplitTurnBoundary(
 }
 
 function firstRetainedIndexPreservingCurrentToolOutput(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   firstRetainedIndex: number,
 ): number {
   const protectedSuffixStart =
@@ -172,7 +172,7 @@ function firstRetainedIndexPreservingCurrentToolOutput(
 }
 
 export function planCompaction(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   split: CompactionSplit,
   options: ResolvedContextCompactionOptions,
 ): CompactionPlan {
@@ -197,7 +197,7 @@ export function planCompaction(
 }
 
 export function smallerCompactionPrefixMessageCount(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): number | null {
   const targetTokens = Math.max(
     1,

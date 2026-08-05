@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import type { SessionMessage } from "../agent/session-message.ts";
 import { errorMessage, isAbortThrow } from "../core/error.ts";
 import {
   pauseActiveSessionGoal,
@@ -6,7 +7,6 @@ import {
   type SessionGoal,
   type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
-import type { Message } from "../llm/types.ts";
 import type {
   BashApprovalGrant,
   SessionBashPermissionPolicy,
@@ -709,7 +709,7 @@ async function runActiveSessionCli(
       }
       let session: SessionState | undefined;
       let activeSessionId: string | undefined;
-      let persistedMessages: readonly Message[] = [];
+      let persistedMessages: readonly SessionMessage[] = [];
       let initialModelSelection: SessionModelSelection | undefined;
       let headlessGoalBashPermission =
         mode.kind === "headless-goal" ? mode.bashPermission : undefined;

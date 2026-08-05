@@ -15,6 +15,15 @@ import {
   clearReadVisibilityState,
   createReadVisibilityState,
 } from "../agent/read-visibility.ts";
+import {
+  replaceSessionLedgerMessages,
+  sessionLedgerFromMessages,
+  sessionLedgerMessages,
+} from "../agent/session-ledger.ts";
+import type {
+  SessionMessage,
+  UserMessageOrigin,
+} from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import {
@@ -52,7 +61,7 @@ import {
   createUndoProtectionTracker,
   undoCheckpointUnavailable,
 } from "../core/undo-protection.ts";
-import type { Message, Usage, UserMessageOrigin } from "../llm/types.ts";
+import type { Usage } from "../llm/types.ts";
 import {
   type McpProviderSchemaTarget,
   mcpProviderSchemaTarget,
@@ -480,7 +489,7 @@ export async function runInteractiveSession(
     });
   let systemPrompt = rebuildSystemPrompt();
   let catalogDiagnosticSignature: string | null = null;
-  const messages: Message[] = [...initialState.messages];
+  const ledger = sessionLedgerFromMessages(initialState.messages);
   let taskProgress = copySessionTaskProgress(initialState.taskProgress);
   let sessionTitle = initialState.title;
   let sessionGoal =
@@ -655,15 +664,15 @@ export async function runInteractiveSession(
       }
     : null;
   const memoryProposalSources = new WeakMap<
-    Extract<Message, { readonly role: "user" }>,
+    Extract<SessionMessage, { readonly role: "user" }>,
     AgentMemoryProposalSource
   >();
   const reservedSessionMessageIds: {
-    readonly message: Message;
+    readonly message: SessionMessage;
     readonly id: string;
   }[] = [];
   const reserveMemoryProposalSource = (
-    message: Extract<Message, { readonly role: "user" }>,
+    message: Extract<SessionMessage, { readonly role: "user" }>,
     provider: InteractiveResolvedProvider,
   ): void => {
     if (reviewedMemory === null) {
@@ -1045,7 +1054,7 @@ export async function runInteractiveSession(
       options.writeStderr(diagnostic);
       catalogDiagnosticSignature = diagnosticSignature;
     }
-    const messagesBeforeTurn = messages.slice();
+    const messagesBeforeTurn = [...sessionLedgerMessages(ledger)];
     const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
     const sessionGoalBeforeTurn =
       sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
@@ -1071,9 +1080,9 @@ export async function runInteractiveSession(
       content: request.userMessage,
       origin: request.userMessageOrigin,
     } as const;
-    messages.push(currentUserMessage);
+    ledger.append(currentUserMessage);
     reserveMemoryProposalSource(currentUserMessage, turnProvider);
-    let persistedMemorySourceMessages: readonly Message[] | null = null;
+    let persistedMemorySourceMessages: readonly SessionMessage[] | null = null;
     let persistedDrainedInputCount = 0;
     const persistedInputIds = new Set<string>();
     const memoryProposal =
@@ -1081,17 +1090,19 @@ export async function runInteractiveSession(
         ? null
         : {
             capability: reviewedMemory.memory.proposal,
-            sourceFor: (message: Extract<Message, { readonly role: "user" }>) =>
-              memoryProposalSources.get(message),
+            sourceFor: (
+              message: Extract<SessionMessage, { readonly role: "user" }>,
+            ) => memoryProposalSources.get(message),
             persistSource: (
-              sourceMessage: Extract<Message, { readonly role: "user" }>,
+              sourceMessage: Extract<SessionMessage, { readonly role: "user" }>,
             ): void => {
-              const sourceIndex = messages.indexOf(sourceMessage);
+              const currentMessages = sessionLedgerMessages(ledger);
+              const sourceIndex = currentMessages.indexOf(sourceMessage);
               assert(
                 sourceIndex >= 0,
                 "reviewed project-memory source is no longer present in the interactive session",
               );
-              const sourceMessages = messages.slice(0, sourceIndex + 1);
+              const sourceMessages = currentMessages.slice(0, sourceIndex + 1);
               const sourceReservations = reservedSessionMessageIds.filter(
                 (reservation) => sourceMessages.includes(reservation.message),
               );
@@ -1144,10 +1155,9 @@ export async function runInteractiveSession(
         );
         systemPrompt = rebuildSystemPrompt();
       }
-      messages.splice(
-        0,
-        messages.length,
-        ...(persistedMemorySourceMessages ?? messagesBeforeTurn),
+      replaceSessionLedgerMessages(
+        ledger,
+        persistedMemorySourceMessages ?? messagesBeforeTurn,
       );
       reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
       updateTaskProgress(taskProgressBeforeTurn);
@@ -1178,7 +1188,7 @@ export async function runInteractiveSession(
         runAgentTurn({
           workspace: options.workspace,
           provider: resolved.provider,
-          messages,
+          ledger,
           systemPrompt: baseSystemPromptWithGoal(),
           ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
@@ -1316,7 +1326,7 @@ export async function runInteractiveSession(
           ? completedSkillState
           : null;
       savedSession?.persistMessages({
-        messages,
+        messages: sessionLedgerMessages(ledger),
         reason: "turn",
         consumedInputIds: [
           ...queuedInputIds(request.consumedInputLines),
@@ -1357,7 +1367,7 @@ export async function runInteractiveSession(
       options.writeStdout("\n");
       const observedEvidenceFingerprint = goalContinuationStagnationFingerprint(
         {
-          messages,
+          messages: sessionLedgerMessages(ledger),
           toolExecutions: toolExecutionsDuringTurn,
           stateChanged:
             taskProgressChanged ||
@@ -1727,8 +1737,8 @@ export async function runInteractiveSession(
               total: latestCatalogExposure.total,
               budgetChars: latestCatalogExposure.budgetChars,
             },
-            messages,
-            messageCount: messages.length,
+            messages: sessionLedgerMessages(ledger),
+            messageCount: sessionLedgerMessages(ledger).length,
             pendingInputCount: lineReader.pendingInputCount(),
             bashApprovalCount:
               activeBashApprovalGrants().length +
@@ -2340,14 +2350,14 @@ export async function runInteractiveSession(
             options.writeStdout(`Restored ${result.restoredLabel}\n`);
             clearReadVisibilityState(readVisibility);
             projectInstructionVisibility.clear();
-            messages.push({
+            ledger.append({
               role: "user",
               content: undoRestoredContextMessage(result.restoredLabel),
               origin: RUNTIME_UNDO_RESTORATION_ORIGIN,
             });
             if (savedSession !== null) {
               savedSession.persistMessages({
-                messages,
+                messages: sessionLedgerMessages(ledger),
                 reason: "turn",
                 consumedInputIds: queuedInputIds([rawInput]),
                 skillState: null,
@@ -2402,7 +2412,7 @@ export async function runInteractiveSession(
             userMessage,
             interactiveCommand.selection,
           );
-          if (messages.length > 0) {
+          if (sessionLedgerMessages(ledger).length > 0) {
             const unknownContextMessage =
               modelSwitchUnknownContextMessage(nextResolved);
             if (unknownContextMessage !== null) {
@@ -2416,7 +2426,7 @@ export async function runInteractiveSession(
           if (
             modelSwitchRequiresCompaction({
               systemPrompt: currentSystemPrompt(),
-              messages,
+              messages: sessionLedgerMessages(ledger),
               target: nextResolved,
               bashToolVisible: bashRuntimeExposesTool(bash),
             })
@@ -2426,6 +2436,7 @@ export async function runInteractiveSession(
             previousResolved = currentResolved;
             resolved = currentResolved;
             const compactAbortController = new AbortController();
+            const compactionMessages = [...sessionLedgerMessages(ledger)];
             activeAbortController = compactAbortController;
             setComposerMode("queue");
             try {
@@ -2436,7 +2447,7 @@ export async function runInteractiveSession(
                 current: currentResolved,
                 target: nextResolved,
                 workspace: options.workspace,
-                messages,
+                messages: compactionMessages,
                 systemPrompt: currentSystemPrompt(),
                 summarySystemPrompt: currentSystemPrompt(),
                 signal: compactAbortController.signal,
@@ -2459,13 +2470,14 @@ export async function runInteractiveSession(
                 consumeQueuedInputLines([rawInput]);
                 continue;
               }
+              replaceSessionLedgerMessages(ledger, compactionMessages);
               modelSwitchCost = compaction.cost;
             } finally {
               activeAbortController = null;
               setComposerMode("ready");
             }
             savedSession?.persistMessages({
-              messages,
+              messages: sessionLedgerMessages(ledger),
               reason: "compaction",
               consumedInputIds: queuedInputIds([rawInput]),
               skillState: null,
@@ -2592,7 +2604,7 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "compact") {
-        if (messages.length === 0) {
+        if (sessionLedgerMessages(ledger).length === 0) {
           options.writeStderr(
             "Context compaction skipped: no conversation history to compact.\n",
           );
@@ -2601,6 +2613,7 @@ export async function runInteractiveSession(
         }
         const compactResolved = resolveActiveProvider(userMessage);
         const compactAbortController = new AbortController();
+        const compactionMessages = [...sessionLedgerMessages(ledger)];
         activeAbortController = compactAbortController;
         setComposerMode("queue");
         let compactCost: CostReport | undefined;
@@ -2613,7 +2626,7 @@ export async function runInteractiveSession(
             command: interactiveCommand,
             resolved: compactResolved,
             workspace: options.workspace,
-            messages,
+            messages: compactionMessages,
             systemPrompt: currentSystemPrompt(),
             summarySystemPrompt: currentSystemPrompt(),
             signal: compactAbortController.signal,
@@ -2629,6 +2642,9 @@ export async function runInteractiveSession(
           });
           compactCost = compaction.cost;
           compactCommitted = compaction.status === "committed";
+          if (compactCommitted) {
+            replaceSessionLedgerMessages(ledger, compactionMessages);
+          }
         } finally {
           activeAbortController = null;
           setComposerMode("ready");
@@ -2637,7 +2653,7 @@ export async function runInteractiveSession(
           consumeQueuedInputLines([rawInput]);
         } else {
           savedSession?.persistMessages({
-            messages,
+            messages: sessionLedgerMessages(ledger),
             reason: "compaction",
             consumedInputIds: queuedInputIds([rawInput]),
             skillState: null,

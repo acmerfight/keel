@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   forkSessionStore,
@@ -18,7 +19,6 @@ import {
   resumeSessionStore,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import {
   headerLine,
   restoredUserMessageId,
@@ -97,7 +97,7 @@ describe("Session Store Model Switch", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(16 * 1024 * 1024),
@@ -168,7 +168,7 @@ describe("Session Store Model Switch", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -228,7 +228,7 @@ describe("Session Store Model Switch", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -295,7 +295,7 @@ describe("Session Store Model Switch", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -363,7 +363,7 @@ describe("Session Store Model Switch", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const originalMessages: readonly Message[] = [
+    const originalMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -375,7 +375,7 @@ describe("Session Store Model Switch", () => {
         toolCalls: [],
       },
     ];
-    const replacedMessages: readonly Message[] = [
+    const replacedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember beta",
@@ -458,7 +458,7 @@ describe("Session Store Model Switch", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",

@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { expect } from "vitest";
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import type { AgentEvent } from "../agent/events.ts";
+import type { SessionMessage } from "../agent/session-message.ts";
 import type {
   InteractiveActiveSession,
   InteractiveActiveSessionState,
@@ -26,7 +27,7 @@ import type { ModelMetadata } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
-import type { LLMProvider, Message, Usage } from "../llm/types.ts";
+import type { LLMProvider, Usage } from "../llm/types.ts";
 import type { BashApprovalGrant } from "../permissions/bash.ts";
 
 export const ZERO_USAGE: Usage = {
@@ -74,7 +75,7 @@ export function runInteractiveSessionWithoutMemory(
     readonly skills?: InteractiveSkillRuntime;
     readonly initialSessionTitle?: string;
     readonly initialSessionGoal?: SessionGoal;
-    readonly initialMessages?: readonly Message[];
+    readonly initialMessages?: readonly SessionMessage[];
     readonly initialTaskProgress?: SessionTaskProgress;
     readonly initialModelSelection?: SessionModelSelection;
     readonly initialModelSwitchCount?: number;

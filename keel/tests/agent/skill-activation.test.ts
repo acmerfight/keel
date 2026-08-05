@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { compactMessages } from "../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
@@ -13,8 +14,8 @@ import {
 } from "../../src/llm/providers/fake.ts";
 import type {
   LLMProvider,
-  Message,
   ModelToolExposure,
+  ProviderMessage,
 } from "../../src/llm/types.ts";
 import { mcpProviderSchemaTarget } from "../../src/mcp/provider-schema.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
@@ -24,6 +25,7 @@ import type {
   SkillDescriptor,
   WorkflowSkill,
 } from "../../src/skills/model.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 import type {
   McpToolExposureSnapshot,
   McpToolReference,
@@ -301,7 +303,7 @@ describe("Agent Skill Activation", () => {
     };
     const exposures: ModelToolExposure[] = [];
     const systemPrompts: string[] = [];
-    const providerMessages: Message[][] = [];
+    const providerMessages: ProviderMessage[][] = [];
     let providerTurn = 0;
     const provider: LLMProvider = {
       id: "mcp-skill-boundary-provider",
@@ -417,7 +419,7 @@ describe("Agent Skill Activation", () => {
       },
       close: async () => {},
     };
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: "Search the remote catalog.",
@@ -457,7 +459,7 @@ describe("Agent Skill Activation", () => {
         runAgentTurn({
           workspace,
           provider: firstProvider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
           bash: { kind: "disabled" },
@@ -521,7 +523,7 @@ describe("Agent Skill Activation", () => {
         runAgentTurn({
           workspace,
           provider: secondProvider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
           bash: { kind: "disabled" },

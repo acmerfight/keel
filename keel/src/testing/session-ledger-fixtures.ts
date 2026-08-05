@@ -1,13 +1,41 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  type SessionLedger,
+  sessionLedgerFromMessages,
+} from "../agent/session-ledger.ts";
+import type { SessionMessage } from "../agent/session-message.ts";
 import type {
   SessionQueuedInput,
   SessionTaskProgressCheckpoint,
 } from "../cli/session-store.ts";
 import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTask } from "../core/task-progress.ts";
-import type { Message } from "../llm/types.ts";
 import type { SkillLifecycleState } from "../skills/model.ts";
+
+export function sessionLedgerMirroringMessages(
+  messages: SessionMessage[],
+): SessionLedger {
+  const ledger = sessionLedgerFromMessages(messages);
+  const syncMirror = (): void => {
+    messages.splice(0, messages.length, ...ledger.messages());
+  };
+  return {
+    messages: ledger.messages,
+    append: (message) => {
+      ledger.append(message);
+      syncMirror();
+    },
+    appendMany: (nextMessages) => {
+      ledger.appendMany(nextMessages);
+      syncMirror();
+    },
+    replace: (nextMessages) => {
+      ledger.replace(nextMessages);
+      syncMirror();
+    },
+  };
+}
 
 function sessionGoalRecord(goal: SessionGoal): object {
   const { completion, ...state } = goal;
@@ -28,7 +56,7 @@ function sessionGoalRecord(goal: SessionGoal): object {
 
 export function appendSessionRecordLine(
   timestamp: string,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): string {
   return JSON.stringify({
     schemaVersion: 5,
@@ -41,7 +69,7 @@ export function appendSessionRecordLine(
 
 export function replaceSessionRecordLine(
   timestamp: string,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): string {
   return JSON.stringify({
     schemaVersion: 5,
@@ -54,7 +82,7 @@ export function replaceSessionRecordLine(
 
 export function snapshotSessionRecordLine(
   timestamp: string,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   title?: string,
   options: {
     readonly pendingInputs?: readonly SessionQueuedInput[];
@@ -244,7 +272,10 @@ export function beforeMessageForkGraph(options: {
   };
 }
 
-export function storedMessages(messages: readonly Message[], prefix: string) {
+export function storedMessages(
+  messages: readonly SessionMessage[],
+  prefix: string,
+) {
   return messages.map((message, index) => ({
     id: `msg_${prefix.replace(/[^A-Za-z0-9_-]/gu, "_")}_${index + 1}`,
     message,
@@ -285,8 +316,8 @@ export async function restoredUserMessageId(options: {
 }
 
 export function ledgerRecordMessages(record: {
-  readonly messages?: readonly { readonly message?: Message }[];
-}): readonly (Message | undefined)[] {
+  readonly messages?: readonly { readonly message?: SessionMessage }[];
+}): readonly (SessionMessage | undefined)[] {
   return (record.messages ?? []).map((storedMessage) => storedMessage.message);
 }
 

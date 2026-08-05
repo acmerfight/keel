@@ -2,13 +2,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   persistSessionMessages,
   resumeSessionStore,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import {
   headerLine,
   runtime,
@@ -124,12 +124,12 @@ describe("Session Store Persistence Validation", () => {
     Then it rejects both cases before appending ambiguous IDs`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const currentUser: Message = {
+    const currentUser: SessionMessage = {
       role: "user",
       content: "Release validation uses pnpm test:coverage.",
       origin: { type: "user_prompt" },
     };
-    const assistant: Message = {
+    const assistant: SessionMessage = {
       role: "assistant",
       content: "Understood.",
       toolCalls: [],
@@ -185,7 +185,7 @@ describe("Session Store Persistence Validation", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "hello",
@@ -233,7 +233,7 @@ describe("Session Store Persistence Validation", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const firstTurn: readonly Message[] = [
+    const firstTurn: readonly SessionMessage[] = [
       {
         role: "user",
         content: "start",
@@ -241,7 +241,7 @@ describe("Session Store Persistence Validation", () => {
       },
       { role: "assistant", content: "started", toolCalls: [] },
     ];
-    const malformedFollowUp: readonly Message[] = [
+    const malformedFollowUp: readonly SessionMessage[] = [
       ...firstTurn,
       {
         role: "assistant",

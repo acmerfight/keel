@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   consumeSessionQueuedInputs,
   createSessionStore,
@@ -16,7 +17,6 @@ import {
   persistSessionQueuedInput,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import {
   expectedStoredMessages,
   headerLine,
@@ -78,7 +78,7 @@ describe("Session Store Queued Input", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "continue with beta",
@@ -293,7 +293,7 @@ describe("Session Store Queued Input", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",

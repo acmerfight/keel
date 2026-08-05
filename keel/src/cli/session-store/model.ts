@@ -1,10 +1,10 @@
+import type { PersistedSessionMessage } from "../../agent/session-message.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type {
   SessionTask,
   SessionTaskProgress,
 } from "../../core/task-progress.ts";
-import type { SessionMessage } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import type {
   SkillActivation,
@@ -32,7 +32,7 @@ export const SUMMARY_CLOSE = "</summary>";
 
 export interface StoredMessage {
   readonly id: string;
-  readonly message: SessionMessage;
+  readonly message: PersistedSessionMessage;
 }
 
 export interface SessionForkPolicyRecord {
@@ -255,7 +255,7 @@ export interface SessionState {
   readonly graph: SessionGraphRecord;
   readonly title?: string;
   readonly goal?: SessionGoal;
-  readonly messages: readonly SessionMessage[];
+  readonly messages: readonly PersistedSessionMessage[];
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants: readonly BashApprovalGrant[];

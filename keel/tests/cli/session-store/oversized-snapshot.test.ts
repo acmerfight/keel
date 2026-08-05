@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   persistSessionBashApprovalGrant,
@@ -21,7 +22,6 @@ import {
   type SessionQueuedInput,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import {
   appendLine,
@@ -272,7 +272,7 @@ describe("Session Store Oversized Snapshot", () => {
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const ledgerPath = join(home, "sessions", "boundary-tail", "ledger.jsonl");
-    const snapshottedMessages: readonly Message[] = [
+    const snapshottedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember boundary",
@@ -396,7 +396,7 @@ describe("Session Store Oversized Snapshot", () => {
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
     const ledgerPath = join(home, "sessions", "snapshot-huge", "ledger.jsonl");
-    const snapshottedMessages: readonly Message[] = [
+    const snapshottedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -404,7 +404,7 @@ describe("Session Store Oversized Snapshot", () => {
       },
       { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
     ];
-    const suffixMessages: readonly Message[] = [
+    const suffixMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "continue with beta",
@@ -474,7 +474,7 @@ describe("Session Store Oversized Snapshot", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const largeMessages: readonly Message[] = [
+    const largeMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(16 * 1024 * 1024),
@@ -482,7 +482,7 @@ describe("Session Store Oversized Snapshot", () => {
       },
       { role: "assistant", content: "Large context noted.", toolCalls: [] },
     ];
-    const compactedMessages: readonly Message[] = [
+    const compactedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "summary: alpha is important",
@@ -574,7 +574,7 @@ describe("Session Store Oversized Snapshot", () => {
       cwd: ledgerWorkspace,
       command: "npm test",
     } satisfies BashApprovalGrant;
-    const largeMessages: readonly Message[] = [
+    const largeMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(16 * 1024 * 1024),

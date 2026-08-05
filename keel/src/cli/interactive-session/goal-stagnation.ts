@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { Message, ToolCall } from "../../llm/types.ts";
+import type { SessionMessage } from "../../agent/session-message.ts";
+import type { ToolCall } from "../../llm/types.ts";
 
 export interface GoalContinuationToolExecution {
   readonly toolCall: ToolCall;
@@ -21,9 +22,9 @@ function toolCallArgumentsFingerprint(toolCall: ToolCall): string {
 }
 
 function latestToolResult(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolCallId: string,
-): Extract<Message, { readonly role: "tool" }> | null {
+): Extract<SessionMessage, { readonly role: "tool" }> | null {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message?.role === "tool" && message.toolCallId === toolCallId) {
@@ -38,7 +39,9 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function currentTurnMessages(messages: readonly Message[]): readonly Message[] {
+function currentTurnMessages(
+  messages: readonly SessionMessage[],
+): readonly SessionMessage[] {
   const lastUserIndex = messages.findLastIndex(
     (message) => message.role === "user",
   );
@@ -46,7 +49,7 @@ function currentTurnMessages(messages: readonly Message[]): readonly Message[] {
 }
 
 export function goalContinuationStagnationFingerprint(options: {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly toolExecutions: readonly GoalContinuationToolExecution[];
   readonly stateChanged: boolean;
 }): string | null {

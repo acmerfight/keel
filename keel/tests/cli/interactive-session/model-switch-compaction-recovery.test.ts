@@ -1,6 +1,7 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
@@ -8,8 +9,8 @@ import type {
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
 import type {
   LLMProvider,
-  Message,
   ModelToolExposure,
+  ProviderMessage,
 } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
@@ -38,7 +39,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     let oldProviderSummaryRequests = 0;
     let targetProviderTurns = 0;
     let targetProviderSummaryRequests = 0;
-    const targetRequestContexts: Message[][] = [];
+    const targetRequestContexts: ProviderMessage[][] = [];
     const targetRequestToolExposures: Array<ModelToolExposure | undefined> = [];
     const largePrompt = "large history ".repeat(3_000).trim();
     const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
@@ -199,7 +200,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       let oldProviderTurns = 0;
       let oldProviderSummaryRequests = 0;
       let targetProviderTurns = 0;
-      const oldRequestContexts: Message[][] = [];
+      const oldRequestContexts: ProviderMessage[][] = [];
       const persistedReasons: string[] = [];
       const largePrompt = "large history ".repeat(3_000).trim();
       const oldProvider: LLMProvider = withProviderRequestAttemptAccounting({
@@ -345,7 +346,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     Then Keel rolls back the switch and records usage only when metering is active`,
     async ({ cliArgs, expectedUsage }) => {
       // Given
-      const initialMessages: readonly Message[] = [
+      const initialMessages: readonly SessionMessage[] = [
         { role: "user", content: "large history ".repeat(3_000).trim() },
         { role: "assistant", content: "old provider answer", toolCalls: [] },
       ];
@@ -460,7 +461,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     When the retry is denied admission,
     Then Keel rejects the switch and reports the completed attempt as budget-limited`, async () => {
     // Given
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Remember alpha." },
       { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
       { role: "user", content: "Remember beta." },
@@ -569,7 +570,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     let oldProviderTurns = 0;
     let oldProviderSummaryRequests = 0;
     let targetProviderTurns = 0;
-    const oldRequestContexts: Message[][] = [];
+    const oldRequestContexts: ProviderMessage[][] = [];
     const largePrompt = "large history ".repeat(3_000).trim();
     const oldProvider: LLMProvider = {
       id: "fake",
@@ -677,7 +678,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       "model switch log line ".repeat(5_000),
       "MODEL_SWITCH_LOG_END",
     ].join("\n");
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -846,7 +847,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       omittedChars: 90_000,
       sourceStatus: "complete",
     });
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Read the old report." },
       {
         role: "assistant",

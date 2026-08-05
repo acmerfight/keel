@@ -1,98 +1,90 @@
-import type { Message } from "../llm/types.ts";
-
-interface SessionMessageEntry {
-  readonly type: "message";
-  readonly message: Message;
-}
+import type { ProviderMessage } from "../llm/types.ts";
+import type { SessionMessage } from "./session-message.ts";
 
 export interface SessionLedger {
-  readonly entries: readonly SessionMessageEntry[];
+  readonly messages: () => readonly SessionMessage[];
+  readonly append: (message: SessionMessage) => void;
+  readonly appendMany: (messages: readonly SessionMessage[]) => void;
+  readonly replace: (messages: readonly SessionMessage[]) => void;
 }
 
 export function sessionLedgerFromMessages(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): SessionLedger {
+  let currentMessages = [...messages];
   return {
-    entries: messages.map((message) => ({
-      type: "message",
-      message,
-    })),
+    messages: () => currentMessages,
+    append: (message) => {
+      currentMessages = [...currentMessages, message];
+    },
+    appendMany: (nextMessages) => {
+      if (nextMessages.length === 0) return;
+      currentMessages = [...currentMessages, ...nextMessages];
+    },
+    replace: (nextMessages) => {
+      currentMessages = [...nextMessages];
+    },
   };
 }
 
 export function appendSessionLedgerMessage(
   ledger: SessionLedger,
-  message: Message,
+  message: SessionMessage,
 ): SessionLedger {
-  return {
-    entries: [...ledger.entries, { type: "message", message }],
-  };
+  ledger.append(message);
+  return ledger;
 }
 
 export function appendSessionLedgerMessages(
   ledger: SessionLedger,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): SessionLedger {
-  if (messages.length === 0) {
-    return ledger;
-  }
-  return {
-    entries: [
-      ...ledger.entries,
-      ...messages.map(
-        (message): SessionMessageEntry => ({ type: "message", message }),
-      ),
-    ],
-  };
+  ledger.appendMany(messages);
+  return ledger;
 }
 
 export function projectSessionLedgerToProviderMessages(
   ledger: SessionLedger,
-): readonly Message[] {
-  return ledger.entries.map((entry) =>
-    projectSessionMessageToProvider(entry.message),
-  );
+): readonly ProviderMessage[] {
+  return ledger.messages().map(projectSessionMessageToProvider);
 }
 
-export function projectSessionMessageToProvider(message: Message): Message {
+export function projectSessionMessageToProvider(
+  message: SessionMessage,
+): ProviderMessage {
   switch (message.role) {
     case "user":
       return {
         role: "user",
         content: message.content,
-        ...(message.contextCompaction === undefined
-          ? {}
-          : { contextCompaction: message.contextCompaction }),
       };
     case "assistant":
-      return message;
+      return {
+        role: "assistant",
+        content: message.content,
+        toolCalls: message.toolCalls,
+        ...(message.providerMetadata === undefined
+          ? {}
+          : { providerMetadata: message.providerMetadata }),
+      };
     case "tool":
-      if (
-        message.resourceObservation === undefined &&
-        message.evidenceShortened === undefined
-      ) {
-        return message;
-      }
       return {
         role: "tool",
         toolCallId: message.toolCallId,
         content: message.content,
-        ...(message.sourceTruncated !== undefined
-          ? { sourceTruncated: message.sourceTruncated }
-          : {}),
       };
   }
 }
 
 export function sessionLedgerMessages(
   ledger: SessionLedger,
-): readonly Message[] {
-  return ledger.entries.map((entry) => entry.message);
+): readonly SessionMessage[] {
+  return ledger.messages();
 }
 
-export function syncMessagesFromSessionLedger(
-  target: Message[],
+export function replaceSessionLedgerMessages(
   ledger: SessionLedger,
+  messages: readonly SessionMessage[],
 ): void {
-  target.splice(0, target.length, ...sessionLedgerMessages(ledger));
+  ledger.replace(messages);
 }

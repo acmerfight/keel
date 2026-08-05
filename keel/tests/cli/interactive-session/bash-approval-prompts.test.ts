@@ -12,7 +12,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -155,7 +155,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
     const command =
       "node -e \"require('node:fs').writeFileSync('created.txt', 'changed')\"";
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -419,7 +419,7 @@ describe("Interactive Session - Bash Approval Prompts", () => {
         resolve();
       });
     });
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     let turn = 0;
     const provider: LLMProvider = {
       id: "fake",

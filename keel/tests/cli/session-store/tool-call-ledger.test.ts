@@ -2,13 +2,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   persistSessionMessages,
   resumeSessionStore,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import {
   appendLine,
   expectedStoredMessages,
@@ -24,7 +24,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content:
@@ -90,7 +90,7 @@ describe("Session Store Tool Call Ledger", () => {
         nested: ["safe", { token: "Bearer another-secret-token-270" }],
       },
     };
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -153,7 +153,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -263,7 +263,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       { role: "user", content: "read note", origin: { type: "user_prompt" } },
       {
         role: "assistant",
@@ -319,7 +319,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -380,7 +380,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const expectedMessages: readonly Message[] = [
+    const expectedMessages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -499,7 +499,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       { role: "user", content: "list files", origin: { type: "user_prompt" } },
       {
         role: "assistant",
@@ -570,7 +570,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "update settings",
@@ -657,7 +657,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const persistedMessages: readonly Message[] = [
+    const persistedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "update settings",
@@ -681,7 +681,7 @@ describe("Session Store Tool Call Ledger", () => {
         content: "Edited settings.ts",
       },
     ];
-    const changedMessages: readonly Message[] = [
+    const changedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "update settings",
@@ -765,7 +765,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -806,7 +806,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -847,7 +847,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "write the file",
@@ -899,7 +899,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -946,7 +946,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -990,7 +990,7 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       { role: "tool", toolCallId: "missing_call", content: "orphan result" },
     ];
 
@@ -1026,11 +1026,11 @@ describe("Session Store Tool Call Ledger", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const originalMessages: readonly Message[] = [
+    const originalMessages: readonly SessionMessage[] = [
       { role: "user", content: "old task", origin: { type: "user_prompt" } },
       { role: "assistant", content: "old progress", toolCalls: [] },
     ];
-    const compactedMessages: readonly Message[] = [
+    const compactedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         origin: { type: "compaction_checkpoint" },

@@ -8,7 +8,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   createWorkspace,
@@ -27,7 +27,7 @@ describe("File Editing Read Boundaries", () => {
     ).join("\n")}\n`;
     await writeFile(join(workspace, "large.txt"), largeContent, "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "capture-read",
       async *stream(options) {
@@ -108,7 +108,7 @@ describe("File Editing Read Boundaries", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "windowed-read",
       async *stream(options) {
@@ -186,8 +186,8 @@ describe("File Editing Read Boundaries", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "one\ntwo\n", "utf8");
     let toolTurn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
     const provider = createFakeProvider([
       fakeToolResponse("read", { path: "note.txt", offset: 3 }),
       fakeToolResponse("read", { path: "note.txt", offset: 1, limit: 1 }),
@@ -253,8 +253,8 @@ describe("File Editing Read Boundaries", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-missing-read-file",
       async *stream(options) {
@@ -357,8 +357,8 @@ describe("File Editing Read Boundaries", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-read-directory-as-file",
       async *stream(options) {

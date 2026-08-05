@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   formatInteractiveGoal,
   formatInteractiveHelp,
@@ -17,7 +18,7 @@ import {
   SESSION_GOAL_COMPLETION_EVIDENCE_REASON_MAX_LENGTH,
   type SessionGoal,
 } from "../../../src/core/session-goal.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -860,7 +861,7 @@ describe("Interactive Session - Goals", () => {
     let stderr = "";
     let persistedGoal: SessionGoal | undefined;
     const providerPrompts: string[] = [];
-    const providerMessages: (readonly Message[])[] = [];
+    const providerMessages: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "goal-provider",
       async *stream(options) {
@@ -981,9 +982,9 @@ describe("Interactive Session - Goals", () => {
     let stdout = "";
     let stderr = "";
     const persistedGoals: SessionGoal[] = [];
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     const providerPrompts: string[] = [];
-    const providerMessages: (readonly Message[])[] = [];
+    const providerMessages: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "goal-activation-provider",
       async *stream(options) {
@@ -1090,7 +1091,7 @@ describe("Interactive Session - Goals", () => {
     const input = new PassThrough();
     let stderr = "";
     let persistedGoal: SessionGoal | undefined;
-    const providerMessages: (readonly Message[])[] = [];
+    const providerMessages: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "queued-goal-activation-provider",
       async *stream(options) {
@@ -1380,7 +1381,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const providerPrompts: string[] = [];
-    const providerMessages: (readonly Message[])[] = [];
+    const providerMessages: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "goal-pause-provider",
       async *stream(options) {
@@ -1636,8 +1637,8 @@ describe("Interactive Session - Goals", () => {
       let stdout = "";
       let stderr = "";
       let persistedGoal: SessionGoal | undefined = initialGoal;
-      let persistedMessages: readonly Message[] = [];
-      const providerMessages: (readonly Message[])[] = [];
+      let persistedMessages: readonly SessionMessage[] = [];
+      const providerMessages: (readonly ProviderMessage[])[] = [];
       const provider: LLMProvider = {
         id: "goal-resume-provider",
         async *stream(options) {

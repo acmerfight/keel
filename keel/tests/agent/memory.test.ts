@@ -1,13 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { Message } from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 import type { AgentMemoryMutationCapability } from "../../src/tools/memory.ts";
 
 describe("agent memory source provenance", () => {
@@ -15,7 +16,7 @@ describe("agent memory source provenance", () => {
     When the provider attempts to use it as memory authority,
     Then the agent rejects the tool call before the mutation capability`, async () => {
     const userMessage = "Remember that release tags use a v prefix.";
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: userMessage,
@@ -48,7 +49,7 @@ describe("agent memory source provenance", () => {
           }),
           fakeResponse("Not saved."),
         ]),
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "system",
         memory: {
           kind: "direct",

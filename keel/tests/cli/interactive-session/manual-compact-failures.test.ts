@@ -1,7 +1,8 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -25,7 +26,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     let summaryPrompt = "";
     let requestTurn = 0;
     const provider: LLMProvider = {
@@ -121,7 +122,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     let summaryPrompt = "";
     let requestTurn = 0;
     const provider: LLMProvider = {
@@ -210,7 +211,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     When user enters /compact,
     Then compaction is skipped without corrupting the next prompt`, async () => {
     // Given
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     let resolvedProviders = 0;
     const provider: LLMProvider = {
       id: "fake",
@@ -289,7 +290,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     let requestTurn = 0;
     const provider: LLMProvider = {
       id: "fake",
@@ -378,7 +379,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     let requestTurn = 0;
     const provider: LLMProvider = {
       id: "fake",
@@ -466,7 +467,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     When user continues the saved session,
     Then Keel reports failure without replacing or persisting the original history`, async () => {
     // Given
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Remember constraint alpha." },
       {
         role: "assistant",
@@ -478,7 +479,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
       { role: "user", content: "Remember evidence gamma." },
       { role: "assistant", content: "Evidence gamma recorded.", toolCalls: [] },
     ];
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     const persistedReasons: string[] = [];
     let summaryRequests = 0;
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
@@ -623,7 +624,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     Then Keel rejects the checkpoint with the configured usage accounting`,
     async ({ cliArgs, expectedCostModelResolutions, expectsReport }) => {
       // Given
-      const initialMessages: readonly Message[] = [
+      const initialMessages: readonly SessionMessage[] = [
         { role: "user", content: "Remember alpha." },
         { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
         { role: "user", content: "Remember beta." },
@@ -695,7 +696,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     When the retry is denied admission,
     Then Keel records the first attempt and rejects the checkpoint as budget-limited`, async () => {
     // Given
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Remember alpha." },
       { role: "assistant", content: "Alpha recorded.", toolCalls: [] },
       { role: "user", content: "Remember beta." },
@@ -790,7 +791,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const summaryRequested = new Promise<void>((resolve) => {
       receiveSummaryRequest = resolve;
     });
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     const compactionPrompts: string[] = [];
     let requestTurn = 0;
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
@@ -915,7 +916,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     When the session exits,
     Then the queued command is consumed instead of replaying`, async () => {
     // Given
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "first prompt" },
       { role: "assistant", content: "First done", toolCalls: [] },
     ];
@@ -1018,7 +1019,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const summaryRequested = new Promise<void>((resolve) => {
       receiveSummaryRequest = resolve;
     });
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     let requestTurn = 0;
     const provider: LLMProvider = {
       id: "fake",
@@ -1121,7 +1122,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     When user enters the prompt,
     Then it is sent as a normal task message`, async () => {
     // Given
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {

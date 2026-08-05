@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   redactMessageForPersistence,
   redactTextForPersistence,
 } from "../../src/cli/persistence-redaction.ts";
-import type { Message } from "../../src/llm/types.ts";
 
 describe("CLI Persistence Redaction", () => {
   test(`Given a persisted transcript line ends with the word Bearer,
@@ -38,7 +38,7 @@ describe("CLI Persistence Redaction", () => {
     When the assistant message is prepared for persistence,
     Then nested strings are redacted while null and primitive types retain their types`, () => {
     // Given
-    const message: Message = {
+    const message: SessionMessage = {
       role: "assistant",
       content: "",
       toolCalls: [

@@ -9,7 +9,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import { createGitWorkspace } from "../../../src/testing/cli-harness.ts";
 import {
   collect,
@@ -121,7 +121,7 @@ describe("File Editing Writes And Creates", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "existing.txt"), "keep me\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "mixed-multiple-writes",
       async *stream(options) {
@@ -223,7 +223,7 @@ describe("File Editing Writes And Creates", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "config.json"), '{"old":true}\n', "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-existing-write",
       async *stream(options) {
@@ -350,7 +350,7 @@ describe("File Editing Writes And Creates", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "scoped-agents-read",
       async *stream(options) {
@@ -448,7 +448,7 @@ describe("File Editing Writes And Creates", () => {
     );
     const targetPath = join(workspace, "packages", "api", "src", "new.ts");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     let fileExistedBeforeRetry = false;
     const provider: LLMProvider = {
       id: "scoped-agents-write-retry",

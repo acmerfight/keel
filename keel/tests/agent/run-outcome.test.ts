@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
@@ -14,7 +15,8 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider } from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
@@ -375,7 +377,7 @@ describe("Run Outcome Reporting", () => {
     When the run reports its final cost,
     Then the compaction request is included without using aggregate tier selection`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier task context ".repeat(2_000) },
       { role: "assistant", content: "Earlier progress.", toolCalls: [] },
       { role: "user", content: "Continue now." },
@@ -418,7 +420,7 @@ describe("Run Outcome Reporting", () => {
       runAgentTurn({
         workspace: process.cwd(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },

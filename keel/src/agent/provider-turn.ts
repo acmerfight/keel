@@ -2,8 +2,8 @@ import { KeelError } from "../core/error.ts";
 import type {
   LLMProvider,
   LLMStopReason,
-  Message,
   ModelToolExposure,
+  ProviderMessage,
   ProviderRequestAttemptObserver,
   ToolCall,
   Usage,
@@ -44,7 +44,7 @@ export interface StreamTurnOptions {
 }
 
 interface ProviderTurnOptions extends StreamTurnOptions {
-  readonly messages: readonly Message[];
+  readonly messages: readonly ProviderMessage[];
 }
 
 function isProviderContextOverflow(error: unknown): boolean {

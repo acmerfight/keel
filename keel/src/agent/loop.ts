@@ -16,7 +16,6 @@ import type { RecordUndoCheckpointResult } from "../core/undo-protection.ts";
 import type {
   AssistantProviderMetadata,
   LLMProvider,
-  Message,
   ModelToolExposure,
   ToolCall,
 } from "../llm/types.ts";
@@ -80,12 +79,11 @@ import {
 import {
   appendSessionLedgerMessage,
   appendSessionLedgerMessages,
-  projectSessionLedgerToProviderMessages,
   type SessionLedger,
   sessionLedgerFromMessages,
   sessionLedgerMessages,
-  syncMessagesFromSessionLedger,
 } from "./session-ledger.ts";
+import type { SessionMessage } from "./session-message.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import {
   DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
@@ -142,18 +140,16 @@ export interface RunAgentOptions {
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly taskProgress?: SessionTaskProgress;
-  readonly onTranscriptReady?: (messages: readonly Message[]) => void;
+  readonly onTranscriptReady?: (messages: readonly SessionMessage[]) => void;
   readonly modelOperations?: ModelOperationInstrumentation;
 }
 
-type InjectedUserMessage = Extract<Message, { readonly role: "user" }>;
+type InjectedUserMessage = Extract<SessionMessage, { readonly role: "user" }>;
 
 export interface RunAgentTurnOptions {
   readonly workspace: string;
   readonly provider: LLMProvider;
-  // Mutated in place: user messages are supplied by the session owner, while
-  // agent turns append assistant/tool messages so later turns share context.
-  readonly messages: Message[];
+  readonly ledger: SessionLedger;
   readonly systemPrompt: string;
   readonly memory?: AgentMemoryRuntime;
   readonly mcp?: AgentMcpRuntime;
@@ -247,7 +243,7 @@ function isBlockedGoalProposal(toolCall: ToolCall): boolean {
   );
 }
 
-function hasUntrustedMcpContent(messages: readonly Message[]): boolean {
+function hasUntrustedMcpContent(messages: readonly SessionMessage[]): boolean {
   return messages.some(
     (message) =>
       (message.role === "assistant" &&
@@ -273,7 +269,9 @@ function publishVisibleProjectInstructions(
   }
 }
 
-function priorToolCallsFromMessages(messages: readonly Message[]): ToolCall[] {
+function priorToolCallsFromMessages(
+  messages: readonly SessionMessage[],
+): ToolCall[] {
   const lastUserIndex = messages.findLastIndex(
     (message) => message.role === "user",
   );
@@ -307,7 +305,7 @@ function combinedReasoningContent(
   return `${left ?? ""}${right ?? ""}`;
 }
 
-function toolRequestMessage(turn: AgentTurn): Message {
+function toolRequestMessage(turn: AgentTurn): SessionMessage {
   const providerMetadata = providerMetadataFromReasoningContent(
     turn.reasoningContent,
   );
@@ -344,7 +342,7 @@ function scheduledToolCalls(
 function finalReplyMessage(
   text: string,
   reasoningContent: string | null,
-): Message | null {
+): SessionMessage | null {
   const providerMetadata =
     providerMetadataFromReasoningContent(reasoningContent);
   return text === "" && reasoningContent === null
@@ -569,7 +567,7 @@ interface WrapUpSummarizeOptions {
   readonly state: CompactionState;
   readonly streamOptions: Omit<
     LedgerTurnOptions,
-    "getLedger" | "setLedger" | "modelOperationPurpose" | "toolExposure"
+    "ledger" | "modelOperationPurpose" | "toolExposure"
   >;
   readonly turnText: string;
   readonly turnReasoningContent: string | null;
@@ -584,21 +582,20 @@ async function* streamWrapUpSummary(
     turnText,
     options.turnReasoningContent,
   );
-  let wrapUpLedger =
-    interimReply !== null
-      ? appendSessionLedgerMessage(sessionLedger, interimReply)
-      : sessionLedger;
-  wrapUpLedger = appendSessionLedgerMessage(wrapUpLedger, {
+  const wrapUpLedger = sessionLedgerFromMessages(
+    sessionLedgerMessages(sessionLedger),
+  );
+  if (interimReply !== null) {
+    appendSessionLedgerMessage(wrapUpLedger, interimReply);
+  }
+  appendSessionLedgerMessage(wrapUpLedger, {
     role: "user",
     content: WRAP_UP_INSTRUCTION,
+    origin: { type: "runtime_turn_limit_summary" },
   });
-  const setWrapUpLedger = (next: SessionLedger) => {
-    wrapUpLedger = next;
-  };
   return yield* streamTurnWithOverflowRecovery(config, state, {
     ...streamOptions,
-    getLedger: () => wrapUpLedger,
-    setLedger: setWrapUpLedger,
+    ledger: wrapUpLedger,
     modelOperationPurpose: "turn_limit_summary",
     toolExposure: { kind: "none" },
     textPrefix: turnText === "" || turnText.endsWith("\n") ? "" : "\n",
@@ -611,7 +608,7 @@ export async function* runAgentTurn(
   const {
     workspace,
     provider,
-    messages,
+    ledger: sessionLedger,
     systemPrompt,
     signal,
     costTracking,
@@ -621,11 +618,13 @@ export async function* runAgentTurn(
   } = options;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
-  let untrustedMcpContentObserved = hasUntrustedMcpContent(messages);
+  let untrustedMcpContentObserved = hasUntrustedMcpContent(
+    sessionLedgerMessages(sessionLedger),
+  );
   const claimedMemorySourceMessages = new WeakSet<InjectedUserMessage>();
   const memoryToolsExposedForMessages = new WeakSet<InjectedUserMessage>();
   const currentMemoryUserMessage = (): InjectedUserMessage | null => {
-    const current = messages.findLast(
+    const current = sessionLedgerMessages(sessionLedger).findLast(
       (message): message is InjectedUserMessage => message.role === "user",
     );
     if (current === undefined) return null;
@@ -652,14 +651,9 @@ export async function* runAgentTurn(
             return true;
           },
         };
-  let sessionLedger = sessionLedgerFromMessages(messages);
-  const applySessionLedger = (next: SessionLedger) => {
-    sessionLedger = next;
-    syncMessagesFromSessionLedger(messages, sessionLedger);
-  };
-  const providerMessages =
-    projectSessionLedgerToProviderMessages(sessionLedger);
-  const priorToolCalls = priorToolCallsFromMessages(providerMessages);
+  const priorToolCalls = priorToolCallsFromMessages(
+    sessionLedgerMessages(sessionLedger),
+  );
   const readVisibility = options.readVisibility ?? createReadVisibilityState();
   const projectInstructionVisibility =
     options.projectInstructionVisibility ??
@@ -808,8 +802,7 @@ export async function* runAgentTurn(
       turnResult = yield* streamTurnWithOverflowRecovery(turnConfig, state, {
         provider: requestProvider,
         systemPrompt: baseTurnSystemPrompt,
-        getLedger: () => sessionLedger,
-        setLedger: applySessionLedger,
+        ledger: sessionLedger,
         signal,
         toolExposure: {
           kind: "auto",
@@ -868,11 +861,11 @@ export async function* runAgentTurn(
         turnResult.reasoningContent,
       );
       if (reply !== null) {
-        applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
+        appendSessionLedgerMessage(sessionLedger, reply);
       }
       if (turnResult.toolCalls.length === 0 && priorToolCalls.length === 0) {
         const sessionGoalEvent = clearPendingBlockedAudit(
-          sessionLedger.entries.length,
+          sessionLedgerMessages(sessionLedger).length,
         );
         if (sessionGoalEvent !== null) {
           yield sessionGoalEvent;
@@ -935,9 +928,7 @@ export async function* runAgentTurn(
         ),
       );
       if (combinedReply !== null) {
-        applySessionLedger(
-          appendSessionLedgerMessage(sessionLedger, combinedReply),
-        );
+        appendSessionLedgerMessage(sessionLedger, combinedReply);
       }
       state.accounting = addRequestAccounting(
         state.accounting,
@@ -964,11 +955,11 @@ export async function* runAgentTurn(
         turnResult.reasoningContent,
       );
       if (reply !== null) {
-        applySessionLedger(appendSessionLedgerMessage(sessionLedger, reply));
+        appendSessionLedgerMessage(sessionLedger, reply);
       }
       if (priorToolCalls.length === 0) {
         const sessionGoalEvent = clearPendingBlockedAudit(
-          sessionLedger.entries.length,
+          sessionLedgerMessages(sessionLedger).length,
         );
         if (sessionGoalEvent !== null) {
           yield sessionGoalEvent;
@@ -984,9 +975,7 @@ export async function* runAgentTurn(
       return;
     }
 
-    applySessionLedger(
-      appendSessionLedgerMessage(sessionLedger, toolRequestMessage(turnResult)),
-    );
+    appendSessionLedgerMessage(sessionLedger, toolRequestMessage(turnResult));
     priorToolCalls.push(...turnResult.toolCalls);
     const sessionGoalAtTurnStart =
       sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
@@ -1101,25 +1090,23 @@ export async function* runAgentTurn(
         const read = settled.execution.ok
           ? toolExecutionEffect(settled.execution, "read")
           : undefined;
-        applySessionLedger(
-          appendSessionLedgerMessage(sessionLedger, {
-            role: "tool",
-            toolCallId: settled.toolCall.id,
+        appendSessionLedgerMessage(sessionLedger, {
+          role: "tool",
+          toolCallId: settled.toolCall.id,
+          content: settled.content,
+          ...toolMessageSourceTruncationMetadata({
             content: settled.content,
-            ...toolMessageSourceTruncationMetadata({
-              content: settled.content,
-              sourceTruncated: settled.sourceTruncated,
-            }),
-            ...(settled.evidenceShortened
-              ? { evidenceShortened: true as const }
-              : {}),
-            ...(read !== undefined
-              ? {
-                  resourceObservation: read.resourceObservation,
-                }
-              : {}),
+            sourceTruncated: settled.sourceTruncated,
           }),
-        );
+          ...(settled.evidenceShortened
+            ? { evidenceShortened: true as const }
+            : {}),
+          ...(read !== undefined
+            ? {
+                resourceObservation: read.resourceObservation,
+              }
+            : {}),
+        });
         if (settled.notice !== undefined) {
           artifactNotices.push(settled.notice);
         }
@@ -1158,7 +1145,9 @@ export async function* runAgentTurn(
         type: "task_progress_updated",
         taskProgress,
         messageOrdinal:
-          sessionLedger.entries.length + pendingToolExecutions.length + 1,
+          sessionLedgerMessages(sessionLedger).length +
+          pendingToolExecutions.length +
+          1,
       };
     };
     const sessionGoalEventFromExecution = (
@@ -1176,7 +1165,9 @@ export async function* runAgentTurn(
         type: "session_goal_updated",
         goal: sessionGoal,
         messageOrdinal:
-          sessionLedger.entries.length + pendingToolExecutions.length + 1,
+          sessionLedgerMessages(sessionLedger).length +
+          pendingToolExecutions.length +
+          1,
       };
     };
 
@@ -1275,7 +1266,7 @@ export async function* runAgentTurn(
     );
     if (!blockedGoalProposalRecordedThisTurn) {
       const sessionGoalEvent = clearPendingBlockedAudit(
-        sessionLedger.entries.length,
+        sessionLedgerMessages(sessionLedger).length,
       );
       if (sessionGoalEvent !== null) {
         yield sessionGoalEvent;
@@ -1283,11 +1274,9 @@ export async function* runAgentTurn(
     }
 
     if (drainInjectedUserMessages !== undefined && !signal.aborted) {
-      applySessionLedger(
-        appendSessionLedgerMessages(
-          sessionLedger,
-          await drainInjectedUserMessages(),
-        ),
+      appendSessionLedgerMessages(
+        sessionLedger,
+        await drainInjectedUserMessages(),
       );
     }
   }
@@ -1296,13 +1285,13 @@ export async function* runAgentTurn(
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
-  const messages: Message[] = [
+  const ledger = sessionLedgerFromMessages([
     {
       role: "user",
       content: options.userMessage,
       origin: { type: "user_prompt" },
     },
-  ];
+  ]);
   const readVisibility = createReadVisibilityState();
   const projectInstructionVisibility = createProjectInstructionVisibilityState(
     options.workspace,
@@ -1327,7 +1316,7 @@ export async function* runAgent(
       for await (const event of runAgentTurn({
         workspace: options.workspace,
         provider: options.provider,
-        messages,
+        ledger,
         systemPrompt: options.systemPrompt,
         ...(options.memory !== undefined ? { memory: options.memory } : {}),
         ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
@@ -1368,7 +1357,7 @@ export async function* runAgent(
       if (checkpointEvent !== null) yield checkpointEvent;
       throw error;
     }
-    options.onTranscriptReady?.(messages);
+    options.onTranscriptReady?.(sessionLedgerMessages(ledger));
     const checkpointEvent = recordCheckpoint();
     checkpointRecorded = true;
     if (checkpointEvent !== null) yield checkpointEvent;

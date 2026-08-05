@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  type PersistedSessionMessage,
+  type SessionMessage,
+  type UserMessageContextCompactionMetadata,
+  type UserMessageOrigin,
+  userMessageOriginTypes,
+} from "../../agent/session-message.ts";
 import { providerIds } from "../../core/provider-id.ts";
 import { copyReadResourceObservation } from "../../core/resource-observation.ts";
 import {
@@ -27,13 +34,6 @@ import {
   sessionTaskPlanSchema,
   sessionTaskProgressSchema,
 } from "../../core/task-progress.ts";
-import {
-  type Message,
-  type SessionMessage,
-  type UserMessageContextCompactionMetadata,
-  type UserMessageOrigin,
-  userMessageOriginTypes,
-} from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import { copySkillActivation } from "../../skills/lifecycle.ts";
 import type { SkillActivation } from "../../skills/model.ts";
@@ -562,7 +562,7 @@ function toUserContextCompactionMetadata(
   };
 }
 
-function toMessage(message: RawMessage): SessionMessage {
+function toMessage(message: RawMessage): PersistedSessionMessage {
   switch (message.role) {
     case "user":
       return {
@@ -608,7 +608,9 @@ function toMessage(message: RawMessage): SessionMessage {
   }
 }
 
-function copyMessage(message: SessionMessage): SessionMessage {
+function copyMessage(
+  message: PersistedSessionMessage,
+): PersistedSessionMessage {
   switch (message.role) {
     case "user":
       return {
@@ -679,7 +681,7 @@ function redactStoredMessageForPersistence(
 
 function messagesFromStoredMessages(
   storedMessages: readonly StoredMessage[],
-): readonly SessionMessage[] {
+): readonly PersistedSessionMessage[] {
   return storedMessages.map((storedMessage) =>
     copyMessage(storedMessage.message),
   );
@@ -1621,9 +1623,9 @@ function parseSnapshotSessionMutationRecord(
 
 function parseSessionMessages(
   sessionId: string,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   action: "persist" | "fork",
-): readonly SessionMessage[] {
+): readonly PersistedSessionMessage[] {
   const parsed = z.array(messageSchema).safeParse(messages);
   if (!parsed.success) {
     sessionStoreError(
@@ -1635,7 +1637,7 @@ function parseSessionMessages(
 
 function validateCompletedTranscript(
   sessionId: string,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   action: "persist" | "resume" | "fork",
 ): void {
   const errorPrefix = `Error: cannot ${action} session "${sessionId}":`;

@@ -11,10 +11,11 @@ import type { CostReport } from "../../agent/events.ts";
 import type { ModelOperationInstrumentation } from "../../agent/model-operations.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
+import type { SessionMessage } from "../../agent/session-message.ts";
 import type { CostModel } from "../../core/cost.ts";
 import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
-import type { Message, Usage } from "../../llm/types.ts";
+import type { Usage } from "../../llm/types.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
   formatContextCompactionReport,
@@ -31,7 +32,7 @@ export interface ModelSwitchCompactionContext {
   readonly current: InteractiveResolvedProvider;
   readonly target: InteractiveResolvedProvider;
   readonly workspace: string;
-  readonly messages: Message[];
+  readonly messages: SessionMessage[];
   readonly systemPrompt: string;
   readonly summarySystemPrompt: string;
   readonly signal: AbortSignal;
@@ -84,8 +85,8 @@ function restoreProjectInstructionVisibility(
 }
 
 function rollbackModelSwitchCompaction(options: {
-  readonly messages: Message[];
-  readonly messagesBeforeCompact: readonly Message[];
+  readonly messages: SessionMessage[];
+  readonly messagesBeforeCompact: readonly SessionMessage[];
   readonly readVisibility: ReadVisibilityState;
   readonly readVisibilityBeforeCompact: readonly VisibleReadSnapshot[];
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
@@ -108,7 +109,7 @@ function rollbackModelSwitchCompaction(options: {
 
 function switchWouldOverflowTargetContext(options: {
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly target: InteractiveResolvedProvider;
   readonly bashToolVisible: boolean;
 }): boolean {
@@ -129,7 +130,7 @@ function switchWouldOverflowTargetContext(options: {
 
 export function modelSwitchRequiresCompaction(options: {
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly target: InteractiveResolvedProvider;
   readonly bashToolVisible: boolean;
 }): boolean {

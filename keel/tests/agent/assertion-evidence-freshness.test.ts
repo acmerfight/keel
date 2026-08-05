@@ -1,13 +1,13 @@
 import { describe, expect, test } from "vitest";
 import { assertionEvidenceResourceFreshness } from "../../src/agent/assertion-evidence-freshness.ts";
-import type { Message } from "../../src/llm/types.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 
 describe("Assertion Evidence Freshness", () => {
   test(`Given a historical read result has no Runtime observation,
     When assertion evidence is prepared for evaluation,
     Then the read is marked unverifiable instead of being treated as current`, () => {
     // Given
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       { role: "user", content: "Inspect missing.txt." },
       {
         role: "assistant",

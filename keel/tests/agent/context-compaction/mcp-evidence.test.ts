@@ -1,13 +1,13 @@
 import { describe, expect, test } from "vitest";
 import { collectToolCompactionEvidence } from "../../../src/agent/context-compaction.ts";
-import type { Message } from "../../../src/llm/types.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 
 describe("Context Compaction MCP Evidence", () => {
   test(`Given a dynamic MCP result is too large for summary input,
     When compaction derives a rerunnable evidence handle,
     Then it never treats the external call as a local source handle`, async () => {
     // Given
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "assistant",
         content: "",

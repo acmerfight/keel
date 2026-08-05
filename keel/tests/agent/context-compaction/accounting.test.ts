@@ -4,21 +4,23 @@ import {
   shouldCompactBeforeRequest,
 } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider } from "../../../src/llm/types.ts";
 import {
   collect,
   freshSignal,
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("Context Compaction Accounting", () => {
   test(`Given no context window is configured,
     When a long agent turn starts,
     Then proactive compaction is skipped`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier context ".repeat(80) },
       {
         role: "assistant",
@@ -46,7 +48,7 @@ describe("Context Compaction Accounting", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -70,7 +72,7 @@ describe("Context Compaction Accounting", () => {
     When proactive compaction checks a later request,
     Then the provider-visible prefix size determines the compaction decision`, () => {
     // Given
-    const completedMessages: Message[] = [
+    const completedMessages: SessionMessage[] = [
       { role: "user", content: "Completed prefix ".repeat(80) },
     ];
     const accounting = captureContextCompactionAccountingSnapshot({
@@ -83,7 +85,7 @@ describe("Context Compaction Accounting", () => {
         outputTokens: 1,
       },
     });
-    const requestMessages: Message[] = [
+    const requestMessages: SessionMessage[] = [
       ...completedMessages,
       { role: "user", content: "Continue with the next step." },
     ];
@@ -116,7 +118,7 @@ describe("Context Compaction Accounting", () => {
     When proactive compaction estimates the request,
     Then reasoning metadata contributes to the context budget`, () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Continue." },
       {
         role: "assistant",
@@ -148,7 +150,7 @@ describe("Context Compaction Accounting", () => {
     When proactive compaction checks provider-visible reasoning metadata,
     Then it re-estimates the current request before deciding to compact`, () => {
     // Given
-    const previousMessages: Message[] = [
+    const previousMessages: SessionMessage[] = [
       { role: "user", content: "Continue." },
       {
         role: "assistant",
@@ -174,7 +176,7 @@ describe("Context Compaction Accounting", () => {
     if (accounting === undefined) {
       throw new Error("test setup expected accounting");
     }
-    const updatedMessages: Message[] = [
+    const updatedMessages: SessionMessage[] = [
       { role: "user", content: "Continue." },
       {
         role: "assistant",
@@ -207,7 +209,7 @@ describe("Context Compaction Accounting", () => {
     When a text-only wrap-up request checks proactive compaction,
     Then it treats the usage as ambiguous and falls back to the estimate`, () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Previously completed request ".repeat(80) },
     ];
     const accounting = captureContextCompactionAccountingSnapshot({
@@ -241,7 +243,7 @@ describe("Context Compaction Accounting", () => {
     When another text-only request checks proactive compaction,
     Then it reuses the provider accounting`, () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Previously completed request ".repeat(80) },
     ];
     const accounting = captureContextCompactionAccountingSnapshot({
@@ -276,7 +278,7 @@ describe("Context Compaction Accounting", () => {
     When a tool-enabled request checks proactive compaction,
     Then it treats the usage as ambiguous and falls back to the estimate`, () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Previously completed request ".repeat(80) },
     ];
     const accounting = captureContextCompactionAccountingSnapshot({
@@ -311,7 +313,7 @@ describe("Context Compaction Accounting", () => {
     When proactive compaction checks a request without bash exposure,
     Then it treats the request shape as ambiguous and falls back to the estimate`, () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Previously completed request ".repeat(80) },
     ];
     const accounting = captureContextCompactionAccountingSnapshot({
@@ -346,7 +348,7 @@ describe("Context Compaction Accounting", () => {
     When proactive compaction checks a request with reviewed memory tools,
     Then it treats the request shape as ambiguous and falls back to the estimate`, () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Previously completed request ".repeat(80) },
     ];
     const accounting = captureContextCompactionAccountingSnapshot({
@@ -383,7 +385,7 @@ describe("Context Compaction Accounting", () => {
     Then no accounting snapshot is recorded`,
     (inputTokens) => {
       // Given
-      const messages: Message[] = [
+      const messages: SessionMessage[] = [
         { role: "user", content: "Completed request." },
       ];
 

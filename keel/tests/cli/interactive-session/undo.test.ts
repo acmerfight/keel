@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
 import {
   createSessionStore,
@@ -12,7 +13,7 @@ import {
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
 import { recordLastEditCheckpoint } from "../../../src/core/git.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   commitFile,
   createGitWorkspace,
@@ -466,7 +467,7 @@ describe("Interactive Session - Undo", () => {
     await commitFile(workspace, "second.txt", "second old\n");
 
     let request = 0;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -611,7 +612,7 @@ describe("Interactive Session - Undo", () => {
     await commitFile(workspace, "note.txt", "old\n");
 
     let request = 0;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -762,7 +763,7 @@ describe("Interactive Session - Undo", () => {
       line: "/undo",
       runtime,
     });
-    let persistedMessages: readonly Message[] = storedSession.messages;
+    let persistedMessages: readonly SessionMessage[] = storedSession.messages;
     const firstInput = new PassThrough();
     let firstStdout = "";
     let firstStderr = "";
@@ -817,7 +818,7 @@ describe("Interactive Session - Undo", () => {
         workspace,
         runtime,
       });
-      const observedContexts: Message[][] = [];
+      const observedContexts: ProviderMessage[][] = [];
       const provider: LLMProvider = {
         id: "fake",
         async *stream(options) {

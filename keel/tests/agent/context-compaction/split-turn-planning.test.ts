@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { compactMessages } from "../../../src/agent/context-compaction.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
+import type { LLMProvider } from "../../../src/llm/types.ts";
 import {
   freshSignal,
   ZERO_USAGE,
@@ -16,7 +17,7 @@ describe("Context Compaction Split-Turn Planning", () => {
       "old pasted log line ".repeat(700),
       "PASTED_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the baseline." },
       { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: pastedLog },
@@ -79,7 +80,7 @@ describe("Context Compaction Split-Turn Planning", () => {
       "consumed log line ".repeat(500),
       "CONSUMED_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the baseline." },
       { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Read the consumed log." },
@@ -167,7 +168,7 @@ describe("Context Compaction Split-Turn Planning", () => {
     When split-turn compaction searches for a safe boundary,
     Then it does not split after the pending tool request`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Older setup ".repeat(100) },
       { role: "assistant", content: "Older setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the pending report." },
@@ -240,7 +241,7 @@ describe("Context Compaction Split-Turn Planning", () => {
     When split-turn compaction runs,
     Then it falls back to that boundary and keeps the pending work`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Older setup ".repeat(100) },
       { role: "assistant", content: "Older setup remembered.", toolCalls: [] },
       {
@@ -318,7 +319,7 @@ describe("Context Compaction Split-Turn Planning", () => {
     Then it keeps the malformed tool adjacency instead of splitting through it`, async () => {
     // Given
     const strayToolOutput = "stray tool output ".repeat(400);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Older setup ".repeat(100) },
       { role: "assistant", content: "Older setup remembered.", toolCalls: [] },
       {

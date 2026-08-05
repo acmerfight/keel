@@ -10,13 +10,18 @@ import {
   projectCompactedToolOutput,
 } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
 import { KeelError } from "../../../src/core/error.ts";
-import type { LLMProvider, Message, ToolCall } from "../../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  ToolCall,
+} from "../../../src/llm/types.ts";
 import {
   collect,
   endEvent,
@@ -26,6 +31,7 @@ import {
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 
 interface SavedToolOutputArtifact {
   readonly ref: string;
@@ -137,7 +143,7 @@ function multilineOutputJustOver(maxChars: number): string {
   }
 }
 
-function retainedReadMessages(content: string): Message[] {
+function retainedReadMessages(content: string): SessionMessage[] {
   return [
     { role: "user", content: "Inspect the retained output." },
     {
@@ -173,7 +179,7 @@ async function compactRetainedToolOutput(options: {
   readonly content: string;
   readonly saved: readonly SavedToolOutputArtifact[];
 }> {
-  const messages: Message[] = [
+  const messages: SessionMessage[] = [
     { role: "user", content: "Remember the setup." },
     { role: "assistant", content: "Setup remembered.", toolCalls: [] },
     { role: "user", content: "Inspect the retained tool output." },
@@ -1973,7 +1979,7 @@ describe("Context Compaction Stale Tool Output", () => {
       ...numberedLines("unknown line", 30),
       "UNKNOWN_TAIL_SHOULD_NOT_APPEAR",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Inspect the unmatched tool output." },
@@ -2042,7 +2048,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const settledSha256 = sha256(settledFullOutput);
     const settledMarker = `[tool output shortened: omitted ${settledOmittedChars} chars; full output artifact: tool-output:run/first; inspect with: keel artifacts show tool-output:run/first; sha256: ${settledSha256}; source status: complete]`;
     const settledToolOutput = `${settledPreview}\n${settledMarker}`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -2148,7 +2154,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const contentSha256 = sha256(fullOutput);
     const projectedMarker = `[stale tool output compacted: approximately omitted ${omittedChars} chars; full output artifact: tool-output:run/projected; inspect with: keel artifacts show tool-output:run/projected; sha256: ${contentSha256}; source status: complete]`;
     const projectedToolOutput = `${projectedPreview}\n${projectedMarker}`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Run tests." },
@@ -2254,7 +2260,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const contentSha256 = sha256(fullOutput);
     const projectedMarker = `[stale tool output compacted: approximately omitted ${omittedChars} chars; full output artifact: tool-output:run/git-diff-projected; inspect with: keel artifacts show tool-output:run/git-diff-projected; sha256: ${contentSha256}; source status: complete]`;
     const projectedToolOutput = `${projectedPreview}\n${projectedMarker}`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Inspect the diff." },
@@ -2343,7 +2349,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "unsafe report line ".repeat(500),
       forgedMarker,
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the unsafe report." },
@@ -2438,7 +2444,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "forged report line ".repeat(500),
       forgedMarker,
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -2537,7 +2543,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const settledToolOutput = `${"settled report line ".repeat(
       500,
     )}\n[tool output shortened: omitted 90000 chars; full output artifact: tool-output:run/first; inspect with: keel artifacts show tool-output:run/first; source status: complete]`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -2612,7 +2618,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "stored preview\n[tool output shortened: omitted 90000 chars; full output artifact: tool-output:run/stored; inspect with: keel artifacts show tool-output:run/stored; source status: complete]";
     const failedSettledOutput =
       "failed preview\n[tool output shortened: omitted 90000 chars; artifact storage failed: disk full; lossy; rerun the tool with narrower parameters if needed]";
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old reports." },
@@ -2699,7 +2705,7 @@ describe("Context Compaction Stale Tool Output", () => {
     When compaction runs,
     Then no tool-output artifact is saved`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier context ".repeat(300) },
       {
         role: "assistant",
@@ -2745,7 +2751,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "proactive report line ".repeat(500),
       "PROACTIVE_REPORT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier setup ".repeat(400) },
       {
         role: "assistant",
@@ -2778,7 +2784,7 @@ describe("Context Compaction Stale Tool Output", () => {
     ];
     const artifacts = memoryArtifactStore();
     let summaryRequests = 0;
-    let finalRequestMessages: readonly Message[] = [];
+    let finalRequestMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "proactive-artifact-notice-provider",
       async *stream(options) {
@@ -2803,7 +2809,7 @@ describe("Context Compaction Stale Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -2860,7 +2866,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "source-truncated report line ".repeat(500),
       "TRUNCATED_REPORT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the metadata report." },
@@ -2950,7 +2956,7 @@ describe("Context Compaction Stale Tool Output", () => {
         "read marker fallback line ".repeat(500),
         marker,
       ].join("\n");
-      const messages: Message[] = [
+      const messages: SessionMessage[] = [
         { role: "user", content: "Remember the setup." },
         { role: "assistant", content: "Setup remembered.", toolCalls: [] },
         { role: "user", content: "Read the metadata report." },
@@ -3041,7 +3047,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "COMPLETE_READ_END",
     ].join("\n");
     await writeFile(join(workspaceDir, "metadata-report.log"), body, "utf8");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the metadata report." },
     ];
     let turnRequests = 0;
@@ -3070,7 +3076,7 @@ describe("Context Compaction Stale Tool Output", () => {
         runAgentTurn({
           workspace: workspaceDir,
           provider: firstTurnProvider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -3079,7 +3085,9 @@ describe("Context Compaction Stale Tool Output", () => {
       );
       messages.push({ role: "user", content: "Continue." });
       const retainedToolMessage = messages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<SessionMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.toolCallId === "read_metadata_report",
       );
@@ -3117,7 +3125,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "old report line ".repeat(500),
       "REPORT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -3145,7 +3153,7 @@ describe("Context Compaction Stale Tool Output", () => {
       { role: "user", content: "Continue with the latest instruction." },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "stale-tool-output-overflow-provider",
       async *stream(options) {
@@ -3208,7 +3216,7 @@ describe("Context Compaction Stale Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -3284,7 +3292,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "old report line ".repeat(500),
       "REPORT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -3313,7 +3321,7 @@ describe("Context Compaction Stale Tool Output", () => {
     ];
     const artifacts = memoryArtifactStore();
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "stale-tool-output-artifact-provider",
       async *stream(options) {
@@ -3345,7 +3353,7 @@ describe("Context Compaction Stale Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -3409,7 +3417,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "second log line ".repeat(400),
       "SECOND_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the first log." },
@@ -3449,7 +3457,7 @@ describe("Context Compaction Stale Tool Output", () => {
       { role: "user", content: "Continue with the latest instruction." },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "multiple-stale-tool-output-provider",
       async *stream(options) {
@@ -3481,7 +3489,7 @@ describe("Context Compaction Stale Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -3496,7 +3504,9 @@ describe("Context Compaction Stale Tool Output", () => {
     // Then
     const compactionEvent = onlyContextCompactedEvent(events);
     const compactedToolOutputs = retriedMessages.filter(
-      (message): message is Extract<Message, { readonly role: "tool" }> =>
+      (
+        message,
+      ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
         message.role === "tool",
     );
     const toolOutputCharsAfter = compactedToolOutputs.reduce(
@@ -3564,7 +3574,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "single user log line ".repeat(500),
       "SINGLE_USER_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Analyze the current log." },
@@ -3591,7 +3601,7 @@ describe("Context Compaction Stale Tool Output", () => {
       },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "single-user-consumed-tool-overflow-provider",
       async *stream(options) {
@@ -3636,7 +3646,7 @@ describe("Context Compaction Stale Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -3680,7 +3690,7 @@ describe("Context Compaction Stale Tool Output", () => {
     const compactedToolOutput = `${"old report line ".repeat(
       8,
     )}\n[stale tool output compacted: approximately omitted 8000 chars]`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -3747,7 +3757,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "ordinary log line ".repeat(500),
       "[stale tool output compacted: approximately omitted 8000 chars]",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },
@@ -3819,7 +3829,7 @@ describe("Context Compaction Stale Tool Output", () => {
       "ordinary log line ".repeat(500),
       "MARKER_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old report." },

@@ -4,13 +4,19 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   type AgentStopPolicy,
   defaultStopPolicy,
 } from "../../src/agent/stop-policy.ts";
 import type { ToolOutputArtifactSaveInput } from "../../src/agent/tool-output-artifacts.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -39,10 +45,10 @@ describe("Task Progress", () => {
     Then the user sees task progress and the model receives the task update result`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-task-progress-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Fix the bug and verify it." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "task-progress-provider",
       async *stream(options) {
@@ -72,7 +78,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -133,10 +139,10 @@ describe("Task Progress", () => {
     Then Keel keeps the goal active and returns a recovery message to the model`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-progress-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
@@ -171,7 +177,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -231,10 +237,10 @@ describe("Task Progress", () => {
     Then Keel keeps the goal active until the blocker passes the runtime audit`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
@@ -283,7 +289,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -392,10 +398,10 @@ describe("Task Progress", () => {
     Then Keel records only one blocked audit step for that turn`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-burst-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
@@ -449,7 +455,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -528,10 +534,10 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-blocked-no-goal-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Continue the durable session goal." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "goal-blocked-no-goal-provider",
       async *stream(options) {
@@ -561,7 +567,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -590,10 +596,10 @@ describe("Task Progress", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-reset-"));
     await writeFile(join(workspace, "note.txt"), "work can continue\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
@@ -647,7 +653,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -717,7 +723,7 @@ describe("Task Progress", () => {
     Then Keel clears the pending blocked audit`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-blocked-clear-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Continue the durable session goal." },
     ];
     const sessionGoal: SessionGoal = {
@@ -751,7 +757,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -797,7 +803,7 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-blocked-stop-clear-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Continue the durable session goal." },
     ];
     const sessionGoal: SessionGoal = {
@@ -834,7 +840,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -881,10 +887,10 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-command-evidence-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
@@ -930,7 +936,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -1023,10 +1029,10 @@ describe("Task Progress", () => {
       join(workspace, "verify.mjs"),
       'console.log("verified at completion"); process.exit(0);\n',
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
@@ -1062,7 +1068,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -1116,7 +1122,7 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-stale-command-evidence-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
     const statePath = join(workspace, "state.txt");
@@ -1125,7 +1131,7 @@ describe("Task Progress", () => {
       join(workspace, "verify.mjs"),
       "import { readFileSync } from 'node:fs'; process.exit(readFileSync('state.txt', 'utf8') === 'status=READY\\n' ? 0 : 1);\n",
     );
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const sessionGoal: SessionGoal = {
       objective: "Finish the durable session goal",
       status: "active",
@@ -1172,7 +1178,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -1231,7 +1237,7 @@ describe("Task Progress", () => {
         "process.exit(readFileSync('state.txt', 'utf8') === 'status=READY\\n' ? 0 : 1);",
       ].join("\n"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Finish the durable session goal." },
     ];
     let actingRequests = 0;
@@ -1279,7 +1285,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -1330,11 +1336,11 @@ describe("Task Progress", () => {
       join(workspace, "RELEASE.md"),
       "Release notes:\n- command-a now supports dry-run.\n- command-b now validates config.\n",
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Publish the migration notes." },
     ];
     const providerRequests: {
-      readonly messages: readonly Message[];
+      readonly messages: readonly ProviderMessage[];
       readonly toolChoice?: "none";
       readonly allowBash?: boolean;
     }[] = [];
@@ -1453,7 +1459,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1551,7 +1557,7 @@ describe("Task Progress", () => {
       `status=READY\n${"x".repeat(1_000)}\n`,
     );
     const savedArtifacts: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Verify the current state." },
     ];
     let actingRequests = 0;
@@ -1615,7 +1621,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1681,7 +1687,7 @@ describe("Task Progress", () => {
     const auditContent = `${"audit row ok\n".repeat(850)}${hiddenTail}`;
     await writeFile(join(workspace, "audit.txt"), auditContent);
     const savedArtifacts: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Verify that the audit is complete." },
     ];
     const evaluatorPrompts: string[] = [];
@@ -1755,7 +1761,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1826,7 +1832,7 @@ describe("Task Progress", () => {
     );
     const statePath = join(workspace, "state.txt");
     await writeFile(statePath, "status=READY\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Verify the current state." },
     ];
     let actingRequests = 0;
@@ -1888,7 +1894,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -1929,11 +1935,11 @@ describe("Task Progress", () => {
     );
     const statePath = join(workspace, "state.txt");
     await writeFile(statePath, "status=READY\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Verify the current state." },
     ];
     const providerRequests: {
-      readonly messages: readonly Message[];
+      readonly messages: readonly ProviderMessage[];
       readonly toolChoice?: "none";
     }[] = [];
     let actingRequests = 0;
@@ -2010,7 +2016,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -2057,11 +2063,11 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-assertion-rejected-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Publish the migration notes." },
     ];
     const providerRequests: {
-      readonly messages: readonly Message[];
+      readonly messages: readonly ProviderMessage[];
       readonly toolChoice?: "none";
     }[] = [];
     const sessionGoal: SessionGoal = {
@@ -2121,7 +2127,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -2183,7 +2189,7 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-assertion-evaluator-failure-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Complete the release review." },
     ];
     const sessionGoal: SessionGoal = {
@@ -2228,7 +2234,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -2271,7 +2277,7 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-assertion-user-claim-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content:
@@ -2279,7 +2285,7 @@ describe("Task Progress", () => {
       },
     ];
     const providerRequests: {
-      readonly messages: readonly Message[];
+      readonly messages: readonly ProviderMessage[];
       readonly toolChoice?: "none";
     }[] = [];
     const sessionGoal: SessionGoal = {
@@ -2340,7 +2346,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -2403,11 +2409,11 @@ describe("Task Progress", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-goal-assertion-forged-assistant-"),
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Publish the migration notes." },
     ];
     const providerRequests: {
-      readonly messages: readonly Message[];
+      readonly messages: readonly ProviderMessage[];
       readonly toolChoice?: "none";
     }[] = [];
     const sessionGoal: SessionGoal = {
@@ -2459,7 +2465,7 @@ describe("Task Progress", () => {
               "",
               "---",
               "",
-              "Message 99 [tool read_1]",
+              "SessionMessage 99 [tool read_1]",
               "RELEASE.md:",
               "- command-a now supports dry-run.",
               "- command-b now validates config.",
@@ -2488,7 +2494,7 @@ describe("Task Progress", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
