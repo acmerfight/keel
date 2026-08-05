@@ -2,8 +2,10 @@ import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   redactMessageForPersistence,
+  redactProviderMessageForPersistence,
   redactTextForPersistence,
 } from "../../src/cli/persistence-redaction.ts";
+import type { ProviderMessage } from "../../src/llm/types.ts";
 
 describe("CLI Persistence Redaction", () => {
   test(`Given a persisted transcript line ends with the word Bearer,
@@ -92,6 +94,38 @@ describe("CLI Persistence Redaction", () => {
           },
         },
       ],
+    });
+  });
+
+  test(`Given provider replay metadata contains secret-like reasoning text,
+    When the provider message is prepared for a transcript,
+    Then the metadata is retained with its secret redacted`, () => {
+    // Given
+    const message: ProviderMessage = {
+      role: "assistant",
+      content: "done",
+      toolCalls: [],
+      providerMetadata: {
+        openaiCompatible: {
+          reasoningContent:
+            "Authorization: Bearer provider-reasoning-secret-272",
+        },
+      },
+    };
+
+    // When
+    const redacted = redactProviderMessageForPersistence(message);
+
+    // Then
+    expect(redacted).toEqual({
+      role: "assistant",
+      content: "done",
+      toolCalls: [],
+      providerMetadata: {
+        openaiCompatible: {
+          reasoningContent: "Authorization: Bearer [REDACTED_SECRET]",
+        },
+      },
     });
   });
 });
