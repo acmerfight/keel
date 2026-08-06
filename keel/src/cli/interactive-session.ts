@@ -38,12 +38,8 @@ import {
   accountSessionGoalTurn,
   activeSessionGoalSystemPrompt,
   copySessionGoal,
-  emptySessionGoalBudget,
-  emptySessionGoalUsage,
   formatSessionGoalBudgetLimitReason,
-  formatSessionGoalResumeRejection,
   formatSessionGoalSummary,
-  pauseActiveSessionGoal,
   type SessionGoal,
   type SessionGoalRuntimeOutcome,
   sessionGoalAccounting,
@@ -111,19 +107,8 @@ import {
 } from "./interactive-session/bash-approvals.ts";
 import {
   formatForkRequiresNamedSession,
-  formatGoalRequiresSavedSession,
   formatInteractiveCommandFailure,
-  formatInteractiveGoal,
-  formatInteractiveGoalBudget,
-  formatInteractiveGoalBudgetCleared,
-  formatInteractiveGoalBudgetUpdated,
-  formatInteractiveGoalCleared,
-  formatInteractiveGoalCompleted,
-  formatInteractiveGoalCriterionSet,
-  formatInteractiveGoalPaused,
-  formatInteractiveGoalResumed,
-  formatInteractiveGoalSet,
-  formatInteractiveGoalVerificationSet,
+  formatInteractiveGoalCommandOutput,
   formatInteractiveHelp,
   formatInteractiveTitle,
   formatInteractiveTitleSet,
@@ -147,6 +132,7 @@ import {
   inspectInteractiveDiff,
 } from "./interactive-session/diff-inspection.ts";
 import { readForkPointPickerSelection } from "./interactive-session/fork-picker.ts";
+import { executeInteractiveGoalCommand } from "./interactive-session/goal-command.ts";
 import {
   type GoalContinuationToolExecution,
   goalContinuationStagnationFingerprint,
@@ -263,15 +249,6 @@ function systemPromptWithSessionGoal(
     return systemPrompt;
   }
   return `${systemPrompt}\n\n${goalPrompt}`;
-}
-
-function preserveLatestSessionGoalRuntimeOutcome<Target extends SessionGoal>(
-  source: SessionGoal,
-  target: Target,
-): Target {
-  return source.latestRuntimeOutcome === undefined
-    ? target
-    : withSessionGoalRuntimeOutcome(target, source.latestRuntimeOutcome);
 }
 
 const GOAL_CONTINUATION_MESSAGE = [
@@ -792,14 +769,6 @@ export async function runInteractiveSession(
     queuedInputIds(lines).length === 0
       ? USER_PROMPT_ORIGIN
       : QUEUED_FOLLOWUP_ORIGIN;
-  const handleGoalPersistenceFailure = (
-    error: unknown,
-    lines: readonly QueuedLine[],
-  ): void => {
-    pendingGoalDrive = null;
-    options.writeStderr(formatInteractiveCommandFailure(error));
-    consumeQueuedInputLines(lines);
-  };
   const abortActiveTurn = () => {
     if (activeAbortController !== null) {
       if (activeAbortController.signal.aborted) {
@@ -1839,406 +1808,53 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "goal") {
-        const goalCommand: Extract<
-          InteractiveCommand,
-          { readonly kind: "goal" }
-        > = interactiveCommand;
-        switch (goalCommand.action) {
-          case "show":
-            options.writeStdout(formatInteractiveGoal(sessionGoal));
-            consumeQueuedInputLines([rawInput]);
-            break;
-          case "show_budget":
-            options.writeStdout(formatInteractiveGoalBudget(sessionGoal));
-            consumeQueuedInputLines([rawInput]);
-            break;
-          case "set":
-          case "launch": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              const nextGoal: SessionGoal =
-                goalCommand.action === "launch"
-                  ? goalCommand.criterion.kind === "command"
-                    ? {
-                        objective: goalCommand.objective,
-                        status: "active",
-                        budget: goalCommand.budget,
-                        usage: emptySessionGoalUsage(),
-                        completion: {
-                          kind: "command",
-                          command: goalCommand.criterion.command,
-                          ...(goalCommand.criterion.verificationTimeoutMs !==
-                          undefined
-                            ? {
-                                verificationTimeoutMs:
-                                  goalCommand.criterion.verificationTimeoutMs,
-                              }
-                            : {}),
-                        },
-                      }
-                    : {
-                        objective: goalCommand.objective,
-                        status: "active",
-                        budget: goalCommand.budget,
-                        usage: emptySessionGoalUsage(),
-                        completion: {
-                          kind: "assertion",
-                          assertion: goalCommand.criterion.assertion,
-                        },
-                      }
-                  : {
-                      objective: goalCommand.objective,
-                      status: "active",
-                      budget: emptySessionGoalBudget(),
-                      usage: emptySessionGoalUsage(),
-                      completion: {
-                        kind: "assertion",
-                        assertion: goalCommand.objective,
-                      },
-                    };
-              sessionGoal = persistSessionGoalUpdate({
-                goal: nextGoal,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(formatInteractiveGoalSet(nextGoal));
-              if (goalCommand.action === "launch") {
-                options.writeStdout(formatInteractiveGoalBudget(nextGoal));
+        const result = executeInteractiveGoalCommand({
+          command: interactiveCommand,
+          goal: sessionGoal,
+          ...(savedSession !== null
+            ? {
+                persistGoal: (goal: SessionGoal | null) =>
+                  persistSessionGoalUpdate({
+                    goal,
+                    consumedInputIds: queuedInputIds([rawInput]),
+                  }),
               }
-              pendingGoalDrive = {
-                message: GOAL_ACTIVATION_MESSAGE,
-                origin: RUNTIME_GOAL_ACTIVATION_ORIGIN,
-                taskTrigger: "goal_activation",
-                runTrigger: "goal_activation",
-              };
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
-            break;
+            : {}),
+        });
+        for (const output of result.output) {
+          const rendered = formatInteractiveGoalCommandOutput(output, {
+            bashToolVisible: bashRuntimeExposesTool(bash),
+          });
+          if (rendered.stream === "stdout") {
+            options.writeStdout(rendered.text);
+          } else {
+            options.writeStderr(rendered.text);
           }
-          case "pause": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal === undefined) {
-              options.writeStderr("Error: no session goal is set.\n");
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal.status !== "active") {
-              options.writeStderr(
-                "Error: only active session goals can be paused.\n",
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              const pausedGoal = pauseActiveSessionGoal(sessionGoal);
-              sessionGoal = persistSessionGoalUpdate({
-                goal: pausedGoal,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(formatInteractiveGoalPaused(pausedGoal));
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
+        }
+        if (result.consumeInput) {
+          consumeQueuedInputLines([rawInput]);
+        }
+        switch (result.drive) {
+          case "retain":
             break;
-          }
-          case "resume": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal === undefined) {
-              options.writeStderr(
-                `${formatSessionGoalResumeRejection(sessionGoal)}\n`,
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            const resumeRejection =
-              formatSessionGoalResumeRejection(sessionGoal);
-            if (resumeRejection !== null) {
-              options.writeStderr(`${resumeRejection}\n`);
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              const resumedGoal = preserveLatestSessionGoalRuntimeOutcome(
-                sessionGoal,
-                {
-                  objective: sessionGoal.objective,
-                  status: "active",
-                  ...sessionGoalAccounting(sessionGoal),
-                  ...sessionGoalCompletionContract(sessionGoal),
-                },
-              );
-              sessionGoal = persistSessionGoalUpdate({
-                goal: resumedGoal,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(formatInteractiveGoalResumed(resumedGoal));
-              pendingGoalDrive = {
-                message: GOAL_RESUMPTION_MESSAGE,
-                origin: RUNTIME_GOAL_RESUMPTION_ORIGIN,
-                taskTrigger: "goal_resume",
-                runTrigger: "goal_resume",
-              };
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
-            break;
-          }
-          case "budget": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal === undefined) {
-              options.writeStderr("Error: no session goal is set.\n");
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal.status === "completed") {
-              options.writeStderr(
-                "Error: completed session goals cannot change budgets. Set a new goal first.\n",
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              let budgetedGoal: SessionGoal = {
-                ...copySessionGoal(sessionGoal),
-                budget: {
-                  ...sessionGoal.budget,
-                  ...goalCommand.budget,
-                },
-              };
-              if (budgetedGoal.status === "active") {
-                const reason = formatSessionGoalBudgetLimitReason(budgetedGoal);
-                if (reason !== null) {
-                  budgetedGoal = withSessionGoalRuntimeOutcome(
-                    {
-                      objective: budgetedGoal.objective,
-                      status: "budget_limited",
-                      statusReason: reason,
-                      ...sessionGoalAccounting(budgetedGoal),
-                      ...sessionGoalCompletionContract(budgetedGoal),
-                    },
-                    { kind: "limit_reached", reason },
-                  );
-                }
-              }
-              sessionGoal = persistSessionGoalUpdate({
-                goal: budgetedGoal,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(
-                formatInteractiveGoalBudgetUpdated(budgetedGoal),
-              );
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
-            break;
-          }
-          case "clear_budget": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal === undefined) {
-              options.writeStderr("Error: no session goal is set.\n");
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal.status === "completed") {
-              options.writeStderr(
-                "Error: completed session goals cannot change budgets. Set a new goal first.\n",
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              const clearedGoal: SessionGoal = {
-                ...copySessionGoal(sessionGoal),
-                budget: emptySessionGoalBudget(),
-              };
-              sessionGoal = persistSessionGoalUpdate({
-                goal: clearedGoal,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(
-                formatInteractiveGoalBudgetCleared(clearedGoal),
-              );
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
-            break;
-          }
-          case "complete": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal === undefined) {
-              options.writeStderr("Error: no session goal is set.\n");
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              const completedGoalWithoutOutcome: SessionGoal = {
-                objective: sessionGoal.objective,
-                status: "completed",
-                completionEvidence: { kind: "user_override" },
-                ...sessionGoalAccounting(sessionGoal),
-                ...sessionGoalCompletionContract(sessionGoal),
-              };
-              const completedGoal = withSessionGoalRuntimeOutcome(
-                completedGoalWithoutOutcome,
-                {
-                  kind: "completed",
-                  reason:
-                    "The user explicitly completed the goal with /goal complete.",
-                },
-              );
-              sessionGoal = persistSessionGoalUpdate({
-                goal: completedGoal,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(
-                formatInteractiveGoalCompleted(completedGoal),
-              );
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
-            break;
-          }
-          case "verify": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal === undefined) {
-              options.writeStderr("Error: no session goal is set.\n");
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal.status !== "active") {
-              options.writeStderr(
-                "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n",
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              const verifiedGoalWithoutOutcome = {
-                objective: sessionGoal.objective,
-                status: "active",
-                ...sessionGoalAccounting(sessionGoal),
-                completion: {
-                  kind: "command",
-                  command: goalCommand.command,
-                  ...(goalCommand.verificationTimeoutMs !== undefined
-                    ? {
-                        verificationTimeoutMs:
-                          goalCommand.verificationTimeoutMs,
-                      }
-                    : {}),
-                },
-              } satisfies SessionGoal & {
-                readonly completion: {
-                  readonly kind: "command";
-                  readonly command: string;
-                  readonly verificationTimeoutMs?: number;
-                };
-              };
-              const verifiedGoal = preserveLatestSessionGoalRuntimeOutcome(
-                sessionGoal,
-                verifiedGoalWithoutOutcome,
-              );
-              sessionGoal = persistSessionGoalUpdate({
-                goal: verifiedGoal,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(
-                formatInteractiveGoalVerificationSet(verifiedGoal, {
-                  bashToolVisible: bashRuntimeExposesTool(bash),
-                }),
-              );
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
-            break;
-          }
-          case "criterion": {
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal === undefined) {
-              options.writeStderr("Error: no session goal is set.\n");
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            if (sessionGoal.status !== "active") {
-              options.writeStderr(
-                "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n",
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              const goalWithCriterionWithoutOutcome = {
-                objective: sessionGoal.objective,
-                status: "active",
-                ...sessionGoalAccounting(sessionGoal),
-                completion: {
-                  kind: "assertion",
-                  assertion: goalCommand.criterion,
-                },
-              } satisfies SessionGoal;
-              const goalWithCriterion = preserveLatestSessionGoalRuntimeOutcome(
-                sessionGoal,
-                goalWithCriterionWithoutOutcome,
-              );
-              sessionGoal = persistSessionGoalUpdate({
-                goal: goalWithCriterion,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(
-                formatInteractiveGoalCriterionSet(goalWithCriterion),
-              );
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
-            break;
-          }
           case "clear":
-            if (savedSession === null) {
-              options.writeStderr(formatGoalRequiresSavedSession());
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            try {
-              sessionGoal = persistSessionGoalUpdate({
-                goal: null,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-              options.writeStdout(formatInteractiveGoalCleared());
-            } catch (error) {
-              handleGoalPersistenceFailure(error, [rawInput]);
-            }
+            pendingGoalDrive = null;
+            break;
+          case "activation":
+            pendingGoalDrive = {
+              message: GOAL_ACTIVATION_MESSAGE,
+              origin: RUNTIME_GOAL_ACTIVATION_ORIGIN,
+              taskTrigger: "goal_activation",
+              runTrigger: "goal_activation",
+            };
+            break;
+          case "resumption":
+            pendingGoalDrive = {
+              message: GOAL_RESUMPTION_MESSAGE,
+              origin: RUNTIME_GOAL_RESUMPTION_ORIGIN,
+              taskTrigger: "goal_resume",
+              runTrigger: "goal_resume",
+            };
             break;
         }
         continue;

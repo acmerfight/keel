@@ -707,12 +707,6 @@ export function assessSessionGoalResume(
       };
 }
 
-export function formatSessionGoalResumeRejection(
-  goal: SessionGoal | undefined,
-): string | null {
-  return assessSessionGoalResume(goal).rejection;
-}
-
 function copySessionGoalCompletionEvidence(
   evidence: SessionGoalCompletionEvidence,
 ): SessionGoalCompletionEvidence {
