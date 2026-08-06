@@ -6,7 +6,11 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../src/llm/types.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -157,7 +161,7 @@ describe("Agent git diff tool use", () => {
     Then the diff is returned to the model without bash approval`, async () => {
     // Given
     const workspace = await createGitWorkspace();
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "agent-git-diff",
       async *stream(options) {
@@ -216,7 +220,7 @@ describe("Agent git diff tool use", () => {
     Then the committed diff is returned to the model without bash approval`, async () => {
     // Given
     const workspace = await createRefComparisonGitWorkspace();
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "agent-git-diff-refs",
       async *stream(options) {

@@ -4,14 +4,20 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../src/agent/tool-output-artifacts.ts";
 import { restoreLastEditCheckpoint } from "../../src/core/git.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../src/llm/types.ts";
 import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -35,8 +41,8 @@ function freshSignal(): AbortSignal {
 }
 
 function isToolMessage(
-  message: Message,
-): message is Extract<Message, { readonly role: "tool" }> {
+  message: ProviderMessage,
+): message is Extract<ProviderMessage, { readonly role: "tool" }> {
   return message.role === "tool";
 }
 
@@ -78,7 +84,7 @@ describe("Tool Scheduling", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "existing.txt"), "visible\n", "utf8");
     let turn = 0;
-    let followUpMessages: readonly Message[] = [];
+    let followUpMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "parallel-read-provider",
       async *stream(options) {
@@ -150,7 +156,7 @@ describe("Tool Scheduling", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "before\n", "utf8");
     let turn = 0;
-    let followUpMessages: readonly Message[] = [];
+    let followUpMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "mixed-edit-read-provider",
       async *stream(options) {
@@ -242,7 +248,7 @@ describe("Tool Scheduling", () => {
     await writeFile(join(workspace, "note.txt"), "before\n", "utf8");
     await writeFile(join(workspace, "todo.txt"), "todo: before\n", "utf8");
     let turn = 0;
-    let followUpMessages: readonly Message[] = [];
+    let followUpMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "mixed-batch-provider",
       async *stream(options) {
@@ -444,7 +450,7 @@ describe("Tool Scheduling", () => {
     await writeFile(join(workspace, "alpha.txt"), "alpha old\n", "utf8");
     await writeFile(join(workspace, "beta.txt"), "beta old\n", "utf8");
     let turn = 0;
-    let followUpMessages: readonly Message[] = [];
+    let followUpMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "independent-edits-provider",
       async *stream(options) {
@@ -559,7 +565,7 @@ describe("Tool Scheduling", () => {
     const workspace = await createGitWorkspace(
       "keel-tool-scheduling-independent-writes-",
     );
-    let followUpMessages: readonly Message[] = [];
+    let followUpMessages: readonly ProviderMessage[] = [];
     let turn = 0;
     const provider: LLMProvider = {
       id: "independent-writes-provider",
@@ -656,7 +662,7 @@ describe("Tool Scheduling", () => {
     );
     const abortController = new AbortController();
     abortController.abort();
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect and search" },
     ];
     const saved: ToolOutputArtifactSaveInput[] = [];
@@ -686,7 +692,7 @@ describe("Tool Scheduling", () => {
         for await (const event of runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: abortController.signal,
           bash: { kind: "disabled" },
@@ -753,7 +759,9 @@ describe("Tool Scheduling", () => {
     );
     const abortController = new AbortController();
     abortController.abort();
-    const messages: Message[] = [{ role: "user", content: "inspect then run" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "inspect then run" },
+    ];
     const saved: ToolOutputArtifactSaveInput[] = [];
     const provider: LLMProvider = {
       id: "terminal-single-bash-provider",
@@ -781,7 +789,7 @@ describe("Tool Scheduling", () => {
         for await (const event of runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: abortController.signal,
           bash: { kind: "trusted" },

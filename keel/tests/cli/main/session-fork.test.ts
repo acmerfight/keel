@@ -10,8 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   appendSessionRecordLine,
@@ -285,7 +285,7 @@ describe("CLI Main - Session Fork", () => {
       const sourceUserMessages = sourceAppends.flatMap((line) =>
         line.messages
           .filter(
-            (storedMessage: { readonly message?: Message }) =>
+            (storedMessage: { readonly message?: SessionMessage }) =>
               storedMessage.message?.role === "user",
           )
           .map(

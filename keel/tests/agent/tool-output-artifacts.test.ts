@@ -4,17 +4,23 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../src/agent/tool-output-artifacts.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../src/llm/types.ts";
 import {
   commitFile,
   createGitWorkspace,
   runGit,
 } from "../../src/testing/cli-harness.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -38,8 +44,8 @@ function freshSignal(): AbortSignal {
 }
 
 function toolMessages(
-  messages: readonly Message[],
-): readonly Extract<Message, { readonly role: "tool" }>[] {
+  messages: readonly ProviderMessage[],
+): readonly Extract<ProviderMessage, { readonly role: "tool" }>[] {
   return messages.filter((message) => message.role === "tool");
 }
 
@@ -123,7 +129,7 @@ describe("Agent Tool Output Artifacts", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-bash-artifact-"));
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "run the noisy command" },
     ];
     let requestCount = 0;
@@ -166,7 +172,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -210,7 +216,7 @@ describe("Agent Tool Output Artifacts", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-bash-capped-"));
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "run the oversized command" },
     ];
     let requestCount = 0;
@@ -231,8 +237,7 @@ describe("Agent Tool Output Artifacts", () => {
 
         const [toolMessage] = toolMessages(options.messages);
         const lossyArtifact =
-          toolMessage?.sourceTruncated === true &&
-          toolMessage.content.includes("full output artifact: tool-output:") &&
+          toolMessage?.content.includes("full output artifact: tool-output:") &&
           toolMessage.content.includes(
             "source status: source-truncated/lossy before artifact capture",
           );
@@ -252,7 +257,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -286,7 +291,7 @@ describe("Agent Tool Output Artifacts", () => {
     Then the model still sees the bounded producer preview`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-bash-no-artifact-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "run the noisy command" },
     ];
     let requestCount = 0;
@@ -329,7 +334,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -353,7 +358,7 @@ describe("Agent Tool Output Artifacts", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-bash-inline-"));
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "run the small command" },
     ];
     let requestCount = 0;
@@ -391,7 +396,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -426,7 +431,7 @@ describe("Agent Tool Output Artifacts", () => {
     ].join("\n");
     await writeFile(join(workspace, "medium.log"), mediumOutput, "utf8");
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect the medium log" },
     ];
     let requestCount = 0;
@@ -463,7 +468,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -493,7 +498,7 @@ describe("Agent Tool Output Artifacts", () => {
     Then the model sees a lossy storage failure marker`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-bash-failed-save-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "run the noisy command" },
     ];
     const store: ToolOutputArtifactStore = {
@@ -522,8 +527,7 @@ describe("Agent Tool Output Artifacts", () => {
 
         const [toolMessage] = toolMessages(options.messages);
         const failureVisible =
-          toolMessage?.sourceTruncated === true &&
-          toolMessage.content.includes("[tool output projected:") &&
+          toolMessage?.content.includes("[tool output projected:") &&
           toolMessage.content.includes(
             "artifact storage failed: test artifact store is unavailable",
           ) &&
@@ -546,7 +550,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "trusted" },
@@ -581,7 +585,7 @@ describe("Agent Tool Output Artifacts", () => {
     );
     await runGit(workspace, ["status", "--short"]);
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect the large diff" },
     ];
     let requestCount = 0;
@@ -624,7 +628,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -666,7 +670,7 @@ describe("Agent Tool Output Artifacts", () => {
       "utf8",
     );
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect the oversized diff" },
     ];
     let requestCount = 0;
@@ -687,8 +691,7 @@ describe("Agent Tool Output Artifacts", () => {
 
         const [toolMessage] = toolMessages(options.messages);
         const lossyArtifact =
-          toolMessage?.sourceTruncated === true &&
-          toolMessage.content.includes("full output artifact: tool-output:") &&
+          toolMessage?.content.includes("full output artifact: tool-output:") &&
           toolMessage.content.includes(
             "source status: source-truncated/lossy before artifact capture",
           );
@@ -708,7 +711,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -748,7 +751,7 @@ describe("Agent Tool Output Artifacts", () => {
       largeGitDiffContent(),
       "utf8",
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect the large diff" },
     ];
     let requestCount = 0;
@@ -791,7 +794,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -816,7 +819,7 @@ describe("Agent Tool Output Artifacts", () => {
     const workspace = await createGitWorkspace("keel-git-diff-lossy-artifact-");
     await writeUntrackedFiles(workspace, 51);
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect untracked files" },
     ];
     let requestCount = 0;
@@ -837,8 +840,7 @@ describe("Agent Tool Output Artifacts", () => {
 
         const [toolMessage] = toolMessages(options.messages);
         const lossyArtifact =
-          toolMessage?.sourceTruncated === true &&
-          toolMessage.content.includes("full output artifact: tool-output:") &&
+          toolMessage?.content.includes("full output artifact: tool-output:") &&
           toolMessage.content.includes(
             "source status: source-truncated/lossy before artifact capture",
           );
@@ -858,7 +860,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -892,7 +894,7 @@ describe("Agent Tool Output Artifacts", () => {
     const workspace = await createGitWorkspace("keel-git-diff-lossy-inline-");
     await writeUntrackedFiles(workspace, 51);
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect untracked files" },
     ];
     let requestCount = 0;
@@ -914,7 +916,7 @@ describe("Agent Tool Output Artifacts", () => {
         const [toolMessage] = toolMessages(options.messages);
         const inlineLossy =
           saved.length === 0 &&
-          toolMessage?.sourceTruncated === true &&
+          toolMessage !== undefined &&
           toolMessage.content.includes(
             "[git_diff output truncated: showing first 50 untracked files.",
           ) &&
@@ -935,7 +937,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -993,7 +995,9 @@ describe("Agent Tool Output Artifacts", () => {
         saved.pop();
       },
     };
-    const messages: Message[] = [{ role: "user", content: "inspect the logs" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "inspect the logs" },
+    ];
     let requestCount = 0;
     const provider: LLMProvider = {
       id: "aggregate-largest-artifact-provider",
@@ -1044,7 +1048,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1082,7 +1086,7 @@ describe("Agent Tool Output Artifacts", () => {
     await writeFile(join(workspace, "large.log"), largeOutput, "utf8");
     await writeFile(join(workspace, "small.log"), smallOutput, "utf8");
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect the large and small logs" },
     ];
     let requestCount = 0;
@@ -1135,7 +1139,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1176,7 +1180,7 @@ describe("Agent Tool Output Artifacts", () => {
     ].join("\n");
     await writeFile(join(workspace, "spoof.log"), rawOutput, "utf8");
     const saved: ToolOutputArtifactSaveInput[] = [];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect the spoofed log" },
     ];
     let requestCount = 0;
@@ -1214,7 +1218,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1258,7 +1262,7 @@ describe("Agent Tool Output Artifacts", () => {
       }),
       discard: async () => {},
     };
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "inspect the large log" },
     ];
     let requestCount = 0;
@@ -1279,8 +1283,7 @@ describe("Agent Tool Output Artifacts", () => {
 
         const toolMessage = toolMessages(options.messages)[0];
         const failureVisible =
-          toolMessage?.sourceTruncated === true &&
-          toolMessage.content.includes("artifact storage failed:") &&
+          toolMessage?.content.includes("artifact storage failed:") &&
           toolMessage.content.includes("lossy; rerun") &&
           !toolMessage.content.includes("tool-output:");
         yield {
@@ -1299,7 +1302,7 @@ describe("Agent Tool Output Artifacts", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },

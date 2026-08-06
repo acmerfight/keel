@@ -2,7 +2,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import type { SessionQueuedInput } from "../../../src/cli/session-store.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -21,7 +21,7 @@ describe("Interactive Session - Queued Input", () => {
     // Given
     let turn = 0;
     let steeringWritten = false;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
       id: "fake",
       async *stream(options) {
@@ -138,7 +138,7 @@ describe("Interactive Session - Queued Input", () => {
     const focusInstruction = "keep the tool result and next action";
     let turn = 0;
     let compactWritten = false;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     let summaryPrompt = "";
     const provider: LLMProvider = {
       id: "fake",
@@ -248,13 +248,6 @@ describe("Interactive Session - Queued Input", () => {
       {
         role: "user",
         content: expect.stringContaining("<conversation-checkpoint>"),
-        contextCompaction: {
-          evidence: [
-            expect.objectContaining({
-              handle: "read:package.json@limit=1",
-            }),
-          ],
-        },
       },
       { role: "assistant", content: "Tool turn done.", toolCalls: [] },
       {
@@ -287,7 +280,7 @@ describe("Interactive Session - Queued Input", () => {
     // Given
     let turn = 0;
     let helpWritten = false;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -392,7 +385,7 @@ describe("Interactive Session - Queued Input", () => {
     // Given
     let turn = 0;
     let titleWritten = false;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     const persistedQueuedInputs: SessionQueuedInput[] = [];
     const consumedMessageInputIds: string[][] = [];
     let titlePersisted = "";
@@ -517,7 +510,7 @@ describe("Interactive Session - Queued Input", () => {
     // Given
     let turn = 0;
     let forkWritten = false;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     let forkTarget = "";
     let forkBeforeMessageId: string | undefined;
     const provider: LLMProvider = {
@@ -641,7 +634,7 @@ describe("Interactive Session - Queued Input", () => {
     let turn = 0;
     let firstCompactWritten = false;
     let laterInputWritten = false;
-    const observedContexts: Message[][] = [];
+    const observedContexts: ProviderMessage[][] = [];
     let summaryPrompt = "";
     const provider: LLMProvider = {
       id: "fake",

@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
 import {
   createSessionStore,
@@ -16,7 +17,11 @@ import {
 } from "../../../src/cli/session-store.ts";
 import { KeelError } from "../../../src/core/error.ts";
 import type { SessionGoal } from "../../../src/core/session-goal.ts";
-import type { LLMProvider, Message, Usage } from "../../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   EXPENSIVE_USAGE,
@@ -323,7 +328,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const observedUserContexts: string[][] = [];
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     const persistedGoals: SessionGoal[] = [];
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -464,7 +469,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         assertion: "The final report exists.",
       },
     };
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     const automaticContinuationTurnLimit = 4;
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -575,7 +580,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         goal: initialGoal,
         runtime,
       });
-      let persistedMessages: readonly Message[] = storedSession.messages;
+      let persistedMessages: readonly SessionMessage[] = storedSession.messages;
       const firstInput = new PassThrough();
       let providerCalls = 0;
       const provider: LLMProvider = {
@@ -971,7 +976,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     Then the metadata does not masquerade as progress and suppress recovery`, async () => {
     // Given
     const input = new PassThrough();
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     let persistedGoal: SessionGoal | undefined = {
       objective: "Verify before completing",
       status: "active",
@@ -1246,7 +1251,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
           assertion: "The external status is complete.",
         },
       };
-      let persistedMessages: readonly Message[] = [];
+      let persistedMessages: readonly SessionMessage[] = [];
       const restoredEvidence: string[] = [];
       const automaticContinuationTurnLimit = 4;
       let mainRequests = 0;
@@ -1499,7 +1504,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const persistedGoals: SessionGoal[] = [];
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     let providerCalls = 0;
     const provider: LLMProvider = {
       id: "interactive-unaffordable-assertion-evaluator",
@@ -2036,7 +2041,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const persistedGoals: SessionGoal[] = [];
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     const automaticContinuationTurnLimit = 5;
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -2153,7 +2158,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-goal-recovery-"));
     try {
       const verificationCommand = 'node -e "process.exit(0)"';
-      let persistedMessages: readonly Message[] = [];
+      let persistedMessages: readonly SessionMessage[] = [];
       let persistedGoal: SessionGoal | undefined = {
         objective: "Recover and verify the finished work",
         status: "active",
@@ -2290,7 +2295,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         assertion: "Every relevant project file has been inspected.",
       },
     };
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     const automaticContinuationTurnLimit = 4;
     const readPaths = ["package.json", "tsconfig.json"] as const;
     let providerCalls = 0;
@@ -2391,7 +2396,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         assertion: "Every relevant project file has been inspected.",
       },
     };
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     const automaticContinuationTurnLimit = 8;
     const readPaths = ["package.json", "tsconfig.json"] as const;
     let providerCalls = 0;
@@ -2508,7 +2513,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
             assertion: "The shell-driven workspace task is finished.",
           },
         };
-        let persistedMessages: readonly Message[] = [];
+        let persistedMessages: readonly SessionMessage[] = [];
         const automaticContinuationTurnLimit = 4;
         let providerCalls = 0;
         const provider: LLMProvider = {
@@ -2619,7 +2624,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
           command: verificationCommand,
         },
       };
-      let persistedMessages: readonly Message[] = [];
+      let persistedMessages: readonly SessionMessage[] = [];
       let persistedGoal: SessionGoal | undefined = initialGoal;
       const automaticContinuationTurnLimit = 4;
       let providerCalls = 0;
@@ -2733,7 +2738,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const input = new PassThrough();
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     let persistedGoal: SessionGoal | undefined = initialGoal;
     let providerCalls = 0;
     const provider: LLMProvider = {
@@ -2900,7 +2905,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const sigintHandlers = new Set<() => void>();
     const persistedGoals: SessionGoal[] = [];
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     let providerCalls = 0;
     const provider: LLMProvider = {
       id: "fake",
@@ -3159,7 +3164,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const input = new PassThrough();
     const consumedInputIds: string[][] = [];
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     let stdout = "";
     const session = runInteractiveSession({
       cliArgs: { bashMode: "disabled" },
@@ -3289,7 +3294,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       workspace,
       runtime,
     });
-    let persistedMessages: readonly Message[] = session.messages;
+    let persistedMessages: readonly SessionMessage[] = session.messages;
     const consumedInputIds: string[][] = [];
     const observedUserContexts: string[][] = [];
     let providerCalls = 0;
@@ -3425,7 +3430,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       workspace,
       runtime,
     });
-    let persistedMessages: readonly Message[] = session.messages;
+    let persistedMessages: readonly SessionMessage[] = session.messages;
     const crash = new Error("simulated process stop");
     const firstProvider: LLMProvider = {
       id: "fake",
@@ -3533,7 +3538,8 @@ describe("Interactive Session - Reports And Queued Input", () => {
         },
       };
       const secondInput = new PassThrough();
-      let resumedPersistedMessages: readonly Message[] = resumed.messages;
+      let resumedPersistedMessages: readonly SessionMessage[] =
+        resumed.messages;
       const secondRun = runInteractiveSession({
         cliArgs: { bashMode: "disabled" },
         workspace,
@@ -3687,7 +3693,10 @@ describe("Interactive Session - Reports And Queued Input", () => {
       receiveFirstText = resolve;
     });
     const observedContexts: Array<
-      Array<{ readonly role: Message["role"]; readonly content: string }>
+      Array<{
+        readonly role: ProviderMessage["role"];
+        readonly content: string;
+      }>
     > = [];
     let turn = 0;
     const provider: LLMProvider = withProviderRequestAttemptAccounting({
@@ -3791,7 +3800,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     Then the model sees the history without re-running old tools`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-resume-"));
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "create the old file" },
       {
         role: "assistant",
@@ -3811,7 +3820,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         content: "Wrote old.txt",
       },
     ];
-    let observedMessages: readonly Message[] = [];
+    let observedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {

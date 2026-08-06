@@ -1,6 +1,6 @@
 import { expect } from "vitest";
+import type { SessionMessage } from "../agent/session-message.ts";
 import type { SessionQueuedInput } from "../cli/session-store.ts";
-import type { Message } from "../llm/types.ts";
 
 export function runtime(home: string, now = 0) {
   return {
@@ -26,7 +26,7 @@ export function rootGraph(sessionId: string) {
 }
 
 export function storedMessages(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   prefix = "stored-message",
 ) {
   return messages.map((message, index) => ({
@@ -35,7 +35,7 @@ export function storedMessages(
   }));
 }
 
-export function expectedStoredMessages(messages: readonly Message[]) {
+export function expectedStoredMessages(messages: readonly SessionMessage[]) {
   return messages.map((message) => ({
     id: expect.any(String),
     message,
@@ -46,7 +46,7 @@ export function restoredUserMessageId(
   session: {
     readonly storedMessages: readonly {
       readonly id: string;
-      readonly message: Message;
+      readonly message: SessionMessage;
     }[];
   },
   content: string,
@@ -73,7 +73,7 @@ export function headerLine(sessionId: string, workspace: string): string {
   });
 }
 
-export function appendLine(messages: readonly Message[]): string {
+export function appendLine(messages: readonly SessionMessage[]): string {
   return JSON.stringify({
     schemaVersion: 5,
     type: "append",
@@ -84,7 +84,7 @@ export function appendLine(messages: readonly Message[]): string {
 }
 
 export function snapshotLine(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   pendingInputs: readonly SessionQueuedInput[],
   snapshotState?: {
     readonly title?: string;

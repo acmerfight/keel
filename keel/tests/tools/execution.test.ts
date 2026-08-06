@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import type { Message } from "../../src/llm/types.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import {
   executeToolCall,
@@ -214,7 +214,7 @@ describe("Tool Execution", () => {
       origin: { type: "user_prompt" as const },
     };
     const claimedMessages = new WeakSet<
-      Extract<Message, { readonly role: "user" }>
+      Extract<SessionMessage, { readonly role: "user" }>
     >();
     claimedMessages.add(currentUserMessage);
     let addCalls = 0;
@@ -815,7 +815,9 @@ describe("Tool Execution", () => {
       content: "Our release validation command is pnpm test:coverage.",
       origin: { type: "user_prompt" as const },
     };
-    const claimed = new WeakSet<Extract<Message, { readonly role: "user" }>>();
+    const claimed = new WeakSet<
+      Extract<SessionMessage, { readonly role: "user" }>
+    >();
     let proposalCalls = 0;
     let persistedSources = 0;
     const memory: AgentMemoryToolContext = {

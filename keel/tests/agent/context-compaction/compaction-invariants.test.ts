@@ -10,13 +10,14 @@ import {
   compactStaleToolOutputs,
   compactStaleToolOutputsWithArtifacts,
 } from "../../../src/agent/context-compaction.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import type {
   ToolOutputArtifactCompactionArtifact,
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactSourceStatus,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
-import type { LLMProvider, Message, ToolCall } from "../../../src/llm/types.ts";
+import type { LLMProvider, ToolCall } from "../../../src/llm/types.ts";
 
 const PROPERTY_RUNS = 40;
 const ZERO_TOOL_OUTPUT_STATS = {
@@ -150,8 +151,8 @@ function messagesForScope(
   scope: ToolOutputCompactionScope,
   toolCallId: string,
   content: string,
-): Message[] {
-  const messages: Message[] = [
+): SessionMessage[] {
+  const messages: SessionMessage[] = [
     { role: "user", content: "Inspect the tool output." },
     {
       role: "assistant",
@@ -180,7 +181,10 @@ function generatedOutput(maxChars: number, extraChars: number): string {
   );
 }
 
-function toolOutput(messages: readonly Message[], toolCallId: string): string {
+function toolOutput(
+  messages: readonly SessionMessage[],
+  toolCallId: string,
+): string {
   const message = messages.find(
     (candidate) =>
       candidate.role === "tool" && candidate.toolCallId === toolCallId,
@@ -191,13 +195,15 @@ function toolOutput(messages: readonly Message[], toolCallId: string): string {
   return message.content;
 }
 
-function toolResultIds(messages: readonly Message[]): readonly string[] {
+function toolResultIds(messages: readonly SessionMessage[]): readonly string[] {
   return messages.flatMap((message) =>
     message.role === "tool" ? [message.toolCallId] : [],
   );
 }
 
-function assistantToolCallIds(messages: readonly Message[]): readonly string[] {
+function assistantToolCallIds(
+  messages: readonly SessionMessage[],
+): readonly string[] {
   return messages.flatMap((message) =>
     message.role === "assistant"
       ? message.toolCalls.map((toolCall) => toolCall.id)
@@ -206,8 +212,8 @@ function assistantToolCallIds(messages: readonly Message[]): readonly string[] {
 }
 
 function expectToolLinkagePreserved(
-  before: readonly Message[],
-  after: readonly Message[],
+  before: readonly SessionMessage[],
+  after: readonly SessionMessage[],
 ): void {
   expect(toolResultIds(after)).toEqual(toolResultIds(before));
   expect(assistantToolCallIds(after)).toEqual(assistantToolCallIds(before));
@@ -232,7 +238,7 @@ function currentToolOutputPolicy(
 async function compactWithStoredArtifacts(options: {
   readonly scope: ToolOutputCompactionScope;
   readonly currentReason: CurrentToolOutputCompactionReason;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly maxChars: number;
   readonly store: ToolOutputArtifactStore;
 }) {
@@ -256,7 +262,7 @@ async function compactWithStoredArtifacts(options: {
 function compactWithoutArtifacts(options: {
   readonly scope: ToolOutputCompactionScope;
   readonly currentReason: CurrentToolOutputCompactionReason;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly maxChars: number;
 }) {
   return options.scope === "stale"

@@ -2,10 +2,20 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgentTurn } from "../../src/agent/loop.ts";
 import {
+  projectSessionLedgerToProviderMessages,
+  sessionLedgerFromMessages,
+} from "../../src/agent/session-ledger.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
+import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../src/agent/stop-policy.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 import type { AgentMemoryMutationCapability } from "../../src/tools/memory.ts";
 
 const ZERO_USAGE: Usage = {
@@ -44,8 +54,8 @@ async function collect(
 }
 
 function receivedMessages(
-  messages: readonly Message[] | null,
-): readonly Message[] {
+  messages: readonly ProviderMessage[] | null,
+): readonly ProviderMessage[] {
   if (messages === null) {
     throw new Error("provider did not receive messages");
   }
@@ -53,16 +63,71 @@ function receivedMessages(
 }
 
 describe("Conversation History", () => {
+  test(`Given a ledger is created from caller-owned messages,
+    When the caller later mutates its source array,
+    Then the ledger remains the sole owner of its message state`, () => {
+    const source: SessionMessage[] = [{ role: "user", content: "Initial" }];
+    const ledger = sessionLedgerFromMessages(source);
+
+    source.push({ role: "user", content: "External mutation" });
+    ledger.append({
+      role: "assistant",
+      content: "Ledger mutation",
+      toolCalls: [],
+    });
+
+    expect(ledger.messages()).toEqual([
+      { role: "user", content: "Initial" },
+      { role: "assistant", content: "Ledger mutation", toolCalls: [] },
+    ]);
+    expect(source).toEqual([
+      { role: "user", content: "Initial" },
+      { role: "user", content: "External mutation" },
+    ]);
+  });
+
+  test(`Given Runtime tool evidence is stored in the session ledger,
+    When messages are projected for a provider request,
+    Then only the provider tool contract crosses the boundary`, () => {
+    const ledger = sessionLedgerFromMessages([
+      {
+        role: "tool",
+        toolCallId: "read_note",
+        content: "bounded preview",
+        sourceTruncated: true,
+        evidenceShortened: true,
+        resourceObservation: {
+          kind: "read_projection",
+          targetPathSha256: "a".repeat(64),
+          contentSha256: "b".repeat(64),
+        },
+      },
+    ]);
+
+    expect(projectSessionLedgerToProviderMessages(ledger)).toEqual([
+      {
+        role: "tool",
+        toolCallId: "read_note",
+        content: "bounded preview",
+      },
+    ]);
+    expect(ledger.messages()[0]).toMatchObject({
+      sourceTruncated: true,
+      evidenceShortened: true,
+      resourceObservation: { kind: "read_projection" },
+    });
+  });
+
   test(`Given an agent session has earlier text context,
     When the next turn is sent to the model,
     Then the model receives the complete conversation history`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember alpha." },
       { role: "assistant", content: "I will remember alpha.", toolCalls: [] },
       { role: "user", content: "What should you remember?" },
     ];
-    let providerMessages: readonly Message[] | null = null;
+    let providerMessages: readonly ProviderMessage[] | null = null;
     const provider: LLMProvider = {
       id: "ledger-text-provider",
       async *stream(options) {
@@ -77,7 +142,7 @@ describe("Conversation History", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -103,14 +168,14 @@ describe("Conversation History", () => {
     When the next turn is sent to the model,
     Then provider-visible history omits the internal origin`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: "Remember alpha.",
         origin: { type: "user_prompt" },
       },
     ];
-    let providerMessages: readonly Message[] | null = null;
+    let providerMessages: readonly ProviderMessage[] | null = null;
     const provider: LLMProvider = {
       id: "ledger-origin-provider",
       async *stream(options) {
@@ -125,7 +190,7 @@ describe("Conversation History", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -148,8 +213,10 @@ describe("Conversation History", () => {
     When the model is called again,
     Then the follow-up request includes the assistant tool call and tool result`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "Read package." }];
-    const providerRequests: (readonly Message[])[] = [];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "Read package." },
+    ];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "ledger-tool-provider",
       async *stream(options) {
@@ -174,7 +241,7 @@ describe("Conversation History", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -214,8 +281,10 @@ describe("Conversation History", () => {
     When the model is called again,
     Then the follow-up request includes the steering message after the tool result`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "Read package." }];
-    const providerRequests: (readonly Message[])[] = [];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "Read package." },
+    ];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "ledger-steering-provider",
       async *stream(options) {
@@ -240,7 +309,7 @@ describe("Conversation History", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -309,7 +378,7 @@ describe("Conversation History", () => {
     When the model request is retried,
     Then the provider receives the checkpoint and recent user context`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Older task details ".repeat(80) },
       {
         role: "assistant",
@@ -318,7 +387,7 @@ describe("Conversation History", () => {
       },
       { role: "user", content: "Continue with the latest step." },
     ];
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "ledger-compaction-provider",
       async *stream(options) {
@@ -343,7 +412,7 @@ describe("Conversation History", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -387,7 +456,7 @@ describe("Conversation History", () => {
     Then only normal provider requests receive memory and the session ledger never stores it`, async () => {
     // Given
     const memoryFact = "MEMORY_ONLY_RELEASE_RULE";
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Older task details ".repeat(80) },
       {
         role: "assistant",
@@ -422,7 +491,7 @@ describe("Conversation History", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         memory: {
           kind: "direct",
@@ -500,7 +569,9 @@ describe("Conversation History", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages: [{ role: "user", content: "Inspect the package." }],
+        ledger: sessionLedgerFromMessages([
+          { role: "user", content: "Inspect the package." },
+        ]),
         systemPrompt: "You are helpful.",
         memory: {
           kind: "direct",

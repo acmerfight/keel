@@ -4,13 +4,15 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
-import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider } from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -220,7 +222,7 @@ describe("Cost Budget", () => {
     Then Keel stops for the budget without calling the evaluator or completing the goal`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cost-budget-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Complete the assertion goal." },
     ];
     const sessionGoal: SessionGoal = {
@@ -267,7 +269,7 @@ describe("Cost Budget", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },

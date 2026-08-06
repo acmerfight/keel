@@ -10,10 +10,11 @@ import type { CostReport } from "../../agent/events.ts";
 import type { ModelOperationInstrumentation } from "../../agent/model-operations.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
+import type { SessionMessage } from "../../agent/session-message.ts";
 import type { CostModel } from "../../core/cost.ts";
 import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
-import type { Message, Usage } from "../../llm/types.ts";
+import type { Usage } from "../../llm/types.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
   formatContextCompactionReport,
@@ -33,7 +34,7 @@ export interface ManualCompactContext {
   readonly command: ManualCompactCommand;
   readonly resolved: InteractiveResolvedProvider;
   readonly workspace: string;
-  readonly messages: Message[];
+  readonly messages: SessionMessage[];
   readonly systemPrompt: string;
   readonly summarySystemPrompt: string;
   readonly signal: AbortSignal;

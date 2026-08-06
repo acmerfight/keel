@@ -11,7 +11,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import { createSkillActivation } from "../../../src/skills/lifecycle.ts";
 import { discoverSkillCatalog } from "../../../src/skills/project.ts";
 import {
@@ -751,7 +751,7 @@ describe("Interactive Session - Lifecycle", () => {
     let stdout = "";
     let stderr = "";
     let providerResolved = false;
-    let observedMessages: readonly Message[] = [];
+    let observedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {

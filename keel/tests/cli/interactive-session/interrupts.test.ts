@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   type InteractiveSkillRuntime,
   runInteractiveSession as runInteractiveSessionWithMemory,
@@ -20,7 +21,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import { createSkillActivation } from "../../../src/skills/lifecycle.ts";
 import { discoverSkillCatalog } from "../../../src/skills/project.ts";
 import {
@@ -272,7 +273,7 @@ describe("Interactive Session - Interrupts", () => {
     let approvalAnswered = false;
     let stdout = "";
     let stderr = "";
-    let persistedMessages: readonly Message[] = [];
+    let persistedMessages: readonly SessionMessage[] = [];
     const persistedInputIdBatches: string[][] = [];
     let reservedMessageOrdinal = 0;
     const persistence = savedInteractiveSession({
@@ -718,7 +719,7 @@ describe("Interactive Session - Interrupts", () => {
     const workingReceived = new Promise<void>((resolve) => {
       workingSeen = resolve;
     });
-    let finalMessages: readonly Message[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -882,7 +883,7 @@ describe("Interactive Session - Interrupts", () => {
     const cancelTextReceived = new Promise<void>((resolve) => {
       receiveCancelText = resolve;
     });
-    let postAbortMessages: readonly Message[] = [];
+    let postAbortMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "fake",
       async *stream(options) {
@@ -1042,7 +1043,7 @@ describe("Interactive Session - Interrupts", () => {
       receiveFirstEnd = resolve;
     });
     const cancelledPrompt = `cancelled prompt ${"x".repeat(50_000)}`;
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     const compactionPrompts: string[] = [];
     let requestTurn = 0;
     const provider: LLMProvider = {

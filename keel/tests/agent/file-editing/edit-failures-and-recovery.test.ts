@@ -18,7 +18,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import { createGitWorkspace } from "../../../src/testing/cli-harness.ts";
 import {
   collect,
@@ -35,7 +35,7 @@ describe("File Editing Failures And Recovery", () => {
     const outside = await mkdtemp(join(tmpdir(), "keel-outside-"));
     const outsidePath = join(outside, "secret.txt");
     await writeFile(outsidePath, "do not change old\n", "utf8");
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: outsidePath,
@@ -93,7 +93,7 @@ describe("File Editing Failures And Recovery", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-edit",
       async *stream(options) {
@@ -236,7 +236,7 @@ describe("File Editing Failures And Recovery", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "note.txt",
@@ -293,7 +293,7 @@ describe("File Editing Failures And Recovery", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello world\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-missing-edit-file",
       async *stream(options) {
@@ -423,7 +423,7 @@ describe("File Editing Failures And Recovery", () => {
     const outsidePath = join(outside, "secret.txt");
     await writeFile(outsidePath, "do not change old\n", "utf8");
     await symlink(outsidePath, join(workspace, "link.txt"));
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider = createFakeProvider([
       fakeToolResponse("edit", {
         path: "link.txt",
@@ -478,7 +478,7 @@ describe("File Editing Failures And Recovery", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "old then old\n", "utf8");
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider = createFakeProvider([
       fakeToolResponse("read", { path: "note.txt" }),
       fakeToolResponse("edit", {

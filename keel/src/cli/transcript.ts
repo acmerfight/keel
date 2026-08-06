@@ -1,9 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { projectSessionMessageToProvider } from "../agent/session-ledger.ts";
-import type { Message } from "../llm/types.ts";
+import type { SessionMessage } from "../agent/session-message.ts";
+import type { ProviderMessage } from "../llm/types.ts";
 import {
-  redactMessageForPersistence,
+  redactProviderMessageForPersistence,
   redactTextForPersistence,
 } from "./persistence-redaction.ts";
 
@@ -11,7 +12,7 @@ interface RunTranscriptInput {
   readonly provider: string;
   readonly model: string;
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
 }
 
 interface TranscriptHeader {
@@ -24,7 +25,7 @@ interface TranscriptHeader {
 
 interface TranscriptMessage {
   readonly type: "message";
-  readonly message: Message;
+  readonly message: ProviderMessage;
 }
 
 type TranscriptRecord = TranscriptHeader | TranscriptMessage;
@@ -44,7 +45,7 @@ export function writeRunTranscript(
     },
     ...input.messages.map((message) => ({
       type: "message" as const,
-      message: redactMessageForPersistence(
+      message: redactProviderMessageForPersistence(
         projectSessionMessageToProvider(message),
       ),
     })),

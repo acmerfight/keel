@@ -1,6 +1,6 @@
 import { errorMessage } from "../core/error.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
-import type { LLMProvider, Message, Usage } from "../llm/types.ts";
+import type { LLMProvider, ProviderMessage, Usage } from "../llm/types.ts";
 import { currentToolRound } from "./context-compaction/current-tool-round.ts";
 import type {
   ContextCompactionOptions as InternalContextCompactionOptions,
@@ -35,6 +35,7 @@ import type {
   ModelOperationPurpose,
   ModelOperationRequest,
 } from "./model-operations.ts";
+import type { SessionMessage } from "./session-message.ts";
 
 export { conversationCheckpointSummaryFromMessage } from "./context-compaction/checkpoint.ts";
 export { currentToolRound } from "./context-compaction/current-tool-round.ts";
@@ -101,7 +102,7 @@ interface CompactMessagesOptions {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
   readonly summarySystemPrompt?: string;
-  readonly messages: Message[];
+  readonly messages: SessionMessage[];
   readonly signal: AbortSignal;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly contextAccounting?: ContextCompactionAccountingSnapshot;
@@ -188,7 +189,7 @@ function requestTargetTokens(
 }
 
 function currentToolOutputMaxCharsForCompaction(options: {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly resolved: ResolvedContextCompactionOptions;
   readonly beforeEstimatedTokens: number;
 }): number {
@@ -244,7 +245,7 @@ function compactedCurrentOutputsExceededSettledBudget(options: {
 
 async function compactCurrentToolOutputsForRequest(options: {
   readonly systemPrompt: string;
-  readonly messages: Message[];
+  readonly messages: SessionMessage[];
   readonly resolved: ResolvedContextCompactionOptions;
   readonly beforeMessageCount: number;
   readonly beforeEstimatedTokens: number;
@@ -336,7 +337,7 @@ async function compactCurrentToolOutputsForRequest(options: {
 
 export function captureContextCompactionAccountingSnapshot(options: {
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly (ProviderMessage | SessionMessage)[];
   readonly usage: Usage;
   readonly requestMetadata?: ContextCompactionRequestMetadata;
 }): ContextCompactionAccountingSnapshot | undefined {
@@ -345,7 +346,7 @@ export function captureContextCompactionAccountingSnapshot(options: {
 
 export function shouldCompactBeforeRequest(
   systemPrompt: string,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   options: ContextCompactionOptions | undefined,
   accounting?: ContextCompactionAccountingSnapshot,
   metadata?: ContextCompactionRequestMetadata,
@@ -361,7 +362,7 @@ export function shouldCompactBeforeRequest(
 
 export function shouldCompactCurrentToolOutputBeforeHistoricalCompaction(
   systemPrompt: string,
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   options: ContextCompactionOptions | undefined,
   accounting?: ContextCompactionAccountingSnapshot,
   metadata?: ContextCompactionRequestMetadata,
@@ -396,7 +397,7 @@ export function shouldCompactCurrentToolOutputBeforeHistoricalCompaction(
 export function contextCompactionStatsForCurrentMessages(options: {
   readonly stats: ContextCompactionStats;
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly requestMetadata?: ContextCompactionRequestMetadata;
 }): ContextCompactionStats {
   return contextCompactionStatsForCurrentMessagesFromAccounting(options);

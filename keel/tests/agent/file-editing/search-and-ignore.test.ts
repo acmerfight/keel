@@ -8,7 +8,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   createWorkspace,
@@ -27,8 +27,8 @@ describe("File Editing Search And Ignore", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "grep-then-read",
       async *stream(options) {
@@ -188,8 +188,8 @@ describe("File Editing Search And Ignore", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-empty-grep",
       async *stream(options) {
@@ -339,8 +339,8 @@ describe("File Editing Search And Ignore", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-ignored-grep",
       async *stream(options) {
@@ -459,9 +459,9 @@ describe("File Editing Search And Ignore", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
-    let fourthTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
+    let fourthTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "ignored-file-tool-boundary",
       async *stream(options) {

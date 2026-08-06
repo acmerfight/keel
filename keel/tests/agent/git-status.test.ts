@@ -6,7 +6,11 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent } from "../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../src/llm/types.ts";
 
 async function collect(
   source: AsyncIterable<AgentEvent>,
@@ -57,7 +61,7 @@ describe("Agent git status tool use", () => {
     Then the status summary is returned to the model without bash approval`, async () => {
     // Given
     const workspace = await createGitStatusWorkspace();
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "agent-git-status",
       async *stream(options) {

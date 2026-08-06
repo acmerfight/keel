@@ -12,7 +12,7 @@ import {
   persistSessionTaskProgress,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -46,7 +46,7 @@ describe("Interactive Session - Task Progress", () => {
     const firstTurnDone = new Promise<void>((resolve) => {
       firstTurnEnded = resolve;
     });
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "task-progress-provider",
       async *stream(options) {
@@ -145,7 +145,7 @@ describe("Interactive Session - Task Progress", () => {
     const firstTurnDone = new Promise<void>((resolve) => {
       firstTurnEnded = resolve;
     });
-    const observedRequestContexts: (readonly Message[])[] = [];
+    const observedRequestContexts: (readonly ProviderMessage[])[] = [];
     let requestTurn = 0;
     const provider: LLMProvider = {
       id: "task-compact-provider",
@@ -281,7 +281,7 @@ describe("Interactive Session - Task Progress", () => {
     const firstTurnDone = new Promise<void>((resolve) => {
       firstTurnEnded = resolve;
     });
-    const providerRequests: (readonly Message[])[] = [];
+    const providerRequests: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "task-injected-provider",
       async *stream(options) {

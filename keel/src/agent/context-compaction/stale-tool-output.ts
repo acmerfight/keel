@@ -1,5 +1,5 @@
-import type { Message } from "../../llm/types.ts";
 import { isPostCompactionReadToolCallId } from "../post-compaction-read-id.ts";
+import type { SessionMessage } from "../session-message.ts";
 import {
   generatedToolOutputArtifactMarker,
   isGeneratedSettledToolOutput,
@@ -76,14 +76,14 @@ export interface StaleToolOutputCompactionStats {
 }
 
 export interface StaleToolOutputCompactionResult {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly stats: StaleToolOutputCompactionStats;
   readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
   readonly artifactReports?: readonly ToolOutputArtifactCompactionArtifact[];
 }
 
 interface StaleToolOutputCompactionEntry {
-  readonly message: Message;
+  readonly message: SessionMessage;
   readonly stats: StaleToolOutputCompactionStats;
   readonly artifactNotice?: ToolOutputArtifactNotice;
   readonly artifactReport?: ToolOutputArtifactCompactionArtifact;
@@ -270,7 +270,7 @@ function omittedCharsForCurrentOutputRecompaction(
 }
 
 function shouldCompactStaleToolOutput(
-  message: Message,
+  message: SessionMessage,
   messageIndex: number,
   lastAssistantIndex: number,
   toolOutputMaxChars: number,
@@ -285,7 +285,7 @@ function shouldCompactStaleToolOutput(
 }
 
 function shouldCompactCurrentToolOutput(
-  message: Message,
+  message: SessionMessage,
   messageIndex: number,
   currentToolOutputIndexes: ReadonlySet<number>,
   toolOutputMaxChars: number,
@@ -315,7 +315,7 @@ function shouldCompactCurrentToolOutput(
 }
 
 function sourceStatusForCompaction(
-  message: Extract<Message, { readonly role: "tool" }>,
+  message: Extract<SessionMessage, { readonly role: "tool" }>,
 ): ToolOutputArtifactSourceStatus {
   if (message.sourceTruncated !== undefined) {
     return message.sourceTruncated ? "source-truncated" : "complete";
@@ -324,7 +324,7 @@ function sourceStatusForCompaction(
 }
 
 function toolContextForToolOutput(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolCallId: string,
 ): ToolOutputProjectionContext {
   for (const message of messages) {
@@ -348,7 +348,7 @@ function artifactToolNameForContext(
 }
 
 function rejectedToolOutputCompactionAttempt(options: {
-  readonly message: Message;
+  readonly message: SessionMessage;
   readonly artifactReport?: ToolOutputArtifactCompactionArtifact;
 }): ToolOutputCompactionAttempt {
   const pendingStoredArtifactRef =
@@ -368,7 +368,7 @@ function rejectedToolOutputCompactionAttempt(options: {
 }
 
 function buildToolOutputCompactionAttempt(options: {
-  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly message: Extract<SessionMessage, { readonly role: "tool" }>;
   readonly compactedContent: string;
   readonly scope: ToolOutputCompactionStatsScope;
   readonly artifactNotice?: ToolOutputArtifactNotice;
@@ -426,7 +426,7 @@ function settleToolOutputCompactionAttempt(
 
 async function artifactMarkerForCompactedToolOutput(options: {
   readonly store: ToolOutputArtifactStore;
-  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly message: Extract<SessionMessage, { readonly role: "tool" }>;
   readonly toolCallId: string;
   readonly toolName: ToolOutputArtifactToolName;
   readonly content: string;
@@ -536,7 +536,7 @@ async function artifactMarkerForCompactedToolOutput(options: {
 }
 
 export function compactStaleToolOutputs(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolOutputMaxChars: number,
 ): StaleToolOutputCompactionResult {
   const lastAssistantIndex = messages.findLastIndex(
@@ -599,7 +599,7 @@ export function compactStaleToolOutputs(
 }
 
 export async function compactStaleToolOutputsWithArtifacts(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolOutputMaxChars: number,
   store: ToolOutputArtifactStore,
 ): Promise<StaleToolOutputCompactionResult> {
@@ -691,7 +691,7 @@ export async function compactStaleToolOutputsWithArtifacts(
 }
 
 export function compactCurrentToolOutputs(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolOutputMaxChars: number,
   options: CurrentToolOutputCompactionOptions,
 ): StaleToolOutputCompactionResult {
@@ -770,7 +770,7 @@ export function compactCurrentToolOutputs(
 }
 
 export async function compactCurrentToolOutputsWithArtifacts(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolOutputMaxChars: number,
   store: ToolOutputArtifactStore,
   options: CurrentToolOutputCompactionOptions,

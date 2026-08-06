@@ -1,12 +1,12 @@
 import { readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import type { SessionMessage } from "../../agent/session-message.ts";
 import { errorMessage } from "../../core/error.ts";
 import { copySessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
   emptySessionTaskProgress,
 } from "../../core/task-progress.ts";
-import type { Message } from "../../llm/types.ts";
 import {
   activeSkillActivations,
   copySkillActivation,
@@ -79,7 +79,7 @@ function catalogCheckpointSummary(content: string): string | null {
 }
 
 function catalogPreviewStateFromMessages(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): CatalogPreviewState {
   let checkpointPreview: string | undefined;
   for (const message of messages) {

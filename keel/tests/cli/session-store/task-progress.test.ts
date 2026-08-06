@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   forkSessionStore,
@@ -9,7 +10,6 @@ import {
   persistSessionTaskProgress,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import {
   restoredUserMessageId,
   runtime,
@@ -80,7 +80,7 @@ describe("Session Store Task Progress", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const largeMessages: readonly Message[] = [
+    const largeMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(16 * 1024 * 1024),
@@ -190,7 +190,7 @@ describe("Session Store Task Progress", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const originalMessages: readonly Message[] = [
+    const originalMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -202,7 +202,7 @@ describe("Session Store Task Progress", () => {
         toolCalls: [],
       },
     ];
-    const replacedMessages: readonly Message[] = [
+    const replacedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember beta",
@@ -280,7 +280,7 @@ describe("Session Store Task Progress", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const firstTurn: readonly Message[] = [
+    const firstTurn: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -292,7 +292,7 @@ describe("Session Store Task Progress", () => {
         toolCalls: [],
       },
     ];
-    const allMessages: readonly Message[] = [
+    const allMessages: readonly SessionMessage[] = [
       ...firstTurn,
       {
         role: "user",

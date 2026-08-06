@@ -1,5 +1,5 @@
 import type { SessionTaskProgress } from "../core/task-progress.ts";
-import type { LLMProvider, Message } from "../llm/types.ts";
+import type { LLMProvider } from "../llm/types.ts";
 import {
   addRequestAccounting,
   type CostTrackingOptions,
@@ -32,10 +32,11 @@ import {
 } from "./provider-turn.ts";
 import {
   projectSessionLedgerToProviderMessages,
+  replaceSessionLedgerMessages,
   type SessionLedger,
-  sessionLedgerFromMessages,
   sessionLedgerMessages,
 } from "./session-ledger.ts";
+import type { SessionMessage } from "./session-message.ts";
 import type { ToolOutputArtifactsOptions } from "./tool-output-artifacts.ts";
 
 export interface CompactionConfig {
@@ -50,7 +51,7 @@ export interface CompactionConfig {
   readonly costTracking: CostTrackingOptions | undefined;
   readonly modelOperations: ModelOperationInstrumentation | null;
   readonly onContextCompacted: (
-    messages: Message[],
+    messages: SessionMessage[],
   ) => Promise<ContextCompactionFinalization>;
 }
 
@@ -68,8 +69,7 @@ export type CompactionState = {
 };
 
 export interface LedgerTurnOptions extends StreamTurnOptions {
-  readonly getLedger: () => SessionLedger;
-  readonly setLedger: (ledger: SessionLedger) => void;
+  readonly ledger: SessionLedger;
   readonly modelOperationPurpose: Extract<
     ModelOperationPurpose,
     "agent_turn" | "turn_limit_summary"
@@ -133,7 +133,7 @@ async function attemptContextCompaction(
   streamOptions: LedgerTurnOptions,
   attempt: ContextCompactionAttempt,
 ): Promise<CompactMessagesResult> {
-  const sourceMessages = sessionLedgerMessages(streamOptions.getLedger());
+  const sourceMessages = sessionLedgerMessages(streamOptions.ledger);
   const targetMessages = [...sourceMessages];
   const requestMetadata = requestMetadataForStream(streamOptions);
   const taskProgress = config.taskProgress?.();
@@ -196,7 +196,7 @@ async function attemptContextCompaction(
       };
     } else {
       state.contextAccounting = undefined;
-      streamOptions.setLedger(sessionLedgerFromMessages(targetMessages));
+      replaceSessionLedgerMessages(streamOptions.ledger, targetMessages);
       finalResult = {
         ...result,
         stats: finalStats,
@@ -284,9 +284,7 @@ export async function* streamTurnWithOverflowRecovery(
 
   try {
     for (;;) {
-      const requestMessages = projectSessionLedgerToProviderMessages(
-        streamOptions.getLedger(),
-      );
+      const requestMessages = sessionLedgerMessages(streamOptions.ledger);
       if (
         !preflightCurrentOutputCompactionAttempted &&
         shouldCompactCurrentToolOutputBeforeHistoricalCompaction(
@@ -304,8 +302,8 @@ export async function* streamTurnWithOverflowRecovery(
           streamOptions,
         );
       }
-      const historicalRequestMessages = projectSessionLedgerToProviderMessages(
-        streamOptions.getLedger(),
+      const historicalRequestMessages = sessionLedgerMessages(
+        streamOptions.ledger,
       );
       if (
         !historicalCompactionAttemptedBeforeRequest &&
@@ -339,8 +337,8 @@ export async function* streamTurnWithOverflowRecovery(
           }
         }
       }
-      const preflightRequestMessages = projectSessionLedgerToProviderMessages(
-        streamOptions.getLedger(),
+      const preflightRequestMessages = sessionLedgerMessages(
+        streamOptions.ledger,
       );
       if (
         !preflightCurrentOutputCompactionAttempted &&
@@ -364,7 +362,7 @@ export async function* streamTurnWithOverflowRecovery(
       }
       try {
         const currentRequestMessages = projectSessionLedgerToProviderMessages(
-          streamOptions.getLedger(),
+          streamOptions.ledger,
         );
         const currentOperation = startOperation();
         let currentSystemPrompt =

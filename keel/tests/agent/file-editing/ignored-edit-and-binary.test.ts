@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { runAgent } from "../../../src/agent/loop.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   createWorkspace,
@@ -24,9 +24,9 @@ describe("File Editing Ignored Edit And Binary", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
-    let thirdTurnMessages: readonly Message[] = [];
-    let fourthTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
+    let thirdTurnMessages: readonly ProviderMessage[] = [];
+    let fourthTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "recover-outside-after-ignored-edit",
       async *stream(options) {

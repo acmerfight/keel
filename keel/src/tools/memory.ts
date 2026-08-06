@@ -1,5 +1,5 @@
+import type { SessionMessage } from "../agent/session-message.ts";
 import type { ProviderId } from "../core/provider-id.ts";
-import type { Message } from "../llm/types.ts";
 
 interface AgentMemoryScope {
   readonly kind: "project";
@@ -106,10 +106,10 @@ export interface AgentMemoryProposalCapability {
 interface AgentMemoryProposalToolCapability {
   readonly capability: AgentMemoryProposalCapability;
   readonly sourceFor: (
-    message: Extract<Message, { readonly role: "user" }>,
+    message: Extract<SessionMessage, { readonly role: "user" }>,
   ) => AgentMemoryProposalSource | undefined;
   readonly persistSource: (
-    message: Extract<Message, { readonly role: "user" }>,
+    message: Extract<SessionMessage, { readonly role: "user" }>,
   ) => void;
   readonly review: (
     request: AgentMemoryProposalReviewRequest,
@@ -134,11 +134,11 @@ interface AgentMemoryToolContext {
   readonly capability: AgentMemoryMutationCapability;
   readonly proposal: AgentMemoryProposalToolCapability | null;
   readonly currentUserMessage: () => Extract<
-    Message,
+    SessionMessage,
     { readonly role: "user" }
   > | null;
   readonly claimSourceMutation: (
-    message: Extract<Message, { readonly role: "user" }>,
+    message: Extract<SessionMessage, { readonly role: "user" }>,
   ) => boolean;
 }
 
@@ -150,7 +150,7 @@ type MemoryIntentValidation =
 
 export function validateAgentMemoryAdd(options: {
   readonly currentUserMessage: Extract<
-    Message,
+    SessionMessage,
     { readonly role: "user" }
   > | null;
   readonly text: string;
@@ -176,7 +176,7 @@ export function validateAgentMemoryAdd(options: {
 
 export function validateAgentMemoryForget(options: {
   readonly currentUserMessage: Extract<
-    Message,
+    SessionMessage,
     { readonly role: "user" }
   > | null;
   readonly id: string;
@@ -199,7 +199,7 @@ export function validateAgentMemoryForget(options: {
 
 export function validateAgentMemoryProposal(options: {
   readonly currentUserMessage: Extract<
-    Message,
+    SessionMessage,
     { readonly role: "user" }
   > | null;
   readonly sourceQuote: string;

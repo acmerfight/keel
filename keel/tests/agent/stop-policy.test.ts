@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import type { AgentStopPolicy } from "../../src/agent/stop-policy.ts";
 import {
   composeStopPolicies,
@@ -18,7 +19,12 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message, ToolCall } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  ToolCall,
+} from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 import { toolCallFromParsedArguments } from "../../src/tools/registry.ts";
 
 async function collect(
@@ -140,7 +146,7 @@ describe("Agent Stopping", () => {
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
     const wrapUpInstructions: string[] = [];
     const wrapUpToolChoices: (string | undefined)[] = [];
-    const wrapUpTranscripts: (readonly Message[])[] = [];
+    const wrapUpTranscripts: (readonly ProviderMessage[])[] = [];
     const provider: LLMProvider = {
       id: "records-wrap-up",
       async *stream(options) {
@@ -201,7 +207,7 @@ describe("Agent Stopping", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "edit the file and explain progress" },
     ];
     const provider = wrapUpBoundaryProvider("Stopping here.");
@@ -212,7 +218,7 @@ describe("Agent Stopping", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -241,7 +247,7 @@ describe("Agent Stopping", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "old a\n", "utf8");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "edit the file and explain progress" },
     ];
     const provider = wrapUpBoundaryProvider("\nStopping here.");
@@ -252,7 +258,7 @@ describe("Agent Stopping", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -787,7 +793,9 @@ describe("Agent Stopping", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
-    const messages: Message[] = [{ role: "user", content: "first task" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "first task" },
+    ];
     const sameRead = fakeToolResponse("read", { path: "a.txt" });
     const firstProvider = createFakeProvider([
       sameRead,
@@ -805,7 +813,7 @@ describe("Agent Stopping", () => {
         runAgentTurn({
           workspace,
           provider: firstProvider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -817,7 +825,7 @@ describe("Agent Stopping", () => {
         runAgentTurn({
           workspace,
           provider: secondProvider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },

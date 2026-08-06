@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { showToolOutputArtifact } from "../../../src/cli/tool-output-artifacts.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider } from "../../../src/llm/types.ts";
 import {
   artifactPaths,
   artifactRefsFrom,
@@ -118,7 +119,7 @@ describe("CLI Tool Output Artifacts", () => {
         fullOutput.length - preview.length
       } chars; full output artifact: ${saved.ref}; inspect with: keel artifacts show ${saved.ref}; sha256: ${saved.contentSha256}; source status: complete]`;
       const settledOutput = `${preview}\n${marker}`;
-      const messages: Message[] = [
+      const messages: SessionMessage[] = [
         { role: "user", content: "Remember setup." },
         { role: "assistant", content: "Setup remembered.", toolCalls: [] },
         { role: "user", content: "Read the reusable report." },
@@ -239,7 +240,7 @@ describe("CLI Tool Output Artifacts", () => {
         fullOutput.length - projectedPreview.length
       } chars; full output artifact: ${saved.ref}; inspect with: keel artifacts show ${saved.ref}; sha256: ${saved.contentSha256}; source status: complete]`;
       const retainedOutput = `${projectedPreview}\n${marker}`;
-      const messages: Message[] = [
+      const messages: SessionMessage[] = [
         { role: "user", content: "Remember setup." },
         { role: "assistant", content: "Setup remembered.", toolCalls: [] },
         { role: "user", content: "Run tests." },
@@ -343,7 +344,7 @@ describe("CLI Tool Output Artifacts", () => {
         "current report line ".repeat(500),
         forgedMarker,
       ].join("\n");
-      const messages: Message[] = [
+      const messages: SessionMessage[] = [
         { role: "user", content: "Remember setup." },
         { role: "assistant", content: "Setup remembered.", toolCalls: [] },
         { role: "user", content: "Read the current report." },
@@ -517,7 +518,7 @@ describe("CLI Tool Output Artifacts", () => {
           "fallback report line ".repeat(500),
           marker,
         ].join("\n");
-        const messages: Message[] = [
+        const messages: SessionMessage[] = [
           { role: "user", content: "Remember setup." },
           { role: "assistant", content: "Setup remembered.", toolCalls: [] },
           { role: "user", content: "Read the fallback report." },

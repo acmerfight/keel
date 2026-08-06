@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import { KeelError } from "../../src/core/error.ts";
@@ -8,7 +9,8 @@ import {
   createFakeProvider,
   fakeResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 type TextEvent = Extract<AgentEvent, { readonly type: "text" }>;
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
@@ -90,7 +92,7 @@ describe("Text Reply", () => {
     When agent responds,
     Then the assistant reply starts the transcript`, async () => {
     // Given
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const provider = createFakeProvider([fakeResponse("Session started.")]);
 
     // When
@@ -98,7 +100,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -116,9 +118,11 @@ describe("Text Reply", () => {
     When the agent continues after the tool result,
     Then the assistant tool replay preserves provider reasoning metadata`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "inspect package" },
+    ];
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "reasoning-tool-replay",
       async *stream(options) {
@@ -146,7 +150,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -156,7 +160,9 @@ describe("Text Reply", () => {
 
     // Then
     const replayedToolRequest = secondTurnMessages.find(
-      (message): message is Extract<Message, { readonly role: "assistant" }> =>
+      (
+        message,
+      ): message is Extract<ProviderMessage, { readonly role: "assistant" }> =>
         message.role === "assistant" &&
         message.toolCalls.some((toolCall) => toolCall.id === "read_package"),
     );
@@ -171,7 +177,9 @@ describe("Text Reply", () => {
     When the turn completes without tools,
     Then the assistant reply preserves provider reasoning metadata`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "answer directly" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "answer directly" },
+    ];
     const provider: LLMProvider = {
       id: "reasoning-final-reply",
       async *stream() {
@@ -186,7 +194,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -214,9 +222,11 @@ describe("Text Reply", () => {
     When the user sends a follow-up message,
     Then the reasoning-only assistant turn remains provider-visible`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "think silently" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "think silently" },
+    ];
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "reasoning-only-final-reply",
       async *stream(options) {
@@ -236,7 +246,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -250,7 +260,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -279,7 +289,9 @@ describe("Text Reply", () => {
     When the turn completes without tools,
     Then the empty delta does not create provider reasoning metadata`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "answer directly" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "answer directly" },
+    ];
     const provider: LLMProvider = {
       id: "empty-reasoning-final-reply",
       async *stream() {
@@ -294,7 +306,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -317,7 +329,9 @@ describe("Text Reply", () => {
     When the agent asks for a wrap-up summary,
     Then the final assistant reply preserves both reasoning segments`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "inspect package" },
+    ];
     let turn = 0;
     const provider: LLMProvider = {
       id: "reasoning-wrap-up",
@@ -346,7 +360,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -395,7 +409,7 @@ describe("Text Reply", () => {
     Then the assistant reply keeps the available reasoning segment`,
     async ({ initialReasoning, wrapUpReasoning, expectedReasoning }) => {
       // Given
-      const messages: Message[] = [
+      const messages: SessionMessage[] = [
         { role: "user", content: "inspect package" },
       ];
       let turn = 0;
@@ -430,7 +444,7 @@ describe("Text Reply", () => {
         runAgentTurn({
           workspace: workspace(),
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -461,9 +475,11 @@ describe("Text Reply", () => {
     When user sends a follow-up message,
     Then the empty turn adds no assistant message to the transcript`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "stay silent" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "stay silent" },
+    ];
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "silent-session",
       async *stream(options) {
@@ -483,7 +499,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -497,7 +513,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -516,9 +532,11 @@ describe("Text Reply", () => {
     When user sends a follow-up message,
     Then the provider receives the earlier context`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "remember alpha" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "remember alpha" },
+    ];
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "observed-session",
       async *stream(options) {
@@ -546,7 +564,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -560,7 +578,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -580,9 +598,11 @@ describe("Text Reply", () => {
     When user sends a follow-up message,
     Then the provider still receives the visible assistant reply`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "summarize alpha" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "summarize alpha" },
+    ];
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "budgeted-session",
       estimateInputTokens: () => 1,
@@ -611,7 +631,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -629,7 +649,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -653,9 +673,11 @@ describe("Text Reply", () => {
     When user sends a follow-up message,
     Then the provider receives the assistant tool call and tool result`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "inspect package" },
+    ];
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "tool-session",
       async *stream(options) {
@@ -685,7 +707,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -699,7 +721,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -735,10 +757,12 @@ describe("Text Reply", () => {
     When the tool result has been added,
     Then the next model request includes the steering after the tool result`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "inspect package" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "inspect package" },
+    ];
     let turn = 0;
     let drained = false;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "steerable-session",
       async *stream(options) {
@@ -765,7 +789,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -807,10 +831,12 @@ describe("Text Reply", () => {
     When all tool results have been added,
     Then the next model request includes the steering after every tool result`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "inspect project" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "inspect project" },
+    ];
     let turn = 0;
     let drained = false;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "batched-tools-session",
       async *stream(options) {
@@ -844,7 +870,7 @@ describe("Text Reply", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1073,7 +1099,9 @@ describe("Text Reply", () => {
     When agent handles the turn,
     Then the partial turn is not committed`, async () => {
     // Given
-    const messages: Message[] = [{ role: "user", content: "start reply" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "start reply" },
+    ];
     const events: AgentEvent[] = [];
     const brokenProvider: LLMProvider = {
       id: "stream-failure",
@@ -1091,7 +1119,7 @@ describe("Text Reply", () => {
       for await (const event of runAgentTurn({
         workspace: workspace(),
         provider: brokenProvider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },

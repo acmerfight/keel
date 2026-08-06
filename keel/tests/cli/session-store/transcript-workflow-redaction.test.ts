@@ -2,6 +2,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   forkSessionStore,
@@ -11,7 +12,6 @@ import {
   resumeSessionStore,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
 import type { WorkflowSkill } from "../../../src/skills/model.ts";
@@ -40,7 +40,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "remember alpha",
@@ -84,7 +84,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const messages: readonly Message[] = [
+    const messages: readonly SessionMessage[] = [
       {
         role: "user",
         origin: { type: "compaction_checkpoint" },
@@ -384,7 +384,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const largeMessages: readonly Message[] = [
+    const largeMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(16 * 1024 * 1024),
@@ -394,7 +394,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const githubToken = `ghp_${"A".repeat(36)}`;
     const googleApiKey = `AIza${"B".repeat(35)}`;
     const reasoningSecret = "sk-reasoning-secret-213";
-    const secretMessages: readonly Message[] = [
+    const secretMessages: readonly SessionMessage[] = [
       {
         role: "user",
         origin: { type: "user_prompt" },
@@ -504,7 +504,9 @@ describe("Session Store Transcript Workflow Redaction", () => {
         JSON.stringify(resumed.messages).includes("[REDACTED_SECRET]"),
       ).toBe(true);
       const resumedToolMessage = resumed.messages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<SessionMessage, { readonly role: "tool" }> =>
           message.role === "tool" && message.toolCallId === "read_secret",
       );
       expect(resumedToolMessage?.sourceTruncated).toBe(true);
@@ -521,7 +523,7 @@ describe("Session Store Transcript Workflow Redaction", () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const ledgerWorkspace = await realpath(workspace);
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const largeMessages: readonly Message[] = [
+    const largeMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(16 * 1024 * 1024),

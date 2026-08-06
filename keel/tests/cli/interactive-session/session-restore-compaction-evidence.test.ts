@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   persistSessionMessages,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider } from "../../../src/llm/types.ts";
 import { CHECKPOINT_INSTRUCTION } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
@@ -48,7 +49,7 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
       `- ${decoyHandle} | label: bash decoy report | source: complete | inspect: keel artifacts show ${decoyHandle} | why: visible decoy evidence`,
       "</conversation-checkpoint>",
     ].join("\n");
-    const persistedMessages: readonly Message[] = [
+    const persistedMessages: readonly SessionMessage[] = [
       {
         role: "user",
         origin: { type: "compaction_checkpoint" },

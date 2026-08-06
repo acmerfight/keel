@@ -1,4 +1,5 @@
 import { conversationCheckpointSummaryFromMessage } from "../agent/context-compaction.ts";
+import type { SessionMessage } from "../agent/session-message.ts";
 import {
   formatSessionGoalCompletionEvidenceSummary,
   formatSessionGoalRuntimeOutcomeSummary,
@@ -10,7 +11,6 @@ import {
   type SessionTaskProgress,
 } from "../core/task-progress.ts";
 import type { UndoProtectionSummary } from "../core/undo-protection.ts";
-import type { Message } from "../llm/types.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
 import type { RunReportMemory } from "./report.ts";
@@ -38,7 +38,7 @@ export interface SessionStatusSnapshotOptions {
     readonly total: number;
     readonly budgetChars: number;
   };
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly messageCount: number;
   readonly pendingInputCount: number;
   readonly bashApprovalCount: number;
@@ -100,7 +100,9 @@ function formatRecoveryCommand(command: string): string {
   return escapeStatusTextWithoutLimit(normalized);
 }
 
-function latestCheckpointSummary(messages: readonly Message[]): string | null {
+function latestCheckpointSummary(
+  messages: readonly SessionMessage[],
+): string | null {
   for (const message of messages.toReversed()) {
     if (message.role !== "user") {
       continue;

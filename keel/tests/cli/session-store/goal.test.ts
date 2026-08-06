@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   persistSessionGoal,
@@ -17,7 +18,6 @@ import {
   SESSION_GOAL_RUNTIME_OUTCOME_REASON_MAX_LENGTH,
   SESSION_GOAL_STATUS_REASON_MAX_LENGTH,
 } from "../../../src/core/session-goal.ts";
-import type { Message } from "../../../src/llm/types.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
 const REDACTION_EXPANDING_SECRET = " sk-aaaa";
@@ -678,7 +678,7 @@ describe("Session Store Goal", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const largeMessages: readonly Message[] = [
+    const largeMessages: readonly SessionMessage[] = [
       {
         role: "user",
         content: "x".repeat(16 * 1024 * 1024),

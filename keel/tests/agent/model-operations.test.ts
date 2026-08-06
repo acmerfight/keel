@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
@@ -22,7 +23,8 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type { LLMProvider, Usage } from "../../src/llm/types.ts";
+import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -108,7 +110,7 @@ describe("Model Operations", () => {
     Then evaluator work is not counted as an Agent-loop model turn`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-model-operation-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Complete the assertion goal." },
     ];
     const goal: SessionGoal = {
@@ -159,7 +161,7 @@ describe("Model Operations", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
           bash: { kind: "disabled" },
@@ -353,7 +355,7 @@ describe("Model Operations", () => {
     Then the report records only the compaction operation and no phantom Agent turn`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-model-operation-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: `Investigate ${"old context ".repeat(500)}` },
       {
         role: "assistant",
@@ -385,7 +387,7 @@ describe("Model Operations", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
           bash: { kind: "disabled" },
@@ -425,7 +427,7 @@ describe("Model Operations", () => {
     Then the report preserves the overflow attempt without inventing an Agent turn`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-model-operation-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: `Investigate ${"old context ".repeat(500)}` },
       {
         role: "assistant",
@@ -463,7 +465,7 @@ describe("Model Operations", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
           bash: { kind: "disabled" },
@@ -617,7 +619,7 @@ describe("Model Operations", () => {
     const provider = createFakeProvider([
       fakeToolResponse("read", { path: "unexpected.txt" }),
     ]);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: `Investigate ${"history ".repeat(500)}` },
       {
         role: "assistant",
@@ -634,7 +636,7 @@ describe("Model Operations", () => {
           runAgentTurn({
             workspace,
             provider,
-            messages,
+            ledger: sessionLedgerMirroringMessages(messages),
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
             bash: { kind: "disabled" },
@@ -746,7 +748,7 @@ describe("Model Operations", () => {
       retry: { maxRetries: 0 },
     });
     const recorder = reportRecorderWithAgentRun();
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: `Investigate ${"history ".repeat(500)}` },
       {
         role: "assistant",
@@ -763,7 +765,7 @@ describe("Model Operations", () => {
           runAgentTurn({
             workspace,
             provider,
-            messages,
+            ledger: sessionLedgerMirroringMessages(messages),
             systemPrompt: "You are helpful.",
             signal: new AbortController().signal,
             bash: { kind: "disabled" },
@@ -811,7 +813,7 @@ describe("Model Operations", () => {
     Then the original operation remains context-overflow and only recovery is admission-rejected`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-model-operation-"));
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Preserve the earlier investigation." },
       {
         role: "assistant",
@@ -851,7 +853,7 @@ describe("Model Operations", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: new AbortController().signal,
           bash: { kind: "disabled" },

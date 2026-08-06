@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import type {
+  PersistedSessionMessage,
+  SessionMessage,
+} from "../../agent/session-message.ts";
 import { copySessionGoal, type SessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -7,7 +11,6 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../../core/task-progress.ts";
-import type { Message, SessionMessage } from "../../llm/types.ts";
 import {
   type BashApprovalGrant,
   bashApprovalGrantKey,
@@ -83,7 +86,7 @@ import {
   replayStateForSession,
   sessionRecordWithConsumedInputIds,
   sessionStateFromReplay,
-  storedMessagesForProviderMessages,
+  storedMessagesForSessionMessages,
   uniqueInputIds,
 } from "./state.ts";
 
@@ -810,17 +813,17 @@ export function persistSessionTaskProgress(options: {
 
 export function persistSessionMessages(options: {
   readonly session: SessionState;
-  readonly previousMessages: readonly Message[];
-  readonly currentMessages: readonly Message[];
+  readonly previousMessages: readonly SessionMessage[];
+  readonly currentMessages: readonly SessionMessage[];
   readonly runtime: SessionStoreRuntime;
   readonly reason: SessionPersistenceReason;
   readonly skillState?: SkillLifecycleState;
   readonly consumedInputIds?: readonly string[];
   readonly reservedMessageIds?: readonly {
-    readonly message: Message;
+    readonly message: SessionMessage;
     readonly id: string;
   }[];
-}): readonly SessionMessage[] {
+}): readonly PersistedSessionMessage[] {
   const reservedMessageIds = new Map<number, string>();
   const existingMessageIds = new Set(
     replayStateForSession(options.session).storedMessages.map(
@@ -853,7 +856,7 @@ export function persistSessionMessages(options: {
   validateCompletedTranscript(options.session.id, currentMessages, "persist");
   const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
   const replayState = replayStateForSession(options.session);
-  const currentStoredMessages = storedMessagesForProviderMessages({
+  const currentStoredMessages = storedMessagesForSessionMessages({
     messages: currentMessages,
     previousStoredMessages: replayState.storedMessages,
     reservedMessageIds,

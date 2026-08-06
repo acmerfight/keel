@@ -12,7 +12,11 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message, Usage } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  Usage,
+} from "../../src/llm/types.ts";
 import {
   type BashApprovalGrant,
   type BashProjectApprovalGrant,
@@ -46,7 +50,7 @@ describe("Bash Commands", () => {
     Then the command is rejected without changing the workspace`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "disabled-bash",
       async *stream(options) {
@@ -104,7 +108,7 @@ describe("Bash Commands", () => {
     Then the command result is sent back and the workspace is updated`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "enabled-bash",
       async *stream(options) {
@@ -161,7 +165,7 @@ describe("Bash Commands", () => {
     Then the failure output is sent back for recovery`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "failed-bash",
       async *stream(options) {
@@ -229,7 +233,7 @@ describe("Bash Commands", () => {
     Then the timeout is applied and the timed-out result is sent back`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "timed-bash",
       async *stream(options) {

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { LLMProvider, Message, ToolCall, Usage } from "../llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  ToolCall,
+  Usage,
+} from "../llm/types.ts";
 import { isMcpToolCall } from "../tools/tool-call.ts";
 import type { AssertionEvidenceResourceFreshness } from "./assertion-evidence-freshness.ts";
 import type { AgentEvent } from "./events.ts";
@@ -8,6 +13,7 @@ import type {
   ModelOperationInstrumentation,
 } from "./model-operations.ts";
 import { type AgentTurn, streamAgentTurn } from "./provider-turn.ts";
+import type { SessionMessage } from "./session-message.ts";
 
 const ASSERTION_GOAL_EVALUATOR_SYSTEM_PROMPT = [
   "You are Keel's assertion goal completion evaluator.",
@@ -99,7 +105,7 @@ interface AssertionGoalEvaluatorOptions {
   readonly provider: LLMProvider;
   readonly signal: AbortSignal;
   readonly goal: AssertionGoalContract;
-  readonly evidenceMessages: readonly Message[];
+  readonly evidenceMessages: readonly SessionMessage[];
   readonly resourceFreshness: readonly AssertionEvidenceResourceFreshness[];
   readonly modelOperations: ModelOperationInstrumentation | null;
 }
@@ -115,7 +121,7 @@ async function drainAgentTurn(
 }
 
 function evidenceRecord(
-  message: Message,
+  message: SessionMessage,
   index: number,
   resourceFreshnessByToolCallId: ReadonlyMap<
     string,
@@ -186,7 +192,7 @@ function evidenceRecord(
 }
 
 function formatEvidenceRecordsJson(
-  evidenceMessages: readonly Message[],
+  evidenceMessages: readonly SessionMessage[],
   resourceFreshness: readonly AssertionEvidenceResourceFreshness[],
 ): string {
   const resourceFreshnessByToolCallId = new Map(
@@ -217,7 +223,7 @@ function formatEvidenceRecordsJson(
 
 function formatEvaluatorPrompt(
   goal: AssertionGoalContract,
-  evidenceMessages: readonly Message[],
+  evidenceMessages: readonly SessionMessage[],
   resourceFreshness: readonly AssertionEvidenceResourceFreshness[],
 ): string {
   return [
@@ -247,9 +253,9 @@ function formatEvaluatorPrompt(
 
 function evaluatorUserMessage(
   goal: AssertionGoalContract,
-  evidenceMessages: readonly Message[],
+  evidenceMessages: readonly SessionMessage[],
   resourceFreshness: readonly AssertionEvidenceResourceFreshness[],
-): Message {
+): ProviderMessage {
   return {
     role: "user",
     content: formatEvaluatorPrompt(goal, evidenceMessages, resourceFreshness),

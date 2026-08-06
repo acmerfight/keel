@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { compactMessages } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
@@ -13,7 +14,7 @@ import type {
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
 import { KeelError } from "../../../src/core/error.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   endEvent,
@@ -25,6 +26,7 @@ import {
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
 import { createWorkspace } from "../../../src/testing/file-editing-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 
 interface SavedToolOutputArtifact {
   readonly input: ToolOutputArtifactSaveInput;
@@ -97,7 +99,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       "large log output",
       "[current tool output compacted after context overflow: approximately omitted 6000 chars; rerun the tool with narrower parameters if needed]",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the large log and continue." },
       {
         role: "assistant",
@@ -170,7 +172,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When current tool-output compaction runs with no history to summarize,
     Then it leaves the messages unchanged without saving an artifact`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the note and continue." },
       {
         role: "assistant",
@@ -264,7 +266,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       "current output line ".repeat(500),
       "CURRENT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the noisy command and continue." },
       {
         role: "assistant",
@@ -285,7 +287,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     ];
     const saved: SavedToolOutputArtifact[] = [];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "current-output-artifact-failure-provider",
       async *stream(options) {
@@ -311,7 +313,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -370,7 +372,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     const currentOmittedChars =
       currentFullOutput.length - currentPreview.length;
     const currentToolOutput = `${currentPreview}\n[tool output shortened: omitted ${currentOmittedChars} chars; full output artifact: tool-output:run/current-first; inspect with: keel artifacts show tool-output:run/current-first; source status: source-truncated/lossy before artifact capture]`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the large log and continue." },
       {
         role: "assistant",
@@ -391,7 +393,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     ];
     const saved: SavedToolOutputArtifact[] = [];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "current-output-reuses-existing-artifact-provider",
       async *stream(options) {
@@ -417,7 +419,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -473,13 +475,13 @@ describe("Context Compaction Overflow Edge Cases", () => {
     Then the retry does not restore a duplicate post-compaction read`, async () => {
     // Given
     const workspace = await createWorkspace();
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the large log and continue." },
     ];
     const largeLogOutput = "large log output ".repeat(400);
     let mainRequests = 0;
     let summaryRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "real-current-read-overflow-provider",
       async *stream(options) {
@@ -526,7 +528,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -542,7 +544,9 @@ describe("Context Compaction Overflow Edge Cases", () => {
       expect(mainRequests).toBe(3);
       expect(summaryRequests).toBe(0);
       const retriedToolMessages = retriedMessages.filter(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool",
       );
       expect(retriedToolMessages).toHaveLength(1);
@@ -574,7 +578,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     Then overflow recovery compacts the current tool output and retries without a summary request`, async () => {
     // Given
     const currentToolOutput = "large log output ".repeat(400);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the large log and continue." },
       {
         role: "assistant",
@@ -596,7 +600,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     let mainRequests = 0;
     let summaryRequests = 0;
     let summaryPrompt = "";
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "tool-tail-overflow-provider",
       async *stream(options) {
@@ -666,7 +670,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -732,7 +736,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     Then it reports no compaction instead of adding an empty checkpoint`, async () => {
     // Given
     const currentToolOutput = "headless current tool output ".repeat(200);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -806,11 +810,11 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When a long current request starts,
     Then the agent sends the original request without adding an empty checkpoint`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Only current request. ".repeat(200) },
     ];
     let summaryRequests = 0;
-    let mainRequestMessages: readonly Message[] = [];
+    let mainRequestMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "proactive-without-safe-split-provider",
       async *stream(options) {
@@ -829,7 +833,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -860,7 +864,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When the compacted request still overflows,
     Then the agent fails instead of compacting in a loop`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
       {
         role: "assistant",
@@ -892,7 +896,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         runAgentTurn({
           workspace: workspace(),
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -913,7 +917,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When compaction succeeds,
     Then the agent still treats the overflow as recoverable`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
       {
         role: "assistant",
@@ -950,7 +954,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -973,7 +977,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When overflow recovery runs,
     Then the original provider overflow is surfaced`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Only current ask." },
     ];
     let requestCount = 0;
@@ -996,7 +1000,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         runAgentTurn({
           workspace: workspace(),
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1017,7 +1021,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When default overflow recovery can summarize older history,
     Then the agent compacts and retries once`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier context ".repeat(6000) },
       {
         role: "assistant",
@@ -1056,7 +1060,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1088,7 +1092,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When each request has not recovered before,
     Then each request gets its own compact-and-retry attempt`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier context ".repeat(80) },
       {
         role: "assistant",
@@ -1139,7 +1143,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1170,7 +1174,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
     When compaction succeeds,
     Then the wrap-up request retries and the run ends with a turn-limit summary`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Inspect the package before finishing." },
     ];
     let wrapUpOverflowed = false;
@@ -1220,7 +1224,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },

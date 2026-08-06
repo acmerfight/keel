@@ -3,18 +3,20 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { runAgent, runAgentTurn } from "../../../src/agent/loop.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import {
   createFakeProvider,
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 import {
   successfulMutationToolExecution,
   successfulReadToolExecution,
@@ -27,7 +29,7 @@ describe("File Editing Read Before Edit", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "edit-before-read",
       async *stream(options) {
@@ -179,7 +181,7 @@ describe("File Editing Read Before Edit", () => {
       }),
       fakeResponse("I need to read the changed file first."),
     ]);
-    let finalMessages: readonly Message[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "stale-edit-after-bash",
       stream(options) {
@@ -237,7 +239,7 @@ describe("File Editing Read Before Edit", () => {
       fakeResponse("I need a fresh read before editing."),
     ]);
     let providerTurn = 0;
-    let finalMessages: readonly Message[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "stale-partial-read",
       async *stream(options) {
@@ -317,7 +319,7 @@ describe("File Editing Read Before Edit", () => {
       fakeResponse("I need to reread the changed file."),
     ]);
     let providerTurn = 0;
-    let finalMessages: readonly Message[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "stale-multi-file-patch",
       async *stream(options) {
@@ -405,7 +407,7 @@ describe("File Editing Read Before Edit", () => {
         fakeResponse("I need to reread the source."),
       ]);
       let providerTurn = 0;
-      let finalMessages: readonly Message[] = [];
+      let finalMessages: readonly ProviderMessage[] = [];
       const provider: LLMProvider = {
         id: `stale-${scenario.kind}-patch`,
         async *stream(options) {
@@ -557,7 +559,7 @@ describe("File Editing Read Before Edit", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "same-turn-read-edit",
       async *stream(options) {
@@ -664,7 +666,7 @@ describe("File Editing Read Before Edit", () => {
       "utf8",
     );
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "same-turn-scoped-agents-read-edit",
       async *stream(options) {
@@ -766,7 +768,7 @@ describe("File Editing Read Before Edit", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "alpha beta gamma\n", "utf8");
     let turn = 0;
-    let fourthTurnMessages: readonly Message[] = [];
+    let fourthTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "reread-after-edit",
       async *stream(options) {
@@ -888,7 +890,7 @@ describe("File Editing Read Before Edit", () => {
     // Given
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "hello old world\n", "utf8");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "read note.txt" },
       {
         role: "assistant",
@@ -909,7 +911,7 @@ describe("File Editing Read Before Edit", () => {
       { role: "user", content: "replace old with new" },
     ];
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "transcript-only-read",
       async *stream(options) {
@@ -956,7 +958,7 @@ describe("File Editing Read Before Edit", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },

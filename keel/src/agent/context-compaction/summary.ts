@@ -6,7 +6,7 @@ import {
 import type {
   LLMProvider,
   LLMStopReason,
-  Message,
+  ProviderMessage,
   Usage,
 } from "../../llm/types.ts";
 import { isUntrustedMcpContentToolCall } from "../../tools/registry.ts";
@@ -15,6 +15,7 @@ import type {
   ModelOperationPurpose,
   ModelOperationRequest,
 } from "../model-operations.ts";
+import type { SessionMessage } from "../session-message.ts";
 import type {
   ToolOutputArtifactCompactionArtifact,
   ToolOutputArtifactNotice,
@@ -114,14 +115,14 @@ type CollectCompactionSummaryResult =
     };
 
 export interface BuildCompactedMessagesResult {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly staleToolOutputStats: StaleToolOutputCompactionStats;
   readonly artifactNotices?: readonly ToolOutputArtifactNotice[];
   readonly artifactReports?: readonly ToolOutputArtifactCompactionArtifact[];
 }
 
 function toolContextForSummaryInput(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolCallId: string,
 ): ToolOutputProjectionContext {
   for (const message of messages) {
@@ -139,8 +140,8 @@ function toolContextForSummaryInput(
 }
 
 function summaryToolOutputPreview(options: {
-  readonly messages: readonly Message[];
-  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly messages: readonly SessionMessage[];
+  readonly message: Extract<SessionMessage, { readonly role: "tool" }>;
   readonly toolOutputMaxChars: number;
 }): string {
   if (options.message.content.length <= options.toolOutputMaxChars) {
@@ -159,8 +160,8 @@ function summaryToolOutputPreview(options: {
 }
 
 function serializeMessage(
-  messages: readonly Message[],
-  message: Message,
+  messages: readonly SessionMessage[],
+  message: SessionMessage,
   toolOutputMaxChars: number,
 ): string {
   switch (message.role) {
@@ -201,7 +202,7 @@ function normalizeFocusInstruction(
 }
 
 function checkpointEvidenceFromMessages(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): readonly CompactionEvidence[] {
   return messages.flatMap((message) =>
     message.role === "user" ? checkpointEvidenceFromMessage(message) : [],
@@ -209,7 +210,7 @@ function checkpointEvidenceFromMessages(
 }
 
 function checkpointContainsUntrustedMcpContent(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): boolean {
   return messages.some(
     (message) =>
@@ -221,7 +222,7 @@ function checkpointContainsUntrustedMcpContent(
 }
 
 function compactionEvidenceForMessages(options: {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly toolOutputMaxChars: number;
   readonly artifactStore: ToolOutputArtifactStore | undefined;
 }): Promise<readonly CompactionEvidence[]> {
@@ -238,7 +239,7 @@ function compactionEvidenceForMessages(options: {
 }
 
 async function renderCompactionEvidenceForMessages(options: {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
   readonly toolOutputMaxChars: number;
   readonly summaryInputMaxChars: number;
   readonly artifactStore: ToolOutputArtifactStore | undefined;
@@ -308,7 +309,7 @@ function selectSummaryInput(
 }
 
 async function buildSummaryPrompt(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   options: ResolvedContextCompactionOptions,
   summaryInputMaxChars = options.summaryInputMaxChars,
   focusInstruction?: string,
@@ -361,7 +362,7 @@ async function buildSummaryPrompt(
 }
 
 export async function buildCompactedMessages(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   firstRetainedIndex: number,
   summary: string,
   options: ResolvedContextCompactionOptions,
@@ -427,7 +428,7 @@ export async function buildCompactedMessages(
 async function collectTextOnlyTurn(options: {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly ProviderMessage[];
   readonly signal: AbortSignal;
   readonly operation: ModelOperationHandle | null;
 }): Promise<TextOnlyTurn> {
@@ -503,7 +504,7 @@ type CompactionModelOperationRequest = ModelOperationRequest<
 interface CollectCompactionSummaryOptions {
   readonly provider: LLMProvider;
   readonly systemPrompt: string;
-  readonly messagesToSummarize: readonly Message[];
+  readonly messagesToSummarize: readonly SessionMessage[];
   readonly signal: AbortSignal;
   readonly contextCompaction: ResolvedContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;

@@ -7,13 +7,14 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
 import type { CostModel } from "../../../src/core/cost.ts";
 import { createDeepseekProvider } from "../../../src/llm/providers/deepseek.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import { verifiedToolOutputArtifactFixture } from "../../../src/testing/context-compaction-fixtures.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
@@ -174,7 +175,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
-    const observedRequestContexts: Message[][] = [];
+    const observedRequestContexts: ProviderMessage[][] = [];
     let summaryPrompt = "";
     let requestTurn = 0;
     const provider: LLMProvider = {
@@ -290,7 +291,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       "manual log b line ".repeat(500),
       "MANUAL_LOG_B_END",
     ].join("\n");
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the old reports." },
@@ -434,7 +435,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       "manual failure log line ".repeat(500),
       "MANUAL_FAILURE_LOG_END",
     ].join("\n");
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the failed report." },
@@ -558,7 +559,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       omittedChars: 90_000,
       sourceStatus: "source-truncated",
     });
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "Read the manual report." },
       {
         role: "assistant",
@@ -674,7 +675,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     When user enters /compact,
     Then manual compaction uses the restored transcript`, async () => {
     // Given
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "remember alpha" },
       { role: "assistant", content: "Alpha is saved.", toolCalls: [] },
     ];
@@ -695,7 +696,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const resolvedMessages: string[] = [];
     const persisted: Array<{
       readonly reason: string;
-      readonly messages: readonly Message[];
+      readonly messages: readonly SessionMessage[];
       readonly consumedInputIds: readonly string[];
     }> = [];
     let stderr = "";
@@ -777,7 +778,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const firstTurnEnded = new Promise<void>((resolve) => {
       receiveFirstEnd = resolve;
     });
-    let editRequestMessages: readonly Message[] = [];
+    let editRequestMessages: readonly ProviderMessage[] = [];
     let requestTurn = 0;
     const provider: LLMProvider = {
       id: "manual-compact-read-restore",
@@ -896,7 +897,9 @@ describe("Interactive Session - Manual Compact Success", () => {
         "hello fresh world\n",
       );
       const restoredReadMessage = editRequestMessages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.content.includes("hello current world"),
       );

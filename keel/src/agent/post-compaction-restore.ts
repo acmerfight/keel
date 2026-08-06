@@ -1,6 +1,6 @@
 import { isRecoverableToolErrorCode, KeelError } from "../core/error.ts";
 import type { ReadResourceObservation } from "../core/resource-observation.ts";
-import type { Message, ToolCall } from "../llm/types.ts";
+import type { ToolCall } from "../llm/types.ts";
 import {
   executeToolCall,
   type ToolExecution,
@@ -17,6 +17,7 @@ import {
   clearReadVisibilityState,
   type ReadVisibilityState,
 } from "./read-visibility.ts";
+import type { SessionMessage } from "./session-message.ts";
 import { toolMessageSourceTruncationMetadata } from "./tool-output-artifacts.ts";
 
 const POST_COMPACTION_MAX_RESTORED_FILES = 5;
@@ -71,7 +72,7 @@ function fitPostCompactionReadContent(
 }
 
 function currentCompactedReadToolCalls(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): readonly Extract<ToolCall, { readonly tool: "read" }>[] {
   const round = currentToolRound(messages);
   if (round === null) {
@@ -117,7 +118,7 @@ function compactedReadRestoreTarget(
 
 function compactedCurrentReadRestoreTargets(options: {
   readonly workspace: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
 }): readonly ReadRestoreTarget[] {
   return currentCompactedReadToolCalls(options.messages).flatMap((toolCall) => {
     const target = compactedReadRestoreTarget(options.workspace, toolCall);
@@ -162,7 +163,7 @@ export async function restorePostCompactionReads(options: {
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly readVisibility: ReadVisibilityState;
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
-  readonly messages: Message[];
+  readonly messages: SessionMessage[];
   readonly nextToolCallId: () => string;
 }): Promise<void> {
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];

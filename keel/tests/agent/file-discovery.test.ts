@@ -10,7 +10,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../src/llm/types.ts";
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -105,8 +105,8 @@ describe("File Discovery", () => {
     );
 
     let turn = 0;
-    let afterLsMessages: readonly Message[] = [];
-    let afterReadMessages: readonly Message[] = [];
+    let afterLsMessages: readonly ProviderMessage[] = [];
+    let afterReadMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "directory-discovery-provider",
       async *stream(options) {
@@ -189,8 +189,8 @@ describe("File Discovery", () => {
     await writeFile(join(workspace, "src.ts"), "not a test\n", "utf8");
 
     let turn = 0;
-    let afterGlobMessages: readonly Message[] = [];
-    let afterReadMessages: readonly Message[] = [];
+    let afterGlobMessages: readonly ProviderMessage[] = [];
+    let afterReadMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "file-discovery-provider",
       async *stream(options) {

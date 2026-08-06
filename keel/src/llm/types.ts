@@ -2,7 +2,6 @@ import type {
   KeelErrorCode,
   ProviderRequestTerminalErrorCode,
 } from "../core/error.ts";
-import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { ModelToolExposure, ToolCall } from "../tools/tool-call.ts";
 
 export type { ModelToolExposure } from "../tools/tool-call.ts";
@@ -14,76 +13,42 @@ export interface Usage {
   readonly outputTokens: number;
 }
 
-export const userMessageOriginTypes = [
-  "user_prompt",
-  "steer",
-  "queued_followup",
-  "runtime_goal_activation",
-  "runtime_goal_continuation",
-  "runtime_goal_resumption",
-  "runtime_goal_stagnation_recovery",
-  "runtime_undo_restoration",
-  "compaction_checkpoint",
-] as const;
-
-type UserMessageOriginType = (typeof userMessageOriginTypes)[number];
-
-export interface UserMessageOrigin {
-  readonly type: UserMessageOriginType;
+interface ProviderMessageAudience {
+  readonly _messageAudience?: "provider";
 }
 
-interface UserMessage {
+interface ProviderUserMessage extends ProviderMessageAudience {
   readonly role: "user";
   readonly content: string;
-  readonly origin?: UserMessageOrigin;
-  readonly contextCompaction?: UserMessageContextCompactionMetadata;
-}
-
-export interface UserMessageContextCompactionEvidence {
-  readonly handle: string;
-  readonly label: string;
-  readonly source: string;
-  readonly why: string;
-  readonly inspectCommand?: string;
-}
-
-export interface UserMessageContextCompactionMetadata {
-  readonly evidence: readonly UserMessageContextCompactionEvidence[];
-  readonly untrustedMcpContent?: true;
 }
 
 export type { ToolCall } from "../tools/tool-call.ts";
 
-interface OpenAICompatibleAssistantMetadata {
+interface OpenAICompatibleProviderAssistantMetadata {
   readonly reasoningContent: string;
 }
 
 export interface AssistantProviderMetadata {
-  readonly openaiCompatible: OpenAICompatibleAssistantMetadata;
+  readonly openaiCompatible: OpenAICompatibleProviderAssistantMetadata;
 }
 
-interface AssistantMessage {
+interface ProviderAssistantMessage extends ProviderMessageAudience {
   readonly role: "assistant";
   readonly content: string;
   readonly toolCalls: readonly ToolCall[];
   readonly providerMetadata?: AssistantProviderMetadata;
 }
 
-interface ToolMessage {
+interface ProviderToolMessage extends ProviderMessageAudience {
   readonly role: "tool";
   readonly toolCallId: string;
   readonly content: string;
-  readonly sourceTruncated?: boolean;
-  readonly evidenceShortened?: true;
-  readonly resourceObservation?: ReadResourceObservation;
 }
 
-export type Message = UserMessage | AssistantMessage | ToolMessage;
-
-export type SessionMessage =
-  | (UserMessage & { readonly origin: UserMessageOrigin })
-  | AssistantMessage
-  | ToolMessage;
+export type ProviderMessage =
+  | ProviderUserMessage
+  | ProviderAssistantMessage
+  | ProviderToolMessage;
 
 export type LLMStopReason = "stop" | "length";
 
@@ -145,7 +110,7 @@ export type LLMEvent =
 export interface StreamOptions {
   readonly systemPrompt: string;
   readonly requestSystemPrompt?: () => string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly ProviderMessage[];
   readonly signal: AbortSignal;
   // Absent = the standard provider tool surface. "none" is for turns that
   // must produce text only, e.g. the wrap-up summary after the turn limit.

@@ -1,6 +1,6 @@
 import type {
   AssistantProviderMetadata,
-  Message,
+  ProviderMessage,
   ToolCall,
   Usage,
 } from "../../llm/types.ts";
@@ -8,6 +8,7 @@ import {
   modelToolExposuresEqual,
   toolCallCanonicalArguments,
 } from "../../tools/registry.ts";
+import type { SessionMessage } from "../session-message.ts";
 import type {
   ContextCompactionOptions,
   ContextCompactionRequestMetadata,
@@ -17,6 +18,8 @@ import {
   resolveContextCompactionOptions,
   resolvedRequestMetadata,
 } from "./options.ts";
+
+type ContextMessage = ProviderMessage | SessionMessage;
 
 interface ToolCallFingerprintCache {
   readonly id: string;
@@ -86,7 +89,7 @@ function estimateAssistantProviderMetadataTokens(
   );
 }
 
-export function estimateMessageTokens(message: Message): number {
+export function estimateMessageTokens(message: ContextMessage): number {
   const roleOverhead = 4;
   switch (message.role) {
     case "user":
@@ -106,7 +109,9 @@ export function estimateMessageTokens(message: Message): number {
   }
 }
 
-export function estimateMessagesTokens(messages: readonly Message[]): number {
+export function estimateMessagesTokens(
+  messages: readonly ContextMessage[],
+): number {
   return messages.reduce(
     (total, message) => total + estimateMessageTokens(message),
     0,
@@ -237,7 +242,7 @@ function toolCallMatchesFingerprintCache(
   );
 }
 
-function messageFingerprint(message: Message): string {
+function messageFingerprint(message: ContextMessage): string {
   switch (message.role) {
     case "user":
       return JSON.stringify([message.role, message.content]);
@@ -258,7 +263,7 @@ function messageFingerprint(message: Message): string {
 }
 
 function captureMessageFingerprintCache(
-  message: Message,
+  message: ContextMessage,
 ): MessageFingerprintCache {
   switch (message.role) {
     case "user":
@@ -297,7 +302,7 @@ function captureMessageFingerprintCache(
 }
 
 function cachedMessageFingerprint(
-  message: Message,
+  message: ContextMessage,
   cache: MessageFingerprintCache,
 ): string {
   switch (message.role) {
@@ -339,7 +344,7 @@ function cachedMessageFingerprint(
 
 export function estimateRequestTokens(
   systemPrompt: string,
-  messages: readonly Message[],
+  messages: readonly ContextMessage[],
   accounting?: ContextCompactionAccountingSnapshot,
   metadata?: ContextCompactionRequestMetadata,
 ): number {
@@ -358,7 +363,7 @@ export function estimateRequestTokens(
 export function contextCompactionStatsForCurrentMessages(options: {
   readonly stats: ContextCompactionStats;
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly ContextMessage[];
   readonly requestMetadata?: ContextCompactionRequestMetadata;
 }): ContextCompactionStats {
   return {
@@ -375,7 +380,7 @@ export function contextCompactionStatsForCurrentMessages(options: {
 
 function estimateRequestTokensFromAccounting(
   systemPrompt: string,
-  messages: readonly Message[],
+  messages: readonly ContextMessage[],
   accounting: ContextCompactionAccountingSnapshot | undefined,
   metadata: ContextCompactionRequestMetadata | undefined,
 ): number | null {
@@ -413,7 +418,7 @@ function isUsableInputTokenCount(inputTokens: number): boolean {
 
 export function captureContextCompactionAccountingSnapshot(options: {
   readonly systemPrompt: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly ContextMessage[];
   readonly usage: Usage;
   readonly requestMetadata?: ContextCompactionRequestMetadata;
 }): ContextCompactionAccountingSnapshot | undefined {
@@ -436,7 +441,7 @@ export function captureContextCompactionAccountingSnapshot(options: {
 
 export function shouldCompactBeforeRequest(
   systemPrompt: string,
-  messages: readonly Message[],
+  messages: readonly ContextMessage[],
   options: ContextCompactionOptions | undefined,
   accounting?: ContextCompactionAccountingSnapshot,
   metadata?: ContextCompactionRequestMetadata,

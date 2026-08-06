@@ -4,13 +4,15 @@ import { describe, expect, test } from "vitest";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { restorePostCompactionReads } from "../../../src/agent/post-compaction-restore.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 import {
   createProjectInstructionVisibilityState,
@@ -53,7 +55,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       "utf8",
     );
     let turn = 0;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: `read the API server. ${"background context ".repeat(1_500)}`,
@@ -62,8 +64,8 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
-    let editRequestMessages: readonly Message[] = [];
-    let finalMessages: readonly Message[] = [];
+    let editRequestMessages: readonly ProviderMessage[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "compacted-scoped-agents-read-before-edit",
       async *stream(options) {
@@ -164,7 +166,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -183,7 +185,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -206,7 +208,9 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         ),
       ).toBe("export const route = 'fresh';\n");
       const restoredInstructionMessage = editRequestMessages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.content.includes(
             "Project instructions from packages/api/AGENTS.md",
@@ -222,7 +226,9 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         "API rule: preserve the exported route name.",
       );
       const restoredFileReadMessage = editRequestMessages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.content.includes("export const route = 'current';"),
       );
@@ -279,7 +285,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       outputTokens: 1,
     };
     let turn = 0;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: `read the API server. ${"background context ".repeat(1_500)}`,
@@ -347,7 +353,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -364,7 +370,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
           runAgentTurn({
             workspace,
             provider,
-            messages,
+            ledger: sessionLedgerMirroringMessages(messages),
             systemPrompt: "You are a helpful assistant.",
             signal: freshSignal(),
             bash: { kind: "disabled" },
@@ -384,7 +390,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -433,14 +439,14 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       "generated.ts",
     );
     let turn = 0;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "create the generated API file" },
     ];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
-    let retryRequestMessages: readonly Message[] = [];
-    let finalMessages: readonly Message[] = [];
+    let retryRequestMessages: readonly ProviderMessage[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "compacted-failed-write-scoped-agents",
       async *stream(options) {
@@ -548,7 +554,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -562,7 +568,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -622,7 +628,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const instructionTargetPath = await realpath(
       join(workspace, "packages", "api", "AGENTS.md"),
     );
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
@@ -696,7 +702,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       "utf8",
     );
     const instructionTargetPath = await realpath(instructionPath);
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
@@ -736,7 +742,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
     const serverPath = join(workspace, "server.ts");
     await writeFile(serverPath, "export const route = 'current';\n", "utf8");
     const serverTargetPath = await realpath(serverPath);
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
@@ -779,7 +785,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       "utf8",
     );
     const instructionTargetPath = await realpath(instructionPath);
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
@@ -829,7 +835,7 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       );
       instructionTargets.push(await realpath(instructionPath));
     }
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
@@ -852,7 +858,9 @@ describe("File Editing Post-Compaction Scoped Instructions", () => {
       // Then
       expect(sequence).toBe(3);
       const restoredToolMessages = messages.filter(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<SessionMessage, { readonly role: "tool" }> =>
           message.role === "tool",
       );
       expect(restoredToolMessages).toHaveLength(3);

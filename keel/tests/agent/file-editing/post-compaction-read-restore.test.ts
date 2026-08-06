@@ -5,13 +5,15 @@ import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { restorePostCompactionReads } from "../../../src/agent/post-compaction-restore.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   createWorkspace,
   freshSignal,
 } from "../../../src/testing/file-editing-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 import { createProjectInstructionVisibilityState } from "../../../src/tools/scoped-project-instructions.ts";
 
@@ -36,7 +38,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const notePath = join(workspace, "note.txt");
     await writeFile(notePath, "first\nsecond\nthird\n", "utf8");
     const noteTargetPath = await realpath(notePath);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -115,7 +117,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const notePath = join(workspace, "note.txt");
     await writeFile(notePath, "visible note\n", "utf8");
     const noteTargetPath = await realpath(notePath);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "assistant",
         content: "",
@@ -210,10 +212,12 @@ describe("File Editing Post-Compaction Read Restore", () => {
       "utf8",
     );
     let turn = 0;
-    const messages: Message[] = [{ role: "user", content: "read note.txt" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "read note.txt" },
+    ];
     const readVisibility = createReadVisibilityState();
-    let editRequestMessages: readonly Message[] = [];
-    let finalMessages: readonly Message[] = [];
+    let editRequestMessages: readonly ProviderMessage[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "compacted-read-before-edit",
       async *stream(options) {
@@ -330,7 +334,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -348,7 +352,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -378,7 +382,9 @@ describe("File Editing Post-Compaction Read Restore", () => {
         "hello fresh world\n",
       );
       const restoredReadMessage = editRequestMessages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.content.includes("hello current world"),
       );
@@ -419,10 +425,12 @@ describe("File Editing Post-Compaction Read Restore", () => {
       "utf8",
     );
     let turn = 0;
-    const messages: Message[] = [{ role: "user", content: "read note.txt" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "read note.txt" },
+    ];
     const readVisibility = createReadVisibilityState();
-    let editRequestMessages: readonly Message[] = [];
-    let finalMessages: readonly Message[] = [];
+    let editRequestMessages: readonly ProviderMessage[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "compacted-windowed-read-before-edit",
       async *stream(options) {
@@ -525,7 +533,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -543,7 +551,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -585,7 +593,9 @@ describe("File Editing Post-Compaction Read Restore", () => {
         }),
       );
       const restoredReadMessage = editRequestMessages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.content.includes("target current value"),
       );
@@ -618,10 +628,12 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const currentContent = `${largePrefix} target current value\n`;
     await writeFile(join(workspace, "note.txt"), oldContent, "utf8");
     let turn = 0;
-    const messages: Message[] = [{ role: "user", content: "read note.txt" }];
+    const messages: SessionMessage[] = [
+      { role: "user", content: "read note.txt" },
+    ];
     const readVisibility = createReadVisibilityState();
-    let editRequestMessages: readonly Message[] = [];
-    let finalMessages: readonly Message[] = [];
+    let editRequestMessages: readonly ProviderMessage[] = [];
+    let finalMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "truncated-post-compaction-read-before-edit",
       async *stream(options) {
@@ -722,7 +734,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -736,7 +748,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
         runAgentTurn({
           workspace,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -763,7 +775,9 @@ describe("File Editing Post-Compaction Read Restore", () => {
         editRequestMessages.length,
       );
       const restoredReadMessage = editRequestMessages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.toolCallId.includes("post_compaction_read"),
       );
@@ -784,7 +798,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
       expect(restoredReadMessage?.content).not.toContain(
         "target current value",
       );
-      expect(restoredReadMessage?.evidenceShortened).toBeUndefined();
+      expect(restoredReadMessage).not.toHaveProperty("evidenceShortened");
       expect(
         messages.find(
           (message) =>
@@ -821,7 +835,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     await writeFile(gonePath, "gone old\n", "utf8");
     const keepTargetPath = await realpath(keepPath);
     const goneTargetPath = await realpath(gonePath);
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
@@ -892,7 +906,7 @@ describe("File Editing Post-Compaction Read Restore", () => {
     const fillerTargetPath = await realpath(fillerPath);
     const largeBTargetPath = await realpath(largeBPath);
     const largeATargetPath = await realpath(largeAPath);
-    const messages: Message[] = [];
+    const messages: SessionMessage[] = [];
     const readVisibility = createReadVisibilityState();
     const projectInstructionVisibility =
       createProjectInstructionVisibilityState(workspace);
@@ -919,7 +933,9 @@ describe("File Editing Post-Compaction Read Restore", () => {
       // Then
       expect(sequence).toBe(4);
       const restoredToolMessages = messages.filter(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<SessionMessage, { readonly role: "tool" }> =>
           message.role === "tool",
       );
       expect(restoredToolMessages).toHaveLength(4);

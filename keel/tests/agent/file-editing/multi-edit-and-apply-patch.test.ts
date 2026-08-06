@@ -8,7 +8,7 @@ import {
   fakeResponse,
   fakeToolResponse,
 } from "../../../src/llm/providers/fake.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   createWorkspace,
@@ -23,7 +23,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     const workspace = await createWorkspace();
     await writeFile(join(workspace, "note.txt"), "old one\nold two\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "replace-all-edit",
       async *stream(options) {
@@ -138,7 +138,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
     await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "multiple-edits",
       async *stream(options) {
@@ -276,7 +276,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
     await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "mixed-multiple-edits",
       async *stream(options) {
@@ -412,7 +412,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     await writeFile(join(workspace, "empty.txt"), "", "utf8");
     await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "empty-old-string-with-success",
       async *stream(options) {
@@ -884,7 +884,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     );
     const targetPath = join(workspace, "packages", "api", "src", "patched.ts");
     let turn = 0;
-    let secondTurnMessages: readonly Message[] = [];
+    let secondTurnMessages: readonly ProviderMessage[] = [];
     let fileExistedBeforeRetry = false;
     const provider: LLMProvider = {
       id: "scoped-agents-apply-patch-retry",
@@ -1014,7 +1014,7 @@ describe("File Editing Multi Edit And Apply Patch", () => {
     await writeFile(join(workspace, "first.txt"), "first old\n", "utf8");
     await writeFile(join(workspace, "second.txt"), "second old\n", "utf8");
     let turn = 0;
-    let finalTurnMessages: readonly Message[] = [];
+    let finalTurnMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "apply-patch-invalidates-all-files",
       async *stream(options) {

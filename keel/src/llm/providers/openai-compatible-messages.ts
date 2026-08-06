@@ -2,7 +2,7 @@ import {
   openAICompatibleTools,
   toolCallArguments,
 } from "../../tools/tool-call.ts";
-import type { Message, StreamOptions } from "../types.ts";
+import type { ProviderMessage, StreamOptions } from "../types.ts";
 
 export interface OpenAICompatibleMessageOptions {
   readonly assistantReasoningContent?: "omit" | "require";
@@ -38,7 +38,7 @@ export function createChatCompletionsBody(
 }
 
 function assistantReasoningContent(
-  message: Extract<Message, { readonly role: "assistant" }>,
+  message: Extract<ProviderMessage, { readonly role: "assistant" }>,
   options: OpenAICompatibleMessageOptions,
 ): string | undefined {
   if (
@@ -56,7 +56,7 @@ function assistantReasoningContent(
 }
 
 function toOpenAICompatibleMessage(
-  message: Message,
+  message: ProviderMessage,
   options: OpenAICompatibleMessageOptions,
 ): Record<string, unknown> {
   switch (message.role) {

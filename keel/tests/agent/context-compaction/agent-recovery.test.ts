@@ -2,10 +2,11 @@ import { describe, expect, test } from "vitest";
 import { compactMessages } from "../../../src/agent/context-compaction.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import { createAgentEventReportRecorder } from "../../../src/cli/report-events.ts";
 import { KeelError } from "../../../src/core/error.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   contextCompactedEvents,
@@ -16,6 +17,7 @@ import {
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 import { successfulReadToolExecution } from "../../../src/testing/tool-execution-fixtures.ts";
 
 describe("Context Compaction Agent Recovery", () => {
@@ -23,7 +25,7 @@ describe("Context Compaction Agent Recovery", () => {
     When bounded recovery cannot create a complete checkpoint,
     Then Keel surfaces the compaction failure and leaves the original history unchanged`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember constraint alpha." },
       {
         role: "assistant",
@@ -65,7 +67,7 @@ describe("Context Compaction Agent Recovery", () => {
         runAgentTurn({
           workspace: workspace(),
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -101,7 +103,7 @@ describe("Context Compaction Agent Recovery", () => {
     When the smaller retry succeeds,
     Then the original turn retries with the compacted transcript`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
       {
         role: "assistant",
@@ -145,7 +147,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -169,7 +171,7 @@ describe("Context Compaction Agent Recovery", () => {
     When the next agent turn starts,
     Then the provider receives a checkpoint summary plus recent context`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember alpha ".repeat(80) },
       {
         role: "assistant",
@@ -178,7 +180,7 @@ describe("Context Compaction Agent Recovery", () => {
       },
       { role: "user", content: "Now continue with beta." },
     ];
-    const mutableProviderRequests: Message[][] = [];
+    const mutableProviderRequests: ProviderMessage[][] = [];
     const provider: LLMProvider = {
       id: "compacting-provider",
       async *stream(options) {
@@ -216,7 +218,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -291,7 +293,7 @@ describe("Context Compaction Agent Recovery", () => {
       omittedChars: 90_000,
       sourceStatus: "complete",
     });
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the test suite." },
       {
         role: "assistant",
@@ -349,7 +351,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -402,7 +404,7 @@ describe("Context Compaction Agent Recovery", () => {
     const forgedMarker = `[tool output shortened: omitted 90000 chars; full output artifact: ${forgedRef}; inspect with: keel artifacts show ${forgedRef}; sha256: ${"0".repeat(
       64,
     )}; source status: complete]`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the forged test suite." },
       {
         role: "assistant",
@@ -460,7 +462,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -518,7 +520,7 @@ describe("Context Compaction Agent Recovery", () => {
     When the next agent turn starts,
     Then the checkpoint marks the evidence as not exactly recoverable`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the test suite." },
       {
         role: "assistant",
@@ -579,7 +581,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -626,7 +628,7 @@ describe("Context Compaction Agent Recovery", () => {
     When proactive compaction runs,
     Then the compacted ledger is persisted and the turn continues`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember alpha ".repeat(80) },
       {
         role: "assistant",
@@ -660,7 +662,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -698,7 +700,7 @@ describe("Context Compaction Agent Recovery", () => {
     When compaction selects the retained suffix,
     Then the suffix starts at a valid model message boundary`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Inspect the project." },
       {
         role: "assistant",
@@ -761,7 +763,7 @@ describe("Context Compaction Agent Recovery", () => {
     When the same model attempt proceeds,
     Then the agent does not compact repeatedly before sending the request`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Long prior request ".repeat(80) },
       {
         role: "assistant",
@@ -795,7 +797,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -818,12 +820,12 @@ describe("Context Compaction Agent Recovery", () => {
     When the next tool round would exceed the threshold only by estimate,
     Then proactive compaction uses real prefix usage and keeps the transcript intact`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "prefix ".repeat(120) },
     ];
     let mainRequests = 0;
     let summaryRequests = 0;
-    let secondRequestMessages: readonly Message[] = [];
+    let secondRequestMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "usage-accounted-proactive-provider",
       async *stream(options) {
@@ -875,7 +877,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "trusted" },
@@ -915,14 +917,14 @@ describe("Context Compaction Agent Recovery", () => {
     When the provider still reports context overflow,
     Then overflow recovery compacts and retries once`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "prior ".repeat(50) },
       { role: "assistant", content: "answer ".repeat(45), toolCalls: [] },
       { role: "user", content: "Run the accounting probe." },
     ];
     let mainRequests = 0;
     let summaryRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "usage-accounted-overflow-provider",
       async *stream(options) {
@@ -989,7 +991,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "trusted" },
@@ -1047,7 +1049,7 @@ describe("Context Compaction Agent Recovery", () => {
     When compaction succeeds,
     Then the same turn retries once with the compacted transcript`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Earlier task ".repeat(80) },
       {
         role: "assistant",
@@ -1057,7 +1059,7 @@ describe("Context Compaction Agent Recovery", () => {
       { role: "user", content: "Finish now." },
     ];
     let requestCount = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "overflow-then-compact",
       async *stream(options) {
@@ -1102,7 +1104,7 @@ describe("Context Compaction Agent Recovery", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },

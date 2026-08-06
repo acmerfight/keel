@@ -1,9 +1,10 @@
-import type { Message, ToolCall } from "../llm/types.ts";
+import type { ToolCall } from "../llm/types.ts";
 import {
   type ReadResourceFreshnessStatus,
   revalidateReadResource,
 } from "../tools/read-resource-observation.ts";
 import { isMcpToolInvocation } from "../tools/tool-call.ts";
+import type { SessionMessage } from "./session-message.ts";
 
 type ReadToolCall = Extract<ToolCall, { readonly tool: "read" }>;
 
@@ -15,7 +16,7 @@ export interface AssertionEvidenceResourceFreshness {
 }
 
 function readToolCallsById(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): ReadonlyMap<string, ReadToolCall> {
   const reads = new Map<string, ReadToolCall>();
   for (const message of messages) {
@@ -31,7 +32,7 @@ function readToolCallsById(
 
 export function assertionEvidenceResourceFreshness(input: {
   readonly workspace: string;
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
 }): readonly AssertionEvidenceResourceFreshness[] {
   const reads = readToolCallsById(input.messages);
   const freshness: AssertionEvidenceResourceFreshness[] = [];

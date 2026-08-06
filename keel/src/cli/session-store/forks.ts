@@ -1,4 +1,4 @@
-import type { Message } from "../../llm/types.ts";
+import type { SessionMessage } from "../../agent/session-message.ts";
 import { normalizeSessionPreview } from "./catalog.ts";
 import { sessionStoreError } from "./errors.ts";
 import type {
@@ -30,7 +30,7 @@ function rootSessionGraph(sessionId: string): SessionGraphRecord {
   };
 }
 
-function messageForkPreview(message: Message): string {
+function messageForkPreview(message: SessionMessage): string {
   return normalizeSessionPreview(message.content);
 }
 

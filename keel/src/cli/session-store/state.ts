@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type {
+  PersistedSessionMessage,
+  SessionMessage,
+} from "../../agent/session-message.ts";
 import { copySessionGoal, type SessionGoal } from "../../core/session-goal.ts";
 import {
   copySessionTaskProgress,
@@ -7,7 +11,7 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../../core/task-progress.ts";
-import type { Message, SessionMessage, ToolCall } from "../../llm/types.ts";
+import type { ToolCall } from "../../llm/types.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import type {
   SkillActivation,
@@ -72,7 +76,7 @@ function toolCallsEqual(left: ToolCall, right: ToolCall): boolean {
   );
 }
 
-function messagesEqual(left: Message, right: Message): boolean {
+function messagesEqual(left: SessionMessage, right: SessionMessage): boolean {
   switch (left.role) {
     case "user":
       return (
@@ -117,8 +121,8 @@ function messagesEqual(left: Message, right: Message): boolean {
 }
 
 function messageArraysEqual(
-  left: readonly Message[],
-  right: readonly Message[],
+  left: readonly SessionMessage[],
+  right: readonly SessionMessage[],
 ): boolean {
   if (left.length !== right.length) {
     return false;
@@ -130,8 +134,8 @@ function messageArraysEqual(
 }
 
 function hasMessagePrefix(
-  currentMessages: readonly Message[],
-  previousMessages: readonly Message[],
+  currentMessages: readonly SessionMessage[],
+  previousMessages: readonly SessionMessage[],
 ): boolean {
   if (currentMessages.length < previousMessages.length) {
     return false;
@@ -500,8 +504,8 @@ export function createSessionMessageId(): string {
   return `msg_${randomUUID()}`;
 }
 
-function storedMessagesForProviderMessages(options: {
-  readonly messages: readonly SessionMessage[];
+function storedMessagesForSessionMessages(options: {
+  readonly messages: readonly PersistedSessionMessage[];
   readonly previousStoredMessages: readonly StoredMessage[];
   readonly reservedMessageIds: ReadonlyMap<number, string>;
 }): readonly StoredMessage[] {
@@ -535,6 +539,6 @@ export {
   replayStateForSession,
   sessionRecordWithConsumedInputIds,
   sessionStateFromReplay,
-  storedMessagesForProviderMessages,
+  storedMessagesForSessionMessages,
   uniqueInputIds,
 };

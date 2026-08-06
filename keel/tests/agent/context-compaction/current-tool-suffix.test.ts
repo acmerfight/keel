@@ -1,14 +1,16 @@
 import { describe, expect, test } from "vitest";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import { KeelError } from "../../../src/core/error.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   freshSignal,
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 
 const CURRENT_TOOL_OUTPUT_MARKER =
   "[current tool output compacted after context overflow:";
@@ -23,7 +25,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       "current log line ".repeat(500),
       "CURRENT_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the current log." },
@@ -49,7 +51,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "current-tool-output-overflow-provider",
       async *stream(options) {
@@ -97,7 +99,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -144,7 +146,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       "unconsumed current log line ".repeat(700),
       "UNCONSUMED_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the baseline." },
       { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Review the older recent note." },
@@ -177,7 +179,7 @@ describe("Context Compaction Current Tool Suffix", () => {
     ];
     let mainRequests = 0;
     let summaryPrompt = "";
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "split-turn-unconsumed-tool-overflow-provider",
       async *stream(options) {
@@ -229,7 +231,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -293,7 +295,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       "queued steering log line ".repeat(700),
       "QUEUED_STEERING_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the baseline." },
       { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Read the queued steering log." },
@@ -323,7 +325,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "split-turn-multiple-steering-provider",
       async *stream(options) {
@@ -373,7 +375,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -424,7 +426,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       "second current log line ".repeat(500),
       "SECOND_CURRENT_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the baseline." },
       { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Read both current logs." },
@@ -460,7 +462,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "split-turn-multi-tool-round-provider",
       async *stream(options) {
@@ -520,7 +522,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -568,7 +570,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       "second sequential log line ".repeat(700),
       "SEQUENTIAL_SECOND_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the baseline." },
       { role: "assistant", content: "Baseline remembered.", toolCalls: [] },
       { role: "user", content: "Inspect both logs before answering." },
@@ -606,7 +608,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "split-turn-sequential-tool-round-provider",
       async *stream(options) {
@@ -641,7 +643,7 @@ describe("Context Compaction Current Tool Suffix", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },

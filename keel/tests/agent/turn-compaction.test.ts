@@ -5,9 +5,10 @@ import {
   sessionLedgerFromMessages,
   sessionLedgerMessages,
 } from "../../src/agent/session-ledger.ts";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { streamTurnWithOverflowRecovery } from "../../src/agent/turn-compaction.ts";
 import { KeelError } from "../../src/core/error.ts";
-import type { LLMProvider, Message } from "../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../src/llm/types.ts";
 import {
   collect,
   freshSignal,
@@ -19,7 +20,7 @@ describe("Turn Compaction", () => {
     When compaction stops with the provider error,
     Then the billed attempt is accounted and the original ledger remains unchanged`, async () => {
     // Given
-    const originalMessages: Message[] = [
+    const originalMessages: SessionMessage[] = [
       {
         role: "user",
         content: `Remember constraint alpha. ${"alpha ".repeat(400)}`,
@@ -38,7 +39,7 @@ describe("Turn Compaction", () => {
       { role: "assistant", content: "Decision beta recorded.", toolCalls: [] },
       { role: "user", content: "Continue.", origin: { type: "steer" } },
     ];
-    let ledger = sessionLedgerFromMessages(originalMessages);
+    const ledger = sessionLedgerFromMessages(originalMessages);
     const retryError = new KeelError(
       "provider_server_error",
       "Summary retry failed upstream",
@@ -99,10 +100,7 @@ describe("Turn Compaction", () => {
             signal: freshSignal(),
             toolExposure: { kind: "auto" },
             modelOperationPurpose: "agent_turn",
-            getLedger: () => ledger,
-            setLedger: (next) => {
-              ledger = next;
-            },
+            ledger,
           },
         ),
       ),
@@ -121,7 +119,7 @@ describe("Turn Compaction", () => {
     When the agent continues the turn,
     Then no compaction event is emitted and the original ledger remains provider-visible`, async () => {
     // Given
-    const originalMessages: Message[] = [
+    const originalMessages: SessionMessage[] = [
       {
         role: "user",
         content: `Remember constraint alpha. ${"alpha ".repeat(400)}`,
@@ -146,9 +144,9 @@ describe("Turn Compaction", () => {
       { role: "assistant", content: "Evidence gamma recorded.", toolCalls: [] },
       { role: "user", content: "Continue.", origin: { type: "steer" } },
     ];
-    let ledger = sessionLedgerFromMessages(originalMessages);
+    const ledger = sessionLedgerFromMessages(originalMessages);
     let summaryRequests = 0;
-    let finalRequestMessages: readonly Message[] = [];
+    let finalRequestMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "truncated-turn-compaction-provider",
       async *stream(options) {
@@ -200,10 +198,7 @@ describe("Turn Compaction", () => {
           signal: freshSignal(),
           toolExposure: { kind: "auto" },
           modelOperationPurpose: "agent_turn",
-          getLedger: () => ledger,
-          setLedger: (next) => {
-            ledger = next;
-          },
+          ledger,
         },
       ),
     );
@@ -231,7 +226,7 @@ describe("Turn Compaction", () => {
     When proactive compaction summarizes history,
     Then the compacted checkpoint does not invent a task progress section`, async () => {
     // Given
-    let ledger = sessionLedgerFromMessages([
+    const ledger = sessionLedgerFromMessages([
       {
         role: "user",
         content: `Investigate ${"alpha ".repeat(400)}`,
@@ -249,7 +244,7 @@ describe("Turn Compaction", () => {
       },
     ]);
     let summaryPrompt = "";
-    let finalRequestMessages: readonly Message[] = [];
+    let finalRequestMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "turn-compaction-provider",
       async *stream(options) {
@@ -292,10 +287,7 @@ describe("Turn Compaction", () => {
           signal: freshSignal(),
           toolExposure: { kind: "auto" },
           modelOperationPurpose: "agent_turn",
-          getLedger: () => ledger,
-          setLedger: (next) => {
-            ledger = next;
-          },
+          ledger,
         },
       ),
     );

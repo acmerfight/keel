@@ -14,6 +14,7 @@ import type { AgentEvent } from "../../../src/agent/events.ts";
 import { runAgentTurn } from "../../../src/agent/loop.ts";
 import { postCompactionReadToolCallId } from "../../../src/agent/post-compaction-read-id.ts";
 import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../../src/agent/stop-policy.ts";
 import type {
   ToolOutputArtifactSaveInput,
@@ -21,7 +22,7 @@ import type {
 } from "../../../src/agent/tool-output-artifacts.ts";
 import { printAgentEvents } from "../../../src/cli/output.ts";
 import { KeelError } from "../../../src/core/error.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   collect,
   contextCompactedEvents,
@@ -32,6 +33,7 @@ import {
   workspace,
   ZERO_USAGE,
 } from "../../../src/testing/context-compaction-fixtures.ts";
+import { sessionLedgerMirroringMessages } from "../../../src/testing/session-ledger-fixtures.ts";
 
 const PREFLIGHT_CURRENT_TOOL_OUTPUT_MARKER =
   "[current tool output compacted before provider request:";
@@ -118,7 +120,7 @@ function storingArtifactStore(
 }
 
 function capturedToolOutput(
-  messages: readonly Message[],
+  messages: readonly (ProviderMessage | SessionMessage)[],
   toolCallId: string,
 ): string {
   return (
@@ -147,7 +149,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         inspectCommand: "keel artifacts show tool-output:prior/evidence",
       },
     ];
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: "Read the large log and continue.",
@@ -172,7 +174,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ];
     let mainRequests = 0;
     let summaryRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-current-output-provider",
       async *stream(options) {
@@ -203,7 +205,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -221,6 +223,10 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     expect(mainRequests).toBe(1);
     expect(summaryRequests).toBe(0);
     expect(acceptedMessages[0]).toEqual({
+      role: "user",
+      content: "Read the large log and continue.",
+    });
+    expect(messages[0]).toEqual({
       role: "user",
       content: "Read the large log and continue.",
       contextCompaction: { evidence },
@@ -266,7 +272,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "low window output row ".repeat(600),
       "LOW_WINDOW_OUTPUT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the low-window output and continue." },
       {
         role: "assistant",
@@ -287,7 +293,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ];
     let mainRequests = 0;
     let summaryRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-current-output-over-local-budget-provider",
       async *stream(options) {
@@ -311,7 +317,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -357,7 +363,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "ACCOUNTED_LOG_END",
     ].join("\n");
     await writeFile(join(workspaceDir, "accounted.log"), currentToolOutput);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: `Read accounted.log and continue. ${"background ".repeat(
@@ -366,7 +372,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       },
     ];
     let providerRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-accounting-provider",
       async *stream(options) {
@@ -416,7 +422,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         runAgentTurn({
           workspace: workspaceDir,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -465,7 +471,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ].join("\n");
     expect(firstOutput.length).toBeLessThan(1_000);
     expect(secondOutput.length).toBeLessThan(1_000);
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read both reports and continue." },
       {
         role: "assistant",
@@ -495,7 +501,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       },
     ];
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "aggregate-current-output-provider",
       async *stream(options) {
@@ -527,7 +533,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -589,7 +595,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "under budget current output ".repeat(80),
       "UNDER_BUDGET_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the note and continue." },
       {
         role: "assistant",
@@ -609,7 +615,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       },
     ];
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "under-budget-current-output-provider",
       async *stream(options) {
@@ -625,7 +631,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -656,7 +662,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "current report row ".repeat(120),
       "CURRENT_REPORT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: `Background context ${"older background detail ".repeat(700)}`,
@@ -686,7 +692,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ];
     let summaryRequests = 0;
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "historical-compaction-sufficient-provider",
       async *stream(options) {
@@ -719,7 +725,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -763,12 +769,12 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     await writeFile(join(workspaceDir, "old.txt"), oldOutput, "utf8");
     await writeFile(join(workspaceDir, "new.txt"), newOutput, "utf8");
     const readVisibility = createReadVisibilityState();
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read old.txt and continue." },
     ];
     let mainRequests = 0;
     let summaryRequests = 0;
-    let acceptedNewReadMessages: readonly Message[] = [];
+    let acceptedNewReadMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-before-restore-provider",
       async *stream(options) {
@@ -826,7 +832,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         runAgentTurn({
           workspace: workspaceDir,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -844,7 +850,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         runAgentTurn({
           workspace: workspaceDir,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -903,7 +909,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "current dominates row ".repeat(1_200),
       "CURRENT_DOMINATES_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: `Older history ${"older detail ".repeat(900)}`,
@@ -933,7 +939,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ];
     let summaryRequests = 0;
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-current-output-no-second-summary-provider",
       async *stream(options) {
@@ -961,7 +967,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -992,7 +998,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     // Given
     const alreadyCompactedOutput =
       "preview\n[current tool output compacted before provider request: approximately omitted 6000 chars; rerun the tool with narrower parameters if needed]";
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Continue from the compacted output." },
       {
         role: "assistant",
@@ -1012,7 +1018,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       },
     ];
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "already-preflight-compacted-provider",
       async *stream(options) {
@@ -1028,7 +1034,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1057,14 +1063,14 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     const oversizedInstruction = `Continue from this large instruction. ${"detail ".repeat(
       600,
     )}`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: oversizedInstruction,
       },
     ];
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "no-current-output-preflight-provider",
       async *stream(options) {
@@ -1084,7 +1090,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1119,7 +1125,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "restored read row ".repeat(600),
       "RESTORED_READ_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Continue from the restored read." },
       {
         role: "assistant",
@@ -1139,7 +1145,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       },
     ];
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-restored-read-provider",
       async *stream(options) {
@@ -1159,7 +1165,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1190,7 +1196,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "fallback row ".repeat(220),
       "PREFLIGHT_FALLBACK_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the fallback log and continue." },
       {
         role: "assistant",
@@ -1210,7 +1216,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       },
     ];
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-overflow-fallback-provider",
       async *stream(options) {
@@ -1251,7 +1257,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1292,14 +1298,14 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       currentToolOutput,
       "utf8",
     );
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read artifact-fallback.log and continue." },
     ];
     const saved: SavedToolOutputArtifact[] = [];
     const artifactRef =
       "tool-output:run-00000000-0000-4000-8000-000000000000/00000000-0000-4000-8000-000000000001";
     let mainRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "artifact-preflight-overflow-fallback-provider",
       async *stream(options) {
@@ -1372,7 +1378,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
         runAgentTurn({
           workspace: workspacePath,
           provider,
-          messages,
+          ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
           bash: { kind: "disabled" },
@@ -1420,7 +1426,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "truncated preflight row ".repeat(500),
       "TRUNCATED_PREFLIGHT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the noisy command and continue." },
       {
         role: "assistant",
@@ -1442,7 +1448,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ];
     const saved: SavedToolOutputArtifact[] = [];
     let mainRequests = 0;
-    let acceptedMessages: readonly Message[] = [];
+    let acceptedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "preflight-current-output-artifact-provider",
       async *stream(options) {
@@ -1468,7 +1474,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1530,7 +1536,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "cli preflight output row ".repeat(500),
       "CLI_PREFLIGHT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the CLI log and continue." },
       {
         role: "assistant",
@@ -1575,7 +1581,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1620,7 +1626,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "current log row ".repeat(500),
       "CURRENT_LOG_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Remember the setup." },
       { role: "assistant", content: "Setup remembered.", toolCalls: [] },
       { role: "user", content: "Read the stale log." },
@@ -1665,7 +1671,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     ];
     let mainRequests = 0;
     let summaryRequests = 0;
-    let retriedMessages: readonly Message[] = [];
+    let retriedMessages: readonly ProviderMessage[] = [];
     const provider: LLMProvider = {
       id: "mixed-tool-output-cli-provider",
       async *stream(options) {
@@ -1722,7 +1728,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       runAgentTurn({
         workspace: workspace(),
         provider,
-        messages,
+        ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
@@ -1762,7 +1768,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "default reason output row ".repeat(200),
       "DEFAULT_REASON_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the log." },
       {
         role: "assistant",
@@ -1812,7 +1818,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     // Given
     const unsafeOmittedChars = "9".repeat(40);
     const currentToolOutput = `preview\n[current tool output compacted before provider request: approximately omitted ${unsafeOmittedChars} chars; rerun the tool with narrower parameters if needed]`;
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read the log." },
       {
         role: "assistant",
@@ -1859,7 +1865,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "default artifact output row ".repeat(200),
       "DEFAULT_ARTIFACT_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the command." },
       {
         role: "assistant",
@@ -1909,7 +1915,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     Then the original current output is retained without saving an unreferenced artifact`, async () => {
     // Given
     const currentToolOutput = "small output";
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the small command." },
       {
         role: "assistant",
@@ -1956,7 +1962,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     Then the original output is retained without reporting an artifact side effect`, async () => {
     // Given
     const currentToolOutput = "small output";
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Run the small command." },
       {
         role: "assistant",
@@ -2014,7 +2020,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
       "direct under-budget output row ".repeat(200),
       "DIRECT_UNDER_BUDGET_END",
     ].join("\n");
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       { role: "user", content: "Read direct output." },
       {
         role: "assistant",
@@ -2072,7 +2078,7 @@ describe("Context Compaction Preflight Current Tool Output", () => {
     When compactMessages summarizes the older history,
     Then the current-output pass is a no-op after the summary`, async () => {
     // Given
-    const messages: Message[] = [
+    const messages: SessionMessage[] = [
       {
         role: "user",
         content: `Older history ${"detail ".repeat(500)}`,

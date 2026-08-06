@@ -1,4 +1,4 @@
-import type { Message } from "../../llm/types.ts";
+import type { SessionMessage } from "../session-message.ts";
 import type { CompactionEvidence } from "./evidence.ts";
 import {
   parseCompactionEvidenceSection,
@@ -82,7 +82,7 @@ export function renderConversationCheckpoint(
 }
 
 function parseConversationCheckpointMessage(
-  message: Extract<Message, { readonly role: "user" }>,
+  message: Extract<SessionMessage, { readonly role: "user" }>,
 ): ConversationCheckpoint | null {
   if (message.origin?.type !== "compaction_checkpoint") {
     return null;
@@ -143,7 +143,7 @@ function serializeCheckpointForSummaryPrompt(
 }
 
 export function serializeCheckpointMessageForSummaryPrompt(
-  message: Extract<Message, { readonly role: "user" }>,
+  message: Extract<SessionMessage, { readonly role: "user" }>,
 ): string | null {
   const checkpoint = parseConversationCheckpointMessage(message);
   return checkpoint === null
@@ -152,13 +152,13 @@ export function serializeCheckpointMessageForSummaryPrompt(
 }
 
 export function conversationCheckpointSummaryFromMessage(
-  message: Extract<Message, { readonly role: "user" }>,
+  message: Extract<SessionMessage, { readonly role: "user" }>,
 ): string | null {
   return parseConversationCheckpointMessage(message)?.summary ?? null;
 }
 
 export function checkpointEvidenceFromMessage(
-  message: Extract<Message, { readonly role: "user" }>,
+  message: Extract<SessionMessage, { readonly role: "user" }>,
 ): readonly CompactionEvidence[] {
   return parseConversationCheckpointMessage(message)?.evidence ?? [];
 }

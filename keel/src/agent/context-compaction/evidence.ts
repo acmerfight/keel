@@ -1,9 +1,9 @@
-import type {
-  Message,
-  ToolCall,
-  UserMessageContextCompactionEvidence,
-} from "../../llm/types.ts";
+import type { ToolCall } from "../../llm/types.ts";
 import { isMcpToolInvocation, toolCallLabel } from "../../tools/registry.ts";
+import type {
+  SessionMessage,
+  UserMessageContextCompactionEvidence,
+} from "../session-message.ts";
 import {
   generatedToolOutputArtifactMarker,
   sourceStatusFromToolOutputText,
@@ -28,7 +28,7 @@ function oneLineField(text: string, maxChars: number): string {
 }
 
 function toolCallsById(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
 ): ReadonlyMap<string, ToolCall> {
   const toolCalls = new Map<string, ToolCall>();
   for (const message of messages) {
@@ -116,7 +116,7 @@ function evidenceLabel(
 }
 
 function sourceStatusForEvidence(
-  message: Extract<Message, { readonly role: "tool" }>,
+  message: Extract<SessionMessage, { readonly role: "tool" }>,
 ): "complete" | "source-truncated" {
   if (message.sourceTruncated !== undefined) {
     return message.sourceTruncated ? "source-truncated" : "complete";
@@ -136,7 +136,7 @@ function artifactStorageFailureReason(text: string): string | null {
 }
 
 async function verifiedArtifactEvidence(options: {
-  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly message: Extract<SessionMessage, { readonly role: "tool" }>;
   readonly toolCall: ToolCall | undefined;
   readonly store: ToolOutputArtifactStore | undefined;
 }): Promise<CompactionEvidence | null> {
@@ -179,7 +179,7 @@ async function verifiedArtifactEvidence(options: {
 }
 
 async function toolMessageEvidence(options: {
-  readonly message: Extract<Message, { readonly role: "tool" }>;
+  readonly message: Extract<SessionMessage, { readonly role: "tool" }>;
   readonly toolCall: ToolCall | undefined;
   readonly toolOutputMaxChars: number;
   readonly store: ToolOutputArtifactStore | undefined;
@@ -228,7 +228,7 @@ async function toolMessageEvidence(options: {
 }
 
 export function collectToolCompactionEvidence(
-  messages: readonly Message[],
+  messages: readonly SessionMessage[],
   toolOutputMaxChars: number,
   store?: ToolOutputArtifactStore,
 ): Promise<readonly CompactionEvidence[]> {

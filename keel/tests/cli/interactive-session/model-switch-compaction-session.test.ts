@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
-import type { LLMProvider, Message } from "../../../src/llm/types.ts";
+import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   EXPENSIVE_USAGE,
@@ -25,7 +26,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     When Keel tries to compact before switching models,
     Then it rolls back and rejects the switch without calling the provider`, async () => {
     // Given
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
       { role: "assistant", content: "old provider reply", toolCalls: [] },
     ];
@@ -222,7 +223,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let oldProviderSummaryRequests = 0;
     let oldProviderSummaryMaxOutputTokens: number | undefined;
     let targetProviderTurns = 0;
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
       { role: "assistant", content: "old provider 1", toolCalls: [] },
     ];
@@ -353,10 +354,10 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let targetProviderTurns = 0;
     const persisted: Array<{
       readonly reason: "turn" | "compaction";
-      readonly messages: readonly Message[];
+      readonly messages: readonly SessionMessage[];
       readonly consumedInputIds: readonly string[];
     }> = [];
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
       { role: "assistant", content: "old provider 1", toolCalls: [] },
     ];
@@ -501,7 +502,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let stdout = "";
     let stderr = "";
     let oldProviderSummaryRequests = 0;
-    const initialMessages: readonly Message[] = [
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
       { role: "assistant", content: "old provider 1", toolCalls: [] },
     ];
@@ -645,7 +646,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let stderr = "";
     const persisted: Array<{
       readonly reason: "turn" | "compaction";
-      readonly messages: readonly Message[];
+      readonly messages: readonly SessionMessage[];
       readonly consumedInputIds: readonly string[];
     }> = [];
     const switches: Array<{
@@ -656,8 +657,8 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       readonly to: { readonly providerId: string; readonly model: string };
       readonly consumedInputIds: readonly string[];
     }> = [];
-    const targetRequestContexts: Message[][] = [];
-    const initialMessages: readonly Message[] = [
+    const targetRequestContexts: ProviderMessage[][] = [];
+    const initialMessages: readonly SessionMessage[] = [
       { role: "user", content: "large history ".repeat(3_000).trim() },
       { role: "assistant", content: "old provider 1", toolCalls: [] },
     ];
@@ -809,7 +810,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let oldRequestTurn = 0;
     let oldProviderSummaryRequests = 0;
     let targetRequestTurn = 0;
-    let editRequestMessages: readonly Message[] = [];
+    let editRequestMessages: readonly ProviderMessage[] = [];
     const oldProvider: LLMProvider = {
       id: "model-switch-read-restore-old",
       async *stream(options) {
@@ -948,7 +949,9 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
         "hello fresh world\n",
       );
       const restoredReadMessage = editRequestMessages.find(
-        (message): message is Extract<Message, { readonly role: "tool" }> =>
+        (
+          message,
+        ): message is Extract<ProviderMessage, { readonly role: "tool" }> =>
           message.role === "tool" &&
           message.content.includes("hello current world"),
       );

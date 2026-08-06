@@ -1,3 +1,9 @@
+import type {
+  PersistedSessionMessage,
+  SessionMessage,
+  UserMessageContextCompactionMetadata,
+  UserMessageOrigin,
+} from "../agent/session-message.ts";
 import { copyReadResourceObservation } from "../core/resource-observation.ts";
 import {
   redactSecretLikeText,
@@ -5,10 +11,7 @@ import {
 } from "../core/secret-text.ts";
 import type {
   AssistantProviderMetadata,
-  Message,
-  SessionMessage,
-  UserMessageContextCompactionMetadata,
-  UserMessageOrigin,
+  ProviderMessage,
 } from "../llm/types.ts";
 import {
   isMcpToolInvocation,
@@ -132,10 +135,14 @@ function copyUserMessageOrigin(origin: UserMessageOrigin): UserMessageOrigin {
 }
 
 export function redactMessageForPersistence(
+  message: PersistedSessionMessage,
+): PersistedSessionMessage;
+export function redactMessageForPersistence(
   message: SessionMessage,
 ): SessionMessage;
-export function redactMessageForPersistence(message: Message): Message;
-export function redactMessageForPersistence(message: Message): Message {
+export function redactMessageForPersistence(
+  message: SessionMessage,
+): SessionMessage {
   switch (message.role) {
     case "user":
       return {
@@ -184,6 +191,37 @@ export function redactMessageForPersistence(message: Message): Message {
               ),
             }
           : {}),
+      };
+  }
+}
+
+export function redactProviderMessageForPersistence(
+  message: ProviderMessage,
+): ProviderMessage {
+  switch (message.role) {
+    case "user":
+      return {
+        role: "user",
+        content: redactTextForPersistence(message.content),
+      };
+    case "assistant":
+      return {
+        role: "assistant",
+        content: redactTextForPersistence(message.content),
+        toolCalls: message.toolCalls.map(redactToolCallForPersistence),
+        ...(message.providerMetadata === undefined
+          ? {}
+          : {
+              providerMetadata: redactAssistantProviderMetadataForPersistence(
+                message.providerMetadata,
+              ),
+            }),
+      };
+    case "tool":
+      return {
+        role: "tool",
+        toolCallId: message.toolCallId,
+        content: redactTextForPersistence(message.content),
       };
   }
 }
