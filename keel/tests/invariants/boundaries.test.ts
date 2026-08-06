@@ -577,6 +577,71 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
+  test(`Given interactive Goal commands have a dedicated lifecycle owner,
+    When the session orchestrator and owner dependencies are inspected,
+    Then the orchestrator delegates through a one-way narrow boundary`, () => {
+    const orchestrator = "src/cli/interactive-session.ts";
+    const owner = "src/cli/interactive-session/goal-command.ts";
+    const orchestratorSource = readFileSync(orchestrator, "utf8");
+    const ownerSource = readFileSync(owner, "utf8");
+
+    expect(importSpecifiers(orchestrator, orchestratorSource)).toContain(
+      "./interactive-session/goal-command.ts",
+    );
+    const forbiddenRoots = [
+      "src/agent/",
+      "src/cli/provider-",
+      "src/llm/",
+      "src/mcp/",
+      "src/permissions/",
+      "src/skills/",
+      "src/tools/",
+      "src/cli/tui/",
+    ];
+    const forbiddenFiles = new Set([
+      orchestrator,
+      "src/cli/interactive-session/commands.ts",
+      "src/core/model-metadata-drift.ts",
+      "src/core/model-metadata.ts",
+      "src/core/provider-id.ts",
+    ]);
+    const pending = [owner];
+    const visited = new Set<string>();
+    const violations: string[] = [];
+    while (pending.length > 0) {
+      const file = pending.pop();
+      if (file === undefined || visited.has(file)) {
+        continue;
+      }
+      visited.add(file);
+      const source = file === owner ? ownerSource : readFileSync(file, "utf8");
+      for (const specifier of importSpecifiers(file, source)) {
+        if (
+          MCP_SDK_IMPORT.test(specifier) ||
+          specifier === "@earendil-works/pi-tui"
+        ) {
+          violations.push(`${file} imports ${specifier}`);
+          continue;
+        }
+        const resolved = resolvedRelativeSpecifier(file, specifier);
+        if (resolved === null || !resolved.endsWith(".ts")) {
+          continue;
+        }
+        if (
+          forbiddenFiles.has(resolved) ||
+          forbiddenRoots.some((root) => resolved.startsWith(root)) ||
+          /(?:^|\/)[^/]*memory[^/]*\.ts$/u.test(resolved)
+        ) {
+          violations.push(`${file} imports ${specifier}`);
+          continue;
+        }
+        pending.push(resolved);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   test(`Given tool execution has domain-owned internals behind a public facade,
     When execution dependencies are inspected,
     Then consumers enter through the facade and internal ownership stays one-way`, () => {

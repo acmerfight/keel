@@ -19,6 +19,10 @@ import {
 import { sanitizeStatusLineText } from "../output.ts";
 import { redactTextForPersistence } from "../persistence-redaction.ts";
 import type { ProviderSelection } from "../provider-config.ts";
+import type {
+  InteractiveGoalCommand,
+  InteractiveGoalCommandOutput,
+} from "./goal-command.ts";
 
 interface HelpCommand {
   readonly kind: "help";
@@ -77,56 +81,6 @@ interface TitleCommand {
   readonly title?: string;
 }
 
-type GoalCommand =
-  | {
-      readonly kind: "goal";
-      readonly action:
-        | "show"
-        | "show_budget"
-        | "pause"
-        | "resume"
-        | "complete"
-        | "clear"
-        | "clear_budget";
-    }
-  | {
-      readonly kind: "goal";
-      readonly action: "set";
-      readonly objective: string;
-    }
-  | {
-      readonly kind: "goal";
-      readonly action: "launch";
-      readonly objective: string;
-      readonly budget: SessionGoalBudget;
-      readonly criterion:
-        | {
-            readonly kind: "command";
-            readonly command: string;
-            readonly verificationTimeoutMs?: number;
-          }
-        | {
-            readonly kind: "assertion";
-            readonly assertion: string;
-          };
-    }
-  | {
-      readonly kind: "goal";
-      readonly action: "verify";
-      readonly command: string;
-      readonly verificationTimeoutMs?: number;
-    }
-  | {
-      readonly kind: "goal";
-      readonly action: "criterion";
-      readonly criterion: string;
-    }
-  | {
-      readonly kind: "goal";
-      readonly action: "budget";
-      readonly budget: SessionGoalBudget;
-    };
-
 interface TasksCommand {
   readonly kind: "tasks";
 }
@@ -171,7 +125,7 @@ export type InteractiveCommand =
   | StatusCommand
   | SessionsCommand
   | TitleCommand
-  | GoalCommand
+  | InteractiveGoalCommand
   | TasksCommand
   | DiffCommand
   | ApprovalsCommand
@@ -462,7 +416,7 @@ function parseApprovalsCommandArgs(
 
 function parseGoalCommandArgs(
   rawArgs: string | undefined,
-): GoalCommand | InvalidInteractiveCommand {
+): InteractiveGoalCommand | InvalidInteractiveCommand {
   const trimmedArgs = rawArgs?.trim() ?? "";
   if (trimmedArgs === "" || trimmedArgs === "status") {
     return { kind: "goal", action: "show" };
@@ -532,7 +486,7 @@ function parseGoalCommandArgs(
 function parseGoalVerifyArgs(
   rawArgs: string,
 ):
-  | Extract<GoalCommand, { readonly action: "verify" }>
+  | Extract<InteractiveGoalCommand, { readonly action: "verify" }>
   | InvalidInteractiveCommand {
   const trimmedArgs = rawArgs.trim();
   if (!trimmedArgs.startsWith("--timeout")) {
@@ -599,7 +553,7 @@ function parseGoalBudgetValues(
 
 function parseGoalBudgetArgs(
   rawArgs: string,
-): GoalCommand | InvalidInteractiveCommand {
+): InteractiveGoalCommand | InvalidInteractiveCommand {
   const parsed = parseGoalBudgetValues(rawArgs);
   return parsed.ok
     ? { kind: "goal", action: "budget", budget: parsed.value }
@@ -678,7 +632,7 @@ function tokenizeAtomicGoalArgs(
 
 function parseAtomicGoalArgs(
   trimmedArgs: string,
-): GoalCommand | InvalidInteractiveCommand {
+): InteractiveGoalCommand | InvalidInteractiveCommand {
   const tokenized = tokenizeAtomicGoalArgs(trimmedArgs);
   if (!tokenized.ok) {
     return { kind: "invalid", message: tokenized.message };
@@ -1085,9 +1039,7 @@ export function formatInteractiveGoal(goal: SessionGoal | undefined): string {
   ].join("\n");
 }
 
-export function formatInteractiveGoalBudget(
-  goal: SessionGoal | undefined,
-): string {
+function formatInteractiveGoalBudget(goal: SessionGoal | undefined): string {
   if (goal === undefined) {
     return formatInteractiveGoal(goal);
   }
@@ -1099,31 +1051,31 @@ export function formatInteractiveGoalBudget(
   )}\n`;
 }
 
-export function formatInteractiveGoalSet(goal: SessionGoal): string {
+function formatInteractiveGoalSet(goal: SessionGoal): string {
   return `Goal set: ${formatInteractiveGoalText(goal.status)}\n`;
 }
 
-export function formatInteractiveGoalCompleted(goal: SessionGoal): string {
+function formatInteractiveGoalCompleted(goal: SessionGoal): string {
   return `Goal completed: ${formatInteractiveGoalText(goal.objective)}\n`;
 }
 
-export function formatInteractiveGoalPaused(goal: SessionGoal): string {
+function formatInteractiveGoalPaused(goal: SessionGoal): string {
   return `Goal paused: ${formatInteractiveGoalText(goal.objective)}\n`;
 }
 
-export function formatInteractiveGoalResumed(goal: SessionGoal): string {
+function formatInteractiveGoalResumed(goal: SessionGoal): string {
   return `Goal resumed: ${formatInteractiveGoalText(goal.objective)}\n`;
 }
 
-export function formatInteractiveGoalBudgetUpdated(goal: SessionGoal): string {
+function formatInteractiveGoalBudgetUpdated(goal: SessionGoal): string {
   return `Goal budget updated.\n${formatInteractiveGoalBudget(goal)}`;
 }
 
-export function formatInteractiveGoalBudgetCleared(goal: SessionGoal): string {
+function formatInteractiveGoalBudgetCleared(goal: SessionGoal): string {
   return `Goal budget cleared.\n${formatInteractiveGoalBudget(goal)}`;
 }
 
-export function formatInteractiveGoalVerificationSet(
+function formatInteractiveGoalVerificationSet(
   goal: SessionGoal & {
     readonly completion: Extract<
       NonNullable<SessionGoal["completion"]>,
@@ -1145,7 +1097,7 @@ export function formatInteractiveGoalVerificationSet(
   return `${setMessage}${timeoutMessage}Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n`;
 }
 
-export function formatInteractiveGoalCriterionSet(
+function formatInteractiveGoalCriterionSet(
   goal: SessionGoal & {
     readonly completion: Extract<
       NonNullable<SessionGoal["completion"]>,
@@ -1156,10 +1108,90 @@ export function formatInteractiveGoalCriterionSet(
   return `Goal assertion criterion set: ${formatInteractiveGoalText(goal.completion.assertion)}\n`;
 }
 
-export function formatInteractiveGoalCleared(): string {
+function formatInteractiveGoalCleared(): string {
   return "Goal cleared.\n";
 }
 
-export function formatGoalRequiresSavedSession(): string {
+function formatGoalRequiresSavedSession(): string {
   return "Error: /goal requires a saved session. Start without --ephemeral, or use --session or --resume.\n";
+}
+
+export function formatInteractiveGoalCommandOutput(
+  output: InteractiveGoalCommandOutput,
+  options: { readonly bashToolVisible: boolean },
+): { readonly stream: "stderr" | "stdout"; readonly text: string } {
+  switch (output.kind) {
+    case "show":
+      return { stream: "stdout", text: formatInteractiveGoal(output.goal) };
+    case "show_budget":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalBudget(output.goal),
+      };
+    case "set":
+      return { stream: "stdout", text: formatInteractiveGoalSet(output.goal) };
+    case "paused":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalPaused(output.goal),
+      };
+    case "resumed":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalResumed(output.goal),
+      };
+    case "budget_updated":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalBudgetUpdated(output.goal),
+      };
+    case "budget_cleared":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalBudgetCleared(output.goal),
+      };
+    case "completed":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalCompleted(output.goal),
+      };
+    case "verification_set":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalVerificationSet(output.goal, options),
+      };
+    case "criterion_set":
+      return {
+        stream: "stdout",
+        text: formatInteractiveGoalCriterionSet(output.goal),
+      };
+    case "cleared":
+      return { stream: "stdout", text: formatInteractiveGoalCleared() };
+    case "requires_saved_session":
+      return { stream: "stderr", text: formatGoalRequiresSavedSession() };
+    case "no_goal":
+      return { stream: "stderr", text: "Error: no session goal is set.\n" };
+    case "pause_requires_active":
+      return {
+        stream: "stderr",
+        text: "Error: only active session goals can be paused.\n",
+      };
+    case "resume_rejected":
+      return { stream: "stderr", text: `${output.message}\n` };
+    case "completed_goal_budget":
+      return {
+        stream: "stderr",
+        text: "Error: completed session goals cannot change budgets. Set a new goal first.\n",
+      };
+    case "inactive_goal_criterion":
+      return {
+        stream: "stderr",
+        text: "Error: only active session goals can change the completion criterion. Resume the goal or set a new goal first.\n",
+      };
+    case "persistence_failed":
+      return {
+        stream: "stderr",
+        text: formatInteractiveCommandFailure(output.error),
+      };
+  }
 }
