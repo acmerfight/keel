@@ -21,19 +21,21 @@ sample and cannot justify investing in multi-child concurrency.
 
 | Field | Value |
 | --- | --- |
-| Experiment | `subagent-slice-1-5-v4` |
-| Freeze commit | `f6f069d663d9b1142a0d0c449ce4617dff4d3033` |
+| Experiment | `subagent-slice-1-5-v5` |
+| Freeze commit | `f48b512df2861087e58cb2b68436ccff9bbc46e7` |
 | Provider / model | DeepSeek / `deepseek-v4-flash` |
 | Window | one uninterrupted run on 2026-08-09 |
 | Trials | 3 paired trials for each of 6 tasks; 36 arms total |
-| Result JSONL | [`artifacts/v4/results.jsonl`](artifacts/v4/results.jsonl) |
-| Result SHA-256 | `a09d814e1e382116e0edbda679ddf9c489ccd8c4695889212a5bce3308a596b1` |
-| Provider-visible transcripts | [`artifacts/v4/transcripts/`](artifacts/v4/transcripts/) |
-| Per-file checksums | [`artifacts/v4/MANIFEST.sha256`](artifacts/v4/MANIFEST.sha256) |
+| Result JSONL | [`artifacts/v5/results.jsonl`](artifacts/v5/results.jsonl) |
+| Result SHA-256 | `5f3c6922596cecbafe669a3cbad9494688a0171399c56efca5cb814a2bafdd10` |
+| Provider-visible transcripts | [`artifacts/v5/transcripts/`](artifacts/v5/transcripts/) |
+| Per-file checksums | [`artifacts/v5/MANIFEST.sha256`](artifacts/v5/MANIFEST.sha256) |
 
-All 36 harness arms completed, all 36 semantic task verifiers passed, every
-report stop reason was `completed`, and cost overshoot was zero. The full suite
-gate was 12/18 because all six eligible treatments failed selection.
+All 36 harness arms completed and 35 semantic task verifiers passed. One
+eligible treatment stopped at budget admission before writing its artifact;
+its report truthfully records `cost_budget`, `verify_failed`, and 0 child runs.
+Cost overshoot was zero. The full suite gate remained 12/18 because all six
+eligible treatments failed selection.
 
 ## Selection evidence
 
@@ -57,14 +59,14 @@ ordinary eligible prompts select delegation.
 
 | Condition | Harness | Task verified | Cost | Input tokens | Output tokens | Wall time | Unspent root budget |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Control | 18/18 | 18/18 | $0.038314 | 1,090,295 | 26,841 | 231.423 s | $0.306686 |
-| Treatment | 18/18 | 18/18 | $0.040597 | 1,055,783 | 29,858 | 257.899 s | $0.304403 |
+| Control | 18/18 | 18/18 | $0.037798 | 1,030,260 | 27,982 | 263.137 s | $0.307202 |
+| Treatment | 18/18 | 17/18 | $0.040977 | 1,041,944 | 32,740 | 298.136 s | $0.304023 |
 
-Treatment used $0.002283 more, 34,512 fewer input tokens, 3,017 more output
-tokens, and 26.476 seconds more in aggregate. These totals include the three
+Treatment used $0.003179 more, 11,684 more input tokens, 4,758 more output
+tokens, and 34.999 seconds more in aggregate. These totals include the three
 serial child runs in the duplicate inducement and normal provider variation;
 they are not interpreted as evidence for or against parallel speedup. Every
-arm retained at least $0.009142 of root budget.
+arm retained at least $0.009124 of root budget.
 
 ## Reliability evidence
 
@@ -76,8 +78,9 @@ The deterministic Slice 1 reliability suites passed 30/30 tests:
 They cover provider failure classification, authority enforcement, child and
 root budget admission, same-call replay/accounting, false completion,
 cancellation settlement, and a real CLI-process Ctrl-C path. The scored cloud
-window additionally observed 36/36 completed harnesses, zero cost overshoot,
-zero missing reports, and zero unavailable selection observations.
+window additionally observed 36/36 completed harnesses, 35 completed agent
+runs, one safe budget-admission stop, zero cost overshoot, zero missing
+reports, and zero unavailable selection observations.
 
 ## Superseded experiment versions
 
@@ -93,12 +96,16 @@ No inspected output was overwritten or selectively rerun.
   user-facing question that its workspace-only verifier could not observe.
   JSONL SHA-256:
   `ebc6bb3dd810a79256d52ad0a4c40e2f83d79a59cfb0b0c7b9a7d9d597187a88`.
+- `v4`, freeze `f6f069d`: excluded because the user-feedback prompt still
+  required file inspection and prohibited proposing a mode, neither of which
+  its workspace-only verifier could observe. JSONL SHA-256:
+  `a09d814e1e382116e0edbda679ddf9c489ccd8c4695889212a5bce3308a596b1`.
 
-Version 4 narrowed the unresolved-decision negative control to facts its
-deterministic workspace verifier can observe, then reran all 36 arms. The
-stable 0/6 eligible selection observation across all four complete windows
-supports Pause, while only v4 task outcomes are used for the authoritative
-decision gate.
+Version 5 narrowed the unresolved-decision negative control to the only facts
+its deterministic verifier grades: leave `policy.md` unchanged and create no
+files. It then reran all 36 arms. The stable 0/6 eligible selection observation
+across all five complete windows supports Pause, while only v5 outcomes are
+used for the authoritative decision gate.
 
 ## Limits and restart condition
 

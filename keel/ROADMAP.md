@@ -141,8 +141,9 @@ What a user can do today:
   delegate one fresh-context workspace investigation, shows bounded lifecycle
   progress, shares the root cost budget, waits for real cancellation/settlement,
   and remains the only final answerer. Slice 1.5 calibration is **Pause**:
-  36/36 authoritative DeepSeek arms completed and verified, negative false
-  calls were 0/9, but ordinary eligible tasks selected a child 0/6 times.
+  36/36 authoritative DeepSeek harness arms completed, 35/36 task artifacts
+  verified, negative false calls were 0/9, but ordinary eligible tasks selected
+  a child 0/6 times. One treatment stopped safely at budget admission.
   The feature remains default-off, and no Slice 2a concurrency work is funded.
   Re-review on 2026-09-09; the experiment expires on 2026-11-09 without new
   demand evidence. See
