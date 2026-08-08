@@ -203,6 +203,40 @@ describe("CLI Run Report Recorder", () => {
     );
   });
 
+  test(`Given a child performs shared context compaction,
+    When the report ledger records and projects that operation,
+    Then its stable child attribution survives both boundaries`, () => {
+    // Given
+    const ledger = createModelOperationReportLedger(() => null);
+    const attribution = {
+      type: "subagent" as const,
+      delegationId: "main:delegate-1",
+      childRunId: "subagent-1",
+    };
+
+    // When
+    const operation = ledger.beginModelOperation({
+      recorder: ledger,
+      owner: { type: "session" },
+      provider: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+      attribution,
+      purpose: "context_compaction",
+      recoveryFor: null,
+    });
+    operation.finish({ outcome: "admission_rejected" });
+
+    // Then
+    expect(ledger.modelOperations()).toMatchObject([
+      {
+        attribution,
+        purpose: "context_compaction",
+        outcome: "admission_rejected",
+      },
+    ]);
+  });
+
   test(`Given a logical outcome conflicts with its physical attempts,
     When the caller projects or finishes the model operation,
     Then the ledger rejects completed-without-usage and late admission rejection`, () => {

@@ -117,7 +117,7 @@ describe("Run Outcome Reporting", () => {
     });
   });
 
-  test(`Given a task the assistant finishes with a plain answer,
+  test(`Given explicit main mode starts with restored empty task progress,
     When the run ends,
     Then the session reports one model turn and a completed stop reason`, async () => {
     // Given
@@ -132,6 +132,8 @@ describe("Run Outcome Reporting", () => {
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
         bash: { kind: "disabled" },
+        toolProfile: "main",
+        taskProgress: { tasks: [] },
         stopPolicy: defaultStopPolicy(),
       }),
     );
