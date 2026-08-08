@@ -83,7 +83,7 @@ describe("Eval Compare", () => {
 
   test(`Given task success stays stable while expected delegation selection regresses,
     When the compare command summarizes the results,
-    Then it reports selection independently from semantic pass`, async () => {
+    Then it reports selection regression, improvement, and removal independently from semantic pass`, async () => {
     // Given
     const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-selection-"));
     const baseFile = join(root, "base.jsonl");
@@ -91,6 +91,28 @@ describe("Eval Compare", () => {
     await writeResultFile(baseFile, [
       resultLine({
         taskId: "delegation-selection",
+        trial: 1,
+        pass: true,
+        delegationSelection: {
+          status: "observed",
+          policy: "require_one",
+          childRuns: 1,
+          satisfied: true,
+        },
+      }),
+      resultLine({
+        taskId: "selection-improved",
+        trial: 1,
+        pass: true,
+        delegationSelection: {
+          status: "observed",
+          policy: "require_one",
+          childRuns: 0,
+          satisfied: false,
+        },
+      }),
+      resultLine({
+        taskId: "selection-removed",
         trial: 1,
         pass: true,
         delegationSelection: {
@@ -113,6 +135,22 @@ describe("Eval Compare", () => {
           satisfied: false,
         },
       }),
+      resultLine({
+        taskId: "selection-improved",
+        trial: 1,
+        pass: true,
+        delegationSelection: {
+          status: "observed",
+          policy: "require_one",
+          childRuns: 1,
+          satisfied: true,
+        },
+      }),
+      resultLine({
+        taskId: "selection-removed",
+        trial: 1,
+        pass: true,
+      }),
     ]);
 
     try {
@@ -127,6 +165,12 @@ describe("Eval Compare", () => {
       );
       expect(result.stdout).toContain(
         "pass: 1/1 (100.0%) -> 1/1 (100.0%) (+0.0pp)",
+      );
+      expect(result.stdout).toContain("task: selection-improved");
+      expect(result.stdout).toContain("status: SELECTION IMPROVEMENT");
+      expect(result.stdout).toContain("task: selection-removed");
+      expect(result.stdout).toContain(
+        "selection: 1/1 satisfied, 1/1 observed -> n/a",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

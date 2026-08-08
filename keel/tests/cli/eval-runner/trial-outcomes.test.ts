@@ -187,6 +187,154 @@ writeFileSync(args[transcriptIndex + 1], '{"schemaVersion":1,"type":"transcript"
     expect(attributedChildCompaction.success).toBe(true);
   });
 
+  test(`Given delegation pair arms can fail at different independent gates,
+    When the runner has no transcript directory,
+    Then harness, task, and unavailable selection failures stay separately observable`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    for (const taskId of [
+      "control-only",
+      "missing-report",
+      "selection-missing",
+    ]) {
+      await createDelegationPairTask(suiteDir, taskId, {
+        prompt: taskId,
+        verify: "test -f result.txt\n",
+        solution: "touch result.txt\n",
+        timeoutMs: 10_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.01,
+        delegationPolicy: "require_one",
+      });
+    }
+    const cliEntry = join(root, "delegation-failure-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const treatment = args.includes("--experimental-agents");
+const prompt = args.at(-1);
+if (prompt !== "missing-report") {
+  const reportIndex = args.indexOf("--report");
+  writeFileSync(args[reportIndex + 1], ${JSON.stringify(JSON.stringify(VALID_REPORT))});
+}
+if (prompt === "selection-missing" || (prompt === "control-only" && !treatment)) {
+  writeFileSync("result.txt", "done\\n");
+}
+`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          taskId: "control-only",
+          condition: "delegation_control",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+        },
+        {
+          taskId: "control-only",
+          condition: "delegation_treatment",
+          harnessOutcome: "completed",
+          taskOutcome: "verify_failed",
+          delegationSelection: { status: "observed", satisfied: false },
+        },
+        {
+          taskId: "missing-report",
+          condition: "delegation_control",
+          harnessOutcome: "crashed",
+        },
+        {
+          taskId: "missing-report",
+          condition: "delegation_treatment",
+          harnessOutcome: "crashed",
+          delegationSelection: { status: "unavailable" },
+        },
+        {
+          taskId: "selection-missing",
+          condition: "delegation_control",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+        },
+        {
+          taskId: "selection-missing",
+          condition: "delegation_treatment",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+          delegationSelection: { status: "observed", satisfied: false },
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a result destination becomes unwritable after paired arms run,
+    When the runner appends their result lines,
+    Then it returns a harness error instead of reporting a successful task`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createDelegationPairTask(suiteDir, "unwritable-results", {
+      prompt: "unwritable-results",
+      verify: "test -f result.txt\n",
+      solution: "touch result.txt\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs: 10_000,
+      allowBash: false,
+      maxCostUsd: 0.01,
+      delegationPolicy: "forbid",
+    });
+    const cliEntry = join(root, "delegation-unwritable-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const reportIndex = args.indexOf("--report");
+writeFileSync(args[reportIndex + 1], ${JSON.stringify(JSON.stringify(VALID_REPORT))});
+writeFileSync("result.txt", "done\\n");
+rmSync(${JSON.stringify(outFile)}, { recursive: true, force: true });
+mkdirSync(${JSON.stringify(outFile)});
+`,
+      "utf8",
+    );
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(
+        stderr.mock.calls.map(([chunk]) => String(chunk)).join(""),
+      ).toContain("cannot write eval results");
+    } finally {
+      stderr.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given provider selection is stored in the user's Keel home,
     When a memory pair isolates its memory store,
     Then both arms preserve the configured provider`, async () => {
