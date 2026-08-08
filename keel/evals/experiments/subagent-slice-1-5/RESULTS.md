@@ -21,18 +21,19 @@ sample and cannot justify investing in multi-child concurrency.
 
 | Field | Value |
 | --- | --- |
-| Experiment | `subagent-slice-1-5-v3` |
-| Freeze commit | `141068e8abe2a010852a73bfdfc1185912a68e34` |
+| Experiment | `subagent-slice-1-5-v4` |
+| Freeze commit | `f6f069d663d9b1142a0d0c449ce4617dff4d3033` |
 | Provider / model | DeepSeek / `deepseek-v4-flash` |
 | Window | one uninterrupted run on 2026-08-09 |
 | Trials | 3 paired trials for each of 6 tasks; 36 arms total |
-| Result JSONL | `/tmp/keel-subagent-slice-1-5-v3.jsonl` |
-| Result SHA-256 | `ebc6bb3dd810a79256d52ad0a4c40e2f83d79a59cfb0b0c7b9a7d9d597187a88` |
-| Transcript directory | `/tmp/keel-subagent-slice-1-5-v3-transcripts` |
-| Sorted transcript-manifest SHA-256 | `c647ee2a4a9f0762677f959bcba81ad0399ea5eece135bc003821846d5b53905` |
+| Result JSONL | [`artifacts/v4/results.jsonl`](artifacts/v4/results.jsonl) |
+| Result SHA-256 | `a09d814e1e382116e0edbda679ddf9c489ccd8c4695889212a5bce3308a596b1` |
+| Provider-visible transcripts | [`artifacts/v4/transcripts/`](artifacts/v4/transcripts/) |
+| Per-file checksums | [`artifacts/v4/MANIFEST.sha256`](artifacts/v4/MANIFEST.sha256) |
 
 All 36 harness arms completed, all 36 semantic task verifiers passed, every
-report stop reason was `completed`, and cost overshoot was zero.
+report stop reason was `completed`, and cost overshoot was zero. The full suite
+gate was 12/18 because all six eligible treatments failed selection.
 
 ## Selection evidence
 
@@ -56,14 +57,14 @@ ordinary eligible prompts select delegation.
 
 | Condition | Harness | Task verified | Cost | Input tokens | Output tokens | Wall time | Unspent root budget |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Control | 18/18 | 18/18 | $0.037821 | 1,062,644 | 27,552 | 239.674 s | $0.307179 |
-| Treatment | 18/18 | 18/18 | $0.042494 | 1,197,022 | 33,186 | 286.910 s | $0.302506 |
+| Control | 18/18 | 18/18 | $0.038314 | 1,090,295 | 26,841 | 231.423 s | $0.306686 |
+| Treatment | 18/18 | 18/18 | $0.040597 | 1,055,783 | 29,858 | 257.899 s | $0.304403 |
 
-Treatment used $0.004673 more, 134,378 more input tokens, 5,634 more output
-tokens, and 47.236 seconds more in aggregate. These totals include the three
+Treatment used $0.002283 more, 34,512 fewer input tokens, 3,017 more output
+tokens, and 26.476 seconds more in aggregate. These totals include the three
 serial child runs in the duplicate inducement and normal provider variation;
 they are not interpreted as evidence for or against parallel speedup. Every
-arm retained at least $0.009149 of root budget.
+arm retained at least $0.009142 of root budget.
 
 ## Reliability evidence
 
@@ -88,11 +89,16 @@ No inspected output was overwritten or selectively rerun.
 - `v2`, freeze `61eaf23`: excluded because a natural-language release-gap
   field still had a narrower phrase recognizer than its prompt. JSONL SHA-256:
   `b044468b53563dba2c8061fa1a1c141313c65a10843f4f7d404ee47a1cecd52c`.
+- `v3`, freeze `141068e`: excluded because the user-feedback prompt required a
+  user-facing question that its workspace-only verifier could not observe.
+  JSONL SHA-256:
+  `ebc6bb3dd810a79256d52ad0a4c40e2f83d79a59cfb0b0c7b9a7d9d597187a88`.
 
-Version 3 replaced the ambiguous release-gap prose with explicit structured
-facts, then reran all 36 arms. The stable 0/6 eligible selection observation
-across all three complete windows supports Pause, while only v3 task outcomes
-are used for the authoritative decision gate.
+Version 4 narrowed the unresolved-decision negative control to facts its
+deterministic workspace verifier can observe, then reran all 36 arms. The
+stable 0/6 eligible selection observation across all four complete windows
+supports Pause, while only v4 task outcomes are used for the authoritative
+decision gate.
 
 ## Limits and restart condition
 
