@@ -140,8 +140,13 @@ What a user can do today:
   time-boxed #590 experiment for one foreground read-only child. Main may
   delegate one fresh-context workspace investigation, shows bounded lifecycle
   progress, shares the root cost budget, waits for real cancellation/settlement,
-  and remains the only final answerer. This is Slice 1 evidence, not a decision
-  to make subagents default or to fund the remaining epic slices.
+  and remains the only final answerer. Slice 1.5 calibration is **Pause**:
+  36/36 authoritative DeepSeek arms completed and verified, negative false
+  calls were 0/9, but ordinary eligible tasks selected a child 0/6 times.
+  The feature remains default-off, and no Slice 2a concurrency work is funded.
+  Re-review on 2026-09-09; the experiment expires on 2026-11-09 without new
+  demand evidence. See
+  [`evals/experiments/subagent-slice-1-5/RESULTS.md`](evals/experiments/subagent-slice-1-5/RESULTS.md).
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
