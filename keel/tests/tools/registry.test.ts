@@ -98,6 +98,25 @@ function providerToolByName(
   return tool;
 }
 
+function allBuiltinProviderTools(): readonly OpenAICompatibleToolDefinition[] {
+  const candidates = [
+    ...openAICompatibleTools({
+      kind: "auto",
+      delegation: true,
+      bash: true,
+      skill: true,
+      memory: "reviewed",
+      mcp: emptyMcpExposure,
+    }),
+    ...openAICompatibleTools({
+      kind: "auto",
+      profile: "read-only-subagent",
+    }),
+  ];
+
+  return builtinTools.map((tool) => providerToolByName(candidates, tool.name));
+}
+
 function validProviderValue(
   field: OpenAICompatibleToolParameter,
 ): string | number | boolean | readonly unknown[] | Record<string, unknown> {
@@ -454,6 +473,7 @@ describe("tool registry", () => {
     const applyPatchTool = builtinToolRegistry.apply_patch;
     const bashTool = builtinToolRegistry.bash;
     const updateGoalTool = builtinToolRegistry.update_goal;
+    const submitAgentResultTool = builtinToolRegistry.submit_agent_result;
 
     expect(readTool.display.formatLabel({ path: "src/index.ts" })).toBe(
       "read src/index.ts",
@@ -516,6 +536,13 @@ describe("tool registry", () => {
     expect(updateGoalTool.display.formatLabel({ status: "completed" })).toBe(
       "update_goal",
     );
+    expect(
+      submitAgentResultTool.display.formatLabel({
+        summary: "summary",
+        evidence: [],
+        risks: [],
+      }),
+    ).toBe("submit_agent_result");
 
     expect(bashTool.permission.kind).toBe("approval");
     if (bashTool.permission.kind === "approval") {
@@ -531,6 +558,8 @@ describe("tool registry", () => {
     const names = builtinTools.map((tool) => tool.name);
 
     expect(names).toEqual([
+      "delegate",
+      "submit_agent_result",
       "update_plan",
       "update_goal",
       "memory_add",
@@ -569,6 +598,20 @@ describe("tool registry", () => {
     }));
 
     expect(contracts).toEqual([
+      {
+        name: "delegate",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "submit_agent_result",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
       {
         name: "update_plan",
         permission: "none",
@@ -886,13 +929,7 @@ describe("tool registry", () => {
     When the registry metadata is inspected,
     Then each tool lists its provider-visible arguments and required fields`, () => {
     const argumentsByTool = Object.fromEntries(
-      openAICompatibleTools({
-        kind: "auto",
-        bash: true,
-        skill: true,
-        memory: "reviewed",
-        mcp: emptyMcpExposure,
-      }).map((tool) => [
+      allBuiltinProviderTools().map((tool) => [
         tool.function.name,
         {
           fields: Object.keys(tool.function.parameters.properties),
@@ -902,6 +939,14 @@ describe("tool registry", () => {
     );
 
     expect(argumentsByTool).toEqual({
+      delegate: {
+        fields: ["task", "focusPaths"],
+        required: ["task"],
+      },
+      submit_agent_result: {
+        fields: ["summary", "evidence", "risks"],
+        required: ["summary", "evidence", "risks"],
+      },
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
       memory_add: {
@@ -963,13 +1008,7 @@ describe("tool registry", () => {
   test(`Given builtin tools declare arguments in Zod,
     When provider metadata is compared with generated JSON schema,
     Then parsing keys requiredness types and numeric bounds stay equivalent`, () => {
-    const providerTools = openAICompatibleTools({
-      kind: "auto",
-      bash: true,
-      skill: true,
-      memory: "reviewed",
-      mcp: emptyMcpExposure,
-    });
+    const providerTools = allBuiltinProviderTools();
 
     for (const tool of builtinTools) {
       const providerTool = providerToolByName(providerTools, tool.name);
@@ -1031,7 +1070,6 @@ describe("tool registry", () => {
   test(`Given provider exposure is derived from the builtin registry,
     When builtin metadata is compared with provider tools,
     Then shell, Skill, and memory filtering match explicit availability metadata`, () => {
-    const allBuiltinToolNames = builtinTools.map((tool) => tool.name);
     const defaultBuiltinToolNames = builtinTools
       .filter(
         (tool) =>
@@ -1039,7 +1077,9 @@ describe("tool registry", () => {
           tool.availability !== "skill-catalog" &&
           tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
-          tool.availability !== "memory-proposal",
+          tool.availability !== "memory-proposal" &&
+          tool.availability !== "delegation" &&
+          tool.availability !== "subagent-result",
       )
       .map((tool) => tool.name);
     const skillBuiltinToolNames = builtinTools
@@ -1048,7 +1088,20 @@ describe("tool registry", () => {
           tool.risk.kind !== "trusted-shell" &&
           tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
-          tool.availability !== "memory-proposal",
+          tool.availability !== "memory-proposal" &&
+          tool.availability !== "delegation" &&
+          tool.availability !== "subagent-result",
+      )
+      .map((tool) => tool.name);
+    const fullyEnabledMainToolNames = builtinTools
+      .filter((tool) => tool.availability !== "subagent-result")
+      .map((tool) => tool.name);
+    const readOnlySubagentToolNames = builtinTools
+      .filter(
+        (tool) =>
+          tool.availability === "subagent-result" ||
+          (tool.availability === undefined &&
+            tool.risk.kind === "workspace-read"),
       )
       .map((tool) => tool.name);
 
@@ -1067,8 +1120,15 @@ describe("tool registry", () => {
         skill: true,
         memory: "reviewed",
         mcp: emptyMcpExposure,
+        delegation: true,
       }).map((tool) => tool.function.name),
-    ).toEqual(allBuiltinToolNames);
+    ).toEqual(fullyEnabledMainToolNames);
+    expect(
+      openAICompatibleTools({
+        kind: "auto",
+        profile: "read-only-subagent",
+      }).map((tool) => tool.function.name),
+    ).toEqual(readOnlySubagentToolNames);
   });
 
   test(`Given direct memory and reviewed interactive memory have different runtime boundaries,
@@ -1108,13 +1168,7 @@ describe("tool registry", () => {
   test(`Given provider tools are requested,
     When OpenAI-compatible definitions are built,
     Then descriptions match the builtin registry and parameters are strict objects`, () => {
-    const providerTools = openAICompatibleTools({
-      kind: "auto",
-      bash: true,
-      skill: true,
-      memory: "reviewed",
-      mcp: emptyMcpExposure,
-    });
+    const providerTools = allBuiltinProviderTools();
 
     expect(
       providerTools.map((tool) => ({

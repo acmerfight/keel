@@ -1,4 +1,5 @@
 import { readdirSync, realpathSync, statSync } from "node:fs";
+import { opendir, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { KeelError } from "../core/error.ts";
 import { hasIgnoredPathSegment } from "./file-search.ts";
@@ -17,6 +18,7 @@ export interface LsOptions {
   readonly path?: string;
   readonly limit?: number;
   readonly hiddenPaths?: readonly string[];
+  readonly signal?: AbortSignal;
 }
 
 interface LsEntry {
@@ -189,6 +191,113 @@ export function executeLs(
     }
 
     entries.push({ name: dirent.name, isDirectory });
+  }
+
+  return formatLsOutput(sortLsEntries(entries), limit);
+}
+
+export async function executeLsAbortable(
+  workspace: string,
+  options: LsOptions & { readonly signal: AbortSignal },
+): Promise<ToolResult> {
+  options.signal.throwIfAborted();
+  const limit = normalizeLimit(options.limit);
+  const requestedDisplayPath = options.path ?? ".";
+  const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
+    workspace,
+    requestedDisplayPath,
+    "ls",
+  );
+
+  if (
+    hasIgnoredPathSegment(workspacePath, requestedPath) ||
+    hasIgnoredPathSegment(workspacePath, targetPath)
+  ) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `ls failed: ignored path: ${requestedDisplayPath}`,
+      "This path is excluded by project policy. List a different directory or omit the path to list the workspace root.",
+    );
+  }
+
+  const projectIgnorePolicy = createProjectIgnorePolicy(
+    workspacePath,
+    options.hiddenPaths,
+  );
+  const targetStat = await stat(targetPath);
+  options.signal.throwIfAborted();
+  const targetIsDirectory = targetStat.isDirectory();
+  if (
+    options.path !== undefined &&
+    (projectIgnorePolicy.isIgnored(requestedPath, targetIsDirectory) ||
+      projectIgnorePolicy.isIgnored(targetPath, targetIsDirectory))
+  ) {
+    throw new KeelError(
+      "tool_path_ignored",
+      `ls failed: ignored path: ${requestedDisplayPath}`,
+      "This path is excluded by project .gitignore. List a different path or omit the path parameter.",
+    );
+  }
+  if (!targetIsDirectory) {
+    throw new KeelError(
+      "tool_not_directory",
+      `ls failed: not a directory: ${requestedDisplayPath}`,
+      "Use a workspace directory as the ls path, or omit path to list the workspace root.",
+    );
+  }
+
+  const directory = await opendir(targetPath);
+  const abort = (): void => {
+    /* v8 ignore next -- exercised through cancellation conformance; the close completion itself is an unobservable OS adapter detail. */
+    void directory.close().catch(() => undefined);
+  };
+  options.signal.addEventListener("abort", abort, { once: true });
+  const entries: LsEntry[] = [];
+  try {
+    while (true) {
+      options.signal.throwIfAborted();
+      const dirent = await directory.read();
+      if (dirent === null) break;
+      options.signal.throwIfAborted();
+      const requestedEntryPath = join(requestedPath, dirent.name);
+      const targetEntryPath = join(targetPath, dirent.name);
+      if (
+        hasIgnoredPathSegment(workspacePath, requestedEntryPath) ||
+        hasIgnoredPathSegment(workspacePath, targetEntryPath)
+      ) {
+        continue;
+      }
+
+      let realEntryPath: string;
+      try {
+        realEntryPath = await realpath(targetEntryPath);
+      } catch {
+        options.signal.throwIfAborted();
+        continue;
+      }
+      options.signal.throwIfAborted();
+      if (
+        !isInsideWorkspace(workspacePath, realEntryPath) ||
+        hasIgnoredPathSegment(workspacePath, realEntryPath)
+      ) {
+        continue;
+      }
+
+      const entryStat = await stat(realEntryPath);
+      options.signal.throwIfAborted();
+      const isDirectory = entryStat.isDirectory();
+      if (!isDirectory && !entryStat.isFile()) continue;
+      if (
+        projectIgnorePolicy.isIgnored(requestedEntryPath, isDirectory) ||
+        projectIgnorePolicy.isIgnored(realEntryPath, isDirectory)
+      ) {
+        continue;
+      }
+      entries.push({ name: dirent.name, isDirectory });
+    }
+  } finally {
+    options.signal.removeEventListener("abort", abort);
+    await directory.close().catch(() => undefined);
   }
 
   return formatLsOutput(sortLsEntries(entries), limit);

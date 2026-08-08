@@ -3,7 +3,7 @@ import { createInterface } from "node:readline/promises";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
 import type {
-  ModelOperationInstrumentation,
+  MainModelOperationInstrumentation,
   ModelOperationOwner,
 } from "../agent/model-operations.ts";
 import { postCompactionReadToolCallId } from "../agent/post-compaction-read-id.ts";
@@ -740,7 +740,7 @@ export async function runInteractiveSession(
   const reportModelOperations = (
     operationResolved: InteractiveResolvedProvider,
     owner: ModelOperationOwner,
-  ): ModelOperationInstrumentation | null =>
+  ): MainModelOperationInstrumentation | null =>
     options.cliArgs.reportFile === undefined
       ? null
       : {

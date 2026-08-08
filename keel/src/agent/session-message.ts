@@ -10,6 +10,7 @@ export const userMessageOriginTypes = [
   "runtime_goal_continuation",
   "runtime_goal_resumption",
   "runtime_goal_stagnation_recovery",
+  "runtime_subagent_delegation",
   "runtime_turn_limit_summary",
   "runtime_undo_restoration",
   "compaction_checkpoint",

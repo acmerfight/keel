@@ -3,6 +3,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  rename,
   rm,
   rmdir,
   stat,
@@ -10,11 +11,11 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import type {
+  AbortableToolOutputArtifactStore,
   ToolOutputArtifactReuseInput,
   ToolOutputArtifactReuseResult,
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactSaveResult,
-  ToolOutputArtifactStore,
 } from "../agent/tool-output-artifacts.ts";
 import { errorMessage } from "../core/error.ts";
 import { type SessionStoreRuntime, sessionHome } from "./session-store.ts";
@@ -27,6 +28,8 @@ const TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS = 30;
 export const TOOL_OUTPUT_ARTIFACT_RETENTION_DESCRIPTION = `raw, unredacted tool output under KEEL_HOME artifacts for ${TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS} days by default or until manual removal; inspect refs with keel artifacts show <ref>`;
 const TOOL_OUTPUT_ARTIFACT_RETENTION_MS =
   TOOL_OUTPUT_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const INTERRUPTED_ARTIFACT_TEMP_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/iu;
 
 interface ToolOutputArtifactStoreOptions {
   readonly runtime: SessionStoreRuntime;
@@ -223,11 +226,20 @@ export async function cleanupExpiredToolOutputArtifacts(options: {
       const scopeDirectory = join(root, scopeEntry.name);
       const artifacts = await listDirectoryEntries(scopeDirectory);
       for (const artifactEntry of artifacts) {
-        if (!artifactEntry.isFile() || !artifactEntry.name.endsWith(".txt")) {
+        if (!artifactEntry.isFile()) {
           continue;
         }
-        const id = artifactEntry.name.slice(0, -".txt".length);
-        if (!isValidArtifactSegment("id", id)) {
+        const isManagedArtifact = artifactEntry.name.endsWith(".txt");
+        const isInterruptedTemp = INTERRUPTED_ARTIFACT_TEMP_PATTERN.test(
+          artifactEntry.name,
+        );
+        const id = isManagedArtifact
+          ? artifactEntry.name.slice(0, -".txt".length)
+          : "";
+        if (
+          (!isManagedArtifact || !isValidArtifactSegment("id", id)) &&
+          !isInterruptedTemp
+        ) {
           continue;
         }
         const artifactFile = join(scopeDirectory, artifactEntry.name);
@@ -257,9 +269,10 @@ export function toolOutputArtifactScopeForSession(sessionId: string): string {
 
 export function createToolOutputArtifactStore(
   options: ToolOutputArtifactStoreOptions,
-): ToolOutputArtifactStore {
+): AbortableToolOutputArtifactStore {
   validateArtifactSegment("scope", options.scope);
   return {
+    abortSignalSupport: true,
     verifyReusable: async (
       input: ToolOutputArtifactReuseInput,
     ): Promise<ToolOutputArtifactReuseResult> => {
@@ -287,18 +300,29 @@ export function createToolOutputArtifactStore(
       const directory = artifactDirectory(options.runtime, options.scope);
       const id = randomUUID();
       const ref = toolOutputArtifactRef(options.scope, id);
+      const finalPath = join(directory, `${id}.txt`);
+      const temporaryPath = join(directory, `${id}.${randomUUID()}.tmp`);
       try {
+        input.signal?.throwIfAborted();
         await mkdir(directory, { recursive: true, mode: 0o700 });
+        input.signal?.throwIfAborted();
         await writeFile(
-          join(directory, `${id}.txt`),
+          temporaryPath,
           artifactContent({
             ref,
             id,
             savedAt: new Date(options.runtime.now()).toISOString(),
             saveInput: input,
           }),
-          { encoding: "utf8", flag: "wx", mode: 0o600 },
+          {
+            encoding: "utf8",
+            flag: "wx",
+            mode: 0o600,
+            ...(input.signal !== undefined ? { signal: input.signal } : {}),
+          },
         );
+        input.signal?.throwIfAborted();
+        await rename(temporaryPath, finalPath);
         return {
           status: "stored",
           ref,
@@ -306,6 +330,8 @@ export function createToolOutputArtifactStore(
         };
       } catch (error) {
         return { status: "failed", reason: errorMessage(error) };
+      } finally {
+        await rm(temporaryPath, { force: true }).catch(() => undefined);
       }
     },
     discard: async (ref: string): Promise<void> => {

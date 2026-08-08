@@ -9,6 +9,7 @@ import { CostBudgetAdmissionError } from "./cost-budget.ts";
 
 export type ModelOperationPurpose =
   | "agent_turn"
+  | "subagent_turn"
   | "turn_limit_summary"
   | "context_compaction"
   | "goal_assertion_evaluation"
@@ -23,11 +24,35 @@ export type ModelOperationOwner =
   | { readonly type: "current_agent_run" }
   | { readonly type: "session" };
 
+export interface ModelOperationAttribution {
+  readonly type: "subagent";
+  readonly delegationId: string;
+  readonly childRunId: string;
+}
+
+export type MainOnlyModelOperationPurpose = Extract<
+  ModelOperationPurpose,
+  | "agent_turn"
+  | "goal_assertion_evaluation"
+  | "manual_compaction"
+  | "model_switch_compaction"
+>;
+
+export type SharedModelOperationPurpose = Extract<
+  ModelOperationPurpose,
+  "turn_limit_summary" | "context_compaction"
+>;
+
+type SubagentOnlyModelOperationPurpose = Extract<
+  ModelOperationPurpose,
+  "subagent_turn"
+>;
+
 export type ModelOperationRecoveryTarget = (
   recoveryOperationOrdinal: number,
 ) => void;
 
-export interface ModelOperationInstrumentation {
+interface ModelOperationInstrumentationBase {
   readonly recorder: ModelOperationRecorder;
   readonly owner: ModelOperationOwner;
   readonly provider: string;
@@ -35,11 +60,32 @@ export interface ModelOperationInstrumentation {
   readonly costModel: CostModel;
 }
 
+export type MainModelOperationInstrumentation =
+  ModelOperationInstrumentationBase & {
+    readonly attribution?: never;
+  };
+
+export type SubagentModelOperationInstrumentation =
+  ModelOperationInstrumentationBase & {
+    readonly attribution: ModelOperationAttribution;
+  };
+
+export type ModelOperationInstrumentation =
+  | MainModelOperationInstrumentation
+  | SubagentModelOperationInstrumentation;
+
+type InstrumentationForPurpose<Purpose extends ModelOperationPurpose> =
+  Purpose extends SubagentOnlyModelOperationPurpose
+    ? SubagentModelOperationInstrumentation
+    : Purpose extends MainOnlyModelOperationPurpose
+      ? MainModelOperationInstrumentation
+      : ModelOperationInstrumentation;
+
 export type ModelOperationRequest<
   Purpose extends ModelOperationPurpose = ModelOperationPurpose,
 > = Purpose extends ModelOperationPurpose
   ? {
-      readonly instrumentation: ModelOperationInstrumentation;
+      readonly instrumentation: InstrumentationForPurpose<Purpose>;
       readonly purpose: Purpose;
       readonly recoveryFor: Purpose extends "context_compaction"
         ? ModelOperationRecoveryTarget | null
@@ -49,7 +95,7 @@ export type ModelOperationRequest<
 
 type BeginModelOperationOptionsFor<Purpose extends ModelOperationPurpose> =
   Purpose extends ModelOperationPurpose
-    ? ModelOperationInstrumentation & {
+    ? InstrumentationForPurpose<Purpose> & {
         readonly purpose: Purpose;
         readonly recoveryFor: Purpose extends "context_compaction"
           ? ModelOperationRecoveryTarget | null

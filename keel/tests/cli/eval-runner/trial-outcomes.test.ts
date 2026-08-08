@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import {
   CLI_ENTRY,
   createEvalDir,
@@ -21,6 +22,43 @@ const KEEL_HOME_ENV = "KEEL_HOME";
 const PATH_ENV = "PATH";
 
 describe("Eval Runner", () => {
+  test(`Given subagent attribution is part of the current report schema,
+    When a report mismatches child purpose and identity,
+    Then invalid combinations are rejected while attributed child compaction remains valid`, () => {
+    // Given
+    const mainOperation = VALID_REPORT.modelOperations[0];
+    const attribution = {
+      type: "subagent" as const,
+      delegationId: "main:delegate-1",
+      childRunId: "subagent-1",
+    };
+
+    // When
+    const childWithoutAttribution = runReportSchema.safeParse({
+      ...VALID_REPORT,
+      modelOperations: [{ ...mainOperation, purpose: "subagent_turn" }],
+    });
+    const mainWithChildAttribution = runReportSchema.safeParse({
+      ...VALID_REPORT,
+      modelOperations: [{ ...mainOperation, attribution }],
+    });
+    const attributedChildCompaction = runReportSchema.safeParse({
+      ...VALID_REPORT,
+      modelOperations: [
+        {
+          ...mainOperation,
+          purpose: "context_compaction",
+          attribution,
+        },
+      ],
+    });
+
+    // Then
+    expect(childWithoutAttribution.success).toBe(false);
+    expect(mainWithChildAttribution.success).toBe(false);
+    expect(attributedChildCompaction.success).toBe(true);
+  });
+
   test(`Given provider selection is stored in the user's Keel home,
     When a memory pair isolates its memory store,
     Then both arms preserve the configured provider`, async () => {
@@ -511,6 +549,105 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       expect(exitCode).toBe(0);
       expect(await readResultLines(outFile)).toMatchObject([
         { taskId: "task-options", pass: true, outcome: "verified" },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given fixed delegation-policy tasks require one, forbid, or bound child identities,
+    When the eval runner scores reports with child attribution,
+    Then matching trajectories verify and a missing required child fails the trial`, async () => {
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskCases = [
+      ["positive", "require_one"],
+      ["sequential", "forbid"],
+      ["duplicate", "at_most_one"],
+      ["duplicate-overflow", "at_most_one"],
+      ["missing-required", "require_one"],
+    ] as const;
+    for (const [prompt, delegationPolicy] of taskCases) {
+      await createTask(suiteDir, prompt, {
+        prompt,
+        verify: "exit 0\n",
+        solution: "exit 0\n",
+        maxCostUsd: 0.1,
+        experimentalAgents: true,
+        delegationPolicy,
+      });
+    }
+    const childOperation = {
+      ...VALID_REPORT.modelOperations[0],
+      purpose: "subagent_turn",
+      attribution: {
+        type: "subagent",
+        delegationId: "main:delegate-1",
+        childRunId: "subagent-1",
+      },
+    };
+    const reports = {
+      positive: {
+        ...VALID_REPORT,
+        modelOperations: [{ ...childOperation, ordinal: 1 }],
+        modelOperationCount: 1,
+      },
+      sequential: VALID_REPORT,
+      duplicate: {
+        ...VALID_REPORT,
+        modelOperations: [
+          { ...childOperation, ordinal: 1 },
+          { ...childOperation, ordinal: 2 },
+        ],
+        modelOperationCount: 2,
+        providerRequestAttemptCount: 2,
+      },
+      "duplicate-overflow": {
+        ...VALID_REPORT,
+        modelOperations: [
+          { ...childOperation, ordinal: 1 },
+          {
+            ...childOperation,
+            ordinal: 2,
+            attribution: {
+              ...childOperation.attribution,
+              childRunId: "subagent-2",
+            },
+          },
+        ],
+        modelOperationCount: 2,
+        providerRequestAttemptCount: 2,
+      },
+      "missing-required": VALID_REPORT,
+    };
+    const cliEntry = join(root, "delegation-policy-cli.mjs");
+    await writeFile(
+      cliEntry,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        "const args = process.argv.slice(2);",
+        "const reportIndex = args.indexOf('--report');",
+        `const reports = ${JSON.stringify(reports)};`,
+        "writeFileSync(args[reportIndex + 1], JSON.stringify(reports[args.at(-1)]));",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(await readResultLines(outFile)).toMatchObject([
+        { taskId: "duplicate", outcome: "verified" },
+        { taskId: "duplicate-overflow", outcome: "verify_failed" },
+        { taskId: "missing-required", outcome: "verify_failed" },
+        { taskId: "positive", outcome: "verified" },
+        { taskId: "sequential", outcome: "verified" },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

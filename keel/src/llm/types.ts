@@ -121,6 +121,7 @@ export interface StreamOptions {
 
 export interface LLMProvider {
   readonly id: string;
+  readonly abortSignalSupport?: true;
   readonly estimateInputTokens?: (options: StreamOptions) => number;
   readonly stream: (options: StreamOptions) => AsyncIterable<LLMEvent>;
 }

@@ -7,6 +7,70 @@ import { SESSION_GOAL_STATUS_REASON_MAX_LENGTH } from "../core/session-goal.ts";
 import { sessionTaskPlanSchema } from "../core/task-progress.ts";
 import { optionalToolArgument } from "./tool-schema.ts";
 
+export const delegateToolArgumentsSchema = z
+  .object({
+    task: z
+      .string()
+      .trim()
+      .min(1)
+      .max(4_000)
+      .describe(
+        "Self-contained read-only investigation task with scope, expected output, and completion criteria.",
+      ),
+    focusPaths: optionalToolArgument(
+      z
+        .array(z.string().trim().min(1).max(500))
+        .min(1)
+        .max(20)
+        .describe(
+          "Optional workspace-relative files or directories that should receive most of the child agent's attention.",
+        ),
+    ),
+  })
+  .strict();
+
+const submittedAgentEvidenceSchema = z
+  .object({
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .describe("Workspace-relative path supporting the finding."),
+    line: optionalToolArgument(
+      z.number().int().min(1).describe("Optional 1-indexed supporting line."),
+    ),
+    detail: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1_000)
+      .describe("Concise observation supported by this path."),
+  })
+  .strict();
+
+export const submitAgentResultToolArgumentsSchema = z
+  .object({
+    summary: z
+      .string()
+      .trim()
+      .min(1)
+      .max(8_000)
+      .describe("Concise answer to the delegated task."),
+    evidence: z
+      .array(submittedAgentEvidenceSchema)
+      .min(1)
+      .max(20)
+      .describe("Concrete workspace evidence for the answer."),
+    risks: z
+      .array(z.string().trim().min(1).max(1_000))
+      .max(10)
+      .describe(
+        "Remaining uncertainty or risks; use an empty array when none.",
+      ),
+  })
+  .strict();
+
 export const skillToolArgumentsSchema = z
   .object({
     name: z

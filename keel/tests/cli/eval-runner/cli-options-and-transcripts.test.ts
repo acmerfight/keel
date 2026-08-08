@@ -26,9 +26,9 @@ function modelOperationReportLines(
 }
 
 describe("Eval Runner", () => {
-  test(`Given the eval command selects a provider and model,
+  test(`Given the eval command selects a provider and model and the task opts into agents,
     When the eval runner executes a trial,
-    Then it passes the provider and model flags into the CLI run`, async () => {
+    Then it passes provider, model, budget, and experimental-agent flags into the CLI run`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "provider-selection", {
@@ -41,9 +41,14 @@ describe("Eval Runner", () => {
         'const model = args.indexOf("--model");',
         'if (provider < 0 || args[provider + 1] !== "qwen") process.exit(1);',
         'if (model < 0 || args[model + 1] !== "qwen3.7-plus") process.exit(1);',
+        'const maxCost = args.indexOf("--max-cost");',
+        'if (maxCost < 0 || args[maxCost + 1] !== "0.2") process.exit(1);',
+        'if (!args.includes("--experimental-agents")) process.exit(1);',
         "'\n",
       ].join(" "),
       solution: "printf '[]' > agent-args.json\n",
+      maxCostUsd: 0.2,
+      experimentalAgents: true,
     });
     const cliEntry = join(root, "record-args-cli.js");
     await writeFile(
@@ -54,7 +59,7 @@ describe("Eval Runner", () => {
         "const reportIndex = args.indexOf('--report');",
         "writeFileSync('agent-args.json', JSON.stringify(args), 'utf8');",
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 19,",
+        "  schemaVersion: 20,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
         "  humanInterventionCount: 0,",
         ...modelOperationReportLines("qwen", "qwen3.7-plus"),
@@ -137,7 +142,7 @@ describe("Eval Runner", () => {
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 19,",
+        "  schemaVersion: 20,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
         "  humanInterventionCount: 0,",
         ...modelOperationReportLines("fake", "fake"),
@@ -213,7 +218,7 @@ describe("Eval Runner", () => {
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 19,",
+        "  schemaVersion: 20,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
         "  humanInterventionCount: 0,",
         ...modelOperationReportLines("fake", "fake"),
@@ -303,7 +308,7 @@ describe("Eval Runner", () => {
           "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
           transcriptAction,
           "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-          "  schemaVersion: 19,",
+          "  schemaVersion: 20,",
           "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
           "  humanInterventionCount: 0,",
           ...modelOperationReportLines("fake", "fake"),

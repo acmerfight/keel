@@ -5,6 +5,8 @@ import { errorMessage } from "../core/error.ts";
 
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 60_000;
+const delegationPolicySchema = z.enum(["require_one", "forbid", "at_most_one"]);
+type EvalDelegationPolicy = z.infer<typeof delegationPolicySchema>;
 
 const standardTaskConfigSchema = z
   .object({
@@ -18,6 +20,8 @@ const standardTaskConfigSchema = z
       .default(DEFAULT_SCRIPT_TIMEOUT_MS),
     allowBash: z.boolean().default(false),
     maxCostUsd: z.number().positive().optional(),
+    experimentalAgents: z.boolean().default(false),
+    delegationPolicy: delegationPolicySchema.optional(),
   })
   .strict();
 
@@ -47,6 +51,8 @@ interface EvalTaskBase {
   readonly timeoutMs: number;
   readonly scriptTimeoutMs: number;
   readonly allowBash: boolean;
+  readonly experimentalAgents: boolean;
+  readonly delegationPolicy?: EvalDelegationPolicy;
 }
 
 export interface StandardEvalTask extends EvalTaskBase {
@@ -121,6 +127,7 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       timeoutMs: config.timeoutMs,
       scriptTimeoutMs: config.scriptTimeoutMs,
       allowBash: config.allowBash,
+      experimentalAgents: false,
       maxCostUsd: config.maxCostUsd,
       memory: config.memory,
     };
@@ -135,6 +142,10 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     timeoutMs: config.timeoutMs,
     scriptTimeoutMs: config.scriptTimeoutMs,
     allowBash: config.allowBash,
+    experimentalAgents: config.experimentalAgents,
+    ...(config.delegationPolicy !== undefined
+      ? { delegationPolicy: config.delegationPolicy }
+      : {}),
     ...(config.maxCostUsd === undefined
       ? {}
       : { maxCostUsd: config.maxCostUsd }),

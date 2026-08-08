@@ -136,6 +136,12 @@ What a user can do today:
 - `keel --max-cost <usd>` — one-shot or interactive best-effort session cost
   budget with conservative request admission, provider output bounds, and
   post-response accounting.
+- `keel --experimental-agents --max-cost <usd> "<message>"` — a default-off,
+  time-boxed #590 experiment for one foreground read-only child. Main may
+  delegate one fresh-context workspace investigation, shows bounded lifecycle
+  progress, shares the root cost budget, waits for real cancellation/settlement,
+  and remains the only final answerer. This is Slice 1 evidence, not a decision
+  to make subagents default or to fund the remaining epic slices.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -223,8 +229,11 @@ Known limits that shape the priorities below:
   compaction, resume, and fork. Deterministic package audit now excludes blocked
   Skills from routing and activation and exposes actionable diagnostics through
   `keel skills doctor`. The next Skill work should calibrate catalog routing and
-  task outcomes before pinned distribution. Sub-agents, marketplaces, and
-  IDE integration remain deferred.
+  task outcomes before pinned distribution. Sub-agents have one explicit,
+  default-off, time-boxed read-only Slice 1 experiment under #590; every later
+  slice requires a fresh next-slice decision and remains subject to the issue's
+  reliability and same-budget value gates. Marketplaces and IDE integration
+  remain deferred.
 - MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
   transport over the same runtime and policy core, and Keel is a client only.
   Remaining work is calibrating progressive tool selection on real tasks.
@@ -392,7 +401,9 @@ Codex/Claude Code — or directly moves the eval numbers.
 
 Not needed to switch; revisit once P0/P1 are done.
 
-- Sub-agents
+- Sub-agents — #590 Slice 1 is an explicit default-off, time-boxed experiment;
+  parallelism, persistence, and any default-on decision remain P2 and require
+  the issue's reliability and same-budget go/no-go gates.
 - Plan mode
 - IDE integration
 - Skill marketplace

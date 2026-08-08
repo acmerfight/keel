@@ -52,6 +52,7 @@ export interface ToolOutputArtifactSaveInput {
   readonly content: string;
   readonly sourceStatus: ToolOutputArtifactSourceStatus;
   readonly purpose: ToolOutputArtifactPurpose;
+  readonly signal?: AbortSignal;
 }
 
 export type ToolOutputArtifactSaveResult =
@@ -92,6 +93,11 @@ export interface ToolOutputArtifactStore {
     input: ToolOutputArtifactSaveInput,
   ) => Promise<ToolOutputArtifactSaveResult>;
   readonly discard: (ref: string) => Promise<void>;
+}
+
+export interface AbortableToolOutputArtifactStore
+  extends ToolOutputArtifactStore {
+  readonly abortSignalSupport: true;
 }
 
 export interface ToolOutputArtifactsOptions {

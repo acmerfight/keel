@@ -7,7 +7,7 @@ import {
   createCostBudgetedProvider,
 } from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
-import type { ModelOperationInstrumentation } from "../../agent/model-operations.ts";
+import type { MainModelOperationInstrumentation } from "../../agent/model-operations.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
@@ -48,7 +48,7 @@ export interface ManualCompactContext {
     costModel: CostModel,
   ) => CostReport;
   readonly compactionCost: InteractiveCompactionCost;
-  readonly modelOperations: ModelOperationInstrumentation | null;
+  readonly modelOperations: MainModelOperationInstrumentation | null;
 }
 
 export interface ManualCompactionResult {

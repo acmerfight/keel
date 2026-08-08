@@ -93,6 +93,8 @@ export type ModelToolExposure =
   | { readonly kind: "none" }
   | {
       readonly kind: "auto";
+      readonly profile?: "main" | "read-only-subagent";
+      readonly delegation?: true;
       readonly bash?: true;
       readonly skill?: true;
       readonly memory?: "direct" | "reviewed";
@@ -103,6 +105,8 @@ export type ResolvedModelToolExposure =
   | { readonly kind: "none" }
   | {
       readonly kind: "auto";
+      readonly profile: "main" | "read-only-subagent";
+      readonly delegation: boolean;
       readonly bash: boolean;
       readonly skill: boolean;
       readonly memory: "disabled" | "direct" | "reviewed";
@@ -124,6 +128,39 @@ export type ToolName = keyof typeof builtinToolRegistry;
 
 type BuiltinToolForName<Name extends ToolName> =
   (typeof builtinToolRegistry)[Name];
+
+function builtinToolIsExposed(
+  exposure: Extract<ModelToolExposure, { readonly kind: "auto" }>,
+  tool: RegisteredBuiltinTool,
+): boolean {
+  if (exposure.profile === "read-only-subagent") {
+    return (
+      (tool.availability === undefined &&
+        tool.risk.kind === "workspace-read") ||
+      tool.availability === "subagent-result"
+    );
+  }
+  return (
+    (exposure.delegation === true || tool.availability !== "delegation") &&
+    tool.availability !== "subagent-result" &&
+    (exposure.bash === true || tool.risk.kind !== "trusted-shell") &&
+    (exposure.skill === true || tool.availability !== "skill-catalog") &&
+    (exposure.mcp?.catalogAvailable === true ||
+      tool.availability !== "mcp-catalog") &&
+    (exposure.memory !== undefined || tool.availability !== "memory") &&
+    (exposure.memory === "reviewed" || tool.availability !== "memory-proposal")
+  );
+}
+
+export function builtinToolAuthorityAllows(
+  exposure: ModelToolExposure,
+  name: ToolName,
+): boolean {
+  return (
+    exposure.kind === "auto" &&
+    builtinToolIsExposed(exposure, builtinToolForName(name))
+  );
+}
 
 export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;
 
@@ -288,16 +325,7 @@ export function openAICompatibleTools(
 ): readonly OpenAICompatibleToolDefinition[] {
   if (exposure.kind === "none") return [];
   const builtins = builtinTools
-    .filter(
-      (tool) =>
-        (exposure.bash === true || tool.risk.kind !== "trusted-shell") &&
-        (exposure.skill === true || tool.availability !== "skill-catalog") &&
-        (exposure.mcp?.catalogAvailable === true ||
-          tool.availability !== "mcp-catalog") &&
-        (exposure.memory !== undefined || tool.availability !== "memory") &&
-        (exposure.memory === "reviewed" ||
-          tool.availability !== "memory-proposal"),
-    )
+    .filter((tool) => builtinToolIsExposed(exposure, tool))
     .map(toOpenAICompatibleToolDefinition);
   const mcpTools =
     exposure.mcp?.catalogAvailable === true
@@ -312,6 +340,8 @@ export function resolveModelToolExposure(
   if (exposure?.kind === "none") return exposure;
   return {
     kind: "auto",
+    profile: exposure?.profile ?? "main",
+    delegation: exposure?.delegation === true,
     bash: exposure?.bash === true,
     skill: exposure?.skill === true,
     memory: exposure?.memory ?? "disabled",
@@ -328,6 +358,8 @@ export function modelToolExposuresEqual(
   if (right.kind === "none") return false;
   return (
     left.bash === right.bash &&
+    left.profile === right.profile &&
+    left.delegation === right.delegation &&
     left.skill === right.skill &&
     left.memory === right.memory &&
     left.mcpSnapshotId === right.mcpSnapshotId

@@ -1,12 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
+import { createSharedCostBudgetedProvider } from "../agent/cost-budget.ts";
 import { runAgent } from "../agent/loop.ts";
+import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import {
+  appendDelegationToSystemPrompt,
   appendProjectMemoryToSystemPrompt,
   appendWorkflowSkillsToSystemPrompt,
   buildAgentSystemPrompt,
 } from "../agent/prompt.ts";
 import type { SessionMessage } from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
+import { createSubagentSupervisor } from "../agent/subagent-supervisor.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
@@ -50,6 +55,7 @@ import {
 } from "./mcp-connection.ts";
 import {
   formatCostReport,
+  formatSubagentProgress,
   formatUndoCheckpointWarning,
   printAgentEvents,
 } from "./output.ts";
@@ -308,7 +314,7 @@ export async function runOneShotCli(
         scope: newToolOutputArtifactScope("run"),
       }),
     };
-    const systemPrompt = buildAgentSystemPrompt({
+    const baseSystemPrompt = buildAgentSystemPrompt({
       workspace,
       platform: runtime.platform,
       ...(projectInstructions !== undefined ? { projectInstructions } : {}),
@@ -316,6 +322,10 @@ export async function runOneShotCli(
         ? { skillCatalog: catalogExposure.skills }
         : {}),
     });
+    const systemPrompt =
+      cliArgs.experimentalAgents === true
+        ? appendDelegationToSystemPrompt(baseSystemPrompt)
+        : baseSystemPrompt;
     const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
     let exposedMemoryBytes = 0;
     let exposedMemoryTokens = 0;
@@ -372,6 +382,63 @@ export async function runOneShotCli(
     const reportRecorder = createAgentEventReportRecorder();
     reportRecorder.beginTask("user_prompt");
     reportRecorder.beginAgentRun("user_prompt");
+    const modelOperations: MainModelOperationInstrumentation | undefined =
+      cliArgs.reportFile !== undefined && trackedCostModel !== undefined
+        ? {
+            recorder: reportRecorder,
+            owner: { type: "current_agent_run" },
+            provider: resolved.provider.id,
+            model: resolved.model,
+            costModel: trackedCostModel,
+          }
+        : undefined;
+    const rootBudget =
+      cliArgs.experimentalAgents === true &&
+      cliArgs.maxCostUsd !== undefined &&
+      trackedCostModel !== undefined
+        ? createSharedCostBudgetedProvider({
+            provider: resolved.provider,
+            model: trackedCostModel,
+            maxCostUsd: cliArgs.maxCostUsd,
+            ...(modelMaxOutputTokens !== undefined
+              ? { modelMaxOutputTokens }
+              : {}),
+          })
+        : undefined;
+    const subagentSupervisor =
+      rootBudget !== undefined &&
+      cliArgs.maxCostUsd !== undefined &&
+      trackedCostModel !== undefined
+        ? createSubagentSupervisor({
+            workspace,
+            platform: runtime.platform,
+            parentRunId: `main-${randomUUID()}`,
+            provider: rootBudget.provider,
+            providerId: resolved.provider.id,
+            model: resolved.model,
+            costModel: trackedCostModel,
+            rootMaxCostUsd: cliArgs.maxCostUsd,
+            rootBudget,
+            ...(projectInstructions !== undefined
+              ? { projectInstructions }
+              : {}),
+            ...(hiddenWorkspacePaths.length > 0
+              ? { hiddenWorkspacePaths }
+              : {}),
+            ...(resolved.contextCompaction !== undefined
+              ? { contextCompaction: resolved.contextCompaction }
+              : {}),
+            ...(modelMaxOutputTokens !== undefined
+              ? { modelMaxOutputTokens }
+              : {}),
+            ...(modelOperations !== undefined ? { modelOperations } : {}),
+            transcriptStore: toolOutputArtifacts.store,
+            now: runtime.now,
+            onProgress: (event) => {
+              runtime.writeStderr(formatSubagentProgress(event));
+            },
+          })
+        : undefined;
     let transcriptMessages: readonly SessionMessage[] | undefined;
     const stream = runAgent({
       workspace,
@@ -389,6 +456,12 @@ export async function runOneShotCli(
         : {}),
       signal: abortController.signal,
       bash: bashRuntime,
+      ...(subagentSupervisor !== undefined
+        ? { delegation: subagentSupervisor.capability }
+        : {}),
+      ...(rootBudget !== undefined
+        ? { costBudgetProvider: rootBudget.provider }
+        : {}),
       ...(mcpRuntime !== undefined
         ? {
             mcp: {
@@ -417,17 +490,7 @@ export async function runOneShotCli(
             },
           }
         : {}),
-      ...(cliArgs.reportFile !== undefined && trackedCostModel !== undefined
-        ? {
-            modelOperations: {
-              recorder: reportRecorder,
-              owner: { type: "current_agent_run" },
-              provider: resolved.provider.id,
-              model: resolved.model,
-              costModel: trackedCostModel,
-            },
-          }
-        : {}),
+      ...(modelOperations !== undefined ? { modelOperations } : {}),
       ...(resolved.contextCompaction !== undefined
         ? { contextCompaction: resolved.contextCompaction }
         : {}),
