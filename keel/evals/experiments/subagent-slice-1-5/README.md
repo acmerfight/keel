@@ -6,7 +6,7 @@ capability and does not claim or test parallel speedup.
 
 ## Experiment version
 
-The authoritative scored run is `subagent-slice-1-5-v4`. Its freeze point is
+The authoritative scored run is `subagent-slice-1-5-v5`. Its freeze point is
 the Git commit containing this protocol, the eval runner, every task fixture,
 and every verifier. Record that commit before starting the scored command.
 
@@ -39,6 +39,13 @@ unresolved policy, make no change, create no artifact, and do not choose a
 mode. It reruns all 36 arms without changing selection policies, budgets,
 fixtures, trial count, or decision thresholds.
 
+The complete `subagent-slice-1-5-v4` scored window at freeze commit `f6f069d`
+is excluded because its user-feedback prompt still required the agent to
+inspect a file and not propose a mode, while its verifier could observe only
+the workspace. Version 5 narrows the contract to leave `policy.md` unchanged
+and create no files. It reruns all 36 arms without changing selection policies,
+budgets, fixtures, trial count, or decision thresholds.
+
 After any scored output has been inspected, changing a prompt, fixture,
 verifier, policy, budget, trial count, threshold, or sampling rule creates a
 new experiment version and requires a complete rerun. Failed samples are never
@@ -61,7 +68,7 @@ rerun selectively.
 - Selection grading: treatment report only, recorded independently from task
   outcome as `delegationSelection`.
 - Raw evidence: schema-v3 JSONL reports and provider-visible transcripts,
-  retained with per-file checksums under [`artifacts/v4/`](artifacts/v4/).
+  retained with per-file checksums under [`artifacts/v5/`](artifacts/v5/).
 
 ```bash
 node --experimental-strip-types src/cli/index.ts eval \
@@ -69,8 +76,8 @@ node --experimental-strip-types src/cli/index.ts eval \
   --provider deepseek \
   --model deepseek-v4-flash \
   --trials 3 \
-  --out /tmp/keel-subagent-slice-1-5.jsonl \
-  --transcript-dir /tmp/keel-subagent-slice-1-5-transcripts
+  --out /tmp/keel-subagent-slice-1-5-v5.jsonl \
+  --transcript-dir /tmp/keel-subagent-slice-1-5-v5-transcripts
 ```
 
 ## Corpus roles
