@@ -145,8 +145,16 @@ const modelOperationBase = {
     }),
     z.object({ type: z.literal("session") }),
   ]),
+  attribution: z
+    .object({
+      type: z.literal("subagent"),
+      delegationId: z.string(),
+      childRunId: z.string(),
+    })
+    .optional(),
   purpose: z.enum([
     "agent_turn",
+    "subagent_turn",
     "turn_limit_summary",
     "context_compaction",
     "goal_assertion_evaluation",
@@ -305,7 +313,7 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 
 export const runReportSchema = z.object({
-  schemaVersion: z.literal(19),
+  schemaVersion: z.literal(20),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),

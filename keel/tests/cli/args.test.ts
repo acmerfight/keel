@@ -259,6 +259,60 @@ describe("CLI Args", () => {
     });
   });
 
+  test(`Given experimental delegation has no root cost budget,
+    When the CLI parses the one-shot request,
+    Then it rejects the experiment before provider resolution`, () => {
+    expect(
+      parseCliArgs(["--experimental-agents", "inspect the project"]),
+    ).toEqual({
+      ok: false,
+      message:
+        "Error: --experimental-agents requires --max-cost <usd> so the root and child share a bounded budget.",
+    });
+  });
+
+  test(`Given experimental delegation is requested for an interactive run,
+    When the CLI parses the invocation,
+    Then it rejects the unsupported lifecycle before provider resolution`, () => {
+    expect(parseCliArgs(["--experimental-agents", "--max-cost", "1"])).toEqual({
+      ok: false,
+      message:
+        "Error: --experimental-agents currently supports one-shot runs with a message only.",
+    });
+  });
+
+  test(`Given experimental delegation has an explicit budget and one-shot task,
+    When the CLI parses the invocation,
+    Then it records the opt-in without changing the default run contract`, () => {
+    expect(
+      parseCliArgs([
+        "--experimental-agents",
+        "--max-cost=1.25",
+        "inspect the project",
+      ]),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        mode: "one-shot",
+        experimentalAgents: true,
+        maxCostUsd: 1.25,
+        userMessage: "inspect the project",
+      },
+    });
+    expect(parseCliArgs(["inspect the project"])).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        mode: "one-shot",
+        userMessage: "inspect the project",
+      },
+    });
+    expect(parseCliArgs(["inspect the project"])).not.toHaveProperty(
+      "value.experimentalAgents",
+    );
+  });
+
   test.each([
     [
       ["skills", "disable", "--all"],

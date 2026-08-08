@@ -177,6 +177,27 @@ function readRunReport(reportPath: string): RunReport | null {
   }
 }
 
+function delegationPolicySatisfied(task: EvalTask, report: RunReport): boolean {
+  if (task.delegationPolicy === undefined) return true;
+  const childRuns = new Set(
+    report.modelOperations.flatMap((operation) =>
+      operation.attribution?.type === "subagent"
+        ? [
+            `${operation.attribution.delegationId}\0${operation.attribution.childRunId}`,
+          ]
+        : [],
+    ),
+  ).size;
+  switch (task.delegationPolicy) {
+    case "require_one":
+      return childRuns === 1;
+    case "forbid":
+      return childRuns === 0;
+    case "at_most_one":
+      return childRuns <= 1;
+  }
+}
+
 function readableTranscriptResult(transcriptPath: string | undefined): {
   readonly transcriptPath?: string;
 } {
@@ -225,6 +246,7 @@ async function runTrialInWorkspace(
     ...(task.maxCostUsd !== undefined
       ? ["--max-cost", String(task.maxCostUsd)]
       : []),
+    ...(task.experimentalAgents ? ["--experimental-agents"] : []),
     ...(condition === "memory_enabled" ? [] : ["--no-memory"]),
     "--report",
     reportPath,
@@ -255,6 +277,17 @@ async function runTrialInWorkspace(
     return {
       outcome: "crashed",
       wallMs,
+      ...readableTranscriptResult(transcriptPath),
+    };
+  }
+  if (!delegationPolicySatisfied(task, report)) {
+    process.stderr.write(
+      `[${task.id}] delegation policy ${task.delegationPolicy} failed\n`,
+    );
+    return {
+      outcome: "verify_failed",
+      wallMs,
+      report,
       ...readableTranscriptResult(transcriptPath),
     };
   }

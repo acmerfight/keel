@@ -2,6 +2,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
   truncate,
   writeFile,
@@ -11,11 +12,14 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
+import { createAgentResultSubmissionCapability } from "../../src/tools/delegation.ts";
 import {
+  type ExecuteToolCallOptions,
   executeToolCall,
   type ToolExecution,
 } from "../../src/tools/execution.ts";
 import type { AgentMemoryToolContext } from "../../src/tools/memory.ts";
+import type { ModelToolExposure } from "../../src/tools/registry.ts";
 
 const EDIT_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const SHELL_ENV_KEY = "SHELL";
@@ -32,7 +36,10 @@ type FailedToolExecutionEffectKind = Extract<
 type FailedToolExecutionEffectsAreRestricted = Expect<
   Equal<
     FailedToolExecutionEffectKind,
-    "external_tool_result" | "visible_project_instructions" | "session_goal"
+    | "delegation"
+    | "external_tool_result"
+    | "visible_project_instructions"
+    | "session_goal"
   >
 >;
 const failedToolExecutionEffectsAreRestricted: FailedToolExecutionEffectsAreRestricted = true;
@@ -49,6 +56,428 @@ function expectRecoverableToolFailure(
 }
 
 describe("Tool Execution", () => {
+  test(`Given a cancellable child reads text beyond its output window or binary bytes beyond the initial sample,
+    When the abortable read implementation consumes the complete file,
+    Then it preserves truncation metadata and rejects late binary content`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-read-only-"));
+    await writeFile(
+      join(workspace, "large.txt"),
+      Buffer.from("line\n".repeat(20_000)),
+    );
+    await writeFile(
+      join(workspace, "late-binary.txt"),
+      Buffer.concat([Buffer.alloc(8_192, 0x61), Buffer.from([0, 0x62])]),
+    );
+    const base = {
+      workspace,
+      signal: new AbortController().signal,
+      bash: { kind: "disabled" } as const,
+      builtinToolAuthority: {
+        kind: "auto",
+        profile: "read-only-subagent",
+      } as const,
+    };
+
+    try {
+      const truncated = await executeToolCall({
+        ...base,
+        toolCall: { id: "large_read", tool: "read", path: "large.txt" },
+      });
+      const binary = await executeToolCall({
+        ...base,
+        toolCall: {
+          id: "late_binary_read",
+          tool: "read",
+          path: "late-binary.txt",
+        },
+      });
+
+      expect(truncated).toMatchObject({ ok: true, sourceTruncated: true });
+      expect(truncated.effects).toEqual([
+        expect.objectContaining({ kind: "read" }),
+      ]);
+      expectRecoverableToolFailure(binary, "binary file");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given read and ls are available to a cancellable read-only child,
+    When cancellation arrives while filesystem work is in progress,
+    Then both cooperative tools reject before scanning their full inputs`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-abort-"));
+    const largeFile = join(workspace, "large.txt");
+    const manyEntries = join(workspace, "many");
+    await writeFile(largeFile, Buffer.alloc(8 * 1024 * 1024, 0x61));
+    await mkdir(manyEntries);
+    await Promise.all(
+      Array.from({ length: 200 }, (_, index) =>
+        writeFile(join(manyEntries, `entry-${index}.txt`), "entry\n"),
+      ),
+    );
+
+    try {
+      for (const toolCall of [
+        { id: "abort_read", tool: "read", path: "large.txt" },
+        { id: "abort_ls", tool: "ls", path: "many" },
+      ] as const) {
+        const controller = new AbortController();
+        const cancellation = new Error(`cancel ${toolCall.tool}`);
+        setTimeout(() => controller.abort(cancellation), 0);
+
+        const rejection = expect(
+          executeToolCall({
+            workspace,
+            toolCall,
+            signal: controller.signal,
+            bash: { kind: "disabled" },
+            builtinToolAuthority: {
+              kind: "auto",
+              profile: "read-only-subagent",
+            },
+          }),
+        ).rejects;
+        if (toolCall.tool === "read") {
+          await rejection.toMatchObject({
+            name: "AbortError",
+            code: "ABORT_ERR",
+          });
+        } else {
+          await rejection.toBe(cancellation);
+        }
+        expect(controller.signal.reason).toBe(cancellation);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given main delegation is disabled and a read-only child fabricates a write,
+    When dispatcher authority checks both calls,
+    Then both fail closed before either capability or filesystem mutation runs`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-delegation-"));
+    let delegateCalled = false;
+
+    try {
+      const disabledDelegate = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "forged_delegate",
+          tool: "delegate",
+          task: "Inspect the workspace.",
+        },
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+        builtinToolAuthority: { kind: "auto" },
+        delegation: {
+          delegate: async () => {
+            delegateCalled = true;
+            return { ok: true, content: "unexpected" };
+          },
+        },
+      });
+      const forgedWrite = await executeToolCall({
+        workspace,
+        toolCall: {
+          id: "forged_write",
+          tool: "write",
+          path: "forbidden.txt",
+          content: "must not exist",
+        },
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+        builtinToolAuthority: {
+          kind: "auto",
+          profile: "read-only-subagent",
+        },
+      });
+
+      expect(disabledDelegate).toMatchObject({ ok: false, effects: [] });
+      expect(disabledDelegate.content).toContain(
+        "delegate is unavailable in the current tool authority context",
+      );
+      expect(forgedWrite).toMatchObject({ ok: false, effects: [] });
+      expect(forgedWrite.content).toContain(
+        "write is unavailable in the current tool authority context",
+      );
+      expect(delegateCalled).toBe(false);
+      await expect(
+        readFile(join(workspace, "forbidden.txt")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a read-only child fabricates catalog and shell tool calls,
+    When dispatcher authority checks each call,
+    Then the specialized unavailable responses fail closed without invoking capabilities`, async () => {
+    const base = {
+      workspace: process.cwd(),
+      signal: new AbortController().signal,
+      bash: { kind: "disabled" } as const,
+      builtinToolAuthority: {
+        kind: "auto",
+        profile: "read-only-subagent",
+      } as const,
+    };
+    const results = await Promise.all([
+      executeToolCall({
+        ...base,
+        toolCall: { id: "denied_bash", tool: "bash", command: "pwd" },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "denied_memory",
+          tool: "memory_add",
+          text: "remember this",
+        },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: { id: "denied_skill", tool: "skill", name: "repo:qa" },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "denied_skill_search",
+          tool: "skill_search",
+          query: "qa",
+        },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "denied_skill_resource",
+          tool: "skill_resource",
+          skill: "repo:qa",
+          path: "references/checklist.md",
+        },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "denied_mcp_search",
+          tool: "mcp_search",
+          query: "remote issue tracker",
+        },
+      }),
+    ]);
+
+    expect(results).toHaveLength(6);
+    for (const result of results) {
+      expect(result).toMatchObject({ ok: false, effects: [] });
+      expect(result.content).toContain("Tool failed:");
+    }
+    expect(
+      results
+        .slice(1)
+        .every((result) => result.content.includes("unavailable")),
+    ).toBe(true);
+  });
+
+  test(`Given delegation and submission calls reach dispatcher without their host capabilities,
+    When the execution layer evaluates them,
+    Then both return recoverable unavailable results without side effects`, async () => {
+    const base: Pick<ExecuteToolCallOptions, "workspace" | "signal" | "bash"> =
+      {
+        workspace: process.cwd(),
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+      };
+    const delegate = await executeToolCall({
+      ...base,
+      toolCall: {
+        id: "missing_delegate_capability",
+        tool: "delegate",
+        task: "Inspect the workspace.",
+      },
+    });
+    const submit = await executeToolCall({
+      ...base,
+      toolCall: {
+        id: "missing_submission_capability",
+        tool: "submit_agent_result",
+        summary: "Result",
+        evidence: [{ path: "ROADMAP.md", detail: "Evidence" }],
+        risks: [],
+      },
+    });
+
+    expect(delegate).toMatchObject({ ok: false, effects: [] });
+    expect(delegate.content).toContain("delegate is unavailable");
+    expect(submit).toMatchObject({ ok: false, effects: [] });
+    expect(submit.content).toContain("submit_agent_result is unavailable");
+  });
+
+  test(`Given an enabled delegation fails, succeeds without usage, or settles after root cancellation,
+    When dispatcher receives each Supervisor result,
+    Then failures stay tool failures, empty usage stays unattributed, and cancelled usage remains observable`, async () => {
+    const authority: ModelToolExposure = { kind: "auto", delegation: true };
+    const base: Pick<
+      ExecuteToolCallOptions,
+      "workspace" | "bash" | "builtinToolAuthority" | "toolCall"
+    > = {
+      workspace: process.cwd(),
+      bash: { kind: "disabled" },
+      builtinToolAuthority: authority,
+      toolCall: {
+        id: "delegate_result",
+        tool: "delegate",
+        task: "Inspect the workspace.",
+      },
+    };
+    const failed = await executeToolCall({
+      ...base,
+      signal: new AbortController().signal,
+      delegation: {
+        delegate: async () => ({ ok: false, content: "child failed" }),
+      },
+    });
+    const noUsage = await executeToolCall({
+      ...base,
+      signal: new AbortController().signal,
+      delegation: {
+        delegate: async () => ({ ok: true, content: "child completed" }),
+      },
+    });
+    const controller = new AbortController();
+    const cancellation = new Error("cancel after child settlement");
+    const cancelled = await executeToolCall({
+      ...base,
+      signal: controller.signal,
+      delegation: {
+        delegate: async () => {
+          controller.abort(cancellation);
+          return {
+            ok: false,
+            content: "child cancelled",
+            usage: {
+              inputTokens: 5,
+              cachedInputTokens: 1,
+              uncachedInputTokens: 4,
+              outputTokens: 2,
+            },
+          };
+        },
+      },
+    });
+
+    expect(failed).toEqual({ ok: false, content: "child failed", effects: [] });
+    expect(noUsage).toEqual({
+      ok: true,
+      content: "child completed",
+      effects: [],
+    });
+    expect(cancelled).toEqual({
+      ok: false,
+      content: "child cancelled",
+      effects: [
+        {
+          kind: "delegation",
+          usage: {
+            inputTokens: 5,
+            cachedInputTokens: 1,
+            uncachedInputTokens: 4,
+            outputTokens: 2,
+          },
+        },
+      ],
+    });
+    expect(controller.signal.reason).toBe(cancellation);
+  });
+
+  test(`Given delegation authority and result submission capabilities are installed,
+    When main delegates and the child submits twice,
+    Then usage is attributed once and the host accepts only the first result`, async () => {
+    const submission = createAgentResultSubmissionCapability();
+    const signal = new AbortController().signal;
+    const delegated = await executeToolCall({
+      workspace: process.cwd(),
+      toolCall: {
+        id: "delegate_once",
+        tool: "delegate",
+        task: "Inspect src/tools/delegation.ts.",
+        focusPaths: ["src/tools/delegation.ts"],
+      },
+      signal,
+      bash: { kind: "disabled" },
+      builtinToolAuthority: { kind: "auto", delegation: true },
+      delegation: {
+        delegate: async (input) => ({
+          ok: true,
+          content: `${input.task}:${input.focusPaths.join(",")}`,
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 2,
+            uncachedInputTokens: 8,
+            outputTokens: 3,
+          },
+        }),
+      },
+    });
+    const childAuthority: ModelToolExposure = {
+      kind: "auto",
+      profile: "read-only-subagent",
+    };
+    const firstSubmission = await executeToolCall({
+      workspace: process.cwd(),
+      toolCall: {
+        id: "submit_once",
+        tool: "submit_agent_result",
+        summary: "The capability interfaces are explicit.",
+        evidence: [
+          {
+            path: "src/tools/delegation.ts",
+            line: 15,
+            detail: "AgentResultSubmissionCapability is declared here.",
+          },
+        ],
+        risks: [],
+      },
+      signal,
+      bash: { kind: "disabled" },
+      builtinToolAuthority: childAuthority,
+      agentResultSubmission: submission,
+    });
+    const repeatedSubmission = await executeToolCall({
+      workspace: process.cwd(),
+      toolCall: {
+        id: "submit_twice",
+        tool: "submit_agent_result",
+        summary: "Replacement must not win.",
+        evidence: [{ path: "ROADMAP.md", detail: "replacement" }],
+        risks: ["replacement"],
+      },
+      signal,
+      bash: { kind: "disabled" },
+      builtinToolAuthority: childAuthority,
+      agentResultSubmission: submission,
+    });
+
+    expect(delegated).toEqual({
+      ok: true,
+      content: "Inspect src/tools/delegation.ts.:src/tools/delegation.ts",
+      effects: [
+        {
+          kind: "delegation",
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 2,
+            uncachedInputTokens: 8,
+            outputTokens: 3,
+          },
+        },
+      ],
+    });
+    expect(firstSubmission).toMatchObject({ ok: true, effects: [] });
+    expect(repeatedSubmission).toMatchObject({ ok: false, effects: [] });
+    expect(submission.accepted()?.summary).toBe(
+      "The capability interfaces are explicit.",
+    );
+  });
+
   test(`Given an MCP search tool call is missing its required query,
     When the tool execution layer handles the invalid call,
     Then it returns a recoverable correction message for the next model turn`, async () => {

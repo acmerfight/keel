@@ -2,6 +2,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import {
+  createCostBudgetedProvider,
+  createSharedCostBudgetedProvider,
+} from "../../src/agent/cost-budget.ts";
 import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
@@ -9,7 +13,10 @@ import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../src/agent/stop-policy.ts";
-import type { CostModel } from "../../src/core/cost.ts";
+import {
+  type CostModel,
+  maxAffordableOutputTokens,
+} from "../../src/core/cost.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";
 import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
@@ -54,6 +61,85 @@ const tieredBudgetModel: CostModel = {
 };
 
 describe("Cost Budget", () => {
+  test(`Given a child lease wraps the shared root cost budget,
+    When both layers calculate an affordable output ceiling,
+    Then the outer root wrapper preserves the smaller child ceiling`, async () => {
+    let receivedMaxOutputTokens: number | undefined;
+    const underlying: LLMProvider = {
+      id: "nested-budget",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        receivedMaxOutputTokens = options.maxOutputTokens;
+        yield { type: "text", text: "done" };
+      },
+    };
+    const root = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd: 1,
+    });
+    const child = createCostBudgetedProvider({
+      provider: root.provider,
+      model: budgetModel,
+      maxCostUsd: 0.5,
+    });
+
+    for await (const _event of child.stream({
+      systemPrompt: "bounded",
+      messages: [],
+      signal: freshSignal(),
+    })) {
+      // Consume the provider stream so both admission layers run.
+    }
+
+    expect(receivedMaxOutputTokens).toBe(
+      maxAffordableOutputTokens({
+        remainingUsd: 0.5,
+        inputTokens: 100,
+        model: budgetModel,
+      }),
+    );
+  });
+
+  test(`Given a child lease wraps the shared root budget and an attempt settles without usage,
+    When the outer wrapper retains a conservative reservation for uncertain spend,
+    Then it reserves only the child's admitted ceiling and preserves main synthesis budget`, async () => {
+    const underlying: LLMProvider = {
+      id: "nested-abnormal-budget",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        yield { type: "text", text: "request started" };
+        options.providerRequestAttempts?.begin().finish({
+          outcome: "terminal_error",
+          errorCode: "provider_network_error",
+        });
+        throw new Error("provider failed after request admission");
+      },
+    };
+    const root = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd: 1,
+    });
+    const child = createCostBudgetedProvider({
+      provider: root.provider,
+      model: budgetModel,
+      maxCostUsd: 0.5,
+    });
+
+    await expect(async () => {
+      for await (const _event of child.stream({
+        systemPrompt: "bounded abnormal attempt",
+        messages: [],
+        signal: freshSignal(),
+      })) {
+        // Consume the provider stream so both admission layers run.
+      }
+    }).rejects.toThrow("provider failed after request admission");
+
+    expect(root.remainingUsd()).toBeGreaterThanOrEqual(0.5);
+  });
+
   test(`Given the conservative input cost cannot fit the session budget,
     When the agent prepares its first model turn,
     Then it stops without calling the provider`, async () => {

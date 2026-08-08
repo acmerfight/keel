@@ -9,6 +9,7 @@ import { CostBudgetAdmissionError } from "./cost-budget.ts";
 
 export type ModelOperationPurpose =
   | "agent_turn"
+  | "subagent_turn"
   | "turn_limit_summary"
   | "context_compaction"
   | "goal_assertion_evaluation"
@@ -23,6 +24,12 @@ export type ModelOperationOwner =
   | { readonly type: "current_agent_run" }
   | { readonly type: "session" };
 
+interface ModelOperationAttribution {
+  readonly type: "subagent";
+  readonly delegationId: string;
+  readonly childRunId: string;
+}
+
 export type ModelOperationRecoveryTarget = (
   recoveryOperationOrdinal: number,
 ) => void;
@@ -33,6 +40,7 @@ export interface ModelOperationInstrumentation {
   readonly provider: string;
   readonly model: string;
   readonly costModel: CostModel;
+  readonly attribution?: ModelOperationAttribution;
 }
 
 export type ModelOperationRequest<

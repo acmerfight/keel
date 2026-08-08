@@ -27,6 +27,10 @@ import {
 } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
+import type {
+  AgentResultSubmissionCapability,
+  DelegationCapability,
+} from "../tools/delegation.ts";
 import {
   executeToolCall,
   type ToolExecution,
@@ -64,7 +68,10 @@ import {
   createCostBudgetedProvider,
 } from "./cost-budget.ts";
 import type { AgentEvent } from "./events.ts";
-import type { ModelOperationInstrumentation } from "./model-operations.ts";
+import type {
+  ModelOperationInstrumentation,
+  ModelOperationPurpose,
+} from "./model-operations.ts";
 import { postCompactionReadToolCallId } from "./post-compaction-read-id.ts";
 import { restorePostCompactionReads } from "./post-compaction-restore.ts";
 import {
@@ -83,7 +90,7 @@ import {
   sessionLedgerFromMessages,
   sessionLedgerMessages,
 } from "./session-ledger.ts";
-import type { SessionMessage } from "./session-message.ts";
+import type { SessionMessage, UserMessageOrigin } from "./session-message.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import {
   DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
@@ -132,7 +139,16 @@ export interface RunAgentOptions {
   readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
   readonly mcp?: AgentMcpRuntime;
   readonly signal: AbortSignal;
+  readonly userMessageOrigin?: UserMessageOrigin;
   readonly bash: BashRuntime;
+  readonly toolProfile?: "main" | "read-only-subagent";
+  readonly delegation?: DelegationCapability;
+  readonly agentResultSubmission?: AgentResultSubmissionCapability;
+  readonly costBudgetProvider?: LLMProvider;
+  readonly agentTurnModelOperationPurpose?: Extract<
+    ModelOperationPurpose,
+    "agent_turn" | "subagent_turn"
+  >;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
@@ -141,6 +157,7 @@ export interface RunAgentOptions {
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly taskProgress?: SessionTaskProgress;
   readonly onTranscriptReady?: (messages: readonly SessionMessage[]) => void;
+  readonly onAgentLoopTurnCompleted?: RunAgentTurnOptions["onAgentLoopTurnCompleted"];
   readonly modelOperations?: ModelOperationInstrumentation;
 }
 
@@ -155,6 +172,14 @@ export interface RunAgentTurnOptions {
   readonly mcp?: AgentMcpRuntime;
   readonly signal: AbortSignal;
   readonly bash: BashRuntime;
+  readonly toolProfile?: "main" | "read-only-subagent";
+  readonly delegation?: DelegationCapability;
+  readonly agentResultSubmission?: AgentResultSubmissionCapability;
+  readonly costBudgetProvider?: LLMProvider;
+  readonly agentTurnModelOperationPurpose?: Extract<
+    ModelOperationPurpose,
+    "agent_turn" | "subagent_turn"
+  >;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly stopPolicy: AgentStopPolicy;
   readonly costTracking?: CostTrackingOptions;
@@ -684,16 +709,18 @@ export async function* runAgentTurn(
   };
   let postCompactionReadSequence = 0;
   const requestProvider =
-    costTracking?.maxCostUsd === undefined
-      ? provider
-      : createCostBudgetedProvider({
-          provider,
-          model: costTracking.model,
-          maxCostUsd: costTracking.maxCostUsd,
-          ...(costTracking.modelMaxOutputTokens !== undefined
-            ? { modelMaxOutputTokens: costTracking.modelMaxOutputTokens }
-            : {}),
-        });
+    options.costBudgetProvider !== undefined
+      ? options.costBudgetProvider
+      : costTracking?.maxCostUsd === undefined
+        ? provider
+        : createCostBudgetedProvider({
+            provider,
+            model: costTracking.model,
+            maxCostUsd: costTracking.maxCostUsd,
+            ...(costTracking.modelMaxOutputTokens !== undefined
+              ? { modelMaxOutputTokens: costTracking.modelMaxOutputTokens }
+              : {}),
+          });
   const config: CompactionConfig = {
     provider: requestProvider,
     systemPrompt,
@@ -797,6 +824,19 @@ export async function* runAgentTurn(
       ...(requestSystemPrompt !== undefined ? { requestSystemPrompt } : {}),
       summarySystemPrompt: baseTurnSystemPrompt,
     };
+    const toolExposure: ModelToolExposure = {
+      kind: "auto",
+      ...(options.toolProfile !== undefined
+        ? { profile: options.toolProfile }
+        : {}),
+      ...(options.delegation !== undefined ? { delegation: true } : {}),
+      ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
+      ...(allowSkill && !untrustedMcpContentObserved ? { skill: true } : {}),
+      ...(memoryToolExposure !== undefined
+        ? { memory: memoryToolExposure }
+        : {}),
+      ...(mcpExposure !== undefined ? { mcp: mcpExposure } : {}),
+    };
     let turnResult: AgentTurn;
     try {
       turnResult = yield* streamTurnWithOverflowRecovery(turnConfig, state, {
@@ -804,18 +844,9 @@ export async function* runAgentTurn(
         systemPrompt: baseTurnSystemPrompt,
         ledger: sessionLedger,
         signal,
-        toolExposure: {
-          kind: "auto",
-          ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
-          ...(allowSkill && !untrustedMcpContentObserved
-            ? { skill: true }
-            : {}),
-          ...(memoryToolExposure !== undefined
-            ? { memory: memoryToolExposure }
-            : {}),
-          ...(mcpExposure !== undefined ? { mcp: mcpExposure } : {}),
-        },
-        modelOperationPurpose: "agent_turn",
+        toolExposure,
+        modelOperationPurpose:
+          options.agentTurnModelOperationPurpose ?? "agent_turn",
       });
     } catch (error) {
       if (
@@ -1004,6 +1035,13 @@ export async function* runAgentTurn(
         toolCall,
         signal,
         bash,
+        builtinToolAuthority: toolExposure,
+        ...(options.delegation !== undefined
+          ? { delegation: options.delegation }
+          : {}),
+        ...(options.agentResultSubmission !== undefined
+          ? { agentResultSubmission: options.agentResultSubmission }
+          : {}),
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: readVisibility,
@@ -1126,6 +1164,14 @@ export async function* runAgentTurn(
       );
       completedToolExecutions.push(completed);
       pendingToolExecutions.push(completed);
+      const delegation = toolExecutionEffect(completed.execution, "delegation");
+      if (delegation !== undefined) {
+        state.accounting = addRequestAccounting(
+          state.accounting,
+          delegation.usage,
+          costTracking,
+        );
+      }
     };
     const taskProgressEventFromExecution = (
       execution: ToolExecution,
@@ -1252,6 +1298,9 @@ export async function* runAgentTurn(
           yield sessionGoalEvent;
         }
         recordCompletedToolExecution({ toolCall, execution });
+        if (!isMcpToolInvocation(toolCall) && toolCall.tool === "delegate") {
+          signal.throwIfAborted();
+        }
       }
     }
     for (const notice of await settlePendingToolExecutions()) {
@@ -1264,6 +1313,23 @@ export async function* runAgentTurn(
       projectInstructionVisibility,
       completedToolExecutions.map(({ execution }) => execution),
     );
+    if (
+      options.agentResultSubmission !== undefined &&
+      options.agentResultSubmission.accepted() !== null
+    ) {
+      const finalCost = buildCostReport(
+        state.accounting.totalCostUsd,
+        costTracking,
+      );
+      yield {
+        type: "end",
+        usage: state.accounting.totalUsage,
+        turns: completedTurns,
+        stopReason: "completed",
+        ...(finalCost !== undefined ? { cost: finalCost } : {}),
+      };
+      return;
+    }
     if (!blockedGoalProposalRecordedThisTurn) {
       const sessionGoalEvent = clearPendingBlockedAudit(
         sessionLedgerMessages(sessionLedger).length,
@@ -1289,7 +1355,7 @@ export async function* runAgent(
     {
       role: "user",
       content: options.userMessage,
-      origin: { type: "user_prompt" },
+      origin: options.userMessageOrigin ?? { type: "user_prompt" },
     },
   ]);
   const readVisibility = createReadVisibilityState();
@@ -1298,6 +1364,7 @@ export async function* runAgent(
   );
   const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
   let checkpointRecorded = false;
+  let transcriptPublished = false;
   const recordCheckpoint = (): Extract<
     AgentEvent,
     { readonly type: "undo_checkpoint" }
@@ -1322,6 +1389,29 @@ export async function* runAgent(
         ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
         signal: options.signal,
         bash: options.bash,
+        ...(options.toolProfile !== undefined
+          ? { toolProfile: options.toolProfile }
+          : {}),
+        ...(options.delegation !== undefined
+          ? { delegation: options.delegation }
+          : {}),
+        ...(options.agentResultSubmission !== undefined
+          ? { agentResultSubmission: options.agentResultSubmission }
+          : {}),
+        ...(options.costBudgetProvider !== undefined
+          ? { costBudgetProvider: options.costBudgetProvider }
+          : {}),
+        ...(options.agentTurnModelOperationPurpose !== undefined
+          ? {
+              agentTurnModelOperationPurpose:
+                options.agentTurnModelOperationPurpose,
+            }
+          : {}),
+        ...(options.onAgentLoopTurnCompleted !== undefined
+          ? {
+              onAgentLoopTurnCompleted: options.onAgentLoopTurnCompleted,
+            }
+          : {}),
         hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],
         ...(options.skillActivation !== undefined
           ? { skillActivation: options.skillActivation }
@@ -1358,12 +1448,16 @@ export async function* runAgent(
       throw error;
     }
     options.onTranscriptReady?.(sessionLedgerMessages(ledger));
+    transcriptPublished = true;
     const checkpointEvent = recordCheckpoint();
     checkpointRecorded = true;
     if (checkpointEvent !== null) yield checkpointEvent;
     /* v8 ignore next -- a normally completed runAgentTurn always emits one terminal end event. */
     if (finalEnd !== undefined) yield finalEnd;
   } finally {
+    if (!transcriptPublished) {
+      options.onTranscriptReady?.(sessionLedgerMessages(ledger));
+    }
     if (!checkpointRecorded) recordCheckpoint();
   }
 }

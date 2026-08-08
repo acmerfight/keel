@@ -29,6 +29,8 @@ export interface TaskFixture {
   readonly scriptTimeoutMs?: number;
   readonly allowBash?: boolean;
   readonly maxCostUsd?: number;
+  readonly experimentalAgents?: boolean;
+  readonly delegationPolicy?: "require_one" | "forbid" | "at_most_one";
 }
 
 export interface MemoryPairTaskFixture {
@@ -77,6 +79,12 @@ export async function createTask(
         : {}),
       ...(fixture.maxCostUsd !== undefined
         ? { maxCostUsd: fixture.maxCostUsd }
+        : {}),
+      ...(fixture.experimentalAgents !== undefined
+        ? { experimentalAgents: fixture.experimentalAgents }
+        : {}),
+      ...(fixture.delegationPolicy !== undefined
+        ? { delegationPolicy: fixture.delegationPolicy }
         : {}),
     }),
     "utf8",
@@ -133,7 +141,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 19,
+  schemaVersion: 20,
   tasks: [
     {
       ordinal: 1,

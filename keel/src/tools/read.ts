@@ -1,6 +1,7 @@
 import {
   closeSync,
   constants,
+  createReadStream,
   fstatSync,
   openSync,
   readSync,
@@ -35,6 +36,7 @@ export interface ReadOptions {
   readonly offset?: number | undefined;
   readonly limit?: number | undefined;
   readonly hiddenPaths?: readonly string[];
+  readonly signal?: AbortSignal;
 }
 
 interface ReadToolResult extends ToolResult {
@@ -256,6 +258,56 @@ function readTextWindow(
     );
   }
 
+  return finishReadTextWindow(acc, filePath, options, decoder, revision);
+}
+
+async function readTextWindowAbortable(
+  fd: number,
+  filePath: string,
+  options: NormalizedReadOptions,
+  signal: AbortSignal,
+): Promise<ReadTextWindowResult> {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const acc = createLineWindowAccumulator();
+  const revision = createFileRevisionAccumulator();
+  const stream = createReadStream(filePath, {
+    fd,
+    autoClose: true,
+    start: 0,
+    highWaterMark: READ_CHUNK_BYTES,
+    signal,
+  });
+
+  try {
+    for await (const rawChunk of stream) {
+      signal.throwIfAborted();
+      // No encoding is configured, so Node's file stream yields byte chunks.
+      const bytes = Buffer.from(rawChunk);
+      revision.update(bytes);
+      if (!acc.keepReading) continue;
+      if (hasBinaryControlBytes(bytes)) {
+        throw binaryFileError("read", filePath);
+      }
+      consumeDecodedText(
+        acc,
+        options,
+        decodeUtf8("read", filePath, decoder, bytes, { stream: true }),
+      );
+    }
+    signal.throwIfAborted();
+    return finishReadTextWindow(acc, filePath, options, decoder, revision);
+  } finally {
+    stream.destroy();
+  }
+}
+
+function finishReadTextWindow(
+  acc: LineWindowAccumulator,
+  filePath: string,
+  options: NormalizedReadOptions,
+  decoder: TextDecoder,
+  revision: ReturnType<typeof createFileRevisionAccumulator>,
+): ReadTextWindowResult {
   if (acc.keepReading) {
     const remaining = decodeUtf8("read", filePath, decoder);
     if (remaining !== "") {
@@ -306,11 +358,18 @@ function readTextWindow(
   };
 }
 
-export function executeRead(
+interface OpenedReadTarget {
+  readonly fd: number;
+  readonly normalizedOptions: NormalizedReadOptions;
+  readonly openedTargetPath: string;
+}
+
+function openReadTarget(
   workspace: string,
   filePath: string,
-  options: ReadOptions = {},
-): ReadToolResult {
+  options: ReadOptions,
+): OpenedReadTarget {
+  options.signal?.throwIfAborted();
   const { workspacePath, requestedPath, targetPath } = resolveWorkspaceTarget(
     workspace,
     filePath,
@@ -372,15 +431,53 @@ export function executeRead(
     if (isBinarySample(openedTargetPath, sample)) {
       throw binaryFileError("read", filePath);
     }
+    options.signal?.throwIfAborted();
+    return { fd, normalizedOptions, openedTargetPath };
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
 
-    const textWindow = readTextWindow(fd, filePath, normalizedOptions);
+export function executeRead(
+  workspace: string,
+  filePath: string,
+  options: ReadOptions = {},
+): ReadToolResult {
+  const opened = openReadTarget(workspace, filePath, options);
+  try {
+    const textWindow = readTextWindow(
+      opened.fd,
+      filePath,
+      opened.normalizedOptions,
+    );
     return {
       content: textWindow.content,
       fileRevision: textWindow.fileRevision,
       sourceTruncated: textWindow.truncated,
-      targetPath: openedTargetPath,
+      targetPath: opened.openedTargetPath,
     };
   } finally {
-    closeSync(fd);
+    closeSync(opened.fd);
   }
+}
+
+export async function executeReadAbortable(
+  workspace: string,
+  filePath: string,
+  options: ReadOptions & { readonly signal: AbortSignal },
+): Promise<ReadToolResult> {
+  const opened = openReadTarget(workspace, filePath, options);
+  const textWindow = await readTextWindowAbortable(
+    opened.fd,
+    filePath,
+    opened.normalizedOptions,
+    options.signal,
+  );
+  return {
+    content: textWindow.content,
+    fileRevision: textWindow.fileRevision,
+    sourceTruncated: textWindow.truncated,
+    targetPath: opened.openedTargetPath,
+  };
 }

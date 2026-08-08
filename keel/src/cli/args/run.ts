@@ -23,6 +23,7 @@ const RUN_OPTIONS = [
   "--model",
   "--skill",
   "--no-skills",
+  "--experimental-agents",
   "--max-cost",
   "--report",
   "--transcript",
@@ -57,6 +58,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let providerId: RunCliArgs["providerId"] | undefined;
   let model: string | undefined;
   let skillsEnabled = true;
+  let experimentalAgents = false;
   const skillNames: string[] = [];
   let userMessage: string | undefined;
   let positionalMessagePresent = false;
@@ -165,6 +167,11 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
 
     if (arg === "--no-skills") {
       skillsEnabled = false;
+      continue;
+    }
+
+    if (arg === "--experimental-agents") {
+      experimentalAgents = true;
       continue;
     }
 
@@ -446,6 +453,16 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   if (!skillsEnabled && skillNames.length > 0) {
     return parseError("Error: --no-skills cannot be combined with --skill.");
   }
+  if (experimentalAgents && maxCostUsd === undefined) {
+    return parseError(
+      "Error: --experimental-agents requires --max-cost <usd> so the root and child share a bounded budget.",
+    );
+  }
+  if (experimentalAgents && userMessage === undefined) {
+    return parseError(
+      "Error: --experimental-agents currently supports one-shot runs with a message only.",
+    );
+  }
 
   if (
     positionalMessagePresent &&
@@ -472,6 +489,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     command: "run",
     bashMode,
     skillsEnabled,
+    ...(experimentalAgents ? { experimentalAgents: true } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(reportFile !== undefined ? { reportFile } : {}),
     memoryEnabled,

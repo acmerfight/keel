@@ -55,6 +55,11 @@ type RunReportProviderRequestAttempt =
 interface RunReportModelOperationBase {
   readonly ordinal: number;
   readonly owner: RunReportModelOperationOwner;
+  readonly attribution?: {
+    readonly type: "subagent";
+    readonly delegationId: string;
+    readonly childRunId: string;
+  };
   readonly purpose: ModelOperationPurpose;
   readonly provider: string;
   readonly model: string;
@@ -149,6 +154,7 @@ type MutableModelOperationResult =
 interface MutableModelOperation {
   readonly ordinal: number;
   readonly owner: RunReportModelOperationOwner;
+  readonly attribution: BeginModelOperationOptions["attribution"];
   readonly purpose: ModelOperationPurpose;
   readonly provider: string;
   readonly model: string;
@@ -314,6 +320,9 @@ function modelOperationReport(
   return {
     ordinal: operation.ordinal,
     owner: { ...operation.owner },
+    ...(operation.attribution !== undefined
+      ? { attribution: { ...operation.attribution } }
+      : {}),
     purpose: operation.purpose,
     provider: operation.provider,
     model: operation.model,
@@ -335,6 +344,7 @@ function beginModelOperation(
   const operation: MutableModelOperation = {
     ordinal: operations.length + 1,
     owner: resolveOperationOwner(options.owner, currentAgentRun),
+    attribution: options.attribution,
     purpose: options.purpose,
     provider: options.provider,
     model: options.model,

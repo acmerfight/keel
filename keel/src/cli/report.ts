@@ -155,7 +155,7 @@ export type RunReportGoalOutcome =
     };
 
 interface RunReport {
-  readonly schemaVersion: 19;
+  readonly schemaVersion: 20;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -218,7 +218,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
       ? input.end.cost.budget.overshootUsd
       : 0;
   const report: RunReport = {
-    schemaVersion: 19,
+    schemaVersion: 20,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,

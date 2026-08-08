@@ -14,8 +14,13 @@ import type { SkillActivationCapability } from "../skills/model.ts";
 import { WorkflowSkillError } from "../skills/model.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
+import type {
+  AgentResultSubmissionCapability,
+  DelegationCapability,
+} from "./delegation.ts";
 import { executeEdit } from "./edit.ts";
 import {
+  type DelegationToolExecutionEffect,
   type FailedToolExecution,
   NO_TOOL_EXECUTION_EFFECTS,
   type ReadToolExecution,
@@ -34,24 +39,27 @@ import { executeGitDiff } from "./git-diff.ts";
 import { executeGitStatus } from "./git-status.ts";
 import { executeGlob } from "./glob.ts";
 import { executeGrep } from "./grep.ts";
-import { executeLs } from "./ls.ts";
+import { executeLs, executeLsAbortable } from "./ls.ts";
 import {
   type AgentMemoryToolContext,
   validateAgentMemoryAdd,
   validateAgentMemoryForget,
   validateAgentMemoryProposal,
 } from "./memory.ts";
-import { executeRead } from "./read.ts";
+import { executeRead, executeReadAbortable } from "./read.ts";
 import type { ReadBeforeEdit } from "./read-before-edit.ts";
 import { observeReadResource } from "./read-resource-observation.ts";
 import type { ProjectInstructionVisibilityState } from "./scoped-project-instructions.ts";
 import { ScopedProjectInstructionsNotVisibleError } from "./scoped-project-instructions.ts";
 import {
+  builtinToolAuthorityAllows,
   builtinToolCallSchema,
   type InvalidToolCall,
   isInvalidToolCall,
   isMcpToolInvocation,
+  type ModelToolExposure,
   type ToolCall,
+  type ToolName,
   type ValidToolCall,
 } from "./tool-call.ts";
 import { invalidBuiltinToolCallError } from "./tool-error.ts";
@@ -113,8 +121,16 @@ type UpdatePlanToolCall = Extract<
   ValidToolCall,
   { readonly tool: "update_plan" }
 >;
+type DelegateToolCall = Extract<ValidToolCall, { readonly tool: "delegate" }>;
+type SubmitAgentResultToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "submit_agent_result" }
+>;
 
 interface BuiltinToolExecutionContext extends GoalExecutionContext {
+  readonly builtinToolAuthority?: ModelToolExposure;
+  readonly delegation?: DelegationCapability;
+  readonly agentResultSubmission?: AgentResultSubmissionCapability;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly skillActivation?: Pick<
     SkillActivationCapability,
@@ -125,6 +141,122 @@ interface BuiltinToolExecutionContext extends GoalExecutionContext {
   readonly recordCheckpoints?: boolean;
   readonly readBeforeEdit?: ReadBeforeEdit;
   readonly projectInstructions?: ProjectInstructionVisibilityState;
+}
+
+async function executeDelegateTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: DelegateToolCall,
+): Promise<ToolExecution> {
+  if (context.delegation === undefined) {
+    return unavailableBuiltinToolExecution("delegate");
+  }
+  const result = await context.delegation.delegate({
+    toolCallId: toolCall.id,
+    task: toolCall.task,
+    focusPaths: toolCall.focusPaths ?? [],
+    signal: context.signal,
+  });
+  const effects: readonly DelegationToolExecutionEffect[] =
+    result.usage === undefined
+      ? NO_TOOL_EXECUTION_EFFECTS
+      : [{ kind: "delegation", usage: result.usage }];
+  if (!result.ok) {
+    return {
+      content: result.content,
+      ok: false,
+      effects,
+    };
+  }
+  return {
+    content: result.content,
+    ok: true,
+    effects,
+  };
+}
+
+function executeSubmitAgentResultTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: SubmitAgentResultToolCall,
+): ToolExecution {
+  if (context.agentResultSubmission === undefined) {
+    return unavailableBuiltinToolExecution("submit_agent_result");
+  }
+  if (
+    !context.agentResultSubmission.submit({
+      summary: toolCall.summary,
+      evidence: toolCall.evidence.map((evidence) => ({
+        path: evidence.path,
+        ...(evidence.line !== undefined ? { line: evidence.line } : {}),
+        detail: evidence.detail,
+      })),
+      risks: toolCall.risks,
+    })
+  ) {
+    return {
+      content:
+        "Tool failed: submit_agent_result was already accepted for this child run.\nRecovery: Stop; the host already owns the submitted result.",
+      ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
+    };
+  }
+  return {
+    content: "Agent result accepted by the host. Stop now.",
+    ok: true,
+    effects: NO_TOOL_EXECUTION_EFFECTS,
+  };
+}
+
+function unavailableBuiltinToolExecution(tool: ToolName): FailedToolExecution {
+  switch (tool) {
+    case "bash":
+      return {
+        content: disabledBashMessage(),
+        ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
+      };
+    case "memory_add":
+    case "memory_forget":
+    case "memory_propose":
+      return memoryToolFailure(
+        tool,
+        "memory mutation is unavailable for this model step",
+      );
+    case "skill":
+      return {
+        content:
+          "Tool failed: skill activation is unavailable in the current tool authority context.\nRecovery: Continue without a skill.",
+        ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
+      };
+    case "skill_search":
+      return {
+        content:
+          "Tool failed: skill catalog search is unavailable.\nRecovery: Continue without a skill.",
+        ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
+      };
+    case "skill_resource":
+      return {
+        content:
+          "Tool failed: workflow skill resources are unavailable.\nRecovery: Continue without this resource.",
+        ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
+      };
+    case "mcp_search":
+      return {
+        content:
+          "Tool failed: MCP search is unavailable because no MCP servers are configured.",
+        ok: false,
+        effects: NO_TOOL_EXECUTION_EFFECTS,
+      };
+    default:
+      break;
+  }
+  return {
+    content: `Tool failed: ${tool} is unavailable in the current tool authority context.\nRecovery: Continue using only tools exposed for this run.`,
+    ok: false,
+    effects: NO_TOOL_EXECUTION_EFFECTS,
+  };
 }
 
 export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
@@ -501,21 +633,34 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
   };
 }
 
-function executeReadTool(
-  {
-    workspace,
-    projectInstructions,
-    hiddenWorkspacePaths,
-  }: BuiltinToolExecutionContext,
+function contextUsesReadOnlySubagentProfile(
+  context: BuiltinToolExecutionContext,
+): boolean {
+  return (
+    context.builtinToolAuthority?.kind === "auto" &&
+    context.builtinToolAuthority.profile === "read-only-subagent"
+  );
+}
+
+async function executeReadTool(
+  context: BuiltinToolExecutionContext,
   toolCall: ReadToolCall,
-): ReadToolExecution {
-  const result = executeRead(workspace, toolCall.path, {
+): Promise<ReadToolExecution> {
+  const { workspace, signal, projectInstructions, hiddenWorkspacePaths } =
+    context;
+  const readOptions = {
     offset: toolCall.offset,
     limit: toolCall.limit,
     ...(hiddenWorkspacePaths !== undefined
       ? { hiddenPaths: hiddenWorkspacePaths }
       : {}),
-  });
+  };
+  const result = contextUsesReadOnlySubagentProfile(context)
+    ? await executeReadAbortable(workspace, toolCall.path, {
+        ...readOptions,
+        signal,
+      })
+    : executeRead(workspace, toolCall.path, readOptions);
   const scopedOutput = projectInstructions?.formatReadOutput(
     result.targetPath,
     result.content,
@@ -549,17 +694,21 @@ function executeReadTool(
   };
 }
 
-function executeLsTool(
-  { workspace, hiddenWorkspacePaths }: BuiltinToolExecutionContext,
+async function executeLsTool(
+  context: BuiltinToolExecutionContext,
   toolCall: LsToolCall,
-): ToolExecution {
-  const result = executeLs(workspace, {
+): Promise<ToolExecution> {
+  const { workspace, signal, hiddenWorkspacePaths } = context;
+  const lsOptions = {
     ...(toolCall.path !== undefined ? { path: toolCall.path } : {}),
     ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
     ...(hiddenWorkspacePaths !== undefined
       ? { hiddenPaths: hiddenWorkspacePaths }
       : {}),
-  });
+  };
+  const result = contextUsesReadOnlySubagentProfile(context)
+    ? await executeLsAbortable(workspace, { ...lsOptions, signal })
+    : executeLs(workspace, lsOptions);
   return {
     content: result.content,
     ok: true,
@@ -824,6 +973,10 @@ function executeBuiltinToolCall(
   }
 
   switch (parsed.data.tool) {
+    case "delegate":
+      return executeDelegateTool(context, parsed.data);
+    case "submit_agent_result":
+      return executeSubmitAgentResultTool(context, parsed.data);
     case "update_plan":
       return executeUpdatePlanTool(parsed.data);
     case "update_goal":
@@ -920,6 +1073,12 @@ export async function executeToolCall(
       ok: false,
       effects: NO_TOOL_EXECUTION_EFFECTS,
     };
+  }
+  if (
+    context.builtinToolAuthority !== undefined &&
+    !builtinToolAuthorityAllows(context.builtinToolAuthority, toolCall.tool)
+  ) {
+    return unavailableBuiltinToolExecution(toolCall.tool);
   }
   try {
     return await executeBuiltinToolCall(context, toolCall);

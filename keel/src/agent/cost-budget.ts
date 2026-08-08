@@ -9,6 +9,7 @@ import type {
   ProviderRequestAttemptHandle,
   ProviderRequestAttemptObserver,
   StreamOptions,
+  Usage,
 } from "../llm/types.ts";
 import { modelToolExposureAccounting } from "../tools/registry.ts";
 
@@ -59,25 +60,65 @@ function admittedStreamOptions(
   maxOutputTokens: number,
   providerRequestAttempts: ProviderRequestAttemptObserver,
 ): StreamOptions {
-  if (maxOutputTokens === Number.MAX_SAFE_INTEGER) {
+  const admittedMaxOutputTokens = effectiveMaxOutputTokens(
+    options,
+    maxOutputTokens,
+  );
+  if (admittedMaxOutputTokens === Number.MAX_SAFE_INTEGER) {
     return { ...options, providerRequestAttempts };
   }
-  return { ...options, maxOutputTokens, providerRequestAttempts };
+  return {
+    ...options,
+    maxOutputTokens: admittedMaxOutputTokens,
+    providerRequestAttempts,
+  };
 }
 
-export function createCostBudgetedProvider(options: {
+function effectiveMaxOutputTokens(
+  options: StreamOptions,
+  affordableMaxOutputTokens: number,
+): number {
+  return Math.min(
+    options.maxOutputTokens ?? Number.MAX_SAFE_INTEGER,
+    affordableMaxOutputTokens,
+  );
+}
+
+interface CostBudgetedProviderOptions {
   readonly provider: LLMProvider;
   readonly model: CostModel;
   readonly maxCostUsd: number;
   readonly modelMaxOutputTokens?: number;
-}): LLMProvider {
+}
+
+export interface SharedCostBudgetedProvider {
+  readonly provider: LLMProvider;
+  readonly remainingUsd: () => number;
+  readonly observedUsage: () => Usage;
+  readonly observedSpendUsd: () => number;
+}
+
+export function createSharedCostBudgetedProvider(
+  options: CostBudgetedProviderOptions,
+): SharedCostBudgetedProvider {
   const maxCostUsd = options.maxCostUsd;
 
   let observedSpendUsd = 0;
+  let observedUsage: Usage = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+  };
   let reservedAttemptSpendUsd = 0;
   let currentAttemptReservationUsd = 0;
-  return {
+  const remainingUsd = (): number =>
+    Math.max(0, maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd);
+  const provider: LLMProvider = {
     id: options.provider.id,
+    ...(options.provider.abortSignalSupport === true
+      ? { abortSignalSupport: true }
+      : {}),
     ...(options.provider.estimateInputTokens !== undefined
       ? { estimateInputTokens: options.provider.estimateInputTokens }
       : {}),
@@ -117,9 +158,13 @@ export function createCostBudgetedProvider(options: {
         return maxOutputTokens;
       };
       const maxOutputTokens = authorizeRequestAttempt();
+      const admittedMaxOutputTokens = effectiveMaxOutputTokens(
+        streamOptions,
+        maxOutputTokens,
+      );
       const requestReservationUsd = calculateConservativeRequestCostUsd(
         estimatedInputTokens,
-        maxOutputTokens,
+        admittedMaxOutputTokens,
         options.model,
       );
       const reserveAttempt = (): void => {
@@ -149,6 +194,18 @@ export function createCostBudgetedProvider(options: {
             finish: (result) => {
               if (result.outcome === "completed") {
                 releaseCompletedAttempt();
+                observedUsage = {
+                  inputTokens:
+                    observedUsage.inputTokens + result.usage.inputTokens,
+                  cachedInputTokens:
+                    observedUsage.cachedInputTokens +
+                    result.usage.cachedInputTokens,
+                  uncachedInputTokens:
+                    observedUsage.uncachedInputTokens +
+                    result.usage.uncachedInputTokens,
+                  outputTokens:
+                    observedUsage.outputTokens + result.usage.outputTokens,
+                };
                 observedSpendUsd += calculateRequestCostBatchUsd(
                   { requests: [{ usage: result.usage }] },
                   options.model,
@@ -171,4 +228,16 @@ export function createCostBudgetedProvider(options: {
       }
     },
   };
+  return {
+    provider,
+    remainingUsd,
+    observedUsage: () => ({ ...observedUsage }),
+    observedSpendUsd: () => observedSpendUsd,
+  };
+}
+
+export function createCostBudgetedProvider(
+  options: CostBudgetedProviderOptions,
+): LLMProvider {
+  return createSharedCostBudgetedProvider(options).provider;
 }

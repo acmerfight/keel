@@ -87,6 +87,8 @@ function sourceHandleForToolCall(toolCall: ToolCall): string | null {
         : `git_diff:${toolCall.paths.join(" ")}`;
     }
     case "update_plan":
+    case "delegate":
+    case "submit_agent_result":
     case "update_goal":
     case "memory_add":
     case "memory_forget":

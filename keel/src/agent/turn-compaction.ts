@@ -72,7 +72,7 @@ export interface LedgerTurnOptions extends StreamTurnOptions {
   readonly ledger: SessionLedger;
   readonly modelOperationPurpose: Extract<
     ModelOperationPurpose,
-    "agent_turn" | "turn_limit_summary"
+    "agent_turn" | "subagent_turn" | "turn_limit_summary"
   >;
 }
 

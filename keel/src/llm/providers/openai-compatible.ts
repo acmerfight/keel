@@ -70,6 +70,7 @@ export function createOpenAICompatibleProvider<
 >(providerConfig: OpenAICompatibleProviderConfig<Chunk>): LLMProvider {
   return {
     id: providerConfig.id,
+    abortSignalSupport: true,
     estimateInputTokens(options): number {
       // All enrolled providers use byte-based tokenizers. Counting the complete
       // serialized request bytes intentionally over-reserves protocol fields,

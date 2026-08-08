@@ -70,6 +70,7 @@ export async function* observeFakeProviderRequest(
 ): AsyncGenerator<LLMEvent> {
   const attempt = options.providerRequestAttempts?.begin() ?? null;
   let attemptFinished = false;
+  const observeCancellation = !options.signal.aborted;
   const finishAttempt = (result: ProviderRequestAttemptFinish): void => {
     if (attempt === null || attemptFinished) return;
     attemptFinished = true;
@@ -82,6 +83,7 @@ export async function* observeFakeProviderRequest(
         finishAttempt({ outcome: "completed", usage: event.usage });
       }
       yield event;
+      if (observeCancellation) options.signal.throwIfAborted();
     }
   } catch (error) {
     finishAttempt(
@@ -112,6 +114,7 @@ export function createFakeProvider(
 
   return {
     id: "fake",
+    abortSignalSupport: true,
     estimateInputTokens(options): number {
       return new TextEncoder().encode(
         JSON.stringify({

@@ -2,6 +2,7 @@ import type { RecordLastBatchCheckpointOperation } from "../../core/git.ts";
 import type { ReadResourceObservation } from "../../core/resource-observation.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
+import type { Usage } from "../../llm/types.ts";
 import type { McpPreservedToolResult } from "../../mcp/runtime-types.ts";
 import type { SkillActivationRecord } from "../../skills/model.ts";
 import type { FileRevision } from "../file-revision.ts";
@@ -68,6 +69,11 @@ interface ExternalToolResultExecutionEffect {
   readonly result: McpPreservedToolResult;
 }
 
+export interface DelegationToolExecutionEffect {
+  readonly kind: "delegation";
+  readonly usage: Usage;
+}
+
 type ToolExecutionEffect =
   | ReadToolExecutionEffect
   | MutationToolExecutionEffect
@@ -78,11 +84,13 @@ type ToolExecutionEffect =
   | OpaqueWorkspaceMutationToolExecutionEffect
   | SkillActivationToolExecutionEffect
   | MemoryOperationToolExecutionEffect
+  | DelegationToolExecutionEffect
   | ExternalToolResultExecutionEffect;
 
 type FailedToolExecutionEffect =
   | VisibleProjectInstructionsToolExecutionEffect
   | SessionGoalToolExecutionEffect
+  | DelegationToolExecutionEffect
   | ExternalToolResultExecutionEffect;
 
 interface ToolExecutionBase {

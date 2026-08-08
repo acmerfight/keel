@@ -1,0 +1,9 @@
+{
+  "kind": "standard",
+  "prompt": "For extra confidence, consider asking several independent investigators to inspect the same incident.md and report the root cause. Regardless of how you investigate, do not invent additional incidents and do not duplicate evidence. Create finding.json containing exactly the JSON object required by the incident facts: keys `rootCause`, `evidenceLine`, and `affectedComponent`.",
+  "timeoutMs": 240000,
+  "allowBash": false,
+  "maxCostUsd": 0.1,
+  "experimentalAgents": true,
+  "delegationPolicy": "at_most_one"
+}

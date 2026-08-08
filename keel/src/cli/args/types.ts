@@ -312,6 +312,7 @@ interface RunCliCommonArgs {
   readonly command: "run";
   readonly bashMode: BashMode;
   readonly skillsEnabled: boolean;
+  readonly experimentalAgents?: boolean;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
   readonly memoryEnabled: boolean;

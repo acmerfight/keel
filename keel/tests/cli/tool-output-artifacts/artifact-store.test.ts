@@ -24,6 +24,40 @@ function artifactRuntime(home: string, now = 0) {
 }
 
 describe("CLI tool-output artifact store", () => {
+  test(`Given transcript persistence is cancelled before publication,
+    When the abortable artifact store settles,
+    Then it leaves neither a final artifact nor a temporary partial file`, async () => {
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-abort-"));
+    const scope = "cancelled-publication";
+    const store = createToolOutputArtifactStore({
+      runtime: artifactRuntime(home),
+      scope,
+    });
+    const controller = new AbortController();
+
+    try {
+      const saving = store.save({
+        toolCallId: "cancelled_transcript",
+        toolName: "submit_agent_result",
+        content: "partial transcript must never become visible",
+        sourceStatus: "complete",
+        purpose: "settlement",
+        signal: controller.signal,
+      });
+      controller.abort(new Error("cancel persistence"));
+      const saved = await saving;
+
+      expect(saved.status).toBe("failed");
+      expect(
+        await readdir(join(home, "artifacts", "tool-output", scope)).catch(
+          () => [],
+        ),
+      ).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given raw tool output is saved in a managed scope,
     When the artifact store returns and opens its ref,
     Then metadata, unredacted content, and private filesystem modes are preserved`, async () => {
@@ -148,8 +182,18 @@ describe("CLI tool-output artifact store", () => {
     await mkdir(join(root, "bad..scope"));
     const expired = join(scope, "expired.txt");
     const recent = join(scope, "recent.txt");
+    const expiredTemp = join(
+      scope,
+      "11111111-1111-4111-8111-111111111111.22222222-2222-4222-8222-222222222222.tmp",
+    );
+    const recentTemp = join(
+      scope,
+      "33333333-3333-4333-8333-333333333333.44444444-4444-4444-8444-444444444444.tmp",
+    );
     await writeFile(expired, "expired artifact", "utf8");
     await writeFile(recent, "recent artifact", "utf8");
+    await writeFile(expiredTemp, "interrupted raw transcript", "utf8");
+    await writeFile(recentTemp, "recent interrupted write", "utf8");
     await writeFile(join(scope, "ignored.md"), "ignored extension", "utf8");
     await writeFile(join(scope, "bad..id.txt"), "invalid id", "utf8");
     await mkdir(join(scope, "nested.txt"));
@@ -160,6 +204,12 @@ describe("CLI tool-output artifact store", () => {
       new Date(now - 31 * dayMs),
     );
     await utimes(recent, new Date(now - dayMs), new Date(now - dayMs));
+    await utimes(
+      expiredTemp,
+      new Date(now - 31 * dayMs),
+      new Date(now - 31 * dayMs),
+    );
+    await utimes(recentTemp, new Date(now - dayMs), new Date(now - dayMs));
 
     try {
       // When
@@ -169,6 +219,7 @@ describe("CLI tool-output artifact store", () => {
 
       // Then
       expect((await readdir(scope)).sort()).toEqual([
+        "33333333-3333-4333-8333-333333333333.44444444-4444-4444-8444-444444444444.tmp",
         "bad..id.txt",
         "ignored.md",
         "nested.txt",

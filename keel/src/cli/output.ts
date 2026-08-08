@@ -1,5 +1,6 @@
 import type { ContextCompactionStats } from "../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
+import type { SubagentProgressEvent } from "../agent/subagent-supervisor.ts";
 import type { ToolOutputArtifactNotice } from "../agent/tool-output-artifacts.ts";
 import {
   formatSessionGoalCompletionEvidenceSummary,
@@ -84,6 +85,25 @@ function formatUsd(value: number): string {
 
 const TOOL_LABEL_MAX_LENGTH = 160;
 const STATUS_LINE_TEXT_MAX_LENGTH = 240;
+
+export function formatSubagentProgress(event: SubagentProgressEvent): string {
+  const identity = sanitizeToolLabel(event.delegationId);
+  const task = sanitizeToolLabel(event.task);
+  const timing = `elapsed ${Math.max(0, Math.round(event.elapsedMs))}ms; deadline ${Math.round(event.deadlineMs)}ms`;
+  if (event.status === "tool") {
+    return `${sanitizeStatusLineText(
+      `Subagent ${identity}: tool ${sanitizeToolLabel(event.tool)} — ${task} (${timing})`,
+    )}\n`;
+  }
+  if (event.status === "turn") {
+    return `${sanitizeStatusLineText(
+      `Subagent ${identity}: turn ${event.turn} — ${task} (${timing})`,
+    )}\n`;
+  }
+  return `${sanitizeStatusLineText(
+    `Subagent ${identity}: ${event.status} — ${task} (${timing})`,
+  )}\n`;
+}
 
 // Shared escape style for model-controlled bytes: control characters become
 // visible \xNN (or \n-style) escapes so the terminal never interprets them.
