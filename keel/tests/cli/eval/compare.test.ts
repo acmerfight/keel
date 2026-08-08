@@ -161,7 +161,7 @@ describe("CLI Eval", () => {
       expect(result.stdout).toContain("head harness failures: 1");
       expect(result.stdout).toContain("/tmp/head/harness-task-1.jsonl");
       expect(result.stdout).toContain(
-        "suite pass: 4/4 (100.0%) -> 2/4 (50.0%) (-50.0pp)",
+        "suite gate: 4/4 (100.0%) -> 2/4 (50.0%) (-50.0pp)",
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -263,6 +263,23 @@ describe("CLI Eval", () => {
         delegationSelection: {
           status: "observed",
           policy: "forbid",
+          childRuns: 0,
+          satisfied: true,
+        },
+      },
+    },
+    {
+      contradiction:
+        "a delegation selection judgment contradicts its child count",
+      fields: {
+        condition: "delegation_treatment",
+        requiredToPass: true,
+        pass: true,
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+        delegationSelection: {
+          status: "observed",
+          policy: "require_one",
           childRuns: 0,
           satisfied: true,
         },

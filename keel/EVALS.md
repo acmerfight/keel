@@ -194,8 +194,10 @@ Each standard trial appends one JSON line:
   for the observational `memory_disabled` and `delegation_control` conditions
   and true otherwise. A delegation treatment line also carries a required
   `delegationSelection` observation with policy, distinct child count, and
-  satisfaction; control and task outcome never carry that judgment. A paired
-  trial appends two lines in stable control/treatment or disabled/enabled order.
+  satisfaction; the schema rejects a satisfaction value that contradicts its
+  policy and child count. Control and task outcome never carry that judgment. A
+  paired trial appends two lines in stable control/treatment or
+  disabled/enabled order.
   Each line carries the ordinary report, so model operations, child
   attribution, usage, cost, and timing remain inspectable without a second
   result format.
@@ -218,8 +220,9 @@ Each standard trial appends one JSON line:
   keel versions, then run `keel eval compare --base <old.jsonl> --head
   <new.jsonl>`. It prints per-task pass, harness, task-outcome, selection,
   human-intervention, turn, token, cost, and wall-time deltas and includes
-  failed head-side
-  `transcriptPath` values for regression rows.
+  failed head-side `transcriptPath` values for regression rows. Its suite gate
+  includes both semantic task pass and any required delegation-selection
+  observation; observational control conditions remain excluded.
 - One trial says little: agent behavior varies between runs. Use
   `--trials 3` or more before claiming a change helped. Per-task pass
   fractions give you pass^k-style reliability reading; a task passing

@@ -31,11 +31,14 @@ interface TaskOutcomeCount {
   readonly count: number;
 }
 
-interface TaskSummary {
-  readonly taskId: string;
+interface PassSummary {
   readonly trials: number;
   readonly passes: number;
   readonly passRate: number;
+}
+
+interface TaskSummary extends PassSummary {
+  readonly taskId: string;
   readonly harnessOutcomes: readonly HarnessOutcomeCount[];
   readonly taskOutcomes: readonly TaskOutcomeCount[];
   readonly harnessFailures: number;
@@ -189,6 +192,22 @@ function summarizeTask(
   };
 }
 
+function summarizeGate(lines: readonly EvalResultLine[]): PassSummary {
+  const passes = lines.filter((line) => {
+    if (!line.pass) return false;
+    const selection = line.delegationSelection;
+    return (
+      selection === undefined ||
+      (selection.status === "observed" && selection.satisfied)
+    );
+  }).length;
+  return {
+    trials: lines.length,
+    passes,
+    passRate: passes / lines.length,
+  };
+}
+
 function sortedTaskIds(
   baseGroups: ReadonlyMap<string, readonly EvalResultLine[]>,
   headGroups: ReadonlyMap<string, readonly EvalResultLine[]>,
@@ -214,14 +233,14 @@ function formatSignedUsd(value: number): string {
   return `${sign}$${Math.abs(rounded).toFixed(6)}`;
 }
 
-function formatPass(summary: TaskSummary | undefined): string {
+function formatPass(summary: PassSummary | undefined): string {
   if (summary === undefined) return "missing";
   return `${summary.passes}/${summary.trials} (${formatPercent(summary.passRate)})`;
 }
 
 function formatPassComparison(
-  base: TaskSummary | undefined,
-  head: TaskSummary | undefined,
+  base: PassSummary | undefined,
+  head: PassSummary | undefined,
 ): string {
   const delta =
     base !== undefined && head !== undefined
@@ -449,15 +468,9 @@ function renderEvalComparison(args: EvalCompareCommandArgs): string {
   }
 
   output.push(
-    `suite pass: ${formatPassComparison(
-      summarizeTask(
-        "suite",
-        baseLines.filter((line) => line.requiredToPass),
-      ),
-      summarizeTask(
-        "suite",
-        headLines.filter((line) => line.requiredToPass),
-      ),
+    `suite gate: ${formatPassComparison(
+      summarizeGate(baseLines.filter((line) => line.requiredToPass)),
+      summarizeGate(headLines.filter((line) => line.requiredToPass)),
     )}`,
   );
 

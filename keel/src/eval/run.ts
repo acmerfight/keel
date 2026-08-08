@@ -21,6 +21,7 @@ import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import { type RunReport, runReportSchema } from "./report-schema.ts";
 import {
+  delegationPolicySatisfied,
   type EvalDelegationSelection,
   type EvalResultCondition,
   type EvalResultConditionForTask,
@@ -204,18 +205,7 @@ function delegationSelection(
 ): EvalDelegationSelection {
   if (report === undefined) return { status: "unavailable", policy };
   const childRuns = childRunCount(report);
-  let satisfied: boolean;
-  switch (policy) {
-    case "require_one":
-      satisfied = childRuns === 1;
-      break;
-    case "forbid":
-      satisfied = childRuns === 0;
-      break;
-    case "at_most_one":
-      satisfied = childRuns <= 1;
-      break;
-  }
+  const satisfied = delegationPolicySatisfied(policy, childRuns);
   return { status: "observed", policy, childRuns, satisfied };
 }
 

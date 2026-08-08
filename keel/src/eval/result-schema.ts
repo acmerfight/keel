@@ -71,6 +71,20 @@ export type EvalDelegationSelection =
       readonly satisfied?: never;
     };
 
+export function delegationPolicySatisfied(
+  policy: EvalDelegationPolicy,
+  childRuns: number,
+): boolean {
+  switch (policy) {
+    case "require_one":
+      return childRuns === 1;
+    case "forbid":
+      return childRuns === 0;
+    case "at_most_one":
+      return childRuns <= 1;
+  }
+}
+
 export type EvalResultCondition =
   | {
       readonly condition: "standard";
@@ -190,7 +204,21 @@ const evalResultConditionSchema = z.discriminatedUnion("condition", [
 
 export const evalResultLineSchema = evalResultLineBaseSchema
   .and(evalResultVerdictSchema)
-  .and(evalResultConditionSchema);
+  .and(evalResultConditionSchema)
+  .superRefine((line, ctx) => {
+    const selection = line.delegationSelection;
+    if (
+      selection?.status === "observed" &&
+      selection.satisfied !==
+        delegationPolicySatisfied(selection.policy, selection.childRuns)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["delegationSelection", "satisfied"],
+        message: "must match policy and distinct child count",
+      });
+    }
+  });
 
 export type EvalResultLine = z.infer<typeof evalResultLineSchema>;
 

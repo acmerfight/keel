@@ -6,7 +6,7 @@ capability and does not claim or test parallel speedup.
 
 ## Experiment version
 
-The authoritative scored run is `subagent-slice-1-5-v3`. Its freeze point is
+The authoritative scored run is `subagent-slice-1-5-v4`. Its freeze point is
 the Git commit containing this protocol, the eval runner, every task fixture,
 and every verifier. Record that commit before starting the scored command.
 
@@ -30,6 +30,14 @@ natural-language `sharedReleaseGap`, but the verifier recognized only one of
 two evidence-supported gaps. Version 3 replaces that field with two explicit
 boolean facts. It reruns all 36 arms and does not change the selection policy,
 budgets, fixtures, trial count, or decision thresholds.
+
+The complete `subagent-slice-1-5-v3` scored window at freeze commit `141068e`
+is excluded because the user-feedback prompt required a user-facing question
+that its workspace-only verifier could not observe. Version 4 narrows that
+negative control to the deterministically observable contract: inspect the
+unresolved policy, make no change, create no artifact, and do not choose a
+mode. It reruns all 36 arms without changing selection policies, budgets,
+fixtures, trial count, or decision thresholds.
 
 After any scored output has been inspected, changing a prompt, fixture,
 verifier, policy, budget, trial count, threshold, or sampling rule creates a

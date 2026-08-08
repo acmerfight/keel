@@ -74,7 +74,7 @@ describe("Eval Compare", () => {
       expect(result.stdout).toContain("task: memory-task [memory_disabled]");
       expect(result.stdout).toContain("task: memory-task [memory_enabled]");
       expect(result.stdout).toContain(
-        "suite pass: 1/1 (100.0%) -> 1/1 (100.0%)",
+        "suite gate: 1/1 (100.0%) -> 1/1 (100.0%)",
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -171,6 +171,9 @@ describe("Eval Compare", () => {
       expect(result.stdout).toContain("task: selection-removed");
       expect(result.stdout).toContain(
         "selection: 1/1 satisfied, 1/1 observed -> n/a",
+      );
+      expect(result.stdout).toContain(
+        "suite gate: 2/3 (66.7%) -> 2/3 (66.7%) (+0.0pp)",
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -335,7 +338,7 @@ describe("Eval Compare", () => {
       expect(result.stdout).toContain("task: unchanged");
       expect(result.stdout).toContain("status: UNCHANGED");
       expect(result.stdout).toContain(
-        "suite pass: 8/9 (88.9%) -> 7/9 (77.8%) (-11.1pp)",
+        "suite gate: 8/9 (88.9%) -> 7/9 (77.8%) (-11.1pp)",
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -391,7 +394,7 @@ describe("Eval Compare", () => {
         "cost avg: $0.002000 -> $0.001000 (-$0.001000)",
       );
       expect(result.stdout).toContain(
-        "suite pass: 2/2 (100.0%) -> 2/2 (100.0%) (+0.0pp)",
+        "suite gate: 2/2 (100.0%) -> 2/2 (100.0%) (+0.0pp)",
       );
     } finally {
       await rm(root, { recursive: true, force: true });
