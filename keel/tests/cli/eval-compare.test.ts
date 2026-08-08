@@ -73,7 +73,61 @@ describe("Eval Compare", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("task: memory-task [memory_disabled]");
       expect(result.stdout).toContain("task: memory-task [memory_enabled]");
-      expect(result.stdout).toContain("suite pass: 1/2 (50.0%) -> 1/2 (50.0%)");
+      expect(result.stdout).toContain(
+        "suite pass: 1/1 (100.0%) -> 1/1 (100.0%)",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given task success stays stable while expected delegation selection regresses,
+    When the compare command summarizes the results,
+    Then it reports selection independently from semantic pass`, async () => {
+    // Given
+    const root = await mkdtemp(join(tmpdir(), "keel-eval-compare-selection-"));
+    const baseFile = join(root, "base.jsonl");
+    const headFile = join(root, "head.jsonl");
+    await writeResultFile(baseFile, [
+      resultLine({
+        taskId: "delegation-selection",
+        trial: 1,
+        pass: true,
+        delegationSelection: {
+          status: "observed",
+          policy: "require_one",
+          childRuns: 1,
+          satisfied: true,
+        },
+      }),
+    ]);
+    await writeResultFile(headFile, [
+      resultLine({
+        taskId: "delegation-selection",
+        trial: 1,
+        pass: true,
+        delegationSelection: {
+          status: "observed",
+          policy: "require_one",
+          childRuns: 0,
+          satisfied: false,
+        },
+      }),
+    ]);
+
+    try {
+      // When
+      const result = runCompare(baseFile, headFile);
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("status: SELECTION REGRESSION");
+      expect(result.stdout).toContain(
+        "selection: 1/1 satisfied, 1/1 observed -> 0/1 satisfied, 1/1 observed",
+      );
+      expect(result.stdout).toContain(
+        "pass: 1/1 (100.0%) -> 1/1 (100.0%) (+0.0pp)",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -186,7 +240,7 @@ describe("Eval Compare", () => {
         taskId: "harness-failure",
         trial: 1,
         pass: false,
-        outcome: "timeout",
+        harnessOutcome: "timeout",
         report: report(),
         transcriptPath: "/tmp/head/harness-failure.jsonl",
       }),
@@ -312,7 +366,7 @@ describe("Eval Compare", () => {
         taskId: "more-reliable-head",
         trial: 1,
         pass: false,
-        outcome: "crashed",
+        harnessOutcome: "crashed",
         transcriptPath: "/tmp/base/crashed.jsonl",
       }),
     ]);
@@ -321,14 +375,14 @@ describe("Eval Compare", () => {
         taskId: "more-reliable-head",
         trial: 1,
         pass: false,
-        outcome: "crashed",
+        harnessOutcome: "crashed",
         transcriptPath: "/tmp/head/crashed-1.jsonl",
       }),
       resultLine({
         taskId: "more-reliable-head",
         trial: 2,
         pass: false,
-        outcome: "timeout",
+        harnessOutcome: "timeout",
         transcriptPath: "/tmp/head/timeout-2.jsonl",
       }),
       resultLine({
@@ -413,7 +467,7 @@ describe("Eval Compare", () => {
       // Then
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("line 1 is not a schemaVersion 2");
+      expect(result.stderr).toContain("line 1 is not a schemaVersion 3");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

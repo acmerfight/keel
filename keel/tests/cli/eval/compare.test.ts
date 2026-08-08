@@ -107,7 +107,7 @@ describe("CLI Eval", () => {
         taskId: "harness-task",
         trial: 1,
         pass: false,
-        outcome: "timeout",
+        harnessOutcome: "timeout",
         wallMs: 5000,
         transcriptPath: "/tmp/head/harness-task-1.jsonl",
       }),
@@ -209,7 +209,7 @@ describe("CLI Eval", () => {
         condition: "standard",
         requiredToPass: true,
         pass: true,
-        outcome: "crashed",
+        harnessOutcome: "crashed",
       },
     },
     {
@@ -218,7 +218,8 @@ describe("CLI Eval", () => {
         condition: "standard",
         requiredToPass: true,
         pass: false,
-        outcome: "verified",
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
       },
     },
     {
@@ -227,7 +228,8 @@ describe("CLI Eval", () => {
         condition: "standard",
         requiredToPass: false,
         pass: true,
-        outcome: "verified",
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
       },
     },
     {
@@ -236,7 +238,34 @@ describe("CLI Eval", () => {
         condition: "memory_disabled",
         requiredToPass: true,
         pass: false,
-        outcome: "verify_failed",
+        harnessOutcome: "completed",
+        taskOutcome: "verify_failed",
+      },
+    },
+    {
+      contradiction: "a delegation treatment omits its selection observation",
+      fields: {
+        condition: "delegation_treatment",
+        requiredToPass: true,
+        pass: true,
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+      },
+    },
+    {
+      contradiction: "a delegation control carries a treatment selection",
+      fields: {
+        condition: "delegation_control",
+        requiredToPass: false,
+        pass: true,
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+        delegationSelection: {
+          status: "observed",
+          policy: "forbid",
+          childRuns: 0,
+          satisfied: true,
+        },
       },
     },
   ])(
@@ -253,7 +282,7 @@ describe("CLI Eval", () => {
       await writeFile(
         baseFile,
         `${JSON.stringify({
-          schemaVersion: 2,
+          schemaVersion: 3,
           timestamp: "2026-06-22T00:00:00.000Z",
           keelVersion: "0.0.1",
           taskId: "contradictory-result",
@@ -283,7 +312,7 @@ describe("CLI Eval", () => {
         expect(result.stdout).toBe("");
         expect(result.stderr).toContain(baseFile);
         expect(result.stderr).toContain(
-          "line 1 is not a schemaVersion 2 eval result",
+          "line 1 is not a schemaVersion 3 eval result",
         );
       } finally {
         await rm(root, { recursive: true, force: true });
@@ -301,7 +330,7 @@ describe("CLI Eval", () => {
     await writeFile(
       baseFile,
       `${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         timestamp: "2026-06-22T00:00:00.000Z",
         keelVersion: "0.0.1",
         taskId: "old-report",
@@ -309,7 +338,8 @@ describe("CLI Eval", () => {
         condition: "standard",
         requiredToPass: true,
         pass: true,
-        outcome: "verified",
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
         wallMs: 1000,
         report: {
           schemaVersion: 1,
@@ -350,7 +380,7 @@ describe("CLI Eval", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(baseFile);
       expect(result.stderr).toContain(
-        "line 1 is not a schemaVersion 2 eval result",
+        "line 1 is not a schemaVersion 3 eval result",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

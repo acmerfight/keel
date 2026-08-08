@@ -2,10 +2,12 @@ import { readFileSync } from "node:fs";
 import { errorMessage } from "../core/error.ts";
 import type { RunReport } from "./report-schema.ts";
 import {
+  type EvalHarnessOutcome,
   type EvalResultLine,
-  type EvalTrialOutcome,
+  type EvalTaskOutcome,
+  evalHarnessOutcomes,
   evalResultLineSchema,
-  evalTrialOutcomes,
+  evalTaskOutcomes,
 } from "./result-schema.ts";
 
 interface MetricSummary {
@@ -13,8 +15,19 @@ interface MetricSummary {
   readonly average: number | null;
 }
 
-interface OutcomeCount {
-  readonly outcome: EvalTrialOutcome;
+interface SelectionSummary {
+  readonly count: number;
+  readonly observed: number;
+  readonly satisfied: number;
+}
+
+interface HarnessOutcomeCount {
+  readonly outcome: EvalHarnessOutcome;
+  readonly count: number;
+}
+
+interface TaskOutcomeCount {
+  readonly outcome: EvalTaskOutcome;
   readonly count: number;
 }
 
@@ -23,10 +36,12 @@ interface TaskSummary {
   readonly trials: number;
   readonly passes: number;
   readonly passRate: number;
-  readonly outcomes: readonly OutcomeCount[];
+  readonly harnessOutcomes: readonly HarnessOutcomeCount[];
+  readonly taskOutcomes: readonly TaskOutcomeCount[];
   readonly harnessFailures: number;
   readonly harnessFailureRate: number;
   readonly failedTranscripts: readonly string[];
+  readonly selection: SelectionSummary;
   readonly humanInterventions: MetricSummary;
   readonly turns: MetricSummary;
   readonly inputTokens: MetricSummary;
@@ -66,7 +81,7 @@ function readEvalResultLines(filePath: string): readonly EvalResultLine[] {
     const parsedLine = evalResultLineSchema.safeParse(parsedJson);
     if (!parsedLine.success) {
       throw new Error(
-        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 2 eval result.`,
+        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 3 eval result.`,
       );
     }
     results.push(parsedLine.data);
@@ -120,17 +135,27 @@ function summarizeTask(
   lines: readonly EvalResultLine[],
 ): TaskSummary {
   const passes = lines.filter((line) => line.pass).length;
-  const outcomesForTask = evalTrialOutcomes.map((outcome) => ({
+  const harnessOutcomes = evalHarnessOutcomes.map((outcome) => ({
     outcome,
-    count: lines.filter((line) => line.outcome === outcome).length,
+    count: lines.filter((line) => line.harnessOutcome === outcome).length,
+  }));
+  const taskOutcomes = evalTaskOutcomes.map((outcome) => ({
+    outcome,
+    count: lines.filter(
+      (line) =>
+        line.harnessOutcome === "completed" && line.taskOutcome === outcome,
+    ).length,
   }));
   const harnessFailures = lines.filter(
-    (line) => line.outcome === "timeout" || line.outcome === "crashed",
+    (line) => line.harnessOutcome !== "completed",
   ).length;
   const failedTranscripts = lines.flatMap((line) =>
     line.pass === false && line.transcriptPath !== undefined
       ? [line.transcriptPath]
       : [],
+  );
+  const selectionLines = lines.flatMap((line) =>
+    line.delegationSelection === undefined ? [] : [line.delegationSelection],
   );
 
   return {
@@ -138,10 +163,20 @@ function summarizeTask(
     trials: lines.length,
     passes,
     passRate: passes / lines.length,
-    outcomes: outcomesForTask,
+    harnessOutcomes,
+    taskOutcomes,
     harnessFailures,
     harnessFailureRate: harnessFailures / lines.length,
     failedTranscripts,
+    selection: {
+      count: selectionLines.length,
+      observed: selectionLines.filter(
+        (selection) => selection.status === "observed",
+      ).length,
+      satisfied: selectionLines.filter(
+        (selection) => selection.status === "observed" && selection.satisfied,
+      ).length,
+    },
     humanInterventions: reportMetric(
       lines,
       (report) => report.humanInterventionCount,
@@ -195,12 +230,23 @@ function formatPassComparison(
   return `${formatPass(base)} -> ${formatPass(head)}${delta}`;
 }
 
-function formatOutcomeCounts(summary: TaskSummary | undefined): string {
-  if (summary === undefined) return "missing";
-  const parts = summary.outcomes.flatMap((outcome) =>
+function formatOutcomeCounts(
+  outcomes: readonly { readonly outcome: string; readonly count: number }[],
+): string {
+  const parts = outcomes.flatMap((outcome) =>
     outcome.count === 0 ? [] : [`${outcome.outcome}=${outcome.count}`],
   );
   return parts.join(", ");
+}
+
+function formatHarnessOutcomes(summary: TaskSummary | undefined): string {
+  if (summary === undefined) return "missing";
+  return formatOutcomeCounts(summary.harnessOutcomes);
+}
+
+function formatTaskOutcomes(summary: TaskSummary | undefined): string {
+  if (summary === undefined) return "missing";
+  return formatOutcomeCounts(summary.taskOutcomes);
 }
 
 function formatMetricValue(
@@ -262,6 +308,22 @@ function efficiencyImproved(base: TaskSummary, head: TaskSummary): boolean {
   );
 }
 
+function selectionRate(selection: SelectionSummary): number | null {
+  return selection.count === 0 ? null : selection.satisfied / selection.count;
+}
+
+function selectionRegressed(base: TaskSummary, head: TaskSummary): boolean {
+  const baseRate = selectionRate(base.selection);
+  const headRate = selectionRate(head.selection);
+  return baseRate !== null && headRate !== null && headRate < baseRate;
+}
+
+function selectionImproved(base: TaskSummary, head: TaskSummary): boolean {
+  const baseRate = selectionRate(base.selection);
+  const headRate = selectionRate(head.selection);
+  return baseRate !== null && headRate !== null && headRate > baseRate;
+}
+
 function statusFor(
   base: TaskSummary | undefined,
   head: TaskSummary | undefined,
@@ -273,6 +335,8 @@ function statusFor(
   }
   if (head.passRate < base.passRate) return "REGRESSION";
   if (head.passRate > base.passRate) return "IMPROVEMENT";
+  if (selectionRegressed(base, head)) return "SELECTION REGRESSION";
+  if (selectionImproved(base, head)) return "SELECTION IMPROVEMENT";
   if (metricIncreased(base.humanInterventions, head.humanInterventions)) {
     return "INTERVENTION REGRESSION";
   }
@@ -282,6 +346,12 @@ function statusFor(
   if (efficiencyRegressed(base, head)) return "EFFICIENCY REGRESSION";
   if (efficiencyImproved(base, head)) return "EFFICIENCY IMPROVEMENT";
   return "UNCHANGED";
+}
+
+function formatSelection(summary: TaskSummary | undefined): string {
+  if (summary === undefined) return "missing";
+  if (summary.selection.count === 0) return "n/a";
+  return `${summary.selection.satisfied}/${summary.selection.count} satisfied, ${summary.selection.observed}/${summary.selection.count} observed`;
 }
 
 function renderTaskComparison(
@@ -294,7 +364,9 @@ function renderTaskComparison(
     `task: ${taskId}`,
     `  status: ${status}`,
     `  pass: ${formatPassComparison(base, head)}`,
-    `  outcomes: ${formatOutcomeCounts(base)} -> ${formatOutcomeCounts(head)}`,
+    `  harness: ${formatHarnessOutcomes(base)} -> ${formatHarnessOutcomes(head)}`,
+    `  task outcomes: ${formatTaskOutcomes(base)} -> ${formatTaskOutcomes(head)}`,
+    `  selection: ${formatSelection(base)} -> ${formatSelection(head)}`,
     `  human interventions avg: ${formatMetricComparison(
       base?.humanInterventions,
       head?.humanInterventions,
@@ -378,8 +450,14 @@ function renderEvalComparison(args: EvalCompareCommandArgs): string {
 
   output.push(
     `suite pass: ${formatPassComparison(
-      summarizeTask("suite", baseLines),
-      summarizeTask("suite", headLines),
+      summarizeTask(
+        "suite",
+        baseLines.filter((line) => line.requiredToPass),
+      ),
+      summarizeTask(
+        "suite",
+        headLines.filter((line) => line.requiredToPass),
+      ),
     )}`,
   );
 

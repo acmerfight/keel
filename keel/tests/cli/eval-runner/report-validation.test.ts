@@ -291,7 +291,7 @@ describe("Eval Runner", () => {
         // Then
         expect(exitCode).toBe(1);
         expect(await readResultLines(outFile)).toMatchObject([
-          { taskId: "bad-report", pass: false, outcome: "crashed" },
+          { taskId: "bad-report", pass: false, harnessOutcome: "crashed" },
         ]);
       } finally {
         if (previousReportContent === undefined) {
@@ -379,7 +379,8 @@ describe("Eval Runner", () => {
       expect(await readResultLines(outFile)).toMatchObject([
         {
           taskId: "valid-memory-report",
-          outcome: "verify_failed",
+          harnessOutcome: "completed",
+          taskOutcome: "verify_failed",
           report: { memory: { operations } },
         },
       ]);

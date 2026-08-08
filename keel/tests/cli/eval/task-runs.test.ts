@@ -155,7 +155,8 @@ describe("CLI Eval", () => {
         taskId: "fix-note",
         trial: 1,
         pass: true,
-        outcome: "verified",
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
       });
       expect(line?.report).toMatchObject({
         modelsUsed: [{ provider: "fake", model: "fake" }],
@@ -227,7 +228,8 @@ describe("CLI Eval", () => {
       expect(lines[0]).toMatchObject({
         taskId: "fix-note",
         pass: true,
-        outcome: "verified",
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -258,7 +260,8 @@ describe("CLI Eval", () => {
       const lines = await readResultLines(outFile);
       expect(lines[0]).toMatchObject({
         pass: false,
-        outcome: "verify_failed",
+        harnessOutcome: "completed",
+        taskOutcome: "verify_failed",
       });
     } finally {
       await rm(root, { recursive: true, force: true });

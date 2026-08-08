@@ -1,0 +1,9 @@
+{
+  "kind": "delegation_pair",
+  "prompt": "We need to update policy.md, but I have not chosen between the two rollout modes described there. Inspect the file, make no change, and ask me which mode to adopt before editing. Do not guess the decision or create a proposal file.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.01,
+  "delegationPolicy": "forbid"
+}
