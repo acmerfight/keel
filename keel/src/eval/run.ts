@@ -23,6 +23,7 @@ import { type RunReport, runReportSchema } from "./report-schema.ts";
 import {
   type EvalDelegationSelection,
   type EvalResultCondition,
+  type EvalResultConditionForTask,
   type EvalResultLine,
   type EvalTrialCondition,
   type EvalTrialObservation,
@@ -574,11 +575,11 @@ function appendResultLines(
   }
 }
 
-function trialResultLine(
+function trialResultLine<Task extends EvalTask>(
   version: string,
-  task: EvalTask,
+  task: Task,
   trial: number,
-  condition: EvalResultCondition,
+  condition: EvalResultConditionForTask<NoInfer<Task>>,
   result: TrialResult,
 ): EvalResultLine {
   return {

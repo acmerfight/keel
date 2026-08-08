@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { runReportSchema } from "./report-schema.ts";
-import { type EvalDelegationPolicy, evalDelegationPolicies } from "./task.ts";
+import {
+  type DelegationPairEvalTask,
+  type EvalDelegationPolicy,
+  type EvalTask,
+  evalDelegationPolicies,
+  type MemoryPairEvalTask,
+  type StandardEvalTask,
+} from "./task.ts";
 
 export const evalHarnessOutcomes = ["completed", "timeout", "crashed"] as const;
 export const evalTaskOutcomes = ["verified", "verify_failed"] as const;
@@ -81,10 +88,32 @@ export type EvalResultCondition =
       readonly delegationSelection: EvalDelegationSelection;
     }
   | {
-      readonly condition: "memory_disabled" | "delegation_control";
+      readonly condition: "memory_disabled";
+      readonly requiredToPass: false;
+      readonly delegationSelection?: never;
+    }
+  | {
+      readonly condition: "delegation_control";
       readonly requiredToPass: false;
       readonly delegationSelection?: never;
     };
+
+export type EvalResultConditionForTask<Task extends EvalTask> =
+  Task extends StandardEvalTask
+    ? Extract<EvalResultCondition, { readonly condition: "standard" }>
+    : Task extends MemoryPairEvalTask
+      ? Extract<
+          EvalResultCondition,
+          { readonly condition: "memory_disabled" | "memory_enabled" }
+        >
+      : Task extends DelegationPairEvalTask
+        ? Extract<
+            EvalResultCondition,
+            {
+              readonly condition: "delegation_control" | "delegation_treatment";
+            }
+          >
+        : never;
 
 const evalResultLineBaseSchema = z.object({
   schemaVersion: z.literal(3),
