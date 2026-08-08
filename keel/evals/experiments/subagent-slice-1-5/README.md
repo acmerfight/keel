@@ -6,7 +6,7 @@ capability and does not claim or test parallel speedup.
 
 ## Experiment version
 
-The authoritative scored run is `subagent-slice-1-5-v2`. Its freeze point is
+The authoritative scored run is `subagent-slice-1-5-v3`. Its freeze point is
 the Git commit containing this protocol, the eval runner, every task fixture,
 and every verifier. Record that commit before starting the scored command.
 
@@ -23,6 +23,13 @@ incident verifier required a line number where the prompt asked for evidence.
 All 36 arms and their selection observations remain historical evidence, but
 the task-outcome gate was invalid. Version 2 fixes only those prompt/verifier
 contracts and reruns the entire corpus; no failed sample is selectively rerun.
+
+The complete `subagent-slice-1-5-v2` scored window at freeze commit `61eaf23`
+is excluded for the same reason. Its release-audit prompt allowed an open-ended
+natural-language `sharedReleaseGap`, but the verifier recognized only one of
+two evidence-supported gaps. Version 3 replaces that field with two explicit
+boolean facts. It reruns all 36 arms and does not change the selection policy,
+budgets, fixtures, trial count, or decision thresholds.
 
 After any scored output has been inspected, changing a prompt, fixture,
 verifier, policy, budget, trial count, threshold, or sampling rule creates a
