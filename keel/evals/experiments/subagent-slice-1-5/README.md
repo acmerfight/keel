@@ -6,15 +6,23 @@ capability and does not claim or test parallel speedup.
 
 ## Experiment version
 
-The scored run is `subagent-slice-1-5-v1`. Its freeze point is the Git commit
-containing this protocol, the eval runner, every task fixture, and every
-verifier. Record that commit before starting the scored command.
+The authoritative scored run is `subagent-slice-1-5-v2`. Its freeze point is
+the Git commit containing this protocol, the eval runner, every task fixture,
+and every verifier. Record that commit before starting the scored command.
 
 Unscored pilots are allowed before the freeze point and must not contribute to
 the decision. The 2026-08-09 initial pilot is excluded: both arms produced
 semantically reasonable output that an exact-phrase verifier rejected, while
 the positive fixture was too small to make `require_one` a fair expectation.
 That pilot motivated structured semantic contracts and larger positive tasks.
+
+The complete `subagent-slice-1-5-v1` scored window at freeze commit `38fc84c`
+is also excluded from the product decision. Its release-audit verifier required
+an undocumented internal enum for a natural-language field, while its duplicate
+incident verifier required a line number where the prompt asked for evidence.
+All 36 arms and their selection observations remain historical evidence, but
+the task-outcome gate was invalid. Version 2 fixes only those prompt/verifier
+contracts and reruns the entire corpus; no failed sample is selectively rerun.
 
 After any scored output has been inspected, changing a prompt, fixture,
 verifier, policy, budget, trial count, threshold, or sampling rule creates a
