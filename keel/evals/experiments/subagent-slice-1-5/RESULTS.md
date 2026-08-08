@@ -47,7 +47,8 @@ eligible treatments failed selection.
 
 These are curated-corpus rates, not production precision. The duplicate task
 created one distinct child in each treatment. Both ordinary eligible tasks
-created zero children in every treatment even though their artifacts verified.
+created zero children in every treatment; five of their six artifacts verified,
+while one treatment stopped safely at budget admission before writing one.
 
 The positive-delegation evidence rubric is not applicable: there were 0/6
 actual positive delegations, so there is no child evidence-handoff sample to
