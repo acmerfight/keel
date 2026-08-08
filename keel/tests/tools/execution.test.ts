@@ -172,7 +172,11 @@ describe("Tool Execution", () => {
         delegation: {
           delegate: async () => {
             delegateCalled = true;
-            return { ok: true, content: "unexpected" };
+            return {
+              delivery: "replayed",
+              ok: true,
+              content: "unexpected",
+            };
           },
         },
       });
@@ -311,7 +315,7 @@ describe("Tool Execution", () => {
     expect(submit.content).toContain("submit_agent_result is unavailable");
   });
 
-  test(`Given an enabled delegation fails, succeeds without usage, or settles after root cancellation,
+  test(`Given an enabled delegation is rejected, replayed, or settles fresh after root cancellation,
     When dispatcher receives each Supervisor result,
     Then failures stay tool failures, empty usage stays unattributed, and cancelled usage remains observable`, async () => {
     const authority: ModelToolExposure = { kind: "auto", delegation: true };
@@ -332,14 +336,22 @@ describe("Tool Execution", () => {
       ...base,
       signal: new AbortController().signal,
       delegation: {
-        delegate: async () => ({ ok: false, content: "child failed" }),
+        delegate: async () => ({
+          delivery: "rejected",
+          ok: false,
+          content: "child failed",
+        }),
       },
     });
     const noUsage = await executeToolCall({
       ...base,
       signal: new AbortController().signal,
       delegation: {
-        delegate: async () => ({ ok: true, content: "child completed" }),
+        delegate: async () => ({
+          delivery: "replayed",
+          ok: true,
+          content: "child completed",
+        }),
       },
     });
     const controller = new AbortController();
@@ -351,6 +363,7 @@ describe("Tool Execution", () => {
         delegate: async () => {
           controller.abort(cancellation);
           return {
+            delivery: "fresh",
             ok: false,
             content: "child cancelled",
             usage: {
@@ -406,6 +419,7 @@ describe("Tool Execution", () => {
       builtinToolAuthority: { kind: "auto", delegation: true },
       delegation: {
         delegate: async (input) => ({
+          delivery: "fresh",
           ok: true,
           content: `${input.task}:${input.focusPaths.join(",")}`,
           usage: {

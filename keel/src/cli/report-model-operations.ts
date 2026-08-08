@@ -1,13 +1,15 @@
 import {
   type BeginModelOperationOptions,
+  type MainOnlyModelOperationPurpose,
+  type ModelOperationAttribution,
   type ModelOperationHandle,
   type ModelOperationOutcome,
   type ModelOperationOwner,
-  type ModelOperationPurpose,
   type ModelOperationRecorder,
   type ModelOperationRecoveryTarget,
   modelOperationOutcomeFromError,
   requestCostUsd,
+  type SharedModelOperationPurpose,
 } from "../agent/model-operations.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { ProviderRequestTerminalErrorCode } from "../core/error.ts";
@@ -55,12 +57,6 @@ type RunReportProviderRequestAttempt =
 interface RunReportModelOperationBase {
   readonly ordinal: number;
   readonly owner: RunReportModelOperationOwner;
-  readonly attribution?: {
-    readonly type: "subagent";
-    readonly delegationId: string;
-    readonly childRunId: string;
-  };
-  readonly purpose: ModelOperationPurpose;
   readonly provider: string;
   readonly model: string;
   readonly providerRequestAttempts: readonly RunReportProviderRequestAttempt[];
@@ -69,7 +65,22 @@ interface RunReportModelOperationBase {
   readonly costUsd: number;
 }
 
-export type RunReportModelOperation = RunReportModelOperationBase;
+type ModelOperationContext =
+  | {
+      readonly purpose: MainOnlyModelOperationPurpose;
+      readonly attribution?: never;
+    }
+  | {
+      readonly purpose: "subagent_turn";
+      readonly attribution: ModelOperationAttribution;
+    }
+  | {
+      readonly purpose: SharedModelOperationPurpose;
+      readonly attribution?: ModelOperationAttribution;
+    };
+
+export type RunReportModelOperation = RunReportModelOperationBase &
+  ModelOperationContext;
 
 export interface RunReportModelUsage {
   readonly provider: string;
@@ -154,14 +165,63 @@ type MutableModelOperationResult =
 interface MutableModelOperation {
   readonly ordinal: number;
   readonly owner: RunReportModelOperationOwner;
-  readonly attribution: BeginModelOperationOptions["attribution"];
-  readonly purpose: ModelOperationPurpose;
+  readonly context: ModelOperationContext;
   readonly provider: string;
   readonly model: string;
   readonly costModel: CostModel;
   readonly providerRequestAttempts: MutableProviderRequestAttempt[];
   result: MutableModelOperationResult;
   latestContextOverflowRecoveryTarget: ModelOperationRecoveryTarget | null;
+}
+
+function modelOperationContext(
+  options: BeginModelOperationOptions,
+): ModelOperationContext {
+  switch (options.purpose) {
+    case "subagent_turn":
+      return {
+        purpose: options.purpose,
+        attribution: { ...options.attribution },
+      };
+    case "turn_limit_summary":
+    case "context_compaction":
+      return options.attribution === undefined
+        ? { purpose: options.purpose }
+        : {
+            purpose: options.purpose,
+            attribution: { ...options.attribution },
+          };
+    case "agent_turn":
+    case "goal_assertion_evaluation":
+    case "manual_compaction":
+    case "model_switch_compaction":
+      return { purpose: options.purpose };
+  }
+}
+
+function cloneModelOperationContext(
+  context: ModelOperationContext,
+): ModelOperationContext {
+  switch (context.purpose) {
+    case "subagent_turn":
+      return {
+        purpose: context.purpose,
+        attribution: { ...context.attribution },
+      };
+    case "turn_limit_summary":
+    case "context_compaction":
+      return context.attribution === undefined
+        ? { purpose: context.purpose }
+        : {
+            purpose: context.purpose,
+            attribution: { ...context.attribution },
+          };
+    case "agent_turn":
+    case "goal_assertion_evaluation":
+    case "manual_compaction":
+    case "model_switch_compaction":
+      return { purpose: context.purpose };
+  }
 }
 
 const ZERO_USAGE: Usage = {
@@ -320,10 +380,7 @@ function modelOperationReport(
   return {
     ordinal: operation.ordinal,
     owner: { ...operation.owner },
-    ...(operation.attribution !== undefined
-      ? { attribution: { ...operation.attribution } }
-      : {}),
-    purpose: operation.purpose,
+    ...cloneModelOperationContext(operation.context),
     provider: operation.provider,
     model: operation.model,
     providerRequestAttempts: operation.result.providerRequestAttempts.map(
@@ -344,8 +401,7 @@ function beginModelOperation(
   const operation: MutableModelOperation = {
     ordinal: operations.length + 1,
     owner: resolveOperationOwner(options.owner, currentAgentRun),
-    attribution: options.attribution,
-    purpose: options.purpose,
+    context: modelOperationContext(options),
     provider: options.provider,
     model: options.model,
     costModel: options.costModel,

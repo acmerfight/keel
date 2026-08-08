@@ -73,6 +73,12 @@ const providerAttemptSchema = z.discriminatedUnion("outcome", [
   }),
 ]);
 
+const modelOperationAttributionSchema = z.object({
+  type: z.literal("subagent"),
+  delegationId: z.string(),
+  childRunId: z.string(),
+});
+
 const modelOperationBase = {
   ordinal: z.number().int().positive(),
   owner: z.discriminatedUnion("type", [
@@ -82,22 +88,6 @@ const modelOperationBase = {
       agentRunOrdinal: z.number().int().positive(),
     }),
     z.object({ type: z.literal("session") }),
-  ]),
-  attribution: z
-    .object({
-      type: z.literal("subagent"),
-      delegationId: z.string(),
-      childRunId: z.string(),
-    })
-    .optional(),
-  purpose: z.enum([
-    "agent_turn",
-    "subagent_turn",
-    "turn_limit_summary",
-    "context_compaction",
-    "goal_assertion_evaluation",
-    "manual_compaction",
-    "model_switch_compaction",
   ]),
   provider: z.string(),
   model: z.string(),
@@ -113,7 +103,28 @@ const modelOperationBase = {
   costUsd: z.number().nonnegative(),
 };
 
-const modelOperationSchema = z.object(modelOperationBase);
+const modelOperationSchema = z.discriminatedUnion("purpose", [
+  z.object({
+    ...modelOperationBase,
+    purpose: z.literal("subagent_turn"),
+    attribution: modelOperationAttributionSchema,
+  }),
+  z.object({
+    ...modelOperationBase,
+    purpose: z.enum([
+      "agent_turn",
+      "goal_assertion_evaluation",
+      "manual_compaction",
+      "model_switch_compaction",
+    ]),
+    attribution: z.never().optional(),
+  }),
+  z.object({
+    ...modelOperationBase,
+    purpose: z.enum(["turn_limit_summary", "context_compaction"]),
+    attribution: modelOperationAttributionSchema.optional(),
+  }),
+]);
 
 const modelOperationReportSchema = z
   .object({

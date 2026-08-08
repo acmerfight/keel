@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import {
   CLI_ENTRY,
   createEvalDir,
@@ -21,6 +22,43 @@ const KEEL_HOME_ENV = "KEEL_HOME";
 const PATH_ENV = "PATH";
 
 describe("Eval Runner", () => {
+  test(`Given subagent attribution is part of the current report schema,
+    When a report mismatches child purpose and identity,
+    Then invalid combinations are rejected while attributed child compaction remains valid`, () => {
+    // Given
+    const mainOperation = VALID_REPORT.modelOperations[0];
+    const attribution = {
+      type: "subagent" as const,
+      delegationId: "main:delegate-1",
+      childRunId: "subagent-1",
+    };
+
+    // When
+    const childWithoutAttribution = runReportSchema.safeParse({
+      ...VALID_REPORT,
+      modelOperations: [{ ...mainOperation, purpose: "subagent_turn" }],
+    });
+    const mainWithChildAttribution = runReportSchema.safeParse({
+      ...VALID_REPORT,
+      modelOperations: [{ ...mainOperation, attribution }],
+    });
+    const attributedChildCompaction = runReportSchema.safeParse({
+      ...VALID_REPORT,
+      modelOperations: [
+        {
+          ...mainOperation,
+          purpose: "context_compaction",
+          attribution,
+        },
+      ],
+    });
+
+    // Then
+    expect(childWithoutAttribution.success).toBe(false);
+    expect(mainWithChildAttribution.success).toBe(false);
+    expect(attributedChildCompaction.success).toBe(true);
+  });
+
   test(`Given provider selection is stored in the user's Keel home,
     When a memory pair isolates its memory store,
     Then both arms preserve the configured provider`, async () => {

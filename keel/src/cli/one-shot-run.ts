@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { createSharedCostBudgetedProvider } from "../agent/cost-budget.ts";
 import { runAgent } from "../agent/loop.ts";
-import type { ModelOperationInstrumentation } from "../agent/model-operations.ts";
+import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import {
   appendDelegationToSystemPrompt,
   appendProjectMemoryToSystemPrompt,
@@ -382,7 +382,7 @@ export async function runOneShotCli(
     const reportRecorder = createAgentEventReportRecorder();
     reportRecorder.beginTask("user_prompt");
     reportRecorder.beginAgentRun("user_prompt");
-    const modelOperations: ModelOperationInstrumentation | undefined =
+    const modelOperations: MainModelOperationInstrumentation | undefined =
       cliArgs.reportFile !== undefined && trackedCostModel !== undefined
         ? {
             recorder: reportRecorder,

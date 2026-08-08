@@ -157,9 +157,9 @@ async function executeDelegateTool(
     signal: context.signal,
   });
   const effects: readonly DelegationToolExecutionEffect[] =
-    result.usage === undefined
-      ? NO_TOOL_EXECUTION_EFFECTS
-      : [{ kind: "delegation", usage: result.usage }];
+    result.delivery === "fresh"
+      ? [{ kind: "delegation", usage: result.usage }]
+      : NO_TOOL_EXECUTION_EFFECTS;
   if (!result.ok) {
     return {
       content: result.content,

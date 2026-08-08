@@ -92,9 +92,11 @@ describe("Run Outcome Reporting", () => {
         userMessage: "Inspect the roadmap.",
         systemPrompt: "You are a read-only child.",
         signal: freshSignal(),
+        userMessageOrigin: { type: "runtime_subagent_delegation" },
         bash: { kind: "disabled" },
         toolProfile: "read-only-subagent",
         agentResultSubmission: submission,
+        costBudgetProvider: provider,
         stopPolicy: defaultStopPolicy(),
       }),
     );

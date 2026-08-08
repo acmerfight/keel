@@ -21,8 +21,8 @@ import type { AgentEvent } from "./events.ts";
 import type {
   ModelOperationHandle,
   ModelOperationInstrumentation,
-  ModelOperationPurpose,
   ModelOperationRecoveryTarget,
+  ModelOperationRequest,
 } from "./model-operations.ts";
 import {
   type AgentTurn,
@@ -70,10 +70,9 @@ export type CompactionState = {
 
 export interface LedgerTurnOptions extends StreamTurnOptions {
   readonly ledger: SessionLedger;
-  readonly modelOperationPurpose: Extract<
-    ModelOperationPurpose,
+  readonly modelOperation: ModelOperationRequest<
     "agent_turn" | "subagent_turn" | "turn_limit_summary"
-  >;
+  > | null;
 }
 
 type ContextCompactionAttempt =
@@ -250,19 +249,36 @@ export async function* streamTurnWithOverflowRecovery(
   let overflowRecoveryAttempted = false;
   let historicalCompactionAttemptedBeforeRequest = false;
   let preflightCurrentOutputCompactionAttempted = false;
-  const operationPurpose: ModelOperationPurpose =
-    streamOptions.modelOperationPurpose;
   let operation: ModelOperationHandle | null = null;
   let operationFinished = false;
   const startOperation = (): ModelOperationHandle | null => {
-    if (operation !== null || config.modelOperations === null) {
+    if (operation !== null || streamOptions.modelOperation === null) {
       return operation;
     }
-    operation = config.modelOperations.recorder.beginModelOperation({
-      ...config.modelOperations,
-      purpose: operationPurpose,
-      recoveryFor: null,
-    });
+    const request = streamOptions.modelOperation;
+    switch (request.purpose) {
+      case "agent_turn":
+        operation = request.instrumentation.recorder.beginModelOperation({
+          ...request.instrumentation,
+          purpose: request.purpose,
+          recoveryFor: null,
+        });
+        break;
+      case "subagent_turn":
+        operation = request.instrumentation.recorder.beginModelOperation({
+          ...request.instrumentation,
+          purpose: request.purpose,
+          recoveryFor: null,
+        });
+        break;
+      case "turn_limit_summary":
+        operation = request.instrumentation.recorder.beginModelOperation({
+          ...request.instrumentation,
+          purpose: request.purpose,
+          recoveryFor: null,
+        });
+        break;
+    }
     return operation;
   };
   const finishOperation = (

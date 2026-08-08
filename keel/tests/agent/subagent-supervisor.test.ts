@@ -213,6 +213,7 @@ describe("Subagent Supervisor", () => {
       });
 
       expect(result).toEqual({
+        delivery: "rejected",
         ok: false,
         content:
           "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
@@ -266,6 +267,7 @@ describe("Subagent Supervisor", () => {
       });
 
       // Then
+      expect(first.delivery).toBe("fresh");
       expect(first.ok).toBe(true);
       expect(first.usage).toEqual({
         inputTokens: 200,
@@ -273,8 +275,13 @@ describe("Subagent Supervisor", () => {
         uncachedInputTokens: 200,
         outputTokens: 20,
       });
-      expect(replay).toEqual({ ok: true, content: first.content });
+      expect(replay).toEqual({
+        delivery: "replayed",
+        ok: true,
+        content: first.content,
+      });
       expect(second).toEqual({
+        delivery: "rejected",
         ok: false,
         content:
           "Delegation rejected: Slice 1 permits only one accepted child per root run.",
@@ -486,6 +493,7 @@ describe("Subagent Supervisor", () => {
       expect(invalid.content).toContain("invalid focus path");
       expect(invalidReplay).toEqual(invalid);
       expect(noBudget).toEqual({
+        delivery: "rejected",
         ok: false,
         content:
           "Delegation rejected: the root budget cannot fund a child while preserving the main synthesis reserve.",

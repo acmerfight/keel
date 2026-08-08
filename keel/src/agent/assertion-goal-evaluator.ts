@@ -9,8 +9,8 @@ import { isMcpToolCall } from "../tools/tool-call.ts";
 import type { AssertionEvidenceResourceFreshness } from "./assertion-evidence-freshness.ts";
 import type { AgentEvent } from "./events.ts";
 import type {
+  MainModelOperationInstrumentation,
   ModelOperationHandle,
-  ModelOperationInstrumentation,
 } from "./model-operations.ts";
 import { type AgentTurn, streamAgentTurn } from "./provider-turn.ts";
 import type { SessionMessage } from "./session-message.ts";
@@ -107,7 +107,7 @@ interface AssertionGoalEvaluatorOptions {
   readonly goal: AssertionGoalContract;
   readonly evidenceMessages: readonly SessionMessage[];
   readonly resourceFreshness: readonly AssertionEvidenceResourceFreshness[];
-  readonly modelOperations: ModelOperationInstrumentation | null;
+  readonly modelOperations: MainModelOperationInstrumentation | null;
 }
 
 async function drainAgentTurn(

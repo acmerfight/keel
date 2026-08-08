@@ -15,7 +15,10 @@ import {
   type SharedCostBudgetedProvider,
 } from "./cost-budget.ts";
 import { runAgent } from "./loop.ts";
-import type { ModelOperationInstrumentation } from "./model-operations.ts";
+import type {
+  MainModelOperationInstrumentation,
+  SubagentModelOperationInstrumentation,
+} from "./model-operations.ts";
 import type { ProjectInstructions } from "./prompt.ts";
 import { buildReadOnlySubagentSystemPrompt } from "./prompt.ts";
 import type { SessionMessage } from "./session-message.ts";
@@ -96,7 +99,9 @@ interface SubagentCanonicalResult {
 
 interface AcceptedDelegation {
   readonly kind: "accepted";
-  readonly promise: Promise<DelegationToolResult>;
+  readonly promise: Promise<
+    Extract<DelegationToolResult, { readonly delivery: "fresh" }>
+  >;
   readonly record: SubagentRunRecord;
 }
 
@@ -104,8 +109,12 @@ interface SubagentRunRecord {
   readonly delegationId: string;
   readonly childRunId: string;
   readonly task: string;
-  state: "queued" | "running" | "terminal";
-  terminal: SubagentCanonicalResult | null;
+  state:
+    | { readonly kind: "queued" | "running" }
+    | {
+        readonly kind: "terminal";
+        readonly result: SubagentCanonicalResult;
+      };
 }
 
 type SubagentRunSnapshot =
@@ -134,7 +143,10 @@ interface ChildLifecycle {
 
 interface RejectedDelegation {
   readonly kind: "rejected";
-  readonly result: DelegationToolResult;
+  readonly result: Extract<
+    DelegationToolResult,
+    { readonly delivery: "rejected" }
+  >;
 }
 
 type DelegationReceipt = AcceptedDelegation | RejectedDelegation;
@@ -160,7 +172,7 @@ interface CreateSubagentSupervisorOptions {
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly contextCompaction?: ContextCompactionOptions;
   readonly modelMaxOutputTokens?: number;
-  readonly modelOperations?: ModelOperationInstrumentation;
+  readonly modelOperations?: MainModelOperationInstrumentation;
   readonly transcriptStore: AbortableToolOutputArtifactStore;
   readonly now: () => number;
   readonly onProgress: (event: SubagentProgressEvent) => void;
@@ -176,6 +188,12 @@ function zeroUsage(): Usage {
     uncachedInputTokens: 0,
     outputTokens: 0,
   };
+}
+
+function rejectedDelegation(
+  content: string,
+): Extract<DelegationToolResult, { readonly delivery: "rejected" }> {
+  return { delivery: "rejected", ok: false, content };
 }
 
 function childTaskMessage(
@@ -365,24 +383,20 @@ function cloneCanonicalResult(
 }
 
 function runSnapshot(record: SubagentRunRecord): SubagentRunSnapshot {
-  if (record.state === "terminal") {
-    /* v8 ignore next 3 -- commitTerminalResult establishes both fields atomically before exposing terminal state. */
-    if (record.terminal === null) {
-      throw new Error("terminal subagent run is missing its canonical result");
-    }
+  if (record.state.kind === "terminal") {
     return {
       delegationId: record.delegationId,
       childRunId: record.childRunId,
       task: record.task,
       state: "terminal",
-      terminal: cloneCanonicalResult(record.terminal),
+      terminal: cloneCanonicalResult(record.state.result),
     };
   }
   return {
     delegationId: record.delegationId,
     childRunId: record.childRunId,
     task: record.task,
-    state: record.state,
+    state: record.state.kind,
     terminal: null,
   };
 }
@@ -392,11 +406,10 @@ function commitTerminalResult(
   result: SubagentCanonicalResult,
 ): void {
   /* v8 ignore next 3 -- the single foreground lifecycle has one canonical commit site; retain a fail-fast invariant guard. */
-  if (record.terminal !== null) {
+  if (record.state.kind === "terminal") {
     throw new Error("subagent terminal result was already committed");
   }
-  record.terminal = cloneCanonicalResult(result);
-  record.state = "terminal";
+  record.state = { kind: "terminal", result: cloneCanonicalResult(result) };
 }
 
 export function createSubagentSupervisor(
@@ -472,7 +485,9 @@ export function createSubagentSupervisor(
     readonly childMaxCostUsd: number;
     readonly lifecycle: ChildLifecycle;
     readonly record: SubagentRunRecord;
-  }): Promise<DelegationToolResult> => {
+  }): Promise<
+    Extract<DelegationToolResult, { readonly delivery: "fresh" }>
+  > => {
     const progress = (
       status: Exclude<SubagentProgressEvent["status"], "tool" | "turn">,
     ): void => {
@@ -504,7 +519,7 @@ export function createSubagentSupervisor(
         deadlineMs,
       });
     };
-    input.record.state = "running";
+    input.record.state = { kind: "running" };
     progress("running");
     try {
       const submission = createAgentResultSubmissionCapability();
@@ -530,7 +545,9 @@ export function createSubagentSupervisor(
           ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
           : {}),
       });
-      const childModelOperations: ModelOperationInstrumentation | undefined =
+      const childModelOperations:
+        | SubagentModelOperationInstrumentation
+        | undefined =
         options.modelOperations === undefined
           ? undefined
           : {
@@ -574,7 +591,6 @@ export function createSubagentSupervisor(
           ...(childModelOperations !== undefined
             ? { modelOperations: childModelOperations }
             : {}),
-          agentTurnModelOperationPurpose: "subagent_turn",
           onTranscriptReady: (messages) => {
             transcriptMessages = messages;
           },
@@ -669,6 +685,7 @@ export function createSubagentSupervisor(
       commitTerminalResult(input.record, result);
       progress(status);
       return {
+        delivery: "fresh",
         ok: status === "completed",
         content: admittedAgentResult(result),
         usage,
@@ -686,15 +703,17 @@ export function createSubagentSupervisor(
       if (existing?.kind === "rejected") return existing.result;
       if (existing?.kind === "accepted") {
         const result = await existing.promise;
-        return { ok: result.ok, content: result.content };
+        return {
+          delivery: "replayed",
+          ok: result.ok,
+          content: result.content,
+        };
       }
 
       if (options.provider.abortSignalSupport !== true) {
-        const result = {
-          ok: false,
-          content:
-            "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
-        };
+        const result = rejectedDelegation(
+          "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
+        );
         receipts.set(delegationId, { kind: "rejected", result });
         return result;
       }
@@ -704,19 +723,16 @@ export function createSubagentSupervisor(
         input.focusPaths,
       );
       if (invalidFocusPath !== null) {
-        const result = {
-          ok: false,
-          content: `Delegation rejected: invalid focus path. ${invalidFocusPath}`,
-        };
+        const result = rejectedDelegation(
+          `Delegation rejected: invalid focus path. ${invalidFocusPath}`,
+        );
         receipts.set(delegationId, { kind: "rejected", result });
         return result;
       }
       if (acceptedRuns >= 1) {
-        const result = {
-          ok: false,
-          content:
-            "Delegation rejected: Slice 1 permits only one accepted child per root run.",
-        };
+        const result = rejectedDelegation(
+          "Delegation rejected: Slice 1 permits only one accepted child per root run.",
+        );
         receipts.set(delegationId, { kind: "rejected", result });
         return result;
       }
@@ -725,11 +741,9 @@ export function createSubagentSupervisor(
         options.rootMaxCostUsd * MAIN_SYNTHESIS_RESERVE_FRACTION;
       const childMaxCostUsd = remainingUsd - synthesisReserveUsd;
       if (childMaxCostUsd <= 0) {
-        const result = {
-          ok: false,
-          content:
-            "Delegation rejected: the root budget cannot fund a child while preserving the main synthesis reserve.",
-        };
+        const result = rejectedDelegation(
+          "Delegation rejected: the root budget cannot fund a child while preserving the main synthesis reserve.",
+        );
         receipts.set(delegationId, { kind: "rejected", result });
         return result;
       }
@@ -740,11 +754,12 @@ export function createSubagentSupervisor(
         delegationId,
         childRunId,
         task: input.task,
-        state: "queued",
-        terminal: null,
+        state: { kind: "queued" },
       };
       let startExecution: (lifecycle: ChildLifecycle) => void = () => {};
-      const promise = new Promise<DelegationToolResult>((resolve, reject) => {
+      const promise = new Promise<
+        Extract<DelegationToolResult, { readonly delivery: "fresh" }>
+      >((resolve, reject) => {
         startExecution = (lifecycle) => {
           void executeAccepted({
             delegationId,
@@ -757,35 +772,43 @@ export function createSubagentSupervisor(
             record,
           })
             /* v8 ignore start -- executeAccepted normalizes provider, tool, storage, cancellation, and observer failures; this is the last-resort promise containment boundary. */
-            .catch((caught): DelegationToolResult => {
-              const usage = zeroUsage();
-              const result: SubagentCanonicalResult = {
-                delegationId,
-                childRunId,
-                status: "failed",
-                task: input.task,
-                submitted: null,
-                usage,
-                turns: 0,
-                costUsd: 0,
-                transcriptRef: null,
-                error: `Unexpected child lifecycle failure: ${errorMessage(caught)}`,
-              };
-              if (record.terminal === null)
-                commitTerminalResult(record, result);
-              publishProgress({
-                status: "failed",
-                delegationId,
-                task: input.task,
-                elapsedMs: elapsedSince(lifecycle.startedAt),
-                deadlineMs,
-              });
-              return {
-                ok: false,
-                content: admittedAgentResult(result),
-                usage,
-              };
-            })
+            .catch(
+              (
+                caught,
+              ): Extract<
+                DelegationToolResult,
+                { readonly delivery: "fresh" }
+              > => {
+                const usage = zeroUsage();
+                const result: SubagentCanonicalResult = {
+                  delegationId,
+                  childRunId,
+                  status: "failed",
+                  task: input.task,
+                  submitted: null,
+                  usage,
+                  turns: 0,
+                  costUsd: 0,
+                  transcriptRef: null,
+                  error: `Unexpected child lifecycle failure: ${errorMessage(caught)}`,
+                };
+                if (record.state.kind !== "terminal")
+                  commitTerminalResult(record, result);
+                publishProgress({
+                  status: "failed",
+                  delegationId,
+                  task: input.task,
+                  elapsedMs: elapsedSince(lifecycle.startedAt),
+                  deadlineMs,
+                });
+                return {
+                  delivery: "fresh",
+                  ok: false,
+                  content: admittedAgentResult(result),
+                  usage,
+                };
+              },
+            )
             /* v8 ignore stop */
             .then(resolve, reject);
         };
