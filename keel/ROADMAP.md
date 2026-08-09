@@ -148,12 +148,13 @@ What a user can do today:
   removes the model-authored `submit_agent_result` protocol: a child now ends
   with a normal final message, while the host creates the typed handoff and
   derives covered paths only from successful read observations. The root
-  budget leases one admitted main continuation before child work, and the
+  budget leases one admitted main continuation before child work by pricing the
+  provider-shaped assistant and bounded tool-result envelopes, and the
   `delegate` tool disappears after the single accepted child. Main receives a
   conclusion-first bounded coverage receipt, synthesizes by default, and may
   perform targeted spot-checks without a brittle read ban. Invalid arguments
   for a currently exposed `delegate` call are recoverable without starting a
-  child or consuming the one-shot slot. The frozen Slice 1.6 v3 DeepSeek window
+  child or consuming the one-shot slot. The frozen Slice 1.6 v6 DeepSeek window
   passed all 12 arms: controls 6/6, treatments 6/6, exactly one completed child
   6/6, zero cost overshoot, and zero full rereads of every child-covered path.
   This proves explicit single-child completion reliability, not autonomous

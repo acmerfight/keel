@@ -50,6 +50,11 @@ missing from one side of the two audits. Raw evidence remains under
 `artifacts/v5/`. V6 changes only that fixture wording to say the field must be
 present in the API request audit and absent from the worker delivery audit.
 
+V6 ran from `2dd1851` and passed the full gate: all 12 arms completed and
+verified, every treatment selected exactly one distinct completed child, no
+cost overshoot or second child occurred, and no main fully reread all
+child-covered paths. Raw evidence is retained under `artifacts/v6/`.
+
 ## Frozen v6 protocol
 
 - Experiment: `subagent-slice-1-6`.

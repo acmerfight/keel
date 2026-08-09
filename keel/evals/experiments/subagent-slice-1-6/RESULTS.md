@@ -102,3 +102,35 @@ were supported. V6 therefore clarifies only that semantic contract and keeps
 the workspace, solution, verifier, runtime, provider/model, budgets, trials,
 ordering, and acceptance threshold unchanged. V5 evidence is retained under
 `artifacts/v5/`.
+
+## V6 — passed after clarifying the eval contract
+
+V6 changes only the ambiguous service-review wording: the requested
+cross-service field must be present in API request audit records and absent
+from worker delivery audit records. Production runtime, prompts, workspace,
+solution, verifier, provider/model, budgets, trials, ordering, and acceptance
+threshold remain the same as v5.
+
+V6 ran all 12 arms once from `2dd1851` and passed:
+
+| Metric | Result |
+| --- | ---: |
+| Control harness + task verifier | 6/6 |
+| Treatment harness + task verifier | 6/6 |
+| Treatment exactly-one-child selection | 6/6 |
+| Completed child handoff with non-empty final text | 6/6 |
+| Distinct child identities | 6/6 |
+| Child model operations correctly attributed | 38 |
+| Cost overshoot | 0/12 |
+| Full reread of every child-observed path | 0/6 |
+| Observable report cost | `$0.0798565208` |
+
+Four child final messages stayed below the admitted bound; two were safely
+projected to 4,000 characters and still verified. Repeated-path counts were
+10/12, 10/12, 7/12, 2/12, 2/12, and 2/12. Controls cost `$0.0283446632` with a
+25.539-second median; treatments cost `$0.0515118576` with a 54.615-second
+median. Full raw evidence and checksums are retained under `artifacts/v6/`.
+
+Slice 1.6's explicit single-child completion gate is satisfied under the
+serialized continuation lease. This does not establish autonomous selection,
+parallel speedup, or lower cost.
