@@ -1,7 +1,38 @@
 import { describe, expect, test } from "vitest";
-import { buildAgentSystemPrompt } from "../../src/agent/prompt.ts";
+import {
+  appendDelegationToSystemPrompt,
+  buildAgentSystemPrompt,
+  buildReadOnlySubagentSystemPrompt,
+} from "../../src/agent/prompt.ts";
 
 describe("Agent System Prompt", () => {
+  test(`Given a bounded child handoff can truncate verbose evidence,
+    When main and child delegation prompts are built,
+    Then child leads with a compact direct answer and main changes it only for directly contradictory evidence`, () => {
+    const mainPrompt = appendDelegationToSystemPrompt("base");
+    const childPrompt = buildReadOnlySubagentSystemPrompt({
+      workspace: "/tmp/project",
+      platform: "linux",
+      focusPaths: ["src"],
+    });
+
+    expect(mainPrompt).toContain(
+      "Do not ask the child to paste bulk source, logs, or repeated evidence",
+    );
+    expect(mainPrompt).toContain(
+      "Change a reported fact only when direct evidence for that same fact contradicts it",
+    );
+    expect(childPrompt).toContain(
+      "Start the final message with the direct answer or requested structured output",
+    );
+    expect(childPrompt).toContain(
+      "Keep the entire final message under 4,000 characters",
+    );
+    expect(childPrompt).toContain(
+      "Do not paste bulk source, logs, CSV rows, or repeated evidence",
+    );
+  });
+
   test(`Given a workspace and platform,
     When the agent's system prompt is built,
     Then it presents keel as a coding agent bound to that workspace with read-before-edit and search-first discipline`, () => {

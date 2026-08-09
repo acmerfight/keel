@@ -21,11 +21,19 @@ bound and the provider treated validation as fatal. The other five treatments
 completed and verified. Raw evidence remains under `artifacts/v1/`; that window
 was not selectively rerun.
 
-V2 is pre-registered after one narrowly scoped recovery change: invalid
-arguments for a currently exposed `delegate` call return a recoverable tool
-failure without starting a child or consuming the one-shot slot. The bound and
-all experimental inputs and thresholds below remain unchanged. V2 runs the
-entire 12-arm window once and stores evidence under `artifacts/v2/`.
+V2 ran from `dd51689`. All 12 arms completed; controls verified 6/6, treatments
+selected and completed one child 6/6, but treatment task verification was only
+4/6. All six child final messages exceeded the 4,000-character projection
+bound. The two failures confused a configured value with a related sample
+measurement despite correct child evidence. Raw evidence remains under
+`artifacts/v2/`; the window was not selectively rerun.
+
+V3 is pre-registered after one prompt-only handoff change: child final messages
+must put the direct answer first, stay under the existing 4,000-character bound,
+and omit bulk source/log copying; main changes a reported fact only when direct
+evidence for that same fact contradicts it. All experimental inputs and
+thresholds below remain unchanged. V3 runs the entire 12-arm window once and
+stores evidence under `artifacts/v3/`.
 
 ## Frozen protocol
 
@@ -59,8 +67,8 @@ node --experimental-strip-types src/cli/index.ts eval \
   --provider deepseek \
   --model deepseek-v4-flash \
   --trials 3 \
-  --out /tmp/keel-subagent-slice-1-6-v2.jsonl \
-  --transcript-dir /tmp/keel-subagent-slice-1-6-v2-transcripts
+  --out /tmp/keel-subagent-slice-1-6-v3.jsonl \
+  --transcript-dir /tmp/keel-subagent-slice-1-6-v3-transcripts
 ```
 
 ## Corpus and budget
