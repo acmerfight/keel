@@ -63,7 +63,9 @@ rerun selectively.
 - Provider: DeepSeek.
 - Model: `deepseek-v4-flash`.
 - Trials: 3 paired trials per task.
-- Conditions: feature-disabled control and `--experimental-agents` treatment.
+- Conditions: feature-disabled control and `agentPolicy: auto` treatment. The
+  scored v5 artifacts predate the stable CLI name; the policy semantics and
+  fixtures are unchanged.
 - Pairing: both arms receive the same prompt, root `maxCostUsd`, base tool set,
   and pristine workspace snapshot. Delegation is the only treatment
   capability delta.

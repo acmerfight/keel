@@ -26,9 +26,9 @@ function modelOperationReportLines(
 }
 
 describe("Eval Runner", () => {
-  test(`Given the eval command selects a provider and model and the task opts into agents,
+  test(`Given the eval command selects a provider, model, and stable agent policy,
     When the eval runner executes a trial,
-    Then it passes provider, model, budget, and experimental-agent flags into the CLI run`, async () => {
+    Then it passes provider, model, budget, and agent policy into the CLI run`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "provider-selection", {
@@ -43,12 +43,13 @@ describe("Eval Runner", () => {
         'if (model < 0 || args[model + 1] !== "qwen3.7-plus") process.exit(1);',
         'const maxCost = args.indexOf("--max-cost");',
         'if (maxCost < 0 || args[maxCost + 1] !== "0.2") process.exit(1);',
-        'if (!args.includes("--experimental-agents")) process.exit(1);',
+        'const agentPolicy = args.indexOf("--agent-policy");',
+        'if (agentPolicy < 0 || args[agentPolicy + 1] !== "auto") process.exit(1);',
         "'\n",
       ].join(" "),
       solution: "printf '[]' > agent-args.json\n",
       maxCostUsd: 0.2,
-      experimentalAgents: true,
+      agentPolicy: "auto",
     });
     const cliEntry = join(root, "record-args-cli.js");
     await writeFile(

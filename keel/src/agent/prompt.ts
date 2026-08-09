@@ -1,3 +1,4 @@
+import type { DelegatingAgentPolicy } from "../core/agent-policy.ts";
 import { skillCatalogEntry } from "../skills/catalog.ts";
 import {
   MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN,
@@ -92,10 +93,18 @@ export function appendProjectMemoryToSystemPrompt(
     : `${systemPrompt}\n\n${memoryPrompt}`;
 }
 
-export function appendDelegationToSystemPrompt(systemPrompt: string): string {
+export function appendDelegationToSystemPrompt(
+  systemPrompt: string,
+  policy: DelegatingAgentPolicy,
+): string {
+  const policyInstruction =
+    policy === "explicit"
+      ? "- Policy is explicit: call delegate only when the current user explicitly asks to use a subagent or delegate work. Interpret the request semantically; no exact phrase is required."
+      : "- Policy is auto: you may call delegate without an explicit user request when the task meets the delegation criteria below.";
   return `${systemPrompt}
 
-Experimental read-only delegation:
+Stable read-only delegation:
+${policyInstruction}
 - Use delegate only for independent, context-heavy workspace investigations that can finish without parent history or feedback.
 - Do not delegate small, sequential, write, approval-requiring, or tightly coupled work.
 - When several investigations are independent, call delegate once for each in the same assistant turn so they can run in parallel. A delegate batch may contain only delegate calls; finish setup or other tools first.

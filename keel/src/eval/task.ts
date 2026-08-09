@@ -1,6 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import {
+  type DelegatingAgentPolicy,
+  delegatingAgentPolicies,
+} from "../core/agent-policy.ts";
 import { errorMessage } from "../core/error.ts";
 
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
@@ -13,31 +17,44 @@ export const evalDelegationPolicies = [
 const delegationPolicySchema = z.enum(evalDelegationPolicies);
 export type EvalDelegationPolicy = z.infer<typeof delegationPolicySchema>;
 
-const standardTaskConfigSchema = z
-  .object({
-    kind: z.literal("standard"),
-    prompt: z.string().min(1),
-    timeoutMs: z.number().int().positive().default(DEFAULT_TASK_TIMEOUT_MS),
-    scriptTimeoutMs: z
-      .number()
-      .int()
-      .positive()
-      .default(DEFAULT_SCRIPT_TIMEOUT_MS),
-    allowBash: z.boolean().default(false),
-    maxCostUsd: z.number().positive().optional(),
-    experimentalAgents: z.boolean().default(false),
-    delegationPolicy: delegationPolicySchema.optional(),
-  })
-  .strict()
-  .superRefine((task, ctx) => {
-    if (task.delegationPolicy !== undefined && !task.experimentalAgents) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["delegationPolicy"],
-        message: "requires experimentalAgents to be true",
-      });
-    }
-  });
+const standardTaskBaseShape = {
+  kind: z.literal("standard"),
+  prompt: z.string().min(1),
+  timeoutMs: z.number().int().positive().default(DEFAULT_TASK_TIMEOUT_MS),
+  scriptTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_SCRIPT_TIMEOUT_MS),
+  allowBash: z.boolean().default(false),
+};
+
+const standardTaskConfigSchema = z.discriminatedUnion("agentPolicy", [
+  z
+    .object({
+      ...standardTaskBaseShape,
+      agentPolicy: z.literal("off"),
+      maxCostUsd: z.number().positive().optional(),
+      delegationPolicy: z.never().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...standardTaskBaseShape,
+      agentPolicy: z.literal("explicit"),
+      maxCostUsd: z.number().positive(),
+      delegationPolicy: delegationPolicySchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...standardTaskBaseShape,
+      agentPolicy: z.literal("auto"),
+      maxCostUsd: z.number().positive(),
+      delegationPolicy: delegationPolicySchema.optional(),
+    })
+    .strict(),
+]);
 
 const memoryPairTaskConfigSchema = z
   .object({
@@ -59,15 +76,28 @@ const delegationPairTaskConfigSchema = z
     scriptTimeoutMs: z.number().int().positive(),
     allowBash: z.boolean(),
     maxCostUsd: z.number().positive(),
+    agentPolicy: z.enum(delegatingAgentPolicies),
     delegationPolicy: delegationPolicySchema,
   })
   .strict();
 
-const taskConfigSchema = z.discriminatedUnion("kind", [
+const taskConfigInputSchema = z.discriminatedUnion("kind", [
   standardTaskConfigSchema,
   memoryPairTaskConfigSchema,
   delegationPairTaskConfigSchema,
 ]);
+const taskConfigSchema = z.preprocess((input) => {
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    "kind" in input &&
+    input.kind === "standard" &&
+    !("agentPolicy" in input)
+  ) {
+    return { ...input, agentPolicy: "off" };
+  }
+  return input;
+}, taskConfigInputSchema);
 
 interface EvalTaskBase {
   readonly id: string;
@@ -88,11 +118,12 @@ interface StandardEvalTaskBase extends EvalTaskBase {
 export type StandardEvalTask = StandardEvalTaskBase &
   (
     | {
-        readonly experimentalAgents: false;
+        readonly agentPolicy: "off";
         readonly delegationPolicy?: never;
       }
     | {
-        readonly experimentalAgents: true;
+        readonly agentPolicy: DelegatingAgentPolicy;
+        readonly maxCostUsd: number;
         readonly delegationPolicy?: EvalDelegationPolicy;
       }
   );
@@ -106,6 +137,7 @@ export interface MemoryPairEvalTask extends EvalTaskBase {
 export interface DelegationPairEvalTask extends EvalTaskBase {
   readonly kind: "delegation_pair";
   readonly maxCostUsd: number;
+  readonly agentPolicy: DelegatingAgentPolicy;
   readonly delegationPolicy: EvalDelegationPolicy;
 }
 
@@ -189,10 +221,11 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       scriptTimeoutMs: config.scriptTimeoutMs,
       allowBash: config.allowBash,
       maxCostUsd: config.maxCostUsd,
+      agentPolicy: config.agentPolicy,
       delegationPolicy: config.delegationPolicy,
     };
   }
-  if (!config.experimentalAgents) {
+  if (config.agentPolicy === "off") {
     return {
       kind: "standard",
       id,
@@ -203,7 +236,7 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       timeoutMs: config.timeoutMs,
       scriptTimeoutMs: config.scriptTimeoutMs,
       allowBash: config.allowBash,
-      experimentalAgents: false,
+      agentPolicy: "off",
       ...(config.maxCostUsd === undefined
         ? {}
         : { maxCostUsd: config.maxCostUsd }),
@@ -219,13 +252,11 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     timeoutMs: config.timeoutMs,
     scriptTimeoutMs: config.scriptTimeoutMs,
     allowBash: config.allowBash,
-    experimentalAgents: true,
+    agentPolicy: config.agentPolicy,
+    maxCostUsd: config.maxCostUsd,
     ...(config.delegationPolicy !== undefined
       ? { delegationPolicy: config.delegationPolicy }
       : {}),
-    ...(config.maxCostUsd === undefined
-      ? {}
-      : { maxCostUsd: config.maxCostUsd }),
   };
 }
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { z } from "zod";
+import type { DelegatingAgentPolicy } from "../../../src/core/agent-policy.ts";
 import { evalResultLineSchema } from "../../../src/eval/result-schema.ts";
 import { runEvalCommand } from "../../../src/eval/run.ts";
 
@@ -20,7 +21,7 @@ export {
 };
 export const resultLineSchema = evalResultLineSchema;
 
-export interface TaskFixture {
+interface TaskFixtureBase {
   readonly prompt: string;
   readonly files?: Record<string, string>;
   readonly verify: string;
@@ -28,10 +29,21 @@ export interface TaskFixture {
   readonly timeoutMs?: number;
   readonly scriptTimeoutMs?: number;
   readonly allowBash?: boolean;
-  readonly maxCostUsd?: number;
-  readonly experimentalAgents?: boolean;
-  readonly delegationPolicy?: "require_one" | "forbid" | "at_most_one";
 }
+
+export type TaskFixture = TaskFixtureBase &
+  (
+    | {
+        readonly agentPolicy?: "off";
+        readonly maxCostUsd?: number;
+        readonly delegationPolicy?: never;
+      }
+    | {
+        readonly agentPolicy: DelegatingAgentPolicy;
+        readonly maxCostUsd: number;
+        readonly delegationPolicy?: "require_one" | "forbid" | "at_most_one";
+      }
+  );
 
 export interface MemoryPairTaskFixture {
   readonly prompt: string;
@@ -54,6 +66,7 @@ export interface DelegationPairTaskFixture {
   readonly scriptTimeoutMs: number;
   readonly allowBash: boolean;
   readonly maxCostUsd: number;
+  readonly agentPolicy: DelegatingAgentPolicy;
   readonly delegationPolicy: "require_one" | "forbid" | "at_most_one";
 }
 
@@ -92,8 +105,8 @@ export async function createTask(
       ...(fixture.maxCostUsd !== undefined
         ? { maxCostUsd: fixture.maxCostUsd }
         : {}),
-      ...(fixture.experimentalAgents !== undefined
-        ? { experimentalAgents: fixture.experimentalAgents }
+      ...(fixture.agentPolicy !== undefined
+        ? { agentPolicy: fixture.agentPolicy }
         : {}),
       ...(fixture.delegationPolicy !== undefined
         ? { delegationPolicy: fixture.delegationPolicy }
@@ -148,6 +161,7 @@ export async function createDelegationPairTask(
       scriptTimeoutMs: fixture.scriptTimeoutMs,
       allowBash: fixture.allowBash,
       maxCostUsd: fixture.maxCostUsd,
+      agentPolicy: fixture.agentPolicy,
       delegationPolicy: fixture.delegationPolicy,
     }),
     "utf8",

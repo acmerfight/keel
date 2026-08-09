@@ -136,8 +136,10 @@ What a user can do today:
 - `keel --max-cost <usd>` — one-shot or interactive best-effort session cost
   budget with conservative request admission, provider output bounds, and
   post-response accounting.
-- `keel --experimental-agents --max-cost <usd> "<message>"` — a default-off,
-  time-boxed #590 foreground read-only orchestration experiment. Main may
+- `keel --agent-policy explicit --max-cost <usd> "<message>"` — stable,
+  default-off #590 foreground read-only orchestration for explicit user
+  requests. `--agent-policy auto` is a separate opt-in policy that lets the
+  model select delegation without an explicit request. Main may
   delegate one or several fresh-context workspace investigations, shows bounded
   lifecycle progress, shares the root cost budget, waits for real
   cancellation/settlement, and remains the only final answerer. Slice 2.2
@@ -150,8 +152,10 @@ What a user can do today:
   and parent cancellation. Slice 1.5 historically established **Continue for
   explicit user-directed development**: autonomous eligible prompts selected a
   child 0/6 times, but the separately frozen exact prefix
-  `使用 subagent 调研这个任务。` selected one child 6/6 times. The feature
-  remains default-off and autonomous selection is uncommitted. Slice 1.6 then
+  `使用 subagent 调研这个任务。` selected one child 6/6 times. Slice 2.3
+  promotes that semantic explicit-intent path to the stable CLI without a
+  keyword dispatcher; autonomous selection remains an explicit opt-in. Slice
+  1.6 then
   removes the model-authored `submit_agent_result` protocol: a child now ends
   with a normal final message, while the host creates a typed, bounded,
   tool-agnostic handoff with a reference to the complete transcript. The root
@@ -268,11 +272,11 @@ Known limits that shape the priorities below:
   compaction, resume, and fork. Deterministic package audit now excludes blocked
   Skills from routing and activation and exposes actionable diagnostics through
   `keel skills doctor`. The next Skill work should calibrate catalog routing and
-  task outcomes before pinned distribution. Sub-agents now have explicit,
-  default-off foreground read-only parallelism through #590 Slice 2.2; later
-  background, persistence, profiles, writes, nesting, and policy slices remain
-  subject to the issue's reliability and same-budget value gates. Marketplaces
-  and IDE integration remain deferred.
+  task outcomes before pinned distribution. Sub-agents now have stable
+  default-off `off|explicit|auto` policy and foreground read-only parallelism
+  through #590 Slice 2.3; later background, persistence, profiles, writes, and
+  nesting remain subject to the issue's reliability and same-budget value
+  gates. Marketplaces and IDE integration remain deferred.
 - MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
   transport over the same runtime and policy core, and Keel is a client only.
   Remaining work is calibrating progressive tool selection on real tasks.
@@ -441,10 +445,11 @@ Codex/Claude Code — or directly moves the eval numbers.
 
 Not needed to switch; revisit once P0/P1 are done.
 
-- Sub-agents — #590 Slice 2.2 provides explicit default-off foreground
-  read-only parallelism. Persistent/background control, governed profiles,
-  isolated writes, bounded nesting, and any default-on decision remain gated by
-  their later epic slices and same-budget value evidence.
+- Sub-agents — #590 Slice 2.3 provides stable default-off `off|explicit|auto`
+  policy over foreground read-only parallelism. Persistent/background control,
+  governed profiles, isolated writes, bounded nesting, and any default-on
+  decision remain gated by their later epic slices and same-budget value
+  evidence.
 - Plan mode
 - IDE integration
 - Skill marketplace

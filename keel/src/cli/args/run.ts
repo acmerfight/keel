@@ -1,7 +1,12 @@
+import type {
+  AgentPolicy,
+  AgentPolicyConfiguration,
+} from "../../core/agent-policy.ts";
 import { type BashMode, bashModeFromPolicy } from "../../permissions/bash.ts";
 import {
   isRecognizedOptionToken,
   type ParseResult,
+  parseAgentPolicy,
   parseBashPolicy,
   parseError,
   parseForkBeforeMessage,
@@ -23,7 +28,7 @@ const RUN_OPTIONS = [
   "--model",
   "--skill",
   "--no-skills",
-  "--experimental-agents",
+  "--agent-policy",
   "--max-cost",
   "--report",
   "--transcript",
@@ -58,7 +63,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let providerId: RunCliArgs["providerId"] | undefined;
   let model: string | undefined;
   let skillsEnabled = true;
-  let experimentalAgents = false;
+  let agentPolicy: AgentPolicy = "off";
   const skillNames: string[] = [];
   let userMessage: string | undefined;
   let positionalMessagePresent = false;
@@ -66,6 +71,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   const reportPrefix = "--report=";
   const transcriptPrefix = "--transcript=";
   const bashPolicyPrefix = "--bash-policy=";
+  const agentPolicyPrefix = "--agent-policy=";
   const sessionPrefix = "--session=";
   const resumePrefix = "--resume=";
   const forkPrefix = "--fork=";
@@ -170,8 +176,18 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       continue;
     }
 
-    if (arg === "--experimental-agents") {
-      experimentalAgents = true;
+    if (arg === "--agent-policy") {
+      const parsed = parseAgentPolicy(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      agentPolicy = parsed.value;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(agentPolicyPrefix)) {
+      const parsed = parseAgentPolicy(arg.slice(agentPolicyPrefix.length));
+      if (!parsed.ok) return parsed;
+      agentPolicy = parsed.value;
       continue;
     }
 
@@ -453,10 +469,19 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   if (!skillsEnabled && skillNames.length > 0) {
     return parseError("Error: --no-skills cannot be combined with --skill.");
   }
-  if (experimentalAgents && maxCostUsd === undefined) {
-    return parseError(
-      "Error: --experimental-agents requires --max-cost <usd> so the root and child share a bounded budget.",
-    );
+  let agentPolicyConfiguration: AgentPolicyConfiguration;
+  if (agentPolicy === "off") {
+    agentPolicyConfiguration = {
+      agentPolicy,
+      ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+    };
+  } else {
+    if (maxCostUsd === undefined) {
+      return parseError(
+        `Error: --agent-policy ${agentPolicy} requires --max-cost <usd> so the root and children share a bounded budget.`,
+      );
+    }
+    agentPolicyConfiguration = { agentPolicy, maxCostUsd };
   }
   if (
     positionalMessagePresent &&
@@ -483,8 +508,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     command: "run",
     bashMode,
     skillsEnabled,
-    ...(experimentalAgents ? { experimentalAgents: true } : {}),
-    ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+    ...agentPolicyConfiguration,
     ...(reportFile !== undefined ? { reportFile } : {}),
     memoryEnabled,
     ...(providerId !== undefined ? { providerId } : {}),

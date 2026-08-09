@@ -79,7 +79,9 @@ duplicate investigation. Raw evidence is retained under `artifacts/v8/`.
 - Provider: DeepSeek.
 - Model: `deepseek-v4-flash`.
 - Trials: 3 paired trials for each of 2 tasks; 12 arms total.
-- Conditions: feature-disabled control and `--experimental-agents` treatment.
+- Conditions: feature-disabled control and `agentPolicy: explicit` treatment.
+  The scored v8 artifacts predate the stable CLI name; the explicit-intent
+  semantics and fixtures are unchanged.
 - Treatment policy: `require_one`.
 - Prompt prefix: exactly `使用 subagent 调研这个任务。` followed by a blank line.
 - Pairing: each pair uses the same prompt, model, root budget, base tools, and

@@ -322,9 +322,9 @@ export async function runOneShotCli(
         : {}),
     });
     const systemPrompt =
-      cliArgs.experimentalAgents === true
-        ? appendDelegationToSystemPrompt(baseSystemPrompt)
-        : baseSystemPrompt;
+      cliArgs.agentPolicy === "off"
+        ? baseSystemPrompt
+        : appendDelegationToSystemPrompt(baseSystemPrompt, cliArgs.agentPolicy);
     const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
     let exposedMemoryBytes = 0;
     let exposedMemoryTokens = 0;
@@ -374,10 +374,20 @@ export async function runOneShotCli(
     const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
       resolved.modelMetadata,
     );
+    const delegationRun =
+      cliArgs.agentPolicy === "off"
+        ? ({ kind: "off" } as const)
+        : ({
+            kind: "enabled",
+            maxCostUsd: cliArgs.maxCostUsd,
+            costModel: requireKnownCostModel(resolved),
+          } as const);
     const trackedCostModel =
-      cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
-        ? requireKnownCostModel(resolved)
-        : undefined;
+      delegationRun.kind === "enabled"
+        ? delegationRun.costModel
+        : cliArgs.maxCostUsd !== undefined || cliArgs.reportFile !== undefined
+          ? requireKnownCostModel(resolved)
+          : undefined;
     const reportRecorder = createAgentEventReportRecorder();
     reportRecorder.beginTask("user_prompt");
     reportRecorder.beginAgentRun("user_prompt");
@@ -392,9 +402,7 @@ export async function runOneShotCli(
           }
         : undefined;
     const subagentRuntime =
-      cliArgs.experimentalAgents === true &&
-      cliArgs.maxCostUsd !== undefined &&
-      trackedCostModel !== undefined
+      delegationRun.kind === "enabled"
         ? createCliSubagentRuntime({
             workspace,
             platform: runtime.platform,
@@ -402,8 +410,8 @@ export async function runOneShotCli(
             provider: resolved.provider,
             providerId: resolved.provider.id,
             model: resolved.model,
-            maxCostUsd: cliArgs.maxCostUsd,
-            costModel: trackedCostModel,
+            maxCostUsd: delegationRun.maxCostUsd,
+            costModel: delegationRun.costModel,
             projectInstructions,
             hiddenWorkspacePaths,
             contextCompaction: resolved.contextCompaction,

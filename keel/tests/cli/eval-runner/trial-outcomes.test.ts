@@ -39,6 +39,7 @@ describe("Eval Runner", () => {
       scriptTimeoutMs: 10_000,
       allowBash: false,
       maxCostUsd: 0.01,
+      agentPolicy: "auto",
       delegationPolicy: "require_one",
     });
     const childOperation = {
@@ -60,7 +61,8 @@ describe("Eval Runner", () => {
       `import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 const args = process.argv.slice(2);
-const treatment = args.includes("--experimental-agents");
+const policyIndex = args.indexOf("--agent-policy");
+const treatment = args[policyIndex + 1] !== "off";
 appendFileSync(${JSON.stringify(callLog)}, (treatment ? "treatment" : "control") + ":" + String(existsSync("result.txt")) + "\\n");
 if (treatment) writeFileSync("result.txt", "alpha beta\\n");
 const reportIndex = args.indexOf("--report");
@@ -205,6 +207,7 @@ writeFileSync(args[transcriptIndex + 1], '{"schemaVersion":1,"type":"transcript"
         scriptTimeoutMs: 10_000,
         allowBash: false,
         maxCostUsd: 0.01,
+        agentPolicy: "auto",
         delegationPolicy: "require_one",
       });
     }
@@ -213,7 +216,8 @@ writeFileSync(args[transcriptIndex + 1], '{"schemaVersion":1,"type":"transcript"
       cliEntry,
       `import { writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
-const treatment = args.includes("--experimental-agents");
+const policyIndex = args.indexOf("--agent-policy");
+const treatment = args[policyIndex + 1] !== "off";
 const prompt = args.at(-1);
 if (prompt !== "missing-report") {
   const reportIndex = args.indexOf("--report");
@@ -295,6 +299,7 @@ if (prompt === "selection-missing" || (prompt === "control-only" && !treatment))
       scriptTimeoutMs: 10_000,
       allowBash: false,
       maxCostUsd: 0.01,
+      agentPolicy: "auto",
       delegationPolicy: "forbid",
     });
     const cliEntry = join(root, "delegation-unwritable-cli.mjs");
@@ -884,7 +889,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
         verify: "exit 0\n",
         solution: "exit 0\n",
         maxCostUsd: 0.1,
-        experimentalAgents: true,
+        agentPolicy: "auto",
         delegationPolicy,
       });
     }

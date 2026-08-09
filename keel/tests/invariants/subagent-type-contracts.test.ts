@@ -4,6 +4,7 @@ import type {
   BeginModelOperationOptions,
   ModelOperationInstrumentation,
 } from "../../src/agent/model-operations.ts";
+import type { AgentPolicyConfiguration } from "../../src/core/agent-policy.ts";
 import type { LLMProvider, Usage } from "../../src/llm/types.ts";
 import type {
   DelegationCapability,
@@ -31,6 +32,23 @@ type RunAgentBase = Pick<
 >;
 
 describe("subagent static type contracts", () => {
+  test(`Given enabled agent policies require a shared root budget,
+    When policy configurations are compared,
+    Then enabled policies without a budget are not assignable`, () => {
+    expectTypeOf<
+      Extends<{ readonly agentPolicy: "explicit" }, AgentPolicyConfiguration>
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Extends<
+        { readonly agentPolicy: "auto"; readonly maxCostUsd: number },
+        AgentPolicyConfiguration
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Extends<{ readonly agentPolicy: "off" }, AgentPolicyConfiguration>
+    >().toEqualTypeOf<true>();
+  });
+
   test(`Given only a prepared delegation batch may enter tool dispatch,
     When capability and executor authority types are compared,
     Then the admission capability cannot be passed as an executor`, () => {

@@ -306,17 +306,19 @@ timeouts, bash policy, root max cost, and a treatment-only `delegationPolicy`:
   "scriptTimeoutMs": 60000,
   "allowBash": false,
   "maxCostUsd": 0.03,
+  "agentPolicy": "explicit",
   "delegationPolicy": "require_one"
 }
 ```
 
 Each trial restores the same pristine workspace for a single-agent control and
-an `--experimental-agents` treatment. Odd trials run control first and even
-trials run treatment first to reduce fixed order bias, while JSONL stays in
-control/treatment order. The control harness must complete; its semantic task
-failure remains a valid observation. The treatment must verify and separately
-satisfy `require_one`, `forbid`, or `at_most_one` using distinct child
-identities from the run report. Selection never changes `taskOutcome`. The
+an `--agent-policy <explicit|auto>` treatment. Odd trials run control first and
+even trials run treatment first to reduce fixed order bias, while JSONL stays
+in control/treatment order. The control harness must complete; its semantic
+task failure remains a valid observation. The treatment must verify and
+separately satisfy `require_one`, `forbid`, or `at_most_one` using distinct
+child identities from the run report. Selection never changes `taskOutcome`.
+The
 frozen Slice 1.5 corpus, transcript rubric, provider/model, trial count,
 budgets, and Continue/Pause/Stop gate live in
 [`evals/experiments/subagent-slice-1-5/README.md`](evals/experiments/subagent-slice-1-5/README.md).
@@ -325,6 +327,8 @@ experiment live in
 [`evals/experiments/subagent-explicit-intent-v1/README.md`](evals/experiments/subagent-explicit-intent-v1/README.md).
 The host-owned completion handoff and continuation-budget reliability gate live
 in [`evals/experiments/subagent-slice-1-6/README.md`](evals/experiments/subagent-slice-1-6/README.md).
+The stable explicit-policy graduation window lives in
+[`evals/experiments/subagent-slice-2-3/README.md`](evals/experiments/subagent-slice-2-3/README.md).
 
 ## Writing good tasks
 

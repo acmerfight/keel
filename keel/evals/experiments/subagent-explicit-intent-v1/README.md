@@ -35,7 +35,9 @@ budget and the no-rerun rule below.
 - Provider: DeepSeek.
 - Model: `deepseek-v4-flash`.
 - Trials: 3 paired trials for each of 2 tasks; 12 arms total.
-- Conditions: feature-disabled control and `--experimental-agents` treatment.
+- Conditions: feature-disabled control and `agentPolicy: explicit` treatment.
+  The scored v1 artifacts predate the stable CLI name; the explicit-intent
+  semantics and fixtures are unchanged.
 - Prompt delta from the v5 positive fixtures: exactly the sentence
   `使用 subagent 调研这个任务。` followed by a blank line. The prompt does not
   prescribe a partition, child scope, tool name, or evidence allocation.
