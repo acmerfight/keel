@@ -43,4 +43,3 @@ There were zero retries and zero cost overshoots. Positive controls cost
 `$0.0227545416` with a 69.762-second median. Negative controls cost
 `$0.0023645664`; negative treatments cost `$0.0026924408`. Total observable
 cost was `$0.0381579968`.
-

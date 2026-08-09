@@ -40,4 +40,3 @@ cost was `$0.0411677952`.
 All three positive mains reread decisive payment and identity files after both
 children returned. This preserves the pre-registered duplicate-work diagnostic
 without turning it into a case-specific runtime rule.
-

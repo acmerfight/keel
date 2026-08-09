@@ -48,6 +48,13 @@ synthesis against the original user request. It changes no runtime rule,
 fixture, verifier, budget, provider, model, trial count, order, or selection
 gate, and reruns the complete window.
 
+V3 ran once from `254dc5fa5b8beae4c2da179d8b906db711f33f75` and
+passed the complete gate: 12/12 arms verified, positive selection 3/3 with 2,
+3, and 2 distinct completed children, negative selection 3/3 with zero
+children, zero retries, and zero budget overshoot. Full analysis is in
+[`RESULTS.md`](RESULTS.md), with raw evidence under
+[`artifacts/v3/`](artifacts/v3/).
+
 ## Final v3 protocol
 
 - Experiment: `subagent-slice-2-3`.

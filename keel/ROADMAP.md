@@ -177,11 +177,15 @@ What a user can do today:
   corpus. That window proved explicit single-child completion reliability, not
   autonomous selection, lower cost, or the elimination of duplicate work;
   Slice 2.2 separately proves deterministic transport overlap and a 3/3 real
-  DeepSeek explicit parallel window. See the
-  [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md)
-  and
-  [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md).
-  [Slice 1.6 completion result](evals/experiments/subagent-slice-1-6/RESULTS.md).
+  DeepSeek explicit parallel window. Slice 2.3's stable-policy V3 window then
+  passed 12/12 arms: ordinary explicit intent selected 2, 3, and 2 completed
+  children across three treatments, while the small-task negative selected
+  none in 3/3. It also confirmed that positive treatments remained slower,
+  more expensive, and subject to repeated main investigation. See the
+  [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md),
+  [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md),
+  [Slice 1.6 completion result](evals/experiments/subagent-slice-1-6/RESULTS.md),
+  and [stable-policy result](evals/experiments/subagent-slice-2-3/RESULTS.md).
   #590 remains the governing epic; foreground parallelism does not imply
   background persistence, write authority, nesting, or default-on autonomous
   delegation before their own slices and gates.
