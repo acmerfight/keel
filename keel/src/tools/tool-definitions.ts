@@ -564,11 +564,11 @@ const delegateTool = defineTool({
   name: "delegate",
   availability: "delegation",
   description: [
-    "Delegate one independent, read-only workspace investigation to a fresh foreground child agent.",
+    "Delegate one independent, read-only workspace investigation to a fresh foreground child agent. Use multiple delegate calls in the same assistant turn when the investigations are independent and should run in parallel.",
     "Use when the task is context-heavy and can be investigated independently before you synthesize the final answer.",
     "The task must be self-contained, no longer than 4,000 characters, and state only the scope, expected output, and completion criteria. focusPaths are advisory workspace-relative areas, not extra authority.",
     "Do not use for small tasks, sequential critical-path work, writes, approval-requiring work, or tasks that need the parent transcript, Goal, memory, Skills, queued input, MCP, or web access.",
-    "Only one child is available in this experimental slice. Wait for its bounded result, inspect its evidence, and remain the sole author of the final answer.",
+    "A pure delegate batch can admit up to four concurrent children, subject to the shared root budget and total child limit. Results return in tool-call source order after every admitted sibling settles. Inspect their evidence and remain the sole author of the final answer.",
   ].join("\n"),
   args: toolArgs(delegateToolArgumentsSchema),
   permission: { kind: "none" },

@@ -7,8 +7,10 @@ import type {
 import type { LLMProvider, Usage } from "../../src/llm/types.ts";
 import type {
   DelegationCapability,
+  DelegationExecutor,
   DelegationToolResult,
 } from "../../src/tools/delegation.ts";
+import type { ExecuteToolCallOptions } from "../../src/tools/execution.ts";
 
 type Extends<Left, Right> = [Left] extends [Right] ? true : false;
 
@@ -29,6 +31,17 @@ type RunAgentBase = Pick<
 >;
 
 describe("subagent static type contracts", () => {
+  test(`Given only a prepared delegation batch may enter tool dispatch,
+    When capability and executor authority types are compared,
+    Then the admission capability cannot be passed as an executor`, () => {
+    expectTypeOf<
+      Extends<DelegationCapability, DelegationExecutor>
+    >().toEqualTypeOf<false>();
+    expectTypeOf<ExecuteToolCallOptions["delegation"]>().toEqualTypeOf<
+      DelegationExecutor | undefined
+    >();
+  });
+
   test(`Given delegation accounting distinguishes first delivery from replay,
     When capability result types are compared,
     Then a result without an accounting disposition is not assignable`, () => {

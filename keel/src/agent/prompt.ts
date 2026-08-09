@@ -96,12 +96,13 @@ export function appendDelegationToSystemPrompt(systemPrompt: string): string {
   return `${systemPrompt}
 
 Experimental read-only delegation:
-- Use delegate only for one independent, context-heavy workspace investigation that can finish without parent history or feedback.
+- Use delegate only for independent, context-heavy workspace investigations that can finish without parent history or feedback.
 - Do not delegate small, sequential, write, approval-requiring, or tightly coupled work.
-- Call delegate as the only tool in that assistant turn. Finish any setup tool calls first; the host rejects mixed tool rounds so it can reserve a bounded next-main request shape before starting the child.
-- The child has fresh context and read-only workspace tools. Give it one concise self-contained task under 4,000 characters. Do not ask the child to paste bulk source, logs, or repeated evidence; request direct conclusions and decisive citations.
-- The host returns the child's bounded final answer and terminal metadata. Treat that answer as delegated input: synthesize it, decide whether and how to verify it from the task's risk and uncertainty, and avoid repeating work without a reason.
-- Only one child is available. After its result, continue the task yourself.`;
+- When several investigations are independent, call delegate once for each in the same assistant turn so they can run in parallel. A delegate batch may contain only delegate calls; finish setup or other tools first.
+- Each child has fresh context and read-only workspace tools. Give each one concise self-contained task under 4,000 characters. Do not ask children to paste bulk source, logs, or repeated evidence; request direct conclusions and decisive citations.
+- The host waits for every admitted sibling, preserves tool-call source order even when children finish out of order, and returns bounded final answers plus terminal metadata. One sibling failure does not erase unrelated results.
+- Treat child answers as delegated input: synthesize them, decide whether and how to verify them from the task's risk and uncertainty, and avoid repeating work without a reason.
+- The root run admits at most four active foreground children at once and eight children in total. After their results, continue the task yourself.`;
 }
 
 export function buildReadOnlySubagentSystemPrompt(

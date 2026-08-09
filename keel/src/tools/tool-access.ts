@@ -274,7 +274,7 @@ export function toolCallAccesses(
   if (isMcpToolInvocation(toolCall)) return ToolAccesses.all();
   switch (toolCall.tool) {
     case "delegate":
-      return ToolAccesses.all();
+      return ToolAccesses.readTree(workspace);
     case "update_plan":
     case "update_goal":
     case "memory_add":

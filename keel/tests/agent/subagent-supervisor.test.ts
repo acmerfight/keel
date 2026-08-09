@@ -121,7 +121,13 @@ function supervisorFixture(options: {
   readonly onProgress?: (event: SubagentProgressEvent) => void;
   readonly providerAbortSignalSupport?: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
+  readonly onContinuationLease?: (
+    input: Parameters<SharedCostBudgetedProvider["leaseContinuation"]>[0],
+  ) => void;
   readonly onContinuationReleased?: () => void;
+  readonly maxActiveAgentRuns?: number;
+  readonly maxTotalChildRuns?: number;
+  readonly providerBlocked?: () => boolean;
 }): {
   readonly supervisor: SubagentSupervisor;
   readonly rootBudget: SharedCostBudgetedProvider;
@@ -139,14 +145,16 @@ function supervisorFixture(options: {
   });
   const rootBudget: SharedCostBudgetedProvider = {
     ...sharedRootBudget,
-    leaseContinuation: () => {
+    leaseContinuation: (input) => {
+      options.onContinuationLease?.(input);
       const reservedUsd = rootMaxCostUsd * 0.25;
-      const childMaxCostUsd = sharedRootBudget.remainingUsd() - reservedUsd;
-      return childMaxCostUsd > 0
+      const additionalRequestBudgetUsd =
+        sharedRootBudget.remainingUsd() - reservedUsd;
+      return additionalRequestBudgetUsd > 0
         ? {
             kind: "granted",
             reservedUsd,
-            childMaxCostUsd,
+            additionalRequestBudgetUsd,
             estimatedContinuationInputTokens: 1_000,
             release: () => options.onContinuationReleased?.(),
           }
@@ -179,11 +187,309 @@ function supervisorFixture(options: {
         ? { settlementGraceMs: options.settlementGraceMs }
         : {}),
       ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
+      ...(options.maxActiveAgentRuns !== undefined
+        ? { maxActiveAgentRuns: options.maxActiveAgentRuns }
+        : {}),
+      ...(options.maxTotalChildRuns !== undefined
+        ? { maxTotalChildRuns: options.maxTotalChildRuns }
+        : {}),
+      ...(options.providerBlocked !== undefined
+        ? { providerBlocked: options.providerBlocked }
+        : {}),
     }),
   };
 }
 
 describe("Subagent Supervisor", () => {
+  test(`Given a root allows two active children and three total children,
+    When main prepares an oversized batch and later delegates again,
+    Then admission is root-inclusive, atomic, and retains the total limit after slots release`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const firstPairStarted = Promise.withResolvers<void>();
+    const releaseFirstPair = Promise.withResolvers<void>();
+    const continuationMessageCounts: number[] = [];
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "admission-boundary-provider",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        providerCalls++;
+        if (providerCalls <= 2) {
+          if (providerCalls === 2) firstPairStarted.resolve();
+          await firstPairStarted.promise;
+          await releaseFirstPair.promise;
+        }
+        yield { type: "text", text: "child completed" };
+        completeAttempt(options, requestUsage);
+        yield { type: "stop", reason: "stop", usage: requestUsage };
+      },
+    };
+    const fixture = supervisorFixture({
+      workspace,
+      provider,
+      maxActiveAgentRuns: 3,
+      maxTotalChildRuns: 3,
+      onContinuationLease: (input) => {
+        continuationMessageCounts.push(input.additionalMessages.length);
+      },
+    });
+    const signal = new AbortController().signal;
+    const requests = ["one", "two", "three"].map((toolCallId) => ({
+      toolCallId,
+      task: `Inspect ${toolCallId}.`,
+      focusPaths: [],
+      signal,
+    }));
+
+    try {
+      const batch = fixture.supervisor.capability.prepareBatch(
+        requests.map((request) => ({ kind: "request", request })),
+      );
+      expect(continuationMessageCounts).toEqual([3]);
+      expect(fixture.supervisor.activeAgentRunCount()).toBe(3);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(2);
+      expect(fixture.supervisor.totalAcceptedCount()).toBe(2);
+      const firstPair = requests.map((request) =>
+        batch.executor.delegate(request),
+      );
+      await firstPairStarted.promise;
+      const third = await firstPair[2];
+      expect(third).toMatchObject({
+        delivery: "rejected",
+        content: expect.stringContaining("active agent limit"),
+      });
+      releaseFirstPair.resolve();
+      const [first, second] = await Promise.all(firstPair.slice(0, 2));
+      batch.close();
+      expect(first).toMatchObject({ delivery: "fresh", ok: true });
+      expect(second).toMatchObject({ delivery: "fresh", ok: true });
+      expect(fixture.supervisor.activeAgentRunCount()).toBe(1);
+
+      const lastAccepted = await fixture.supervisor.capability.delegate({
+        toolCallId: "four",
+        task: "Inspect four.",
+        focusPaths: [],
+        signal,
+      });
+      const overTotal = await fixture.supervisor.capability.delegate({
+        toolCallId: "five",
+        task: "Inspect five.",
+        focusPaths: [],
+        signal,
+      });
+      expect(lastAccepted).toMatchObject({ delivery: "fresh", ok: true });
+      expect(overTotal).toMatchObject({
+        delivery: "rejected",
+        content: expect.stringContaining("total child limit"),
+      });
+      expect(fixture.supervisor.totalAcceptedCount()).toBe(3);
+      expect(fixture.supervisor.runSnapshots()).toHaveLength(3);
+      expect(providerCalls).toBe(3);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a delegate batch reserves one queued child,
+    When dispatch receives an unprepared call and then closes before starting the admitted call,
+    Then the foreign call fails closed and the queued child releases without provider work`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    let providerCalls = 0;
+    let continuationReleases = 0;
+    const baseProvider = singleFinalProvider("unreachable");
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...baseProvider,
+        async *stream(options) {
+          providerCalls++;
+          yield* baseProvider.stream(options);
+        },
+      },
+      onContinuationReleased: () => {
+        continuationReleases++;
+      },
+    });
+    const request = {
+      toolCallId: "prepared",
+      task: "Do not start this child.",
+      focusPaths: [],
+      signal: new AbortController().signal,
+    };
+
+    try {
+      const batch = fixture.supervisor.capability.prepareBatch([
+        { kind: "request", request },
+      ]);
+      const foreign = await batch.executor.delegate({
+        ...request,
+        toolCallId: "foreign",
+      });
+      batch.close();
+
+      expect(foreign).toMatchObject({
+        delivery: "rejected",
+        content: expect.stringContaining("not part of the prepared tool batch"),
+      });
+      expect(providerCalls).toBe(0);
+      expect(continuationReleases).toBe(1);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+      expect(fixture.supervisor.runSnapshots()).toMatchObject([
+        {
+          state: "terminal",
+          terminal: { status: "cancelled" },
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two foreground children share the parent AbortSignal,
+    When the parent is cancelled while both providers are live,
+    Then cancellation cascades to both and no active child remains`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const bothStarted = Promise.withResolvers<void>();
+    let activeProviderCalls = 0;
+    const provider: LLMProvider = {
+      id: "multi-child-cancellation-provider",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        activeProviderCalls++;
+        if (activeProviderCalls === 2) bothStarted.resolve();
+        try {
+          await new Promise<void>((_resolve, reject) => {
+            const abort = () =>
+              reject(new KeelError("provider_aborted", "child aborted"));
+            if (options.signal.aborted) abort();
+            else
+              options.signal.addEventListener("abort", abort, { once: true });
+          });
+        } finally {
+          activeProviderCalls--;
+        }
+        yield { type: "text", text: "unreachable" };
+      },
+    };
+    const fixture = supervisorFixture({ workspace, provider });
+    const parent = new AbortController();
+    const requests = ["one", "two"].map((toolCallId) => ({
+      toolCallId,
+      task: `Wait in ${toolCallId}.`,
+      focusPaths: [],
+      signal: parent.signal,
+    }));
+
+    try {
+      const batch = fixture.supervisor.capability.prepareBatch(
+        requests.map((request) => ({ kind: "request", request })),
+      );
+      const results = requests.map((request) =>
+        batch.executor.delegate(request),
+      );
+      await bothStarted.promise;
+      parent.abort(new Error("cancel the parent"));
+      const settled = await Promise.all(results);
+      batch.close();
+
+      expect(
+        settled.map((result) => JSON.parse(result.content).status),
+      ).toEqual(["cancelled", "cancelled"]);
+      expect(activeProviderCalls).toBe(0);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+      expect(fixture.supervisor.runSnapshots()).toMatchObject([
+        { state: "terminal", terminal: { status: "cancelled" } },
+        { state: "terminal", terminal: { status: "cancelled" } },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one sibling fails with a non-circuit provider error while another is independent,
+    When both foreground children run in one prepared batch,
+    Then Supervisor waits for both and preserves the unrelated successful result in source order`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const bothStarted = Promise.withResolvers<void>();
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      id: "sibling-isolation-provider",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        providerCalls++;
+        const attempt = options.providerRequestAttempts?.begin();
+        if (providerCalls === 2) bothStarted.resolve();
+        await bothStarted.promise;
+        const task = options.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.content)
+          .join("\n");
+        if (task.includes("Fail independently")) {
+          attempt?.finish({
+            outcome: "terminal_error",
+            errorCode: "provider_network_error",
+          });
+          throw new KeelError(
+            "provider_network_error",
+            "one child lost its connection",
+          );
+        }
+        yield { type: "text", text: "independent sibling completed" };
+        attempt?.finish({ outcome: "completed", usage: requestUsage });
+        yield { type: "stop", reason: "stop", usage: requestUsage };
+      },
+    };
+    const fixture = supervisorFixture({ workspace, provider });
+    const signal = new AbortController().signal;
+    const requests = [
+      {
+        toolCallId: "failed",
+        task: "Fail independently.",
+        focusPaths: [],
+        signal,
+      },
+      {
+        toolCallId: "successful",
+        task: "Complete independently.",
+        focusPaths: [],
+        signal,
+      },
+    ];
+
+    try {
+      const batch = fixture.supervisor.capability.prepareBatch(
+        requests.map((request) => ({ kind: "request", request })),
+      );
+      const settled = await Promise.all(
+        requests.map((request) => batch.executor.delegate(request)),
+      );
+      batch.close();
+
+      expect(
+        settled.map((result) => ({
+          ok: result.ok,
+          status: JSON.parse(result.content).status,
+        })),
+      ).toEqual([
+        { ok: false, status: "failed" },
+        { ok: true, status: "completed" },
+      ]);
+      expect(settled[1]?.content).toContain("independent sibling completed");
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+      expect(providerCalls).toBe(2);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a provider does not certify AbortSignal settlement,
     When main requests a child,
     Then admission fails before starting provider work or registering a run`, async () => {
@@ -227,9 +533,9 @@ describe("Subagent Supervisor", () => {
     }
   });
 
-  test(`Given one delegation completes and the same parent tool call is replayed,
-    When both calls settle and a second unique child is requested,
-    Then only one child ran, replay usage is not counted twice, and the new child is rejected`, async () => {
+  test(`Given one delegation completes and its result is replayed alone and beside fresh work,
+    When every batch reserves its provider-shaped continuation,
+    Then replay is priced without duplicate usage while the unique child gets its own run`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-subagent-supervisor-"),
@@ -239,6 +545,8 @@ describe("Subagent Supervisor", () => {
       "export const answer = 42;\n",
     );
     const exposedTools: string[][] = [];
+    const continuationMessages: (readonly { readonly content: string }[])[] =
+      [];
     let continuationReleases = 0;
     const fixture = supervisorFixture({
       workspace,
@@ -246,6 +554,9 @@ describe("Subagent Supervisor", () => {
       hiddenWorkspacePaths: [],
       onContinuationReleased: () => {
         continuationReleases++;
+      },
+      onContinuationLease: (input) => {
+        continuationMessages.push(input.additionalMessages);
       },
     });
     const signal = new AbortController().signal;
@@ -259,44 +570,60 @@ describe("Subagent Supervisor", () => {
         focusPaths: ["module.ts"],
         signal,
       });
-      const replay = await fixture.supervisor.capability.delegate({
+      const replayOnly = await fixture.supervisor.capability.delegate({
         toolCallId: "delegate-1",
         task: "Changed replay text must not create a new run.",
         focusPaths: [],
         signal,
       });
-      const second = await fixture.supervisor.capability.delegate({
+      const replayRequest = {
+        toolCallId: "delegate-1",
+        task: "Replay beside one fresh child.",
+        focusPaths: [],
+        signal,
+      };
+      const secondRequest = {
         toolCallId: "delegate-2",
         task: "Inspect it again.",
         focusPaths: [],
         signal,
-      });
+      };
+      const mixedBatch = fixture.supervisor.capability.prepareBatch([
+        { kind: "request", request: replayRequest },
+        { kind: "request", request: secondRequest },
+      ]);
+      const [replayBesideFresh, second] = await Promise.all([
+        mixedBatch.executor.delegate(replayRequest),
+        mixedBatch.executor.delegate(secondRequest),
+      ]);
+      mixedBatch.close();
 
       // Then
       expect(first.delivery).toBe("fresh");
       expect(first.ok).toBe(true);
-      expect(continuationReleases).toBe(1);
+      expect(continuationReleases).toBe(3);
       expect(first.usage).toEqual({
         inputTokens: 200,
         cachedInputTokens: 0,
         uncachedInputTokens: 200,
         outputTokens: 20,
       });
-      expect(replay).toEqual({
+      expect(replayOnly).toEqual({
         delivery: "replayed",
         ok: true,
         content: first.content,
       });
-      expect(second).toEqual({
-        delivery: "rejected",
-        ok: false,
-        content:
-          "Delegation rejected: Slice 1 permits only one accepted child per root run.",
-      });
-      expect(fixture.supervisor.totalAcceptedCount()).toBe(1);
-      expect(fixture.supervisor.capability.available()).toBe(false);
-      expect(fixture.supervisor.activeRunCount()).toBe(0);
-      expect(fixture.supervisor.runSnapshots()).toEqual([
+      expect(replayBesideFresh).toEqual(replayOnly);
+      expect(second).toMatchObject({ delivery: "fresh", ok: true });
+      expect(continuationMessages.map((messages) => messages.length)).toEqual([
+        1, 1, 2,
+      ]);
+      expect(continuationMessages[1]?.[0]?.content).toBe(first.content);
+      expect(continuationMessages[2]?.[0]?.content).toBe(first.content);
+      expect(fixture.supervisor.totalAcceptedCount()).toBe(2);
+      expect(fixture.supervisor.capability.available()).toBe(true);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+      expect(fixture.supervisor.runSnapshots()).toMatchObject([
         {
           delegationId: "main-run:delegate-1",
           childRunId: expect.stringMatching(/^subagent-/u),
@@ -311,20 +638,86 @@ describe("Subagent Supervisor", () => {
             error: null,
           }),
         },
+        {
+          delegationId: "main-run:delegate-2",
+          task: "Inspect it again.",
+          state: "terminal",
+          terminal: {
+            status: "completed",
+            usage: requestUsage,
+            turns: 1,
+            transcriptRef: "tool-output:test/delegate-2",
+          },
+        },
       ]);
-      expect(fixture.artifacts.inputs).toHaveLength(1);
+      expect(fixture.artifacts.inputs).toHaveLength(2);
       expect(fixture.artifacts.inputs[0]?.content).toContain(
         '"delegationId":"main-run:delegate-1"',
       );
       expect(fixture.artifacts.inputs[0]?.content).toMatch(
         /"childRunId":"subagent-[^"]+"/u,
       );
-      expect(exposedTools).toHaveLength(2);
+      expect(exposedTools).toHaveLength(3);
       for (const tools of exposedTools) {
         expect(tools.toSorted()).toEqual(
           ["git_diff", "git_status", "glob", "grep", "ls", "read"].toSorted(),
         );
       }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one completed child has a long identity and a large source batch replays it,
+    When aggregate result admission projects every replay,
+    Then each delivery fits its share and the batch never exceeds the tree result ceiling`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const toolCallId = `long-${"x".repeat(2_000)}`;
+    const continuationMessages: (readonly { readonly content: string }[])[] =
+      [];
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("stable child result"),
+      onContinuationLease: (input) => {
+        continuationMessages.push(input.additionalMessages);
+      },
+    });
+    const request = {
+      toolCallId,
+      task: "Return one stable result.",
+      focusPaths: [],
+      signal: new AbortController().signal,
+    };
+
+    try {
+      const first = await fixture.supervisor.capability.delegate(request);
+      expect(first.delivery).toBe("fresh");
+      const replayEntries = Array.from({ length: 40 }, () => ({
+        kind: "request" as const,
+        request,
+      }));
+      const batch = fixture.supervisor.capability.prepareBatch(replayEntries);
+      const replays = await Promise.all(
+        replayEntries.map(() => batch.executor.delegate(request)),
+      );
+      batch.close();
+
+      expect(replays).toHaveLength(40);
+      expect(replays.every((result) => result.delivery === "replayed")).toBe(
+        true,
+      );
+      expect(replays.every((result) => result.content.length <= 600)).toBe(
+        true,
+      );
+      expect(
+        replays.reduce((total, result) => total + result.content.length, 0),
+      ).toBeLessThanOrEqual(24_000);
+      expect(
+        continuationMessages.at(-1)?.map((message) => message.content),
+      ).toEqual(replays.map((result) => result.content));
+      expect(fixture.supervisor.totalAcceptedCount()).toBe(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -374,7 +767,7 @@ describe("Subagent Supervisor", () => {
 
       expect(result.ok).toBe(true);
       expect(supervisor.totalAcceptedCount()).toBe(1);
-      expect(supervisor.activeRunCount()).toBe(0);
+      expect(supervisor.activeChildRunCount()).toBe(0);
       expect(exposedTools).toHaveLength(2);
       expect(queuedSnapshot).toMatchObject({
         state: "queued",
@@ -426,7 +819,7 @@ describe("Subagent Supervisor", () => {
         });
 
         expect(result.ok).toBe(true);
-        expect(fixture.supervisor.activeRunCount()).toBe(0);
+        expect(fixture.supervisor.activeChildRunCount()).toBe(0);
         expect(fixture.supervisor.runSnapshots()).toMatchObject([
           { state: "terminal", terminal: { status: "completed", turns: 2 } },
         ]);
@@ -501,6 +894,18 @@ describe("Subagent Supervisor", () => {
           focusPaths: [],
           signal: new AbortController().signal,
         });
+      const blockedFixture = supervisorFixture({
+        workspace,
+        provider,
+        providerBlocked: () => true,
+      });
+      const providerBlocked =
+        await blockedFixture.supervisor.capability.delegate({
+          toolCallId: "provider-blocked",
+          task: "Do not start after the provider circuit opens.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        });
 
       expect(invalid.ok).toBe(false);
       expect(invalid.content).toContain("invalid focus path");
@@ -509,12 +914,19 @@ describe("Subagent Supervisor", () => {
         delivery: "rejected",
         ok: false,
         content:
-          "Delegation rejected: the root budget cannot fund a child while preserving an admitted main continuation lease.",
+          "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
       });
-      expect(invalidEstimate).toEqual(noBudget);
+      expect(invalidEstimate).toEqual({
+        delivery: "rejected",
+        ok: false,
+        content:
+          "Delegation rejected: the child request cost cannot be estimated.",
+      });
+      expect(providerBlocked.content).toContain("auth/quota circuit is open");
       expect(invalidFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(budgetFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(invalidEstimateFixture.supervisor.totalAcceptedCount()).toBe(0);
+      expect(blockedFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(providerCalls).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -596,7 +1008,7 @@ describe("Subagent Supervisor", () => {
         delivery: "rejected",
         ok: false,
         content:
-          "Delegation rejected: the root budget cannot fund a child while preserving an admitted main continuation lease.",
+          "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
       });
       expect(supervisor.totalAcceptedCount()).toBe(0);
       expect(supervisor.runSnapshots()).toEqual([]);
@@ -630,7 +1042,7 @@ describe("Subagent Supervisor", () => {
         .object({
           status: z.literal("completed"),
           finalText: z.string(),
-          transcriptRef: z.string(),
+          transcriptRef: z.string().nullable(),
         })
         .passthrough()
         .parse(JSON.parse(result.content));
@@ -666,7 +1078,7 @@ describe("Subagent Supervisor", () => {
       const admitted = z
         .object({
           status: z.literal("completed"),
-          transcriptRef: z.string(),
+          transcriptRef: z.string().nullable(),
           truncated: z.literal(true),
           finalText: z.string(),
         })
@@ -675,7 +1087,7 @@ describe("Subagent Supervisor", () => {
 
       expect(result.ok).toBe(true);
       expect(result.content.length).toBeLessThanOrEqual(24_000);
-      expect(admitted.finalText).toHaveLength(1_000);
+      expect(admitted.finalText.length).toBeGreaterThan(800);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -749,7 +1161,7 @@ describe("Subagent Supervisor", () => {
         expect(result.content).toContain(`"status":"${expectedStatus}"`);
         expect(result.content).toContain(providerError.message);
         expect(fixture.artifacts.inputs).toHaveLength(1);
-        expect(fixture.supervisor.activeRunCount()).toBe(0);
+        expect(fixture.supervisor.activeChildRunCount()).toBe(0);
         expect(continuationReleases).toBe(1);
       } finally {
         await rm(workspace, { recursive: true, force: true });
@@ -1098,7 +1510,7 @@ describe("Subagent Supervisor", () => {
       expect(storageSettled).toBe(true);
       expect(result.ok).toBe(false);
       expect(result.content).toContain('"status":"timed_out"');
-      expect(fixture.supervisor.activeRunCount()).toBe(0);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
       expect(artifacts.inputs).toHaveLength(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1153,7 +1565,7 @@ describe("Subagent Supervisor", () => {
       expect(storageSettled).toBe(true);
       expect(result.ok).toBe(false);
       expect(result.content).toContain('"status":"timed_out"');
-      expect(fixture.supervisor.activeRunCount()).toBe(0);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1222,7 +1634,7 @@ describe("Subagent Supervisor", () => {
           },
         },
       ]);
-      expect(fixture.supervisor.activeRunCount()).toBe(0);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
     } finally {
       releaseStorage();
       await rm(workspace, { recursive: true, force: true });
@@ -1293,7 +1705,7 @@ describe("Subagent Supervisor", () => {
         // Then
         expect(result.ok).toBe(false);
         expect(result.content).toContain(`"status":"${terminal}"`);
-        expect(fixture.supervisor.activeRunCount()).toBe(0);
+        expect(fixture.supervisor.activeChildRunCount()).toBe(0);
         expect(fixture.artifacts.inputs).toHaveLength(1);
       } finally {
         await rm(workspace, { recursive: true, force: true });
