@@ -1,10 +1,9 @@
 import { z } from "zod";
-import {
-  type PersistedSessionMessage,
-  type SessionMessage,
-  type UserMessageContextCompactionMetadata,
-  type UserMessageOrigin,
-  userMessageOriginTypes,
+import type {
+  PersistedSessionMessage,
+  SessionMessage,
+  UserMessageContextCompactionMetadata,
+  UserMessageOrigin,
 } from "../../agent/session-message.ts";
 import { providerIds } from "../../core/provider-id.ts";
 import { copyReadResourceObservation } from "../../core/resource-observation.ts";
@@ -41,12 +40,16 @@ import {
   isWorkflowSkillResourcePath,
   MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
 } from "../../skills/resources.ts";
-import { toolCallSchema } from "../../tools/tool-call.ts";
 import {
   hasPersistenceRedactionMarker,
   redactMessageForPersistence,
   redactTextForPersistence,
 } from "../persistence-redaction.ts";
+import {
+  persistedSessionMessageSchema as messageSchema,
+  type userMessageContextCompactionSchema,
+  type userMessageOriginSchema,
+} from "../session-message-schema.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
   type AppendSessionRecord,
@@ -81,85 +84,6 @@ type BashApprovalsClearedSessionRecord = Extract<
 >;
 
 const sessionTitleSchema = z.string().min(1).max(SESSION_TITLE_MAX_LENGTH);
-
-const userMessageContextCompactionEvidenceSchema = z
-  .object({
-    handle: z.string(),
-    label: z.string(),
-    source: z.string(),
-    why: z.string(),
-    inspectCommand: z.string().optional(),
-  })
-  .strict();
-
-const userMessageContextCompactionSchema = z
-  .object({
-    evidence: z.array(userMessageContextCompactionEvidenceSchema),
-    untrustedMcpContent: z.literal(true).optional(),
-  })
-  .strict();
-
-const userMessageOriginSchema = z
-  .object({
-    type: z.enum(userMessageOriginTypes),
-  })
-  .strict();
-
-const userMessageSchema = z
-  .object({
-    role: z.literal("user"),
-    content: z.string(),
-    origin: userMessageOriginSchema,
-    contextCompaction: userMessageContextCompactionSchema.optional(),
-  })
-  .strict();
-
-const openAICompatibleAssistantMetadataSchema = z
-  .object({
-    reasoningContent: z.string(),
-  })
-  .strict();
-
-const assistantProviderMetadataSchema = z
-  .object({
-    openaiCompatible: openAICompatibleAssistantMetadataSchema,
-  })
-  .strict();
-
-const assistantMessageSchema = z
-  .object({
-    role: z.literal("assistant"),
-    content: z.string(),
-    toolCalls: z.array(toolCallSchema),
-    providerMetadata: assistantProviderMetadataSchema.optional(),
-  })
-  .strict();
-
-const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
-const readResourceObservationSchema = z
-  .object({
-    kind: z.literal("read_projection"),
-    targetPathSha256: sha256Schema,
-    contentSha256: sha256Schema,
-  })
-  .strict();
-
-const toolMessageSchema = z
-  .object({
-    role: z.literal("tool"),
-    toolCallId: z.string(),
-    content: z.string(),
-    sourceTruncated: z.boolean().optional(),
-    evidenceShortened: z.literal(true).optional(),
-    resourceObservation: readResourceObservationSchema.optional(),
-  })
-  .strict();
-
-const messageSchema = z.discriminatedUnion("role", [
-  userMessageSchema,
-  assistantMessageSchema,
-  toolMessageSchema,
-]);
 
 const storedMessageSchema = z
   .object({

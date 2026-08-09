@@ -122,7 +122,7 @@ async function writeWorkflowSkill(options: {
 
 function savedSessionIntroFromStderr(stderr: string): string {
   const match =
-    /^Keel interactive session\nsession: ([^\n]+)\nContinue the task here; send follow-ups or corrections until it is done\.\nAfter a completed turn, resume with: keel --resume \1\nCommands: \/sessions \/status \/tasks \/diff \/undo \/help\n/u.exec(
+    /^Keel interactive session\nsession: ([^\n]+)\nContinue the task here; send follow-ups or corrections until it is done\.\nAfter a completed turn, resume with: keel --resume \1\nCommands: \/sessions \/status \/agents \/tasks \/diff \/undo \/help\n/u.exec(
       stderr,
     );
   if (match === null) {
@@ -4141,7 +4141,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
         const stderr = fixture.stderr();
         return (
           stderr.includes(
-            "Commands: /sessions /status /tasks /diff /undo /help\n",
+            "Commands: /sessions /status /agents /tasks /diff /undo /help\n",
           ) &&
           stderr === `${savedSessionIntroFromStderr(stderr)}keel> /help\nkeel> `
         );

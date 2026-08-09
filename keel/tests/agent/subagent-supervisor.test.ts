@@ -8,6 +8,10 @@ import {
   type SharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
 import {
+  type SubagentLifecyclePersistence,
+  SubagentPersistenceError,
+} from "../../src/agent/subagent-lifecycle.ts";
+import {
   createSubagentSupervisor,
   type SubagentProgressEvent,
   type SubagentSupervisor,
@@ -128,6 +132,7 @@ function supervisorFixture(options: {
   readonly maxActiveAgentRuns?: number;
   readonly maxTotalChildRuns?: number;
   readonly providerBlocked?: () => boolean;
+  readonly lifecyclePersistence?: SubagentLifecyclePersistence;
 }): {
   readonly supervisor: SubagentSupervisor;
   readonly rootBudget: SharedCostBudgetedProvider;
@@ -175,6 +180,9 @@ function supervisorFixture(options: {
       costModel,
       rootBudget,
       transcriptStore: options.transcriptStore ?? artifacts.store,
+      ...(options.lifecyclePersistence !== undefined
+        ? { lifecyclePersistence: options.lifecyclePersistence }
+        : {}),
       now: options.now ?? (() => 0),
       onProgress: options.onProgress ?? (() => {}),
       ...(options.hiddenWorkspacePaths !== undefined
@@ -201,6 +209,146 @@ function supervisorFixture(options: {
 }
 
 describe("Subagent Supervisor", () => {
+  test(`Given a saved-session lifecycle sink is configured,
+    When a child is admitted and completes,
+    Then durable acceptance precedes provider work and the canonical result precedes terminal progress`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const events: string[] = [];
+    const baseProvider = singleFinalProvider("durable child result");
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...baseProvider,
+        async *stream(options) {
+          events.push("provider");
+          yield* baseProvider.stream(options);
+        },
+      },
+      lifecyclePersistence: {
+        accepted: (lifecycle) => {
+          events.push("accepted");
+          return {
+            transcriptRef: "agent-transcript:test/agent-1",
+            transcript: {
+              initialize: () => {
+                events.push("transcript-initialize");
+              },
+              append: () => {},
+              replace: () => {},
+            },
+            running: () => {
+              events.push("running");
+            },
+            accounting: () => {
+              events.push("accounting");
+            },
+            terminal: (snapshot) => {
+              events.push("terminal");
+              return {
+                delegationId: lifecycle.delegationId,
+                childAgentId: lifecycle.childAgentId,
+                childRunId: lifecycle.childRunId,
+                task: lifecycle.task,
+                transcriptRef: "agent-transcript:test/agent-1",
+                ...snapshot,
+              };
+            },
+          };
+        },
+        rejected: () => {},
+      },
+      onProgress: (event) => {
+        events.push(`progress:${event.status}`);
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "durable",
+        task: "Return a durable result.",
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: true });
+      expect(events.indexOf("accepted")).toBeLessThan(
+        events.indexOf("progress:queued"),
+      );
+      expect(events.indexOf("running")).toBeLessThan(
+        events.indexOf("provider"),
+      );
+      expect(events.indexOf("terminal")).toBeLessThan(
+        events.indexOf("progress:completed"),
+      );
+      expect(fixture.artifacts.inputs).toEqual([]);
+      expect(fixture.supervisor.runSnapshots()[0]?.terminal).toMatchObject({
+        status: "completed",
+        transcriptRef: "agent-transcript:test/agent-1",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an accepted child's durable lifecycle writer fails before provider work,
+    When the Supervisor starts that child,
+    Then the persistence failure escapes instead of becoming a normal rejected or failed child result`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      lifecyclePersistence: {
+        accepted: (lifecycle) => ({
+          transcriptRef: "agent-transcript:test/fatal",
+          transcript: {
+            initialize: () => {},
+            append: () => {},
+            replace: () => {},
+          },
+          running: () => {
+            throw new SubagentPersistenceError("durable writer failed");
+          },
+          accounting: () => {},
+          terminal: (snapshot) => ({
+            delegationId: lifecycle.delegationId,
+            childAgentId: lifecycle.childAgentId,
+            childRunId: lifecycle.childRunId,
+            task: lifecycle.task,
+            transcriptRef: "agent-transcript:test/fatal",
+            ...snapshot,
+          }),
+        }),
+        rejected: () => {},
+      },
+    });
+
+    try {
+      await expect(
+        fixture.supervisor.capability.delegate({
+          toolCallId: "fatal-persistence",
+          task: "Do not continue after durable storage fails.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow(SubagentPersistenceError);
+      expect(providerCalls).toBe(0);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a root allows two active children and three total children,
     When main prepares an oversized batch and later delegates again,
     Then admission is root-inclusive, atomic, and retains the total limit after slots release`, async () => {
@@ -497,9 +645,20 @@ describe("Subagent Supervisor", () => {
       join(tmpdir(), "keel-subagent-supervisor-"),
     );
     let providerCalls = 0;
+    let acceptedLifecycleCount = 0;
+    const rejectedTasks: string[] = [];
     const fixture = supervisorFixture({
       workspace,
       providerAbortSignalSupport: false,
+      lifecyclePersistence: {
+        accepted: () => {
+          acceptedLifecycleCount++;
+          throw new Error("unexpected accepted lifecycle");
+        },
+        rejected: (lifecycle) => {
+          rejectedTasks.push(lifecycle.task);
+        },
+      },
       provider: {
         id: "uncertified-provider",
         estimateInputTokens: () => 100,
@@ -526,6 +685,8 @@ describe("Subagent Supervisor", () => {
           "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
       });
       expect(providerCalls).toBe(0);
+      expect(acceptedLifecycleCount).toBe(0);
+      expect(rejectedTasks).toEqual(["Do not start this child."]);
       expect(fixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(fixture.supervisor.runSnapshots()).toEqual([]);
     } finally {

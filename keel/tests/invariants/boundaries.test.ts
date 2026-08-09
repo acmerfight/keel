@@ -430,16 +430,30 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
-  test(`Given session records validate persisted tool calls,
-    When their tool dependencies are inspected,
-    Then validation uses the stable tool-call contract`, () => {
-    const file = "src/cli/session-store/records.ts";
-    const source = readFileSync(file, "utf8");
-    const specifiers = importSpecifiers(file, source);
+  test(`Given session and child ledgers validate persisted messages,
+    When their schema dependencies are inspected,
+    Then one shared boundary schema uses the stable tool-call contract`, () => {
+    const schemaFile = "src/cli/session-message-schema.ts";
+    const schemaSpecifiers = importSpecifiers(
+      schemaFile,
+      readFileSync(schemaFile, "utf8"),
+    );
+    expect(schemaSpecifiers).toContain("../tools/tool-call.ts");
+    expect(schemaSpecifiers).not.toContain("../tools/builtin.ts");
+    expect(schemaSpecifiers).not.toContain("../tools/registry.ts");
 
-    expect(specifiers).toContain("../../tools/tool-call.ts");
-    expect(specifiers).not.toContain("../../tools/builtin.ts");
-    expect(specifiers).not.toContain("../../tools/registry.ts");
+    expect(
+      importSpecifiers(
+        "src/cli/session-store/records.ts",
+        readFileSync("src/cli/session-store/records.ts", "utf8"),
+      ),
+    ).toContain("../session-message-schema.ts");
+    expect(
+      importSpecifiers(
+        "src/cli/agent-tree-store/model.ts",
+        readFileSync("src/cli/agent-tree-store/model.ts", "utf8"),
+      ),
+    ).toContain("../session-message-schema.ts");
   });
 
   test(`Given tool definitions own declarative metadata,

@@ -37,6 +37,7 @@ import type {
   AgentMemoryProposalCapability,
   AgentMemoryRuntime,
 } from "../../tools/memory.ts";
+import type { AgentTreeHistory } from "../agent-tree-store.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { McpServerConfig } from "../mcp-config.ts";
 import type { ModelSource, ProviderSelection } from "../provider-config.ts";
@@ -269,6 +270,7 @@ interface InteractiveSessionOptionsBase {
     grant: BashProjectApprovalGrant,
   ) => void;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly agentHistory?: AgentTreeHistory;
   readonly delegation?: {
     readonly policy: DelegatingAgentPolicy;
     readonly transcriptStore: AbortableToolOutputArtifactStore;

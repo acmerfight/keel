@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
+import { SubagentPersistenceError } from "../../src/agent/subagent-lifecycle.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import { createDelegationExecutor } from "../../src/tools/delegation.ts";
 import {
@@ -378,6 +379,28 @@ describe("Tool Execution", () => {
       ],
     });
     expect(controller.signal.reason).toBe(cancellation);
+  });
+
+  test(`Given an accepted child can no longer persist its lifecycle,
+    When delegation reaches the tool execution boundary,
+    Then the failure terminates the session owner instead of becoming a recoverable tool result`, async () => {
+    const failure = new SubagentPersistenceError("agent tree is unavailable");
+    await expect(
+      executeToolCall({
+        workspace: process.cwd(),
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+        builtinToolAuthority: { kind: "auto", delegation: true },
+        toolCall: {
+          id: "delegate_persistence_failure",
+          tool: "delegate",
+          task: "Inspect the workspace.",
+        },
+        delegation: createDelegationExecutor(async () => {
+          throw failure;
+        }),
+      }),
+    ).rejects.toBe(failure);
   });
 
   test(`Given delegation authority and a host capability are installed,

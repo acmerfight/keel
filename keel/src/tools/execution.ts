@@ -1,3 +1,4 @@
+import { SubagentPersistenceError } from "../agent/subagent-lifecycle.ts";
 import {
   errorMessage,
   isAbortThrow,
@@ -1046,6 +1047,7 @@ export async function executeToolCall(
     if (isAbortThrow(error, context.signal)) {
       throw error;
     }
+    if (error instanceof SubagentPersistenceError) throw error;
     if (error instanceof ScopedProjectInstructionsNotVisibleError) {
       return {
         content: scopedProjectInstructionsFailureMessage(error),
