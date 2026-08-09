@@ -121,6 +121,7 @@ function supervisorFixture(options: {
   readonly onProgress?: (event: SubagentProgressEvent) => void;
   readonly providerAbortSignalSupport?: boolean;
   readonly hiddenWorkspacePaths?: readonly string[];
+  readonly onContinuationReleased?: () => void;
 }): {
   readonly supervisor: SubagentSupervisor;
   readonly rootBudget: SharedCostBudgetedProvider;
@@ -147,6 +148,7 @@ function supervisorFixture(options: {
             reservedUsd,
             childMaxCostUsd,
             estimatedContinuationInputTokens: 1_000,
+            release: () => options.onContinuationReleased?.(),
           }
         : { kind: "rejected", reason: "insufficient_budget" };
     },
@@ -237,10 +239,14 @@ describe("Subagent Supervisor", () => {
       "export const answer = 42;\n",
     );
     const exposedTools: string[][] = [];
+    let continuationReleases = 0;
     const fixture = supervisorFixture({
       workspace,
       provider: scriptedSuccessfulProvider(exposedTools),
       hiddenWorkspacePaths: [],
+      onContinuationReleased: () => {
+        continuationReleases++;
+      },
     });
     const signal = new AbortController().signal;
 
@@ -269,6 +275,7 @@ describe("Subagent Supervisor", () => {
       // Then
       expect(first.delivery).toBe("fresh");
       expect(first.ok).toBe(true);
+      expect(continuationReleases).toBe(1);
       expect(first.usage).toEqual({
         inputTokens: 200,
         cachedInputTokens: 0,
@@ -638,7 +645,14 @@ describe("Subagent Supervisor", () => {
           throw providerError;
         },
       };
-      const fixture = supervisorFixture({ workspace, provider });
+      let continuationReleases = 0;
+      const fixture = supervisorFixture({
+        workspace,
+        provider,
+        onContinuationReleased: () => {
+          continuationReleases++;
+        },
+      });
 
       try {
         const result = await fixture.supervisor.capability.delegate({
@@ -653,6 +667,7 @@ describe("Subagent Supervisor", () => {
         expect(result.content).toContain(providerError.message);
         expect(fixture.artifacts.inputs).toHaveLength(1);
         expect(fixture.supervisor.activeRunCount()).toBe(0);
+        expect(continuationReleases).toBe(1);
       } finally {
         await rm(workspace, { recursive: true, force: true });
       }

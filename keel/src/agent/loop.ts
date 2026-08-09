@@ -432,6 +432,24 @@ function scheduledToolCalls(
   }));
 }
 
+const NON_ISOLATED_DELEGATION_RESULT =
+  "Delegation rejected: delegate must be the only tool call in its assistant turn so the host can preserve an isolated main continuation budget.";
+
+function delegationForToolRound(
+  delegation: DelegationCapability | undefined,
+  toolCalls: readonly ToolCall[],
+): DelegationCapability | undefined {
+  if (delegation === undefined || toolCalls.length === 1) return delegation;
+  return {
+    available: () => false,
+    delegate: async () => ({
+      delivery: "rejected",
+      ok: false,
+      content: NON_ISOLATED_DELEGATION_RESULT,
+    }),
+  };
+}
+
 function finalReplyMessage(
   text: string,
   reasoningContent: string | null,
@@ -1112,6 +1130,10 @@ export async function* runAgentTurn(
       sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
     let blockedGoalProposalRecordedThisTurn = false;
     let toolCostBudgetAdmission: CostBudgetAdmissionError | null = null;
+    const turnDelegation = delegationForToolRound(
+      options.delegation,
+      turnResult.toolCalls,
+    );
 
     const executeTurnToolCall = async (
       toolCall: ToolCall,
@@ -1136,9 +1158,7 @@ export async function* runAgentTurn(
         signal,
         bash,
         builtinToolAuthority: toolExposure,
-        ...(options.delegation !== undefined
-          ? { delegation: options.delegation }
-          : {}),
+        ...(turnDelegation !== undefined ? { delegation: turnDelegation } : {}),
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: readVisibility,

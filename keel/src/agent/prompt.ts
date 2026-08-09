@@ -98,6 +98,7 @@ export function appendDelegationToSystemPrompt(systemPrompt: string): string {
 Experimental read-only delegation:
 - Use delegate only for one independent, context-heavy workspace investigation that can finish without parent history or feedback.
 - Do not delegate small, sequential, write, approval-requiring, or tightly coupled work.
+- Call delegate as the only tool in that assistant turn. Finish any setup tool calls first; the host rejects mixed tool rounds so it can reserve a bounded next-main request shape before starting the child.
 - The child has fresh context and read-only workspace tools. Give it one concise self-contained task under 4,000 characters. Do not ask the child to paste bulk source, logs, or repeated evidence; request direct conclusions and decisive citations.
 - The host returns the child's final text plus paths actually observed through read. Synthesize from that handoff and use only targeted spot-checks when uncertainty matters; do not reread child-covered resources merely to reconfirm a supported fact. Change a reported fact only when direct evidence for that same fact contradicts it; a related measurement is not a contradiction. When filling a requested named field, use evidence that defines that field, not a related observation, example, or sampled value.
 - Only one child is available. After its result, continue the task yourself; do not repeat the child's full investigation.`;

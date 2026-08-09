@@ -20,6 +20,9 @@ describe("Agent System Prompt", () => {
       "Do not ask the child to paste bulk source, logs, or repeated evidence",
     );
     expect(mainPrompt).toContain(
+      "Call delegate as the only tool in that assistant turn",
+    );
+    expect(mainPrompt).toContain(
       "Change a reported fact only when direct evidence for that same fact contradicts it",
     );
     expect(mainPrompt).toContain(

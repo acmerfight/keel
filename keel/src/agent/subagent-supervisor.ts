@@ -895,6 +895,7 @@ export function createSubagentSupervisor(
             lifecycle,
             record,
           })
+            .finally(continuationLease.release)
             /* v8 ignore start -- executeAccepted normalizes provider, tool, storage, cancellation, and observer failures; this is the last-resort promise containment boundary. */
             .catch(
               (
