@@ -18,7 +18,11 @@ import {
   maxAffordableOutputTokens,
 } from "../../src/core/cost.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  StreamOptions,
+  ToolCall,
+} from "../../src/llm/types.ts";
 import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 async function collect(
@@ -140,58 +144,118 @@ describe("Cost Budget", () => {
     expect(root.remainingUsd()).toBeGreaterThanOrEqual(0.5);
   });
 
-  test(`Given a completed main request establishes the shared root baseline,
-    When host leases one bounded continuation before running a child,
-    Then child spend cannot consume the lease and the next main request is admitted`, async () => {
+  test(`Given a completed main request and a bounded non-ASCII tool result,
+    When host leases the continuation before running a child,
+    Then the provider estimator prices the assistant and tool envelopes so the next main request is admitted`, async () => {
     let providerCalls = 0;
+    const toolCall: Extract<ToolCall, { readonly tool: "delegate" }> = {
+      id: "delegate-call",
+      tool: "delegate",
+      task: "Inspect the workspace.",
+    };
+    const reasoningContent = "我会委派这个调查。";
+    const initialMessages = [
+      { role: "user", content: "使用 subagent 调研这个任务。" },
+    ] as const;
+    const childMessages = [
+      { role: "user", content: "Inspect the workspace." },
+    ] as const;
+    const toolResultMessage = {
+      role: "tool",
+      toolCallId: toolCall.id,
+      content: "\u0800".repeat(1_000),
+    } as const;
+    const inputEstimate = (
+      options: Parameters<LLMProvider["stream"]>[0],
+    ): number =>
+      new TextEncoder().encode(
+        JSON.stringify({
+          systemPrompt: options.systemPrompt,
+          messages: options.messages,
+          toolExposure: options.toolExposure,
+        }),
+      ).length;
     const underlying: LLMProvider = {
       id: "continuation-lease",
-      estimateInputTokens: (options) =>
-        options.systemPrompt === "main continuation" ? 1_100 : 100,
+      estimateInputTokens: inputEstimate,
       async *stream(options) {
         providerCalls++;
-        const usage =
-          providerCalls === 1
-            ? {
-                inputTokens: 100,
-                cachedInputTokens: 0,
-                uncachedInputTokens: 100,
-                outputTokens: 50,
-              }
-            : {
-                inputTokens: 100,
-                cachedInputTokens: 0,
-                uncachedInputTokens: 100,
-                outputTokens: 100,
-              };
+        if (providerCalls === 1) {
+          yield { type: "reasoning", text: reasoningContent };
+          yield { type: "tool_call", ...toolCall };
+        } else yield { type: "text", text: "done" };
+        const inputTokens = inputEstimate(options);
+        const outputTokens =
+          providerCalls === 1 ? 1 : providerCalls === 2 ? 256 : 100;
+        const usage = {
+          inputTokens,
+          cachedInputTokens: 0,
+          uncachedInputTokens: inputTokens,
+          outputTokens,
+        };
         options.providerRequestAttempts
           ?.begin()
           .finish({ outcome: "completed", usage });
-        yield { type: "text", text: "done" };
         yield { type: "stop", reason: "stop", usage };
       },
     };
+    const baselineOptions: StreamOptions = {
+      systemPrompt: "main",
+      messages: initialMessages,
+      signal: freshSignal(),
+      toolExposure: { kind: "auto", delegation: true } as const,
+    };
+    const childOptions: StreamOptions = {
+      systemPrompt: "child",
+      messages: childMessages,
+      signal: freshSignal(),
+      toolExposure: { kind: "auto", profile: "read-only-subagent" } as const,
+    };
+    const continuationOptions: StreamOptions = {
+      ...baselineOptions,
+      messages: [
+        ...initialMessages,
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [toolCall],
+          providerMetadata: {
+            openaiCompatible: { reasoningContent },
+          },
+        } as const,
+        toolResultMessage,
+      ],
+      maxOutputTokens: 256,
+    };
+    const baselineInputTokens = inputEstimate(baselineOptions);
+    const childInputTokens = inputEstimate(childOptions);
+    const continuationInputTokens = inputEstimate(continuationOptions);
+    const maxCostUsd =
+      (baselineInputTokens +
+        2 +
+        childInputTokens +
+        2 * 256 +
+        continuationInputTokens +
+        2 * 256 +
+        10) /
+      1_000_000;
     const root = createSharedCostBudgetedProvider({
       provider: underlying,
       model: budgetModel,
-      maxCostUsd: 0.01,
+      maxCostUsd,
     });
 
-    for await (const _event of root.provider.stream({
-      systemPrompt: "main baseline",
-      messages: [],
-      signal: freshSignal(),
-    })) {
+    for await (const _event of root.provider.stream(baselineOptions)) {
       // Establish the root request baseline used by the lease estimator.
     }
     const lease = root.leaseContinuation({
-      additionalInputTokens: 1_000,
-      maxOutputTokens: 1_000,
-      minimumChildInputTokens: 100,
+      additionalMessages: [toolResultMessage],
+      maxOutputTokens: 256,
+      minimumChildInputTokens: childInputTokens,
     });
     expect(lease).toMatchObject({
       kind: "granted",
-      estimatedContinuationInputTokens: 1_150,
+      estimatedContinuationInputTokens: continuationInputTokens,
     });
     if (lease.kind !== "granted") throw new Error("lease was not granted");
     const child = createCostBudgetedProvider({
@@ -200,23 +264,14 @@ describe("Cost Budget", () => {
       maxCostUsd: lease.childMaxCostUsd,
     });
 
-    for await (const _event of child.stream({
-      systemPrompt: "child",
-      messages: [],
-      signal: freshSignal(),
-    })) {
+    for await (const _event of child.stream(childOptions)) {
       // Child uses the residual budget only.
     }
     expect(root.remainingUsd()).toBeGreaterThanOrEqual(lease.reservedUsd);
 
     await expect(
       (async () => {
-        for await (const _event of root.provider.stream({
-          systemPrompt: "main continuation",
-          messages: [],
-          signal: freshSignal(),
-          maxOutputTokens: 1_000,
-        })) {
+        for await (const _event of root.provider.stream(continuationOptions)) {
           // The leased main continuation is now admitted on the root provider.
         }
       })(),
@@ -249,7 +304,9 @@ describe("Cost Budget", () => {
       maxCostUsd: 0.001,
     });
     const request = {
-      additionalInputTokens: 100,
+      additionalMessages: [
+        { role: "tool", toolCallId: "delegate-call", content: "result" },
+      ],
       maxOutputTokens: 256,
       minimumChildInputTokens: 100,
     } as const;

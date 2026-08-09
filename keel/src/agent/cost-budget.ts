@@ -6,9 +6,11 @@ import {
 } from "../core/cost.ts";
 import type {
   LLMProvider,
+  ProviderMessage,
   ProviderRequestAttemptHandle,
   ProviderRequestAttemptObserver,
   StreamOptions,
+  ToolCall,
   Usage,
 } from "../llm/types.ts";
 import { modelToolExposureAccounting } from "../tools/registry.ts";
@@ -107,7 +109,7 @@ export interface SharedCostBudgetedProvider {
   readonly observedUsage: () => Usage;
   readonly observedSpendUsd: () => number;
   readonly leaseContinuation: (input: {
-    readonly additionalInputTokens: number;
+    readonly additionalMessages: readonly ProviderMessage[];
     readonly maxOutputTokens: number;
     readonly minimumChildInputTokens: number;
   }) => ContinuationBudgetLease;
@@ -122,8 +124,39 @@ type ContinuationBudgetLease =
     }
   | {
       readonly kind: "rejected";
-      readonly reason: "missing_baseline" | "insufficient_budget";
+      readonly reason:
+        | "missing_baseline"
+        | "invalid_estimate"
+        | "insufficient_budget";
     };
+
+interface ContinuationBaseline {
+  readonly streamOptions: StreamOptions;
+  readonly assistantMessage: Extract<
+    ProviderMessage,
+    { readonly role: "assistant" }
+  >;
+}
+
+function assistantMessageFromStream(input: {
+  readonly text: readonly string[];
+  readonly reasoning: readonly string[];
+  readonly toolCalls: readonly ToolCall[];
+}): Extract<ProviderMessage, { readonly role: "assistant" }> {
+  const reasoningContent = input.reasoning.join("");
+  return {
+    role: "assistant",
+    content: input.text.join(""),
+    toolCalls: [...input.toolCalls],
+    ...(reasoningContent === ""
+      ? {}
+      : {
+          providerMetadata: {
+            openaiCompatible: { reasoningContent },
+          },
+        }),
+  };
+}
 
 export function createSharedCostBudgetedProvider(
   options: CostBudgetedProviderOptions,
@@ -140,7 +173,7 @@ export function createSharedCostBudgetedProvider(
   let reservedAttemptSpendUsd = 0;
   let currentAttemptReservationUsd = 0;
   let latestEstimatedInputTokens: number | null = null;
-  let latestCompletedOutputTokens = 0;
+  let continuationBaseline: ContinuationBaseline | null = null;
   const remainingUsd = (): number =>
     Math.max(0, maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd);
   const provider: LLMProvider = {
@@ -163,7 +196,10 @@ export function createSharedCostBudgetedProvider(
         });
       }
       latestEstimatedInputTokens = estimatedInputTokens;
-      latestCompletedOutputTokens = 0;
+      continuationBaseline = null;
+      const assistantText: string[] = [];
+      const assistantReasoning: string[] = [];
+      const assistantToolCalls: ToolCall[] = [];
       const authorizeRequestAttempt = (): number => {
         const remainingUsd = Math.max(
           0,
@@ -242,7 +278,6 @@ export function createSharedCostBudgetedProvider(
                   { requests: [{ usage: result.usage }] },
                   options.model,
                 );
-                latestCompletedOutputTokens = result.usage.outputTokens;
               }
               attempt?.finish(result);
             },
@@ -257,8 +292,34 @@ export function createSharedCostBudgetedProvider(
           providerRequestAttempts,
         ),
       )) {
-        if (event.type === "stop") {
-          latestCompletedOutputTokens = event.usage.outputTokens;
+        switch (event.type) {
+          case "text":
+            assistantText.push(event.text);
+            break;
+          case "reasoning":
+            assistantReasoning.push(event.text);
+            break;
+          case "tool_call": {
+            const { type: _type, ...toolCall } = event;
+            assistantToolCalls.push(toolCall);
+            break;
+          }
+          case "stop":
+            continuationBaseline = {
+              streamOptions: {
+                ...streamOptions,
+                messages: [...streamOptions.messages],
+              },
+              assistantMessage: assistantMessageFromStream({
+                text: assistantText,
+                reasoning: assistantReasoning,
+                toolCalls: assistantToolCalls,
+              }),
+            };
+            break;
+          /* v8 ignore next 2 -- retry notifications carry no assistant payload, so preserving them requires no budget-baseline state change. */
+          case "provider_retry":
+            break;
         }
         yield event;
       }
@@ -270,13 +331,27 @@ export function createSharedCostBudgetedProvider(
     observedUsage: () => ({ ...observedUsage }),
     observedSpendUsd: () => observedSpendUsd,
     leaseContinuation: (input) => {
-      if (latestEstimatedInputTokens === null) {
+      if (
+        latestEstimatedInputTokens === null ||
+        continuationBaseline === null
+      ) {
         return { kind: "rejected", reason: "missing_baseline" };
       }
-      const estimatedContinuationInputTokens =
-        latestEstimatedInputTokens +
-        latestCompletedOutputTokens +
-        input.additionalInputTokens;
+      const estimatedContinuationInputTokens = estimateProviderInputTokens(
+        options.provider,
+        {
+          ...continuationBaseline.streamOptions,
+          messages: [
+            ...continuationBaseline.streamOptions.messages,
+            continuationBaseline.assistantMessage,
+            ...input.additionalMessages,
+          ],
+          maxOutputTokens: input.maxOutputTokens,
+        },
+      );
+      if (estimatedContinuationInputTokens === null) {
+        return { kind: "rejected", reason: "invalid_estimate" };
+      }
       const reservedUsd = calculateConservativeRequestCostUsd(
         estimatedContinuationInputTokens,
         input.maxOutputTokens,

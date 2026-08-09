@@ -40,9 +40,15 @@ const MAX_ADMITTED_ERROR_CHARS = 2_000;
 const MAX_ADMITTED_ID_CHARS = 512;
 const MAX_ADMITTED_TRANSCRIPT_REF_CHARS = 512;
 const MAX_ADMITTED_RESULT_CHARS = 24_000;
-const MAIN_CONTINUATION_TOOL_RESULT_TOKEN_RESERVE =
-  MAX_ADMITTED_RESULT_CHARS + 512;
 const MAX_AGGREGATE_FALLBACK_TEXT_CHARS = 1_000;
+
+function maximumUtf8ToolResult(maxCodeUnits: number): string {
+  // JSON leaves U+0800 unescaped and UTF-8 encodes it as three bytes. Because
+  // admittedAgentResult returns JSON text with no raw control characters, this
+  // bounds every possible UTF-8 serialization of the admitted result at the
+  // same UTF-16 length, including a second provider JSON envelope.
+  return "\u0800".repeat(maxCodeUnits);
+}
 
 type AgentTerminalStatus =
   | "completed"
@@ -846,8 +852,13 @@ export function createSubagentSupervisor(
         minimumChildInputTokens === null
           ? { kind: "rejected" as const }
           : options.rootBudget.leaseContinuation({
-              additionalInputTokens:
-                MAIN_CONTINUATION_TOOL_RESULT_TOKEN_RESERVE,
+              additionalMessages: [
+                {
+                  role: "tool",
+                  toolCallId: input.toolCallId,
+                  content: maximumUtf8ToolResult(MAX_ADMITTED_RESULT_CHARS),
+                },
+              ],
               maxOutputTokens: continuationMaxOutputTokens,
               minimumChildInputTokens,
             });
