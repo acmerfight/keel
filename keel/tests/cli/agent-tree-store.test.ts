@@ -54,8 +54,8 @@ describe("Agent Tree Store", () => {
           origin: { type: "runtime_subagent_delegation" },
         },
       ]);
-      run.running();
-      run.accounting({
+      const running = run.running();
+      running.accounting({
         usage: {
           inputTokens: 100,
           cachedInputTokens: 0,
@@ -65,7 +65,7 @@ describe("Agent Tree Store", () => {
         turns: 1,
         costUsd: 0.00014,
       });
-      run.terminal({
+      running.terminal({
         status: "completed",
         finalText: "The module exports 42.",
         error: null,
@@ -179,8 +179,8 @@ describe("Agent Tree Store", () => {
           toolCalls: [],
         },
       ]);
-      run.running();
-      run.accounting({
+      const running = run.running();
+      running.accounting({
         usage: {
           inputTokens: 80,
           cachedInputTokens: 0,
@@ -270,8 +270,8 @@ describe("Agent Tree Store", () => {
           origin: { type: "runtime_subagent_delegation" },
         },
       ]);
-      run.running();
-      run.terminal({
+      const running = run.running();
+      running.terminal({
         status: "completed",
         finalText: "Done.",
         error: null,

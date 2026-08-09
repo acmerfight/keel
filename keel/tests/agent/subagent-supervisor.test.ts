@@ -10,6 +10,7 @@ import {
 import {
   type SubagentLifecyclePersistence,
   SubagentPersistenceError,
+  type SubagentTerminalSnapshot,
 } from "../../src/agent/subagent-lifecycle.ts";
 import {
   createSubagentSupervisor,
@@ -229,32 +230,39 @@ describe("Subagent Supervisor", () => {
       lifecyclePersistence: {
         accepted: (lifecycle) => {
           events.push("accepted");
+          const transcript = {
+            initialize: () => {
+              events.push("transcript-initialize");
+            },
+            append: () => {},
+            replace: () => {},
+          };
+          const terminal = (snapshot: SubagentTerminalSnapshot) => {
+            events.push("terminal");
+            return {
+              delegationId: lifecycle.delegationId,
+              childAgentId: lifecycle.childAgentId,
+              childRunId: lifecycle.childRunId,
+              task: lifecycle.task,
+              transcriptRef: "agent-transcript:test/agent-1",
+              ...snapshot,
+            };
+          };
           return {
             transcriptRef: "agent-transcript:test/agent-1",
-            transcript: {
-              initialize: () => {
-                events.push("transcript-initialize");
-              },
-              append: () => {},
-              replace: () => {},
-            },
+            transcript,
             running: () => {
               events.push("running");
-            },
-            accounting: () => {
-              events.push("accounting");
-            },
-            terminal: (snapshot) => {
-              events.push("terminal");
               return {
-                delegationId: lifecycle.delegationId,
-                childAgentId: lifecycle.childAgentId,
-                childRunId: lifecycle.childRunId,
-                task: lifecycle.task,
                 transcriptRef: "agent-transcript:test/agent-1",
-                ...snapshot,
+                transcript,
+                accounting: () => {
+                  events.push("accounting");
+                },
+                terminal,
               };
             },
+            terminal,
           };
         },
         rejected: () => {},

@@ -128,9 +128,9 @@ describe("Agent Tree Store Crash Boundaries", () => {
         if (marker.includes("agent_run_running")) {
           expect(() => run.running()).toThrow("simulated partial");
         } else {
-          run.running();
+          const running = run.running();
           expect(() =>
-            run.terminal({
+            running.terminal({
               status: "completed",
               finalText: "Complete before the simulated crash.",
               error: null,

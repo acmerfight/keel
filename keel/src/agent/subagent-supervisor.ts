@@ -30,6 +30,7 @@ import { maxTurnFallbackPolicy } from "./stop-policy.ts";
 import type {
   SubagentCanonicalResult,
   SubagentLifecyclePersistence,
+  SubagentRunningPersistence,
   SubagentRunPersistence,
   SubagentTerminalOutcome,
   SubagentTerminalStatus,
@@ -615,7 +616,8 @@ export function createSubagentSupervisor(
       });
     };
     try {
-      input.persistence?.running();
+      const runningPersistence: SubagentRunningPersistence | undefined =
+        input.persistence?.running();
       input.record.state = { kind: "running" };
       progress("running");
       let transcriptMessages: readonly SessionMessage[] = [];
@@ -684,7 +686,7 @@ export function createSubagentSupervisor(
           },
           onAgentLoopAccountingUpdated: (accounting) => {
             turns = accounting.turns;
-            input.persistence?.accounting({
+            runningPersistence?.accounting({
               usage: accounting.usage,
               turns: accounting.turns,
               costUsd:
@@ -777,8 +779,8 @@ export function createSubagentSupervisor(
         transcriptRef,
       };
       const result: SubagentCanonicalResult = { ...resultBase, ...terminal };
-      if (input.persistence !== undefined) {
-        const persistedResult = input.persistence.terminal({
+      if (runningPersistence !== undefined) {
+        const persistedResult = runningPersistence.terminal({
           ...terminal,
           usage,
           turns,

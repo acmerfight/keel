@@ -5,6 +5,7 @@ import {
   type SubagentAccountingSnapshot,
   type SubagentLifecyclePersistence,
   SubagentPersistenceError,
+  type SubagentRunningPersistence,
   type SubagentRunPersistence,
   type SubagentTerminalSnapshot,
   type SubagentTerminalStatus,
@@ -554,15 +555,34 @@ export function createAgentTreeHistory(options: {
       const requireMutableRun = (): MutableAgentRun =>
         requireRun(runs, lifecycle.childAgentId, lifecycle.childRunId);
       const transcript = createTranscriptObserver(writer, transcriptPath);
+      const persistedTranscript = {
+        initialize: (messages: Parameters<typeof transcript.initialize>[0]) =>
+          persist(() => transcript.initialize(messages)),
+        append: (messages: Parameters<typeof transcript.append>[0]) =>
+          persist(() => transcript.append(messages)),
+        replace: (messages: Parameters<typeof transcript.replace>[0]) =>
+          persist(() => transcript.replace(messages)),
+      };
+      const terminal = (
+        snapshot: SubagentTerminalSnapshot,
+      ): PersistedSubagentCanonicalResult => {
+        const current = requireMutableRun();
+        requireUnsettledRun(current);
+        return persist(() =>
+          appendCanonicalTerminal({
+            filePath,
+            transcriptPath,
+            runtime: options.runtime,
+            run: current,
+            writer,
+            snapshot,
+          }),
+        );
+      };
       return {
         transcriptRef: acceptedRecord.transcriptRef,
-        transcript: {
-          initialize: (messages) =>
-            persist(() => transcript.initialize(messages)),
-          append: (messages) => persist(() => transcript.append(messages)),
-          replace: (messages) => persist(() => transcript.replace(messages)),
-        },
-        running: () => {
+        transcript: persistedTranscript,
+        running: (): SubagentRunningPersistence => {
           const current = requireMutableRun();
           const state = requireUnsettledRun(current);
           if (state.kind !== "queued") {
@@ -582,43 +602,37 @@ export function createAgentTreeHistory(options: {
             kind: "running",
             accounting: copyAccounting(state.accounting),
           };
-        },
-        accounting: (accounting) => {
-          const current = requireMutableRun();
-          const state = requireUnsettledRun(current);
-          if (state.kind !== "running") {
-            agentTreeError(
-              `child agent ${lifecycle.childAgentId} cannot account before running`,
-            );
-          }
-          const record: AgentRunAccountingRecord = {
-            schemaVersion: AGENT_TREE_SCHEMA_VERSION,
-            type: "agent_run_accounting",
-            timestamp: timestamp(options.runtime),
-            childAgentId: lifecycle.childAgentId,
-            childRunId: lifecycle.childRunId,
-            ...copyAccounting(accounting),
+          return {
+            transcriptRef: acceptedRecord.transcriptRef,
+            transcript: persistedTranscript,
+            accounting: (accounting) => {
+              const running = requireMutableRun();
+              const runningState = requireUnsettledRun(running);
+              if (runningState.kind !== "running") {
+                agentTreeError(
+                  `child agent ${lifecycle.childAgentId} is not running`,
+                );
+              }
+              const accountingRecord: AgentRunAccountingRecord = {
+                schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+                type: "agent_run_accounting",
+                timestamp: timestamp(options.runtime),
+                childAgentId: lifecycle.childAgentId,
+                childRunId: lifecycle.childRunId,
+                ...copyAccounting(accounting),
+              };
+              persist(() =>
+                writer.append(filePath, accountingRecord, "agent tree"),
+              );
+              running.state = {
+                kind: "running",
+                accounting: copyAccounting(accounting),
+              };
+            },
+            terminal,
           };
-          persist(() => writer.append(filePath, record, "agent tree"));
-          current.state = {
-            kind: "running",
-            accounting: copyAccounting(accounting),
-          };
         },
-        terminal: (snapshot) => {
-          const current = requireMutableRun();
-          requireUnsettledRun(current);
-          return persist(() =>
-            appendCanonicalTerminal({
-              filePath,
-              transcriptPath,
-              runtime: options.runtime,
-              run: current,
-              writer,
-              snapshot,
-            }),
-          );
-        },
+        terminal,
       };
     },
     rejected: (lifecycle) => {

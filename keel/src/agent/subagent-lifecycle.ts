@@ -80,14 +80,21 @@ export type PersistedSubagentCanonicalResult = SubagentCanonicalResult & {
   readonly transcriptRef: string;
 };
 
-export interface SubagentRunPersistence {
+interface SubagentTerminalPersistence {
   readonly transcriptRef: string;
   readonly transcript: SessionLedgerObserver;
-  readonly running: () => void;
-  readonly accounting: (snapshot: SubagentAccountingSnapshot) => void;
   readonly terminal: (
     snapshot: SubagentTerminalSnapshot,
   ) => PersistedSubagentCanonicalResult;
+}
+
+export interface SubagentRunningPersistence
+  extends SubagentTerminalPersistence {
+  readonly accounting: (snapshot: SubagentAccountingSnapshot) => void;
+}
+
+export interface SubagentRunPersistence extends SubagentTerminalPersistence {
+  readonly running: () => SubagentRunningPersistence;
 }
 
 export interface SubagentLifecyclePersistence {
