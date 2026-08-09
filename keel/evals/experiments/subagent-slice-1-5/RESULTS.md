@@ -29,7 +29,8 @@ See
 | Trials | 3 paired trials for each of 6 tasks; 36 arms total |
 | Result JSONL | [`artifacts/v5/results.jsonl`](artifacts/v5/results.jsonl) |
 | Result SHA-256 | `5f3c6922596cecbafe669a3cbad9494688a0171399c56efca5cb814a2bafdd10` |
-| Provider-visible transcripts | [`artifacts/v5/transcripts/`](artifacts/v5/transcripts/) |
+| Main provider-visible transcripts | [`artifacts/v5/transcripts/`](artifacts/v5/transcripts/) |
+| Child provider-visible transcripts | [`artifacts/v5/child-transcripts/`](artifacts/v5/child-transcripts/) |
 | Per-file checksums | [`artifacts/v5/MANIFEST.sha256`](artifacts/v5/MANIFEST.sha256) |
 
 All 36 harness arms completed and 35 semantic task verifiers passed. One

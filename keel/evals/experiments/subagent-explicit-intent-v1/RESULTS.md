@@ -25,7 +25,8 @@ children returned a valid completed result.
 | Trials | 3 paired trials for each of 2 tasks; 12 arms total |
 | Result JSONL | [`artifacts/v1/results.jsonl`](artifacts/v1/results.jsonl) |
 | Result SHA-256 | `8e3d736aafe640c628a79faa0b02ab267efbdcc99c0966618df1365cf4f61204` |
-| Provider-visible transcripts | [`artifacts/v1/transcripts/`](artifacts/v1/transcripts/) |
+| Main provider-visible transcripts | [`artifacts/v1/transcripts/`](artifacts/v1/transcripts/) |
+| Child provider-visible transcripts | [`artifacts/v1/child-transcripts/`](artifacts/v1/child-transcripts/) |
 | Per-file checksums | [`artifacts/v1/MANIFEST.sha256`](artifacts/v1/MANIFEST.sha256) |
 
 The eval command exited 1 because the general `delegation_pair` suite gate
@@ -64,9 +65,9 @@ The two completed child results both contained concrete paths, lines, values,
 and risks, and main used them to produce verified `review.json` artifacts.
 Handoff efficiency was inconsistent:
 
-- in one verified treatment, main re-read 11 fixture files and issued four
+- in one verified treatment, main re-read 10 fixture files and issued four
   greps after receiving the child report, repeating most of the investigation;
-- in the other, main read three files and issued four focused greps before
+- in the other, main read two files and issued four focused greps before
   writing, which is closer to bounded verification plus synthesis;
 - the four failed children supplied no evidence, so main fell back to direct
   reads; conservative main-turn admission stopped those runs before a verified

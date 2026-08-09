@@ -48,8 +48,8 @@ budget and the no-rerun rule below.
   `delegationSelection`, independent from task outcome.
 - Sampling: run the command below once after committing this protocol. Do not
   selectively rerun a failed or unavailable sample.
-- Raw evidence: retain the result JSONL, every provider-visible transcript,
-  and per-file SHA-256 checksums under `artifacts/v1/`.
+- Raw evidence: retain the result JSONL, every main and child provider-visible
+  transcript, and per-file SHA-256 checksums under `artifacts/v1/`.
 
 ```bash
 node --experimental-strip-types src/cli/index.ts eval \

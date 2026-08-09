@@ -74,8 +74,9 @@ rerun selectively.
   trajectory, delegation, or fixed natural-language phrasing.
 - Selection grading: treatment report only, recorded independently from task
   outcome as `delegationSelection`.
-- Raw evidence: schema-v3 JSONL reports and provider-visible transcripts,
-  retained with per-file checksums under [`artifacts/v5/`](artifacts/v5/).
+- Raw evidence: schema-v3 JSONL reports and every main and actual child
+  provider-visible transcript, retained with per-file checksums under
+  [`artifacts/v5/`](artifacts/v5/).
 
 ```bash
 node --experimental-strip-types src/cli/index.ts eval \
