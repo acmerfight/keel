@@ -142,9 +142,136 @@ describe("CLI Main - Subagent Delegation", () => {
     }
   });
 
-  test(`Given experimental agents and a root cost budget are enabled,
-    When main delegates one read-only workspace investigation,
-    Then a fresh bounded child submits evidence and main returns the only final answer`, async () => {
+  test(`Given experimental agents are enabled and the model first supplies an overlong delegation task,
+    When main retries with valid arguments and the child finishes normally,
+    Then the invalid call is recoverable, consumes no child slot, and delegation remains one-shot`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-retry-"));
+    const reportPath = join(workspace, "report.json");
+    const requests: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        requests.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            res.end(
+              [
+                sseToolCall("delegate_too_long", "delegate", {
+                  task: "x".repeat(4_001),
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            res.end(
+              [
+                sseToolCall("delegate_retry", "delegate", {
+                  task: "Inspect the workspace and return a concise evidence summary.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            res.end(
+              sseTextReplyWithUsage(
+                "The delegated read-only investigation completed with no findings.",
+              ),
+            );
+            return;
+          case 4:
+            res.end(
+              sseTextReplyWithUsage(
+                "Completed after one recovered delegation attempt.",
+              ),
+            );
+            return;
+          default:
+            res.writeHead(500);
+            res.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--experimental-agents",
+        "--no-skills",
+        "--max-cost",
+        "0.05",
+        "--report",
+        reportPath,
+        "Use a subagent to inspect this workspace.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: join(workspace, ".keel-home"),
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(requests).toHaveLength(4);
+      expect(toolNames(requests[0])).toContain("delegate");
+      expect(toolNames(requests[1])).toContain("delegate");
+      expect(toolNames(requests[2])).not.toContain("delegate");
+      expect(toolNames(requests[3])).not.toContain("delegate");
+      expect(requestText(requests[1])).toContain(
+        "delegate failed: invalid arguments",
+      );
+      expect(requestText(requests[1])).toContain(
+        "no longer than 4,000 characters",
+      );
+      expect(requestText(requests[3])).toContain(
+        "The delegated read-only investigation completed with no findings.",
+      );
+      expect(fixture.stdout()).toBe(
+        "Completed after one recovered delegation attempt.\n",
+      );
+      expect(fixture.stderr()).toContain("Tool failed: delegate");
+
+      const report = z
+        .object({
+          modelOperations: z.array(
+            z.object({ purpose: z.string() }).passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      expect(
+        report.modelOperations.filter(
+          (operation) => operation.purpose === "subagent_turn",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user explicitly requests a subagent and a root cost budget is enabled,
+    When one read-only child finishes with a normal evidence-based answer,
+    Then host hands its bounded final to main without tool-specific evidence, removes delegate, and main writes the result`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-"));
     const keelHome = join(workspace, ".keel-home");
@@ -196,27 +323,27 @@ describe("CLI Main - Subagent Delegation", () => {
             return;
           case 3:
             res.end(
+              sseTextReplyWithUsage(
+                "module.ts:1 exports answer with value 42. I observed it with the read tool.",
+              ),
+            );
+            return;
+          case 4:
+            res.end(
               [
-                sseToolCall("child_submit", "submit_agent_result", {
-                  summary: "module.ts exports answer with value 42.",
-                  evidence: [
-                    {
-                      path: "module.ts",
-                      line: 1,
-                      detail: "export const answer = 42;",
-                    },
-                  ],
-                  risks: [],
+                sseToolCall("main_write", "write", {
+                  path: "delegated-result.md",
+                  content: "module.ts:1 exports answer = 42.\n",
                 }),
                 sseToolFinish(),
                 "data: [DONE]\n\n",
               ].join(""),
             );
             return;
-          case 4:
+          case 5:
             res.end(
               sseTextReplyWithUsage(
-                "The delegated read-only check found module.ts:1 exports answer = 42.",
+                "Wrote delegated-result.md from the child handoff.",
               ),
             );
             return;
@@ -235,7 +362,7 @@ describe("CLI Main - Subagent Delegation", () => {
         "0.05",
         "--report",
         reportPath,
-        "PRIVATE PARENT CONTEXT: do not copy this. Analyze module.ts.",
+        "使用 subagent 调研这个任务。\n\nPRIVATE PARENT CONTEXT: do not copy this. Analyze module.ts.",
       ],
       {
         cwd: workspace,
@@ -260,7 +387,7 @@ describe("CLI Main - Subagent Delegation", () => {
           stderr: fixture.stderr(),
           tools: requests.map(toolNames),
         }),
-      ).toHaveLength(4);
+      ).toHaveLength(5);
       expect(toolNames(requests[0])).toContain("delegate");
 
       const childInitial = requestText(requests[1]);
@@ -271,15 +398,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(childInitial).toContain("DELEGATED_FIXTURE_RULE");
       expect(childInitial).not.toContain("PRIVATE PARENT CONTEXT");
       expect(toolNames(requests[1]).toSorted()).toEqual(
-        [
-          "git_diff",
-          "git_status",
-          "glob",
-          "grep",
-          "ls",
-          "read",
-          "submit_agent_result",
-        ].toSorted(),
+        ["git_diff", "git_status", "glob", "grep", "ls", "read"].toSorted(),
       );
       expect(toolNames(requests[1])).not.toContain("write");
       expect(toolNames(requests[1])).not.toContain("edit");
@@ -287,29 +406,33 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(toolNames(requests[1])).not.toContain("bash");
       expect(toolNames(requests[1])).not.toContain("delegate");
 
-      const finalMainRequest = requestSchema.parse(requests[3]);
-      const delegatedToolResult = finalMainRequest.messages?.find(
+      const resumedMainRequest = requestSchema.parse(requests[3]);
+      expect(toolNames(requests[3])).not.toContain("delegate");
+      const delegatedToolResult = resumedMainRequest.messages?.find(
         (message) => message.tool_call_id === "delegate_once",
       )?.content;
       expect(delegatedToolResult).toContain(
-        "module.ts exports answer with value 42.",
+        "module.ts:1 exports answer with value 42.",
       );
+      expect(delegatedToolResult).not.toContain("observedResources");
+      expect(delegatedToolResult).toContain('"childLimitReached":true');
       const artifactRef = artifactRefSchema.parse(
         delegatedToolResult?.match(
           /tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/u,
         )?.[0],
       );
       expect(fixture.stdout()).toBe(
-        "The delegated read-only check found module.ts:1 exports answer = 42.\n",
+        "Wrote delegated-result.md from the child handoff.\n",
       );
+      expect(
+        await readFile(join(workspace, "delegated-result.md"), "utf8"),
+      ).toBe("module.ts:1 exports answer = 42.\n");
       expect(fixture.stderr()).toMatch(/Subagent .*: queued .*deadline/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: running/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: turn 1 .*deadline/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: tool read .*elapsed/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: turn 2 .*deadline/u);
-      expect(fixture.stderr()).toMatch(
-        /Subagent .*: tool submit_agent_result .*elapsed/u,
-      );
+      expect(fixture.stderr()).not.toContain("submit_agent_result");
       expect(fixture.stderr()).toMatch(/Subagent .*: completed .*elapsed/u);
 
       const report = z
@@ -338,10 +461,10 @@ describe("CLI Main - Subagent Delegation", () => {
         })
         .passthrough()
         .parse(JSON.parse(await readFile(reportPath, "utf8")));
-      expect(report.modelOperationCount).toBe(4);
-      expect(report.providerRequestAttemptCount).toBe(4);
-      expect(report.usage.inputTokens).toBe(40);
-      expect(report.usage.outputTokens).toBe(12);
+      expect(report.modelOperationCount).toBe(5);
+      expect(report.providerRequestAttemptCount).toBe(5);
+      expect(report.usage.inputTokens).toBe(50);
+      expect(report.usage.outputTokens).toBe(15);
       expect(report.costUsd).toBeGreaterThan(0);
       const childOperations = report.modelOperations.filter(
         (operation) => operation.purpose === "subagent_turn",
@@ -377,7 +500,7 @@ describe("CLI Main - Subagent Delegation", () => {
         '"origin":"runtime_subagent_delegation"',
       );
       expect(inspectFixture.stdout()).toContain(
-        "module.ts exports answer with value 42.",
+        "module.ts:1 exports answer with value 42.",
       );
     } finally {
       await close(server);

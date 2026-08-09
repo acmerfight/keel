@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+  CostBudgetAdmissionError,
   createCostBudgetedProvider,
   createSharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
@@ -18,7 +19,11 @@ import {
   maxAffordableOutputTokens,
 } from "../../src/core/cost.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
-import type { LLMProvider } from "../../src/llm/types.ts";
+import type {
+  LLMProvider,
+  StreamOptions,
+  ToolCall,
+} from "../../src/llm/types.ts";
 import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 
 async function collect(
@@ -61,6 +66,102 @@ const tieredBudgetModel: CostModel = {
 };
 
 describe("Cost Budget", () => {
+  test(`Given delegate is emitted beside another tool call,
+    When the host executes the tool round,
+    Then it rejects delegation before child work because the continuation shape is not isolated`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-delegate-isolation-"));
+    await writeFile(join(workspace, "note.txt"), "evidence\n", "utf8");
+    let providerCalls = 0;
+    let childCalls = 0;
+    let transcript: readonly SessionMessage[] = [];
+    const provider: LLMProvider = {
+      id: "delegate-isolation",
+      async *stream() {
+        providerCalls++;
+        if (providerCalls === 1) {
+          yield {
+            type: "tool_call",
+            id: "delegate-call",
+            tool: "delegate",
+            task: "Inspect the note independently.",
+          };
+          yield {
+            type: "tool_call",
+            id: "read-call",
+            tool: "read",
+            path: "note.txt",
+          };
+        } else {
+          yield { type: "text", text: "done" };
+        }
+        yield {
+          type: "stop",
+          reason: "stop",
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 100,
+            outputTokens: 10,
+          },
+        };
+      },
+    };
+
+    try {
+      await collect(
+        runAgent({
+          workspace,
+          provider,
+          userMessage: "Use a subagent to inspect the note.",
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          delegation: {
+            available: () => true,
+            delegate: async () => {
+              childCalls++;
+              return {
+                delivery: "fresh",
+                ok: true,
+                content: "unexpected child result",
+                usage: {
+                  inputTokens: 1,
+                  cachedInputTokens: 0,
+                  uncachedInputTokens: 1,
+                  outputTokens: 1,
+                },
+              };
+            },
+          },
+          onTranscriptReady: (messages) => {
+            transcript = messages;
+          },
+        }),
+      );
+
+      expect(childCalls).toBe(0);
+      expect(transcript).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          toolCallId: "delegate-call",
+          content: expect.stringContaining(
+            "delegate must be the only tool call in its assistant turn",
+          ),
+        }),
+      );
+      expect(transcript).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          toolCallId: "read-call",
+          content: expect.stringContaining("evidence"),
+        }),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a child lease wraps the shared root cost budget,
     When both layers calculate an affordable output ceiling,
     Then the outer root wrapper preserves the smaller child ceiling`, async () => {
@@ -138,6 +239,266 @@ describe("Cost Budget", () => {
     }).rejects.toThrow("provider failed after request admission");
 
     expect(root.remainingUsd()).toBeGreaterThanOrEqual(0.5);
+  });
+
+  test(`Given a completed main request and a bounded non-ASCII tool result,
+    When host leases the continuation before running a child,
+    Then the provider estimator prices the assistant and tool envelopes so the next main request is admitted`, async () => {
+    let providerCalls = 0;
+    const toolCall: Extract<ToolCall, { readonly tool: "delegate" }> = {
+      id: "delegate-call",
+      tool: "delegate",
+      task: "Inspect the workspace.",
+    };
+    const reasoningContent = "我会委派这个调查。";
+    const initialMessages = [
+      { role: "user", content: "使用 subagent 调研这个任务。" },
+    ] as const;
+    const childMessages = [
+      { role: "user", content: "Inspect the workspace." },
+    ] as const;
+    const toolResultMessage = {
+      role: "tool",
+      toolCallId: toolCall.id,
+      content: "\u0800".repeat(1_000),
+    } as const;
+    const inputEstimate = (
+      options: Parameters<LLMProvider["stream"]>[0],
+    ): number =>
+      new TextEncoder().encode(
+        JSON.stringify({
+          systemPrompt: options.systemPrompt,
+          messages: options.messages,
+          toolExposure: options.toolExposure,
+          maxOutputTokens: options.maxOutputTokens,
+        }),
+      ).length;
+    const underlying: LLMProvider = {
+      id: "continuation-lease",
+      estimateInputTokens: inputEstimate,
+      async *stream(options) {
+        providerCalls++;
+        if (providerCalls === 1) {
+          yield { type: "reasoning", text: reasoningContent };
+          yield { type: "tool_call", ...toolCall };
+        } else yield { type: "text", text: "done" };
+        const inputTokens = inputEstimate(options);
+        const outputTokens =
+          providerCalls === 1 ? 1 : providerCalls === 2 ? 256 : 100;
+        const usage = {
+          inputTokens,
+          cachedInputTokens: 0,
+          uncachedInputTokens: inputTokens,
+          outputTokens,
+        };
+        options.providerRequestAttempts
+          ?.begin()
+          .finish({ outcome: "completed", usage });
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const baselineOptions: StreamOptions = {
+      systemPrompt: "main",
+      messages: initialMessages,
+      signal: freshSignal(),
+      toolExposure: { kind: "auto", delegation: true } as const,
+    };
+    const childOptions: StreamOptions = {
+      systemPrompt: "child",
+      messages: childMessages,
+      signal: freshSignal(),
+      toolExposure: { kind: "auto", profile: "read-only-subagent" } as const,
+    };
+    const continuationOptions: StreamOptions = {
+      ...baselineOptions,
+      messages: [
+        ...initialMessages,
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [toolCall],
+          providerMetadata: {
+            openaiCompatible: { reasoningContent },
+          },
+        } as const,
+        toolResultMessage,
+      ],
+      maxOutputTokens: 256,
+    };
+    const baselineInputTokens = inputEstimate({
+      ...baselineOptions,
+      maxOutputTokens: 256,
+    });
+    const childInputTokens = inputEstimate({
+      ...childOptions,
+      maxOutputTokens: 256,
+    });
+    const continuationInputTokens = inputEstimate(continuationOptions);
+    const maxCostUsd =
+      (baselineInputTokens +
+        2 +
+        childInputTokens +
+        2 * 256 +
+        continuationInputTokens +
+        2 * 256 +
+        10) /
+      1_000_000;
+    const root = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd,
+      modelMaxOutputTokens: 256,
+    });
+
+    for await (const _event of root.provider.stream(baselineOptions)) {
+      // Establish the root request baseline used by the lease estimator.
+    }
+    const lease = root.leaseContinuation({
+      additionalMessages: [toolResultMessage],
+      maxOutputTokens: 256,
+      minimumChildInputTokens: childInputTokens,
+    });
+    expect(lease).toMatchObject({
+      kind: "granted",
+      estimatedContinuationInputTokens: continuationInputTokens,
+    });
+    if (lease.kind !== "granted") throw new Error("lease was not granted");
+    expect(
+      root.leaseContinuation({
+        additionalMessages: [toolResultMessage],
+        maxOutputTokens: 256,
+        minimumChildInputTokens: childInputTokens,
+      }),
+    ).toEqual({ kind: "rejected", reason: "active_lease" });
+    await expect(
+      (async () => {
+        for await (const _event of root.provider.stream({
+          ...childOptions,
+          systemPrompt: "\u0800".repeat(1_000),
+        })) {
+          // A request outside the child cap cannot borrow the held main lease.
+        }
+      })(),
+    ).rejects.toBeInstanceOf(CostBudgetAdmissionError);
+    const child = createCostBudgetedProvider({
+      provider: root.provider,
+      model: budgetModel,
+      maxCostUsd: lease.childMaxCostUsd,
+      modelMaxOutputTokens: 256,
+    });
+
+    for await (const _event of child.stream(childOptions)) {
+      // Child uses the residual budget only.
+    }
+    expect(root.remainingUsd()).toBeGreaterThanOrEqual(0);
+    lease.release();
+    expect(root.remainingUsd()).toBeGreaterThanOrEqual(lease.reservedUsd);
+
+    await expect(
+      (async () => {
+        for await (const _event of root.provider.stream(continuationOptions)) {
+          // The leased main continuation is now admitted on the root provider.
+        }
+      })(),
+    ).resolves.toBeUndefined();
+    expect(providerCalls).toBe(3);
+  });
+
+  test(`Given no baseline, an invalid continuation estimate, or insufficient remaining budget,
+    When host asks for a continuation lease,
+    Then the typed lease result rejects before child work can start`, async () => {
+    const underlying: LLMProvider = {
+      id: "rejected-continuation-lease",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        const usage = {
+          inputTokens: 900,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 900,
+          outputTokens: 0,
+        };
+        options.providerRequestAttempts
+          ?.begin()
+          .finish({ outcome: "completed", usage });
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const root = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd: 0.001,
+    });
+    const invalidEstimateRoot = createSharedCostBudgetedProvider({
+      provider: {
+        ...underlying,
+        estimateInputTokens: (options) =>
+          options.messages.some((message) => message.role === "tool")
+            ? Number.NaN
+            : 100,
+      },
+      model: budgetModel,
+      maxCostUsd: 0.01,
+    });
+    let invalidFinalShapeProviderCalls = 0;
+    const invalidFinalShapeRoot = createSharedCostBudgetedProvider({
+      provider: {
+        ...underlying,
+        estimateInputTokens: (options) =>
+          options.maxOutputTokens === undefined ? 100 : Number.NaN,
+        async *stream() {
+          invalidFinalShapeProviderCalls++;
+          yield { type: "text", text: "unexpected" };
+        },
+      },
+      model: budgetModel,
+      maxCostUsd: 0.01,
+    });
+    const request = {
+      additionalMessages: [
+        { role: "tool", toolCallId: "delegate-call", content: "result" },
+      ],
+      maxOutputTokens: 256,
+      minimumChildInputTokens: 100,
+    } as const;
+
+    expect(root.leaseContinuation(request)).toEqual({
+      kind: "rejected",
+      reason: "missing_baseline",
+    });
+    for await (const _event of invalidEstimateRoot.provider.stream({
+      systemPrompt: "valid baseline",
+      messages: [],
+      signal: freshSignal(),
+    })) {
+      // Establish a valid baseline before the provider rejects the full shape.
+    }
+    expect(invalidEstimateRoot.leaseContinuation(request)).toEqual({
+      kind: "rejected",
+      reason: "invalid_estimate",
+    });
+    await expect(
+      (async () => {
+        for await (const _event of invalidFinalShapeRoot.provider.stream({
+          systemPrompt: "initial estimate is valid",
+          messages: [],
+          signal: freshSignal(),
+        })) {
+          // The final provider shape must be rejected before transport starts.
+        }
+      })(),
+    ).rejects.toMatchObject({ estimatedInputTokens: null });
+    expect(invalidFinalShapeProviderCalls).toBe(0);
+    for await (const _event of root.provider.stream({
+      systemPrompt: "spend baseline",
+      messages: [],
+      signal: freshSignal(),
+    })) {
+      // Leave too little capacity for both leases.
+    }
+    expect(root.leaseContinuation(request)).toEqual({
+      kind: "rejected",
+      reason: "insufficient_budget",
+    });
   });
 
   test(`Given the conservative input cost cannot fit the session budget,

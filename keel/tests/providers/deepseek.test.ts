@@ -1471,6 +1471,46 @@ describe("DeepSeek Provider", () => {
             return;
           }
 
+          if (parsed.messages?.[1]?.content === "invalid-delegate-task") {
+            writeSseResponse(res, [
+              sseData({
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          id: "call_delegate_0",
+                          index: 0,
+                          type: "function",
+                          function: {
+                            name: "delegate",
+                            arguments: JSON.stringify({
+                              task: "x".repeat(4_001),
+                              focusPaths: ["src"],
+                            }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+                usage: null,
+              }),
+              sseData({
+                choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                usage: {
+                  prompt_tokens: 30,
+                  prompt_cache_hit_tokens: 0,
+                  prompt_cache_miss_tokens: 30,
+                  completion_tokens: 8,
+                },
+              }),
+              "data: [DONE]\n\n",
+            ]);
+            return;
+          }
+
           if (parsed.messages?.[1]?.content === "invalid-read-arguments") {
             writeSseResponse(res, [
               sseData({
@@ -3910,6 +3950,34 @@ describe("DeepSeek Provider", () => {
         },
       },
     ]);
+  });
+
+  test(`Given DeepSeek returns an overlong delegate task,
+    When provider validates the completed tool call,
+    Then it yields a recoverable invalid delegate call instead of crashing the run`, async () => {
+    const provider = createDeepseekProvider({
+      apiKey: "test-key",
+      baseUrl,
+      model: "deepseek-v4-flash",
+    });
+
+    const events = await collect(
+      provider.stream({
+        systemPrompt: "You are helpful.",
+        messages: [{ role: "user", content: "invalid-delegate-task" }],
+        signal: freshSignal(),
+        toolExposure: { kind: "auto", delegation: true },
+      }),
+    );
+
+    expect(events[0]).toMatchObject({
+      type: "tool_call",
+      id: "call_delegate_0",
+      tool: "delegate",
+      validationError: expect.stringContaining("Too big"),
+      recovery: expect.stringContaining("4,000 characters"),
+    });
+    expect(events.at(-1)).toMatchObject({ type: "stop", reason: "stop" });
   });
 
   test(`Given a read tool call has invalid arguments,

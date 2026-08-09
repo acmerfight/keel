@@ -949,7 +949,6 @@ function projectToolOutputPreview(
     case "apply_patch":
     case "update_plan":
     case "delegate":
-    case "submit_agent_result":
     case "update_goal":
     case "memory_add":
     case "memory_forget":

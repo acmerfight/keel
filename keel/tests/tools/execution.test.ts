@@ -12,7 +12,6 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
-import { createAgentResultSubmissionCapability } from "../../src/tools/delegation.ts";
 import {
   type ExecuteToolCallOptions,
   executeToolCall,
@@ -170,6 +169,7 @@ describe("Tool Execution", () => {
         bash: { kind: "disabled" },
         builtinToolAuthority: { kind: "auto" },
         delegation: {
+          available: () => true,
           delegate: async () => {
             delegateCalled = true;
             return {
@@ -281,9 +281,9 @@ describe("Tool Execution", () => {
     ).toBe(true);
   });
 
-  test(`Given delegation and submission calls reach dispatcher without their host capabilities,
-    When the execution layer evaluates them,
-    Then both return recoverable unavailable results without side effects`, async () => {
+  test(`Given a delegation call reaches dispatcher without its host capability,
+    When the execution layer evaluates it,
+    Then it returns a recoverable unavailable result without side effects`, async () => {
     const base: Pick<ExecuteToolCallOptions, "workspace" | "signal" | "bash"> =
       {
         workspace: process.cwd(),
@@ -298,21 +298,8 @@ describe("Tool Execution", () => {
         task: "Inspect the workspace.",
       },
     });
-    const submit = await executeToolCall({
-      ...base,
-      toolCall: {
-        id: "missing_submission_capability",
-        tool: "submit_agent_result",
-        summary: "Result",
-        evidence: [{ path: "ROADMAP.md", detail: "Evidence" }],
-        risks: [],
-      },
-    });
-
     expect(delegate).toMatchObject({ ok: false, effects: [] });
     expect(delegate.content).toContain("delegate is unavailable");
-    expect(submit).toMatchObject({ ok: false, effects: [] });
-    expect(submit.content).toContain("submit_agent_result is unavailable");
   });
 
   test(`Given an enabled delegation is rejected, replayed, or settles fresh after root cancellation,
@@ -336,6 +323,7 @@ describe("Tool Execution", () => {
       ...base,
       signal: new AbortController().signal,
       delegation: {
+        available: () => true,
         delegate: async () => ({
           delivery: "rejected",
           ok: false,
@@ -347,6 +335,7 @@ describe("Tool Execution", () => {
       ...base,
       signal: new AbortController().signal,
       delegation: {
+        available: () => true,
         delegate: async () => ({
           delivery: "replayed",
           ok: true,
@@ -360,6 +349,7 @@ describe("Tool Execution", () => {
       ...base,
       signal: controller.signal,
       delegation: {
+        available: () => true,
         delegate: async () => {
           controller.abort(cancellation);
           return {
@@ -401,10 +391,9 @@ describe("Tool Execution", () => {
     expect(controller.signal.reason).toBe(cancellation);
   });
 
-  test(`Given delegation authority and result submission capabilities are installed,
-    When main delegates and the child submits twice,
-    Then usage is attributed once and the host accepts only the first result`, async () => {
-    const submission = createAgentResultSubmissionCapability();
+  test(`Given delegation authority and a host capability are installed,
+    When main delegates once,
+    Then the fresh child usage is attributed exactly once`, async () => {
     const signal = new AbortController().signal;
     const delegated = await executeToolCall({
       workspace: process.cwd(),
@@ -418,6 +407,7 @@ describe("Tool Execution", () => {
       bash: { kind: "disabled" },
       builtinToolAuthority: { kind: "auto", delegation: true },
       delegation: {
+        available: () => true,
         delegate: async (input) => ({
           delivery: "fresh",
           ok: true,
@@ -431,45 +421,6 @@ describe("Tool Execution", () => {
         }),
       },
     });
-    const childAuthority: ModelToolExposure = {
-      kind: "auto",
-      profile: "read-only-subagent",
-    };
-    const firstSubmission = await executeToolCall({
-      workspace: process.cwd(),
-      toolCall: {
-        id: "submit_once",
-        tool: "submit_agent_result",
-        summary: "The capability interfaces are explicit.",
-        evidence: [
-          {
-            path: "src/tools/delegation.ts",
-            line: 15,
-            detail: "AgentResultSubmissionCapability is declared here.",
-          },
-        ],
-        risks: [],
-      },
-      signal,
-      bash: { kind: "disabled" },
-      builtinToolAuthority: childAuthority,
-      agentResultSubmission: submission,
-    });
-    const repeatedSubmission = await executeToolCall({
-      workspace: process.cwd(),
-      toolCall: {
-        id: "submit_twice",
-        tool: "submit_agent_result",
-        summary: "Replacement must not win.",
-        evidence: [{ path: "ROADMAP.md", detail: "replacement" }],
-        risks: ["replacement"],
-      },
-      signal,
-      bash: { kind: "disabled" },
-      builtinToolAuthority: childAuthority,
-      agentResultSubmission: submission,
-    });
-
     expect(delegated).toEqual({
       ok: true,
       content: "Inspect src/tools/delegation.ts.:src/tools/delegation.ts",
@@ -485,11 +436,6 @@ describe("Tool Execution", () => {
         },
       ],
     });
-    expect(firstSubmission).toMatchObject({ ok: true, effects: [] });
-    expect(repeatedSubmission).toMatchObject({ ok: false, effects: [] });
-    expect(submission.accepted()?.summary).toBe(
-      "The capability interfaces are explicit.",
-    );
   });
 
   test(`Given an MCP search tool call is missing its required query,

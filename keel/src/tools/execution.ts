@@ -14,10 +14,7 @@ import type { SkillActivationCapability } from "../skills/model.ts";
 import { WorkflowSkillError } from "../skills/model.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
-import type {
-  AgentResultSubmissionCapability,
-  DelegationCapability,
-} from "./delegation.ts";
+import type { DelegationCapability } from "./delegation.ts";
 import { executeEdit } from "./edit.ts";
 import {
   type DelegationToolExecutionEffect,
@@ -122,15 +119,10 @@ type UpdatePlanToolCall = Extract<
   { readonly tool: "update_plan" }
 >;
 type DelegateToolCall = Extract<ValidToolCall, { readonly tool: "delegate" }>;
-type SubmitAgentResultToolCall = Extract<
-  ValidToolCall,
-  { readonly tool: "submit_agent_result" }
->;
 
 interface BuiltinToolExecutionContext extends GoalExecutionContext {
   readonly builtinToolAuthority?: ModelToolExposure;
   readonly delegation?: DelegationCapability;
-  readonly agentResultSubmission?: AgentResultSubmissionCapability;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly skillActivation?: Pick<
     SkillActivationCapability,
@@ -171,38 +163,6 @@ async function executeDelegateTool(
     content: result.content,
     ok: true,
     effects,
-  };
-}
-
-function executeSubmitAgentResultTool(
-  context: BuiltinToolExecutionContext,
-  toolCall: SubmitAgentResultToolCall,
-): ToolExecution {
-  if (context.agentResultSubmission === undefined) {
-    return unavailableBuiltinToolExecution("submit_agent_result");
-  }
-  if (
-    !context.agentResultSubmission.submit({
-      summary: toolCall.summary,
-      evidence: toolCall.evidence.map((evidence) => ({
-        path: evidence.path,
-        ...(evidence.line !== undefined ? { line: evidence.line } : {}),
-        detail: evidence.detail,
-      })),
-      risks: toolCall.risks,
-    })
-  ) {
-    return {
-      content:
-        "Tool failed: submit_agent_result was already accepted for this child run.\nRecovery: Stop; the host already owns the submitted result.",
-      ok: false,
-      effects: NO_TOOL_EXECUTION_EFFECTS,
-    };
-  }
-  return {
-    content: "Agent result accepted by the host. Stop now.",
-    ok: true,
-    effects: NO_TOOL_EXECUTION_EFFECTS,
   };
 }
 
@@ -975,8 +935,6 @@ function executeBuiltinToolCall(
   switch (parsed.data.tool) {
     case "delegate":
       return executeDelegateTool(context, parsed.data);
-    case "submit_agent_result":
-      return executeSubmitAgentResultTool(context, parsed.data);
     case "update_plan":
       return executeUpdatePlanTool(parsed.data);
     case "update_goal":
@@ -1067,18 +1025,18 @@ export async function executeToolCall(
       };
     }
   }
+  if (
+    context.builtinToolAuthority !== undefined &&
+    !builtinToolAuthorityAllows(context.builtinToolAuthority, toolCall.tool)
+  ) {
+    return unavailableBuiltinToolExecution(toolCall.tool);
+  }
   if (isInvalidToolCall(toolCall)) {
     return {
       content: invalidToolCallFailureMessage(toolCall),
       ok: false,
       effects: NO_TOOL_EXECUTION_EFFECTS,
     };
-  }
-  if (
-    context.builtinToolAuthority !== undefined &&
-    !builtinToolAuthorityAllows(context.builtinToolAuthority, toolCall.tool)
-  ) {
-    return unavailableBuiltinToolExecution(toolCall.tool);
   }
   try {
     return await executeBuiltinToolCall(context, toolCall);

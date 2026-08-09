@@ -29,48 +29,6 @@ export const delegateToolArgumentsSchema = z
   })
   .strict();
 
-const submittedAgentEvidenceSchema = z
-  .object({
-    path: z
-      .string()
-      .trim()
-      .min(1)
-      .max(500)
-      .describe("Workspace-relative path supporting the finding."),
-    line: optionalToolArgument(
-      z.number().int().min(1).describe("Optional 1-indexed supporting line."),
-    ),
-    detail: z
-      .string()
-      .trim()
-      .min(1)
-      .max(1_000)
-      .describe("Concise observation supported by this path."),
-  })
-  .strict();
-
-export const submitAgentResultToolArgumentsSchema = z
-  .object({
-    summary: z
-      .string()
-      .trim()
-      .min(1)
-      .max(8_000)
-      .describe("Concise answer to the delegated task."),
-    evidence: z
-      .array(submittedAgentEvidenceSchema)
-      .min(1)
-      .max(20)
-      .describe("Concrete workspace evidence for the answer."),
-    risks: z
-      .array(z.string().trim().min(1).max(1_000))
-      .max(10)
-      .describe(
-        "Remaining uncertainty or risks; use an empty array when none.",
-      ),
-  })
-  .strict();
-
 export const skillToolArgumentsSchema = z
   .object({
     name: z

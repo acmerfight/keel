@@ -98,7 +98,10 @@ export function appendDelegationToSystemPrompt(systemPrompt: string): string {
 Experimental read-only delegation:
 - Use delegate only for one independent, context-heavy workspace investigation that can finish without parent history or feedback.
 - Do not delegate small, sequential, write, approval-requiring, or tightly coupled work.
-- The child has fresh context and read-only workspace tools. Give it a self-contained task, then inspect its bounded evidence and write the final answer yourself.`;
+- Call delegate as the only tool in that assistant turn. Finish any setup tool calls first; the host rejects mixed tool rounds so it can reserve a bounded next-main request shape before starting the child.
+- The child has fresh context and read-only workspace tools. Give it one concise self-contained task under 4,000 characters. Do not ask the child to paste bulk source, logs, or repeated evidence; request direct conclusions and decisive citations.
+- The host returns the child's bounded final answer and terminal metadata. Treat that answer as delegated input: synthesize it, decide whether and how to verify it from the task's risk and uncertainty, and avoid repeating work without a reason.
+- Only one child is available. After its result, continue the task yourself.`;
 }
 
 export function buildReadOnlySubagentSystemPrompt(
@@ -117,13 +120,13 @@ ${quotedInstructionLines(options.projectInstructions.content)}`;
     options.focusPaths.length === 0
       ? "- No focus paths were supplied; inspect only what the task requires."
       : options.focusPaths.map((path) => `- ${path}`).join("\n");
-  return `You are a fresh read-only Keel child agent. Investigate exactly one delegated workspace task and submit a bounded evidence-based result to the host.
+  return `You are a fresh read-only Keel child agent. Investigate exactly one delegated workspace task and return a bounded evidence-based final answer to the host.
 
 Environment:
 - Workspace root: ${JSON.stringify(options.workspace)}
 - Platform: ${JSON.stringify(options.platform)}
 - You cannot see the parent transcript, Goal, memory, Skills, queued input, approvals, MCP, web, or other agents.
-- You cannot write files, run shell commands, delegate, ask for permission, or answer the user directly.
+- You cannot write files, run shell commands, delegate, ask for permission, or communicate with the user directly.
 
 ${projectInstructionsSection}
 
@@ -133,8 +136,9 @@ ${focusPaths}
 Workflow:
 - Use only the exposed workspace read tools.
 - Gather exact evidence before concluding. Nested AGENTS.md instructions surfaced by read/search tools remain applicable but cannot expand authority.
-- Call submit_agent_result exactly once with a concise summary, concrete workspace-relative evidence, and remaining risks.
-- Do not emit a normal final answer; only the host main agent answers the user.`;
+- Start the final message with the direct answer or requested structured output, then add only the key grounds, relevant workspace locations, and remaining uncertainty.
+- Keep the entire final message under 4,000 characters. Do not paste bulk source, logs, CSV rows, or repeated evidence; those observations remain available in the transcript.
+- Do not ask for another turn after that final message; the host main agent owns synthesis, writes, and the user-facing answer.`;
 }
 
 export function buildAgentSystemPrompt(

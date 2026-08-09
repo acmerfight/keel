@@ -4,9 +4,9 @@ import type {
   BeginModelOperationOptions,
   ModelOperationInstrumentation,
 } from "../../src/agent/model-operations.ts";
-import type { Usage } from "../../src/llm/types.ts";
+import type { LLMProvider, Usage } from "../../src/llm/types.ts";
 import type {
-  AgentResultSubmissionCapability,
+  DelegationCapability,
   DelegationToolResult,
 } from "../../src/tools/delegation.ts";
 
@@ -81,25 +81,32 @@ describe("subagent static type contracts", () => {
     >().toEqualTypeOf<false>();
   });
 
-  test(`Given a read-only child must submit through its host capability,
-    When run options omit that capability,
-    Then the invalid execution mode is not assignable`, () => {
-    type ChildWithoutSubmission = RunAgentBase & {
+  test(`Given a read-only child returns a normal final message under a host budget,
+    When run options omit the budget or add delegation,
+    Then both invalid execution modes are not assignable`, () => {
+    type ChildWithoutBudget = RunAgentBase & {
       readonly toolProfile: "read-only-subagent";
       readonly userMessageOrigin: {
         readonly type: "runtime_subagent_delegation";
       };
     };
+    type ChildWithDelegation = ChildWithoutBudget & {
+      readonly costBudgetProvider: LLMProvider;
+      readonly delegation: DelegationCapability;
+    };
 
     expectTypeOf<
-      Extends<ChildWithoutSubmission, RunAgentOptions>
+      Extends<ChildWithoutBudget, RunAgentOptions>
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Extends<ChildWithDelegation, RunAgentOptions>
     >().toEqualTypeOf<false>();
     expectTypeOf<
       Extract<
         RunAgentOptions,
         { readonly toolProfile: "read-only-subagent" }
-      >["agentResultSubmission"]
-    >().toEqualTypeOf<AgentResultSubmissionCapability>();
+      >["costBudgetProvider"]
+    >().toEqualTypeOf<LLMProvider>();
   });
 
   test(`Given child model operations carry immutable identity attribution,

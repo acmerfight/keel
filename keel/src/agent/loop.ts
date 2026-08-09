@@ -27,10 +27,7 @@ import {
 } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
-import type {
-  AgentResultSubmissionCapability,
-  DelegationCapability,
-} from "../tools/delegation.ts";
+import type { DelegationCapability } from "../tools/delegation.ts";
 import {
   executeToolCall,
   type ToolExecution,
@@ -155,7 +152,6 @@ interface MainRunAgentOptions {
   readonly bash: BashRuntime;
   readonly toolProfile?: "main";
   readonly delegation?: DelegationCapability;
-  readonly agentResultSubmission?: never;
   readonly costBudgetProvider?: LLMProvider;
   readonly skillActivation?: SkillActivationCapability;
   readonly taskProgress?: SessionTaskProgress;
@@ -171,7 +167,6 @@ interface SubagentRunAgentOptions {
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "read-only-subagent";
   readonly delegation?: never;
-  readonly agentResultSubmission: AgentResultSubmissionCapability;
   readonly costBudgetProvider: LLMProvider;
   readonly skillActivation?: never;
   readonly taskProgress?: never;
@@ -213,7 +208,6 @@ interface MainRunAgentTurnOptions {
   readonly bash: BashRuntime;
   readonly toolProfile?: "main";
   readonly delegation?: DelegationCapability;
-  readonly agentResultSubmission?: never;
   readonly costBudgetProvider?: LLMProvider;
   readonly skillActivation?: SkillActivationCapability;
   readonly taskProgress?: SessionTaskProgress;
@@ -230,7 +224,6 @@ interface SubagentRunAgentTurnOptions {
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "read-only-subagent";
   readonly delegation?: never;
-  readonly agentResultSubmission: AgentResultSubmissionCapability;
   readonly costBudgetProvider: LLMProvider;
   readonly skillActivation?: never;
   readonly taskProgress?: never;
@@ -249,7 +242,6 @@ function agentTurnExecutionOptions(
     return {
       bash: options.bash,
       toolProfile: options.toolProfile,
-      agentResultSubmission: options.agentResultSubmission,
       costBudgetProvider: options.costBudgetProvider,
       ...(options.modelOperations !== undefined
         ? { modelOperations: options.modelOperations }
@@ -438,6 +430,25 @@ function scheduledToolCalls(
     toolCall,
     accesses: toolCallAccesses(workspace, toolCall),
   }));
+}
+
+const NON_ISOLATED_DELEGATION_RESULT =
+  "Delegation rejected: delegate must be the only tool call in its assistant turn so the host can preserve an isolated main continuation budget.";
+
+function delegationForToolRound(
+  delegation: DelegationCapability | undefined,
+  toolCalls: readonly ToolCall[],
+): DelegationCapability | undefined {
+  if (delegation === undefined || toolCalls.length === 1) return delegation;
+  return {
+    /* v8 ignore next -- executeDelegateTool calls delegate directly for this already-issued mixed round; availability is required only by the shared capability interface. */
+    available: () => false,
+    delegate: async () => ({
+      delivery: "rejected",
+      ok: false,
+      content: NON_ISOLATED_DELEGATION_RESULT,
+    }),
+  };
 }
 
 function finalReplyMessage(
@@ -938,7 +949,7 @@ export async function* runAgentTurn(
       ...(options.toolProfile !== undefined
         ? { profile: options.toolProfile }
         : {}),
-      ...(options.delegation !== undefined ? { delegation: true } : {}),
+      ...(options.delegation?.available() === true ? { delegation: true } : {}),
       ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
       ...(allowSkill && !untrustedMcpContentObserved ? { skill: true } : {}),
       ...(memoryToolExposure !== undefined
@@ -1120,6 +1131,10 @@ export async function* runAgentTurn(
       sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
     let blockedGoalProposalRecordedThisTurn = false;
     let toolCostBudgetAdmission: CostBudgetAdmissionError | null = null;
+    const turnDelegation = delegationForToolRound(
+      options.delegation,
+      turnResult.toolCalls,
+    );
 
     const executeTurnToolCall = async (
       toolCall: ToolCall,
@@ -1144,12 +1159,7 @@ export async function* runAgentTurn(
         signal,
         bash,
         builtinToolAuthority: toolExposure,
-        ...(options.delegation !== undefined
-          ? { delegation: options.delegation }
-          : {}),
-        ...(options.agentResultSubmission !== undefined
-          ? { agentResultSubmission: options.agentResultSubmission }
-          : {}),
+        ...(turnDelegation !== undefined ? { delegation: turnDelegation } : {}),
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: readVisibility,
@@ -1421,23 +1431,6 @@ export async function* runAgentTurn(
       projectInstructionVisibility,
       completedToolExecutions.map(({ execution }) => execution),
     );
-    if (
-      options.agentResultSubmission !== undefined &&
-      options.agentResultSubmission.accepted() !== null
-    ) {
-      const finalCost = buildCostReport(
-        state.accounting.totalCostUsd,
-        costTracking,
-      );
-      yield {
-        type: "end",
-        usage: state.accounting.totalUsage,
-        turns: completedTurns,
-        stopReason: "completed",
-        ...(finalCost !== undefined ? { cost: finalCost } : {}),
-      };
-      return;
-    }
     if (!blockedGoalProposalRecordedThisTurn) {
       const sessionGoalEvent = clearPendingBlockedAudit(
         sessionLedgerMessages(sessionLedger).length,

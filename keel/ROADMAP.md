@@ -144,14 +144,34 @@ What a user can do today:
   explicit user-directed development**: autonomous eligible prompts selected a
   child 0/6 times, but the separately frozen exact prefix
   `使用 subagent 调研这个任务。` selected one child 6/6 times. The feature
-  remains default-off and autonomous selection is uncommitted. Because only
-  2/6 explicit treatments returned a verified artifact and 4/6 child results
-  failed DeepSeek `submit_agent_result` validation, the next slice must harden
-  the existing single-child result/synthesis path before Slice 2a concurrency.
-  See the
+  remains default-off and autonomous selection is uncommitted. Slice 1.6
+  removes the model-authored `submit_agent_result` protocol: a child now ends
+  with a normal final message, while the host creates a typed, bounded,
+  tool-agnostic handoff with a reference to the complete transcript. The root
+  budget leases one admitted main continuation before child work by pricing the
+  finalized provider-shaped assistant and bounded tool-result envelopes. The
+  root ledger holds that reservation until child settlement, child minimum
+  admission uses the same finalized request shape, mixed delegate/tool rounds
+  are rejected before child creation, and `delegate` disappears after the
+  single accepted child. Main receives the bounded child conclusion and
+  terminal metadata, then decides for itself whether further verification is
+  warranted. Invalid arguments for a currently exposed `delegate` call are
+  recoverable without starting a child or consuming the one-shot slot. The
+  final Slice 1.6 v8 DeepSeek window passed all 12 arms: controls 6/6,
+  treatments 6/6, exactly one completed child 6/6, zero cost overshoot, and
+  delegate-only assistant turns 6/6. No handoff included read-specific
+  evidence. All six mains still repeated some read/search work after child
+  completion, and treatment remained slower and more expensive in this serial
+  corpus. This proves explicit single-child completion reliability, not
+  autonomous selection, lower cost, parallel speedup, or the elimination of
+  duplicate work. See the
   [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md)
   and
   [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md).
+  [Slice 1.6 completion result](evals/experiments/subagent-slice-1-6/RESULTS.md).
+  After #590 closes, any further delegation capability requires a fresh user
+  problem, issue, priority, and architecture decision; passing 1.6 is not an
+  automatic commitment to concurrency or a broader multi-agent system.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,

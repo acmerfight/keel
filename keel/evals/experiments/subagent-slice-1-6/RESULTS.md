@@ -1,0 +1,221 @@
+# Slice 1.6 results
+
+## V1 — failed, retained
+
+The first scored window ran from candidate `714abd9f` and failed the frozen
+completion gate:
+
+| Metric | Result |
+| --- | ---: |
+| Control harness + task verifier | 6/6 |
+| Treatment harness + task verifier | 5/6 |
+| Treatment exactly-one-child selection | 5/6 observable; 1 crashed before selection could be reported |
+| Completed child handoff with non-empty final text | 5/6 |
+| Cost overshoot | 0/11 reported arms |
+| Full reread of every child-observed path | 1/5 completed treatments |
+| Observable report cost | `$0.081926824` |
+
+The failed treatment emitted an overlong `delegate.task`. Provider validation
+treated it as fatal and crashed the run before creating a child. Raw evidence,
+the exact stderr, and checksums are retained under `artifacts/v1/`; it was not
+selectively rerun.
+
+## V2 — runtime reliable, task gate failed
+
+V2 changes one behavior only: invalid arguments for a `delegate` tool that is
+actually exposed in the current request become a recoverable tool failure with
+a bounded compression instruction. The failed call creates no child and
+consumes no one-shot slot. The 4,000-character limit, corpus, prompts, model,
+budgets, arm order, trial count, verifiers, and acceptance thresholds are
+unchanged.
+
+V2 ran the complete 12-arm window once from `dd51689`:
+
+| Metric | Result |
+| --- | ---: |
+| Control harness + task verifier | 6/6 |
+| Treatment harness | 6/6 |
+| Treatment task verifier | 4/6 |
+| Treatment exactly-one-child selection | 6/6 |
+| Completed child handoff with non-empty final text | 6/6 |
+| Cost overshoot | 0/12 |
+| Full reread of every child-observed path | 0/6 |
+| Observable report cost | `$0.0781459728` |
+
+Both failures confused a configured 300-second limit with related 240-second
+samples even though the child handoff stated both correctly. All 6 child final
+messages exceeded the 4,000-character projection bound and were truncated.
+Full evidence is retained under `artifacts/v2/`.
+
+## V3 — passed
+
+V3 keeps the v2 runtime, corpus, tasks, provider/model, budgets, ordering,
+trials, verifiers, and acceptance gate unchanged. The only change is the
+handoff prompt contract:
+
+- child starts with the direct answer or requested structured output;
+- child keeps the final message below 4,000 characters and omits bulk source,
+  logs, CSV rows, and repeated evidence; and
+- main changes a child-reported fact only for direct contradictory evidence
+  about that same fact, not a related measurement.
+
+V3 ran all 12 arms once from `093ae6e` and passed:
+
+| Metric | Result |
+| --- | ---: |
+| Control harness + task verifier | 6/6 |
+| Treatment harness + task verifier | 6/6 |
+| Treatment exactly-one-child selection | 6/6 |
+| Completed child handoff with non-empty final text | 6/6 |
+| Distinct child identities | 6/6 |
+| Cost overshoot | 0/12 |
+| Full reread of every child-observed path | 0/6 |
+| Observable report cost | `$0.074461408` |
+
+Five child final messages stayed below the admitted bound; one was safely
+truncated and still verified. Full raw evidence and checksums are retained
+under `artifacts/v3/`. Slice 1.6's explicit single-child completion gate is
+therefore satisfied. This does not establish autonomous selection, parallel
+speedup, or lower cost.
+
+## V4 — budget reliable, task gate failed
+
+V4 ran all 12 arms once from `a8b2949` after the main continuation lease began
+pricing the complete provider-shaped assistant and a worst-case bounded tool
+result. Controls verified 6/6, treatments verified 4/6, every treatment child
+completed, and no cost overshoot occurred. Both failures again substituted a
+240-second observed sample for a separately configured 300-second policy. Raw
+evidence is retained under `artifacts/v4/`; no sample was selectively rerun.
+
+## V5 — named-fact regression fixed, eval ambiguity found
+
+V5 ran all 12 arms once from `3e456f1` after a general named-fact distinction
+was added to the child and main handoff prompts. The recurring release-audit
+case verified 3/3. Overall controls verified 6/6 and treatments verified 5/6;
+all treatment children completed and no cost overshoot occurred.
+
+The sole service-review failure reported `account_id`, which is present in the
+worker audit and absent from the API audit. The verifier expected `request_id`,
+which is present in the API audit and absent from the worker audit. Because the
+old `missingCorrelationField` prompt did not specify a direction, both answers
+were supported. V6 therefore clarifies only that semantic contract and keeps
+the workspace, solution, verifier, runtime, provider/model, budgets, trials,
+ordering, and acceptance threshold unchanged. V5 evidence is retained under
+`artifacts/v5/`.
+
+## V6 — passed after clarifying the eval contract
+
+V6 changes only the ambiguous service-review wording: the requested
+cross-service field must be present in API request audit records and absent
+from worker delivery audit records. Production runtime, prompts, workspace,
+solution, verifier, provider/model, budgets, trials, ordering, and acceptance
+threshold remain the same as v5.
+
+V6 ran all 12 arms once from `2dd1851` and passed:
+
+| Metric | Result |
+| --- | ---: |
+| Control harness + task verifier | 6/6 |
+| Treatment harness + task verifier | 6/6 |
+| Treatment exactly-one-child selection | 6/6 |
+| Completed child handoff with non-empty final text | 6/6 |
+| Distinct child identities | 6/6 |
+| Child model operations correctly attributed | 38 |
+| Cost overshoot | 0/12 |
+| Full reread of every child-observed path | 0/6 |
+| Observable report cost | `$0.0798565208` |
+
+Four child final messages stayed below the admitted bound; two were safely
+projected to 4,000 characters and still verified. Repeated-path counts were
+10/12, 10/12, 7/12, 2/12, 2/12, and 2/12. Controls cost `$0.0283446632` with a
+25.539-second median; treatments cost `$0.0515118576` with a 54.615-second
+median. Full raw evidence and checksums are retained under `artifacts/v6/`.
+
+## V7 — final reviewed candidate passed
+
+Review of the post-v6 budget architecture found two ways a child could consume
+or invalidate a nominal main continuation reserve. V7 changes runtime admission
+without changing the corpus, task prompts, workspace, solution, verifier,
+provider/model, budgets, trials, ordering, or acceptance threshold:
+
+- delegate must be the only tool in its assistant turn, so sibling tool results
+  and state changes cannot make the leased continuation shape unbounded;
+- every request is re-estimated after the final `maxOutputTokens` field is set;
+- the root ledger holds the continuation reservation until child settlement;
+  and
+- minimum child admission prices the same finalized 256-output-token shape that
+  actual child admission requires.
+
+V7 ran all 12 arms once from `0cfae78` and passed:
+
+| Metric | Result |
+| --- | ---: |
+| Control harness + task verifier | 6/6 |
+| Treatment harness + task verifier | 6/6 |
+| Treatment exactly-one-child selection | 6/6 |
+| Completed child handoff with non-empty final text | 6/6 |
+| Delegate-only assistant turns | 6/6 |
+| Distinct child identities | 6/6 |
+| Child model operations correctly attributed | 44 |
+| Cost overshoot | 0/12 |
+| Full reread of every child-observed path | 1/6 diagnostic |
+| Observable report cost | `$0.0843432016` |
+
+Three child final messages stayed below the admitted bound; three were safely
+projected to 4,000 characters and still verified. Repeated-path counts were
+2/12, 10/12, 12/12, 0/12, 6/12, and 4/12. The one full reread is retained as the
+pre-registered duplicate-work diagnostic; it was not selectively rerun and
+does not introduce a brittle runtime read ban. Controls cost `$0.0284115944`
+with a 24.972-second median; treatments cost `$0.0559316072` with a
+60.809-second median. Full raw evidence and checksums are retained under
+`artifacts/v7/`.
+
+Slice 1.6's explicit single-child completion gate is satisfied under the final
+root-held continuation reservation. This does not establish autonomous
+selection, parallel speedup, lower cost, or elimination of duplicate work.
+
+## V8 — simplified final candidate passed
+
+V8 is the one pre-registered rerun required after Step 1 simplified the
+product protocol. Candidate `3313988` removes `observedResources`, read-specific
+canonical-result projection, and case-specific verification prompt rules. It
+keeps the typed terminal outcome, bounded final/error projection, transcript
+reference, delegate-only admission, one-shot/replay behavior, root-held
+continuation budget, cancellation, and settlement invariants.
+
+The complete 12-arm window ran once without selective reruns and exited 0:
+
+| Metric | Control | Treatment |
+| --- | ---: | ---: |
+| Harness + task verifier | 6/6 | 6/6 |
+| Exactly one distinct child | n/a | 6/6 |
+| Completed non-empty child handoff | n/a | 6/6 |
+| Delegate-only assistant turn | n/a | 6/6 |
+| Handoff omits `observedResources` | n/a | 6/6 |
+| Cost overshoot | 0/6 | 0/6 |
+| Input tokens | 912,036 | 777,032 |
+| Output tokens | 22,739 | 48,379 |
+| Observable cost | `$0.0281555120` | `$0.0449717520` |
+| Median wall time | 30.355 s | 60.849 s |
+
+The total observable cost was `$0.0731272640`. Six distinct child identities
+account for 35 attributed child model operations. Five child finals fit below
+the 4,000-character handoff bound; one was projected to exactly 4,000
+characters with `truncated=true`, and its task still verified. All delegate
+results were `status=completed`, `error=null`, and carried an inspectable
+`transcriptRef`. No second child, false completion, crash, or orphan was
+observed.
+
+The duplicate-work result is deliberately qualitative now that the product no
+longer manufactures a read receipt. In all six treatments, main performed at
+least some read/search work after receiving the child final and revisited
+decisive files the child had already inspected. Treatment therefore remained
+slower and more expensive than control in this serial corpus. This is a model
+behavior and product limitation, not evidence that read traces should become a
+semantic handoff protocol.
+
+Full result JSONL, all 12 main transcripts, all 6 child transcripts, command
+metadata, and checksums are retained under `artifacts/v8/`. Slice 1.6 passes
+the final explicit single-child completion gate with a smaller, tool-agnostic
+handoff. It does not establish autonomous selection, parallel speedup, lower
+cost, lower latency, or elimination of duplicate work.

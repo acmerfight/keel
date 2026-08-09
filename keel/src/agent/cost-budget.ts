@@ -6,15 +6,18 @@ import {
 } from "../core/cost.ts";
 import type {
   LLMProvider,
+  ProviderMessage,
   ProviderRequestAttemptHandle,
   ProviderRequestAttemptObserver,
   StreamOptions,
+  ToolCall,
   Usage,
 } from "../llm/types.ts";
 import { modelToolExposureAccounting } from "../tools/registry.ts";
 
-const MIN_USEFUL_OUTPUT_TOKENS = 256;
+export const MIN_USEFUL_OUTPUT_TOKENS = 256;
 const UNKNOWN_PROVIDER_TOOL_SCHEMA_TOKEN_RESERVE = 16_384;
+const MAX_REQUEST_PRICING_ATTEMPTS = 8;
 
 export class CostBudgetAdmissionError extends Error {
   readonly remainingUsd: number;
@@ -55,6 +58,16 @@ function conservativeFallbackInputTokens(options: StreamOptions): number {
   );
 }
 
+export function estimateProviderInputTokens(
+  provider: LLMProvider,
+  options: StreamOptions,
+): number | null {
+  const estimate =
+    provider.estimateInputTokens?.(options) ??
+    conservativeFallbackInputTokens(options);
+  return validInputEstimate(estimate) ? estimate : null;
+}
+
 function admittedStreamOptions(
   options: StreamOptions,
   maxOutputTokens: number,
@@ -84,6 +97,83 @@ function effectiveMaxOutputTokens(
   );
 }
 
+type RequestPricing =
+  | {
+      readonly kind: "priced";
+      readonly estimatedInputTokens: number;
+      readonly maxOutputTokens: number;
+      readonly reservationUsd: number;
+    }
+  | {
+      readonly kind: "rejected";
+      readonly estimatedInputTokens: number | null;
+    };
+
+function priceFinalProviderRequest(options: {
+  readonly provider: LLMProvider;
+  readonly streamOptions: StreamOptions;
+  readonly remainingUsd: number;
+  readonly model: CostModel;
+  readonly modelMaxOutputTokens?: number;
+}): RequestPricing {
+  let estimatedInputTokens = estimateProviderInputTokens(
+    options.provider,
+    options.streamOptions,
+  );
+  if (estimatedInputTokens === null) {
+    return { kind: "rejected", estimatedInputTokens: null };
+  }
+
+  for (let attempt = 0; attempt < MAX_REQUEST_PRICING_ATTEMPTS; attempt++) {
+    const affordableMaxOutputTokens = maxAffordableOutputTokens({
+      remainingUsd: options.remainingUsd,
+      inputTokens: estimatedInputTokens,
+      model: options.model,
+      ...(options.modelMaxOutputTokens !== undefined
+        ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
+        : {}),
+    });
+    if (affordableMaxOutputTokens === null) {
+      return { kind: "rejected", estimatedInputTokens };
+    }
+    const maxOutputTokens = effectiveMaxOutputTokens(
+      options.streamOptions,
+      affordableMaxOutputTokens,
+    );
+    if (maxOutputTokens < MIN_USEFUL_OUTPUT_TOKENS) {
+      return { kind: "rejected", estimatedInputTokens };
+    }
+    const finalStreamOptions =
+      maxOutputTokens === Number.MAX_SAFE_INTEGER
+        ? options.streamOptions
+        : { ...options.streamOptions, maxOutputTokens };
+    const finalEstimatedInputTokens = estimateProviderInputTokens(
+      options.provider,
+      finalStreamOptions,
+    );
+    if (finalEstimatedInputTokens === null) {
+      return { kind: "rejected", estimatedInputTokens: null };
+    }
+    const reservationUsd = calculateConservativeRequestCostUsd(
+      finalEstimatedInputTokens,
+      maxOutputTokens,
+      options.model,
+    );
+    if (reservationUsd <= options.remainingUsd) {
+      return {
+        kind: "priced",
+        estimatedInputTokens: finalEstimatedInputTokens,
+        maxOutputTokens,
+        reservationUsd,
+      };
+    }
+    estimatedInputTokens = finalEstimatedInputTokens;
+  }
+
+  /* v8 ignore next -- a deterministic provider estimator converges as the output ceiling shrinks; retain a bounded fail-closed result for nonconforming oscillating estimators. */
+  return { kind: "rejected", estimatedInputTokens };
+}
+
 interface CostBudgetedProviderOptions {
   readonly provider: LLMProvider;
   readonly model: CostModel;
@@ -96,6 +186,57 @@ export interface SharedCostBudgetedProvider {
   readonly remainingUsd: () => number;
   readonly observedUsage: () => Usage;
   readonly observedSpendUsd: () => number;
+  readonly leaseContinuation: (input: {
+    readonly additionalMessages: readonly ProviderMessage[];
+    readonly maxOutputTokens: number;
+    readonly minimumChildInputTokens: number;
+  }) => ContinuationBudgetLease;
+}
+
+type ContinuationBudgetLease =
+  | {
+      readonly kind: "granted";
+      readonly reservedUsd: number;
+      readonly childMaxCostUsd: number;
+      readonly estimatedContinuationInputTokens: number;
+      readonly release: () => void;
+    }
+  | {
+      readonly kind: "rejected";
+      readonly reason:
+        | "active_lease"
+        | "missing_baseline"
+        | "invalid_estimate"
+        | "insufficient_budget";
+      readonly release?: never;
+    };
+
+interface ContinuationBaseline {
+  readonly streamOptions: StreamOptions;
+  readonly assistantMessage: Extract<
+    ProviderMessage,
+    { readonly role: "assistant" }
+  >;
+}
+
+function assistantMessageFromStream(input: {
+  readonly text: readonly string[];
+  readonly reasoning: readonly string[];
+  readonly toolCalls: readonly ToolCall[];
+}): Extract<ProviderMessage, { readonly role: "assistant" }> {
+  const reasoningContent = input.reasoning.join("");
+  return {
+    role: "assistant",
+    content: input.text.join(""),
+    toolCalls: [...input.toolCalls],
+    ...(reasoningContent === ""
+      ? {}
+      : {
+          providerMetadata: {
+            openaiCompatible: { reasoningContent },
+          },
+        }),
+  };
 }
 
 export function createSharedCostBudgetedProvider(
@@ -112,8 +253,21 @@ export function createSharedCostBudgetedProvider(
   };
   let reservedAttemptSpendUsd = 0;
   let currentAttemptReservationUsd = 0;
+  let latestEstimatedInputTokens: number | null = null;
+  let continuationBaseline: ContinuationBaseline | null = null;
+  let activeContinuationReservation: {
+    readonly id: number;
+    readonly reservedUsd: number;
+  } | null = null;
+  let nextContinuationReservationId = 0;
   const remainingUsd = (): number =>
-    Math.max(0, maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd);
+    Math.max(
+      0,
+      maxCostUsd -
+        observedSpendUsd -
+        reservedAttemptSpendUsd -
+        (activeContinuationReservation?.reservedUsd ?? 0),
+    );
   const provider: LLMProvider = {
     id: options.provider.id,
     ...(options.provider.abortSignalSupport === true
@@ -123,54 +277,35 @@ export function createSharedCostBudgetedProvider(
       ? { estimateInputTokens: options.provider.estimateInputTokens }
       : {}),
     async *stream(streamOptions) {
-      const estimatedInputTokens =
-        options.provider.estimateInputTokens?.(streamOptions) ??
-        conservativeFallbackInputTokens(streamOptions);
-      if (!validInputEstimate(estimatedInputTokens)) {
+      const pricing = priceFinalProviderRequest({
+        provider: options.provider,
+        streamOptions,
+        remainingUsd: remainingUsd(),
+        model: options.model,
+        ...(options.modelMaxOutputTokens !== undefined
+          ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
+          : {}),
+      });
+      if (pricing.kind === "rejected") {
         throw new CostBudgetAdmissionError({
-          remainingUsd: Math.max(0, maxCostUsd - observedSpendUsd),
-          estimatedInputTokens: null,
+          remainingUsd: remainingUsd(),
+          estimatedInputTokens: pricing.estimatedInputTokens,
         });
       }
-      const authorizeRequestAttempt = (): number => {
-        const remainingUsd = Math.max(
-          0,
-          maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd,
-        );
-        const maxOutputTokens = maxAffordableOutputTokens({
-          remainingUsd,
-          inputTokens: estimatedInputTokens,
-          model: options.model,
-          ...(options.modelMaxOutputTokens !== undefined
-            ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
-            : {}),
-        });
-        if (
-          remainingUsd <= 0 ||
-          maxOutputTokens === null ||
-          maxOutputTokens < MIN_USEFUL_OUTPUT_TOKENS
-        ) {
-          throw new CostBudgetAdmissionError({
-            remainingUsd,
-            estimatedInputTokens,
-          });
-        }
-        return maxOutputTokens;
-      };
-      const maxOutputTokens = authorizeRequestAttempt();
-      const admittedMaxOutputTokens = effectiveMaxOutputTokens(
-        streamOptions,
-        maxOutputTokens,
-      );
-      const requestReservationUsd = calculateConservativeRequestCostUsd(
-        estimatedInputTokens,
-        admittedMaxOutputTokens,
-        options.model,
-      );
+      const estimatedInputTokens = pricing.estimatedInputTokens;
+      latestEstimatedInputTokens = estimatedInputTokens;
+      continuationBaseline = null;
+      const assistantText: string[] = [];
+      const assistantReasoning: string[] = [];
+      const assistantToolCalls: ToolCall[] = [];
+      const requestReservationUsd = pricing.reservationUsd;
       const reserveAttempt = (): void => {
         const remainingUsd = Math.max(
           0,
-          maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd,
+          maxCostUsd -
+            observedSpendUsd -
+            reservedAttemptSpendUsd -
+            (activeContinuationReservation?.reservedUsd ?? 0),
         );
         if (requestReservationUsd > remainingUsd) {
           throw new CostBudgetAdmissionError({
@@ -220,10 +355,39 @@ export function createSharedCostBudgetedProvider(
       for await (const event of options.provider.stream(
         admittedStreamOptions(
           streamOptions,
-          maxOutputTokens,
+          pricing.maxOutputTokens,
           providerRequestAttempts,
         ),
       )) {
+        switch (event.type) {
+          case "text":
+            assistantText.push(event.text);
+            break;
+          case "reasoning":
+            assistantReasoning.push(event.text);
+            break;
+          case "tool_call": {
+            const { type: _type, ...toolCall } = event;
+            assistantToolCalls.push(toolCall);
+            break;
+          }
+          case "stop":
+            continuationBaseline = {
+              streamOptions: {
+                ...streamOptions,
+                messages: [...streamOptions.messages],
+              },
+              assistantMessage: assistantMessageFromStream({
+                text: assistantText,
+                reasoning: assistantReasoning,
+                toolCalls: assistantToolCalls,
+              }),
+            };
+            break;
+          /* v8 ignore next 2 -- retry notifications carry no assistant payload, so preserving them requires no budget-baseline state change. */
+          case "provider_retry":
+            break;
+        }
         yield event;
       }
     },
@@ -233,6 +397,63 @@ export function createSharedCostBudgetedProvider(
     remainingUsd,
     observedUsage: () => ({ ...observedUsage }),
     observedSpendUsd: () => observedSpendUsd,
+    leaseContinuation: (input) => {
+      if (activeContinuationReservation !== null) {
+        return { kind: "rejected", reason: "active_lease" };
+      }
+      if (
+        latestEstimatedInputTokens === null ||
+        continuationBaseline === null
+      ) {
+        return { kind: "rejected", reason: "missing_baseline" };
+      }
+      const estimatedContinuationInputTokens = estimateProviderInputTokens(
+        options.provider,
+        {
+          ...continuationBaseline.streamOptions,
+          messages: [
+            ...continuationBaseline.streamOptions.messages,
+            continuationBaseline.assistantMessage,
+            ...input.additionalMessages,
+          ],
+          maxOutputTokens: input.maxOutputTokens,
+        },
+      );
+      if (estimatedContinuationInputTokens === null) {
+        return { kind: "rejected", reason: "invalid_estimate" };
+      }
+      const reservedUsd = calculateConservativeRequestCostUsd(
+        estimatedContinuationInputTokens,
+        input.maxOutputTokens,
+        options.model,
+      );
+      const childMaxCostUsd = remainingUsd() - reservedUsd;
+      const minimumChildCostUsd = calculateConservativeRequestCostUsd(
+        input.minimumChildInputTokens,
+        MIN_USEFUL_OUTPUT_TOKENS,
+        options.model,
+      );
+      if (
+        childMaxCostUsd < minimumChildCostUsd ||
+        input.maxOutputTokens < MIN_USEFUL_OUTPUT_TOKENS
+      ) {
+        return { kind: "rejected", reason: "insufficient_budget" };
+      }
+      const reservationId = nextContinuationReservationId++;
+      activeContinuationReservation = { id: reservationId, reservedUsd };
+      return {
+        kind: "granted",
+        reservedUsd,
+        childMaxCostUsd,
+        estimatedContinuationInputTokens,
+        release: () => {
+          /* v8 ignore else -- the single accepted child owns one finally release; retain the generation guard so a stale duplicate release cannot clear a future lease. */
+          if (activeContinuationReservation?.id === reservationId) {
+            activeContinuationReservation = null;
+          }
+        },
+      };
+    },
   };
 }
 
