@@ -99,7 +99,8 @@ describe("Eval Runner", () => {
         {
           taskId: "provider-selection",
           pass: true,
-          outcome: "verified",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
           report: {
             modelsUsed: [{ provider: "qwen", model: "qwen3.7-plus" }],
           },
@@ -179,7 +180,12 @@ describe("Eval Runner", () => {
       expect(exitCode).toBe(0);
       const lines = await readResultLines(outFile);
       expect(lines).toMatchObject([
-        { taskId: "records-transcript", pass: true, outcome: "verified" },
+        {
+          taskId: "records-transcript",
+          pass: true,
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+        },
       ]);
       expect(lines[0]?.transcriptPath).toContain("records-transcript-");
       expect(lines[0]?.transcriptPath).toContain("-trial-1");

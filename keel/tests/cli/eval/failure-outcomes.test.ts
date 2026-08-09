@@ -28,7 +28,10 @@ describe("CLI Eval", () => {
       expect(result.stdout).toContain("too-slow: 0/1 pass");
 
       const lines = await readResultLines(outFile);
-      expect(lines[0]).toMatchObject({ pass: false, outcome: "timeout" });
+      expect(lines[0]).toMatchObject({
+        pass: false,
+        harnessOutcome: "timeout",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -57,7 +60,10 @@ describe("CLI Eval", () => {
       expect(result.stdout).toContain("slow-verifier: 0/1 pass");
 
       const lines = await readResultLines(outFile);
-      expect(lines[0]).toMatchObject({ pass: false, outcome: "timeout" });
+      expect(lines[0]).toMatchObject({
+        pass: false,
+        harnessOutcome: "timeout",
+      });
       expect(lines[0]?.report).toBeDefined();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -83,7 +89,10 @@ describe("CLI Eval", () => {
       expect(result.stdout).toContain("provider-crash: 0/1 pass");
 
       const lines = await readResultLines(outFile);
-      expect(lines[0]).toMatchObject({ pass: false, outcome: "crashed" });
+      expect(lines[0]).toMatchObject({
+        pass: false,
+        harnessOutcome: "crashed",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

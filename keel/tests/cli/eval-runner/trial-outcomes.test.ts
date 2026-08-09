@@ -1,7 +1,8 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import {
   CLI_ENTRY,
+  createDelegationPairTask,
   createEvalDir,
   createMemoryPairTask,
   createTask,
@@ -22,6 +23,133 @@ const KEEL_HOME_ENV = "KEEL_HOME";
 const PATH_ENV = "PATH";
 
 describe("Eval Runner", () => {
+  test(`Given a pre-registered delegation calibration task,
+    When the user runs paired trials,
+    Then task outcome, harness status, and selection stay independent while arms use pristine workspaces in alternating order`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const taskId = "delegation-calibration";
+    const callLog = join(root, "calls.log");
+    await createDelegationPairTask(suiteDir, taskId, {
+      prompt: "inspect both independent notes and write result.txt",
+      files: { "first.txt": "alpha\n", "second.txt": "beta\n" },
+      verify: "test -f result.txt\n",
+      solution: "printf 'alpha beta\n' > result.txt\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs: 10_000,
+      allowBash: false,
+      maxCostUsd: 0.01,
+      delegationPolicy: "require_one",
+    });
+    const childOperation = {
+      ...VALID_REPORT.modelOperations[0],
+      purpose: "subagent_turn",
+      attribution: {
+        type: "subagent",
+        delegationId: "main:delegate-1",
+        childRunId: "subagent-1",
+      },
+    };
+    const treatmentReport = {
+      ...VALID_REPORT,
+      modelOperations: [childOperation],
+    };
+    const cliEntry = join(root, "delegation-pair-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+const treatment = args.includes("--experimental-agents");
+appendFileSync(${JSON.stringify(callLog)}, (treatment ? "treatment" : "control") + ":" + String(existsSync("result.txt")) + "\\n");
+if (treatment) writeFileSync("result.txt", "alpha beta\\n");
+const reportIndex = args.indexOf("--report");
+writeFileSync(args[reportIndex + 1], JSON.stringify(treatment ? ${JSON.stringify(treatmentReport)} : ${JSON.stringify(VALID_REPORT)}));
+const transcriptIndex = args.indexOf("--transcript");
+mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });
+writeFileSync(args[transcriptIndex + 1], '{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n');
+`,
+      "utf8",
+    );
+    const stdout = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 2,
+        check: false,
+        cliEntry,
+        transcriptDir: join(root, "transcripts"),
+      });
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          taskId,
+          trial: 1,
+          condition: "delegation_control",
+          requiredToPass: false,
+          harnessOutcome: "completed",
+          taskOutcome: "verify_failed",
+          pass: false,
+          transcriptPath: expect.stringContaining("delegation-control.jsonl"),
+        },
+        {
+          taskId,
+          trial: 1,
+          condition: "delegation_treatment",
+          requiredToPass: true,
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+          pass: true,
+          delegationSelection: {
+            status: "observed",
+            policy: "require_one",
+            childRuns: 1,
+            satisfied: true,
+          },
+          transcriptPath: expect.stringContaining("delegation-treatment.jsonl"),
+        },
+        {
+          taskId,
+          trial: 2,
+          condition: "delegation_control",
+          harnessOutcome: "completed",
+          taskOutcome: "verify_failed",
+        },
+        {
+          taskId,
+          trial: 2,
+          condition: "delegation_treatment",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            policy: "require_one",
+            childRuns: 1,
+            satisfied: true,
+          },
+        },
+      ]);
+      await expect(readFile(callLog, "utf8")).resolves.toBe(
+        "control:false\ntreatment:false\ntreatment:false\ncontrol:false\n",
+      );
+      expect(
+        stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
+      ).toContain(
+        `${taskId}: control 0/2, treatment 2/2, expected selection 2/2`,
+      );
+    } finally {
+      stdout.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given subagent attribution is part of the current report schema,
     When a report mismatches child purpose and identity,
     Then invalid combinations are rejected while attributed child compaction remains valid`, () => {
@@ -57,6 +185,154 @@ describe("Eval Runner", () => {
     expect(childWithoutAttribution.success).toBe(false);
     expect(mainWithChildAttribution.success).toBe(false);
     expect(attributedChildCompaction.success).toBe(true);
+  });
+
+  test(`Given delegation pair arms can fail at different independent gates,
+    When the runner has no transcript directory,
+    Then harness, task, and unavailable selection failures stay separately observable`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    for (const taskId of [
+      "control-only",
+      "missing-report",
+      "selection-missing",
+    ]) {
+      await createDelegationPairTask(suiteDir, taskId, {
+        prompt: taskId,
+        verify: "test -f result.txt\n",
+        solution: "touch result.txt\n",
+        timeoutMs: 10_000,
+        scriptTimeoutMs: 10_000,
+        allowBash: false,
+        maxCostUsd: 0.01,
+        delegationPolicy: "require_one",
+      });
+    }
+    const cliEntry = join(root, "delegation-failure-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const treatment = args.includes("--experimental-agents");
+const prompt = args.at(-1);
+if (prompt !== "missing-report") {
+  const reportIndex = args.indexOf("--report");
+  writeFileSync(args[reportIndex + 1], ${JSON.stringify(JSON.stringify(VALID_REPORT))});
+}
+if (prompt === "selection-missing" || (prompt === "control-only" && !treatment)) {
+  writeFileSync("result.txt", "done\\n");
+}
+`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          taskId: "control-only",
+          condition: "delegation_control",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+        },
+        {
+          taskId: "control-only",
+          condition: "delegation_treatment",
+          harnessOutcome: "completed",
+          taskOutcome: "verify_failed",
+          delegationSelection: { status: "observed", satisfied: false },
+        },
+        {
+          taskId: "missing-report",
+          condition: "delegation_control",
+          harnessOutcome: "crashed",
+        },
+        {
+          taskId: "missing-report",
+          condition: "delegation_treatment",
+          harnessOutcome: "crashed",
+          delegationSelection: { status: "unavailable" },
+        },
+        {
+          taskId: "selection-missing",
+          condition: "delegation_control",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+        },
+        {
+          taskId: "selection-missing",
+          condition: "delegation_treatment",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+          delegationSelection: { status: "observed", satisfied: false },
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a result destination becomes unwritable after paired arms run,
+    When the runner appends their result lines,
+    Then it returns a harness error instead of reporting a successful task`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createDelegationPairTask(suiteDir, "unwritable-results", {
+      prompt: "unwritable-results",
+      verify: "test -f result.txt\n",
+      solution: "touch result.txt\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs: 10_000,
+      allowBash: false,
+      maxCostUsd: 0.01,
+      delegationPolicy: "forbid",
+    });
+    const cliEntry = join(root, "delegation-unwritable-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const reportIndex = args.indexOf("--report");
+writeFileSync(args[reportIndex + 1], ${JSON.stringify(JSON.stringify(VALID_REPORT))});
+writeFileSync("result.txt", "done\\n");
+rmSync(${JSON.stringify(outFile)}, { recursive: true, force: true });
+mkdirSync(${JSON.stringify(outFile)});
+`,
+      "utf8",
+    );
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(
+        stderr.mock.calls.map(([chunk]) => String(chunk)).join(""),
+      ).toContain("cannot write eval results");
+    } finally {
+      stderr.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test(`Given provider selection is stored in the user's Keel home,
@@ -187,13 +463,15 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
         {
           condition: "memory_disabled",
           requiredToPass: false,
-          outcome: "verify_failed",
+          harnessOutcome: "completed",
+          taskOutcome: "verify_failed",
           transcriptPath: expect.stringContaining("memory-disabled.jsonl"),
         },
         {
           condition: "memory_enabled",
           requiredToPass: true,
-          outcome: "verified",
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
           transcriptPath: expect.stringContaining("memory-enabled.jsonl"),
         },
       ]);
@@ -209,8 +487,11 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
       verify: "if test -f release-command.txt; then exit 0; else exit 1; fi\n",
       action:
         'if (disabled) process.exit(1); writeFileSync("release-command.txt", "pnpm test:coverage\\n");',
-      disabledOutcome: "crashed",
-      enabledOutcome: "verified",
+      disabledObservation: { harnessOutcome: "crashed" },
+      enabledObservation: {
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+      },
       expectedExitCode: 1,
     },
     {
@@ -220,8 +501,11 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
         "if test -f disabled-arm; then sleep 5; fi\ntest -f release-command.txt\n",
       action:
         'writeFileSync(disabled ? "disabled-arm" : "release-command.txt", "pnpm test:coverage\\n");',
-      disabledOutcome: "timeout",
-      enabledOutcome: "verified",
+      disabledObservation: { harnessOutcome: "timeout" },
+      enabledObservation: {
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+      },
       expectedExitCode: 1,
     },
     {
@@ -229,8 +513,14 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
       scriptTimeoutMs: 10_000,
       verify: "test -f release-command.txt\n",
       action: "",
-      disabledOutcome: "verify_failed",
-      enabledOutcome: "verify_failed",
+      disabledObservation: {
+        harnessOutcome: "completed",
+        taskOutcome: "verify_failed",
+      },
+      enabledObservation: {
+        harnessOutcome: "completed",
+        taskOutcome: "verify_failed",
+      },
       expectedExitCode: 1,
     },
     {
@@ -238,8 +528,14 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
       scriptTimeoutMs: 10_000,
       verify: "test -f release-command.txt\n",
       action: 'writeFileSync("release-command.txt", "pnpm test:coverage\\n");',
-      disabledOutcome: "verified",
-      enabledOutcome: "verified",
+      disabledObservation: {
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+      },
+      enabledObservation: {
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+      },
       expectedExitCode: 0,
     },
     {
@@ -247,8 +543,8 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
       scriptTimeoutMs: 10_000,
       verify: "kill -TERM $$\n",
       action: "",
-      disabledOutcome: "crashed",
-      enabledOutcome: "crashed",
+      disabledObservation: { harnessOutcome: "crashed" },
+      enabledObservation: { harnessOutcome: "crashed" },
       expectedExitCode: 1,
     },
   ] as const)(
@@ -259,8 +555,8 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
       scriptTimeoutMs,
       verify,
       action,
-      disabledOutcome,
-      enabledOutcome,
+      disabledObservation,
+      enabledObservation,
       expectedExitCode,
     }) => {
       // Given
@@ -303,8 +599,8 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
         // Then
         expect(exitCode).toBe(expectedExitCode);
         expect(await readResultLines(outFile)).toMatchObject([
-          { condition: "memory_disabled", outcome: disabledOutcome },
-          { condition: "memory_enabled", outcome: enabledOutcome },
+          { condition: "memory_disabled", ...disabledObservation },
+          { condition: "memory_enabled", ...enabledObservation },
         ]);
       } finally {
         await rm(root, { recursive: true, force: true });
@@ -332,7 +628,13 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       // Then
       expect(exitCode).toBe(0);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "fix-note", trial: 1, pass: true, outcome: "verified" },
+        {
+          taskId: "fix-note",
+          trial: 1,
+          pass: true,
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+        },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -362,7 +664,12 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       // Then
       expect(exitCode).toBe(1);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "rejects-work", pass: false, outcome: "verify_failed" },
+        {
+          taskId: "rejects-work",
+          pass: false,
+          harnessOutcome: "completed",
+          taskOutcome: "verify_failed",
+        },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -421,7 +728,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       // Then
       expect(exitCode).toBe(1);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "too-slow", pass: false, outcome: "timeout" },
+        { taskId: "too-slow", pass: false, harnessOutcome: "timeout" },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -452,7 +759,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       // Then
       expect(exitCode).toBe(1);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "slow-verifier", pass: false, outcome: "timeout" },
+        { taskId: "slow-verifier", pass: false, harnessOutcome: "timeout" },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -484,7 +791,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
         {
           taskId: "missing-verifier-shell",
           pass: false,
-          outcome: "crashed",
+          harnessOutcome: "crashed",
         },
       ]);
     } finally {
@@ -515,7 +822,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       // Then
       expect(exitCode).toBe(1);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "provider-crash", pass: false, outcome: "crashed" },
+        { taskId: "provider-crash", pass: false, harnessOutcome: "crashed" },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -548,7 +855,12 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       // Then
       expect(exitCode).toBe(0);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "task-options", pass: true, outcome: "verified" },
+        {
+          taskId: "task-options",
+          pass: true,
+          harnessOutcome: "completed",
+          taskOutcome: "verified",
+        },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -557,7 +869,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
 
   test(`Given fixed delegation-policy tasks require one, forbid, or bound child identities,
     When the eval runner scores reports with child attribution,
-    Then matching trajectories verify and a missing required child fails the trial`, async () => {
+    Then task outcomes remain verified while independent selection observations fail the gate`, async () => {
     const { root, suiteDir, outFile } = await createEvalDir();
     const taskCases = [
       ["positive", "require_one"],
@@ -643,11 +955,51 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
 
       expect(exitCode).toBe(1);
       expect(await readResultLines(outFile)).toMatchObject([
-        { taskId: "duplicate", outcome: "verified" },
-        { taskId: "duplicate-overflow", outcome: "verify_failed" },
-        { taskId: "missing-required", outcome: "verify_failed" },
-        { taskId: "positive", outcome: "verified" },
-        { taskId: "sequential", outcome: "verified" },
+        {
+          taskId: "duplicate",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 1,
+            satisfied: true,
+          },
+        },
+        {
+          taskId: "duplicate-overflow",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 2,
+            satisfied: false,
+          },
+        },
+        {
+          taskId: "missing-required",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 0,
+            satisfied: false,
+          },
+        },
+        {
+          taskId: "positive",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 1,
+            satisfied: true,
+          },
+        },
+        {
+          taskId: "sequential",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 0,
+            satisfied: true,
+          },
+        },
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

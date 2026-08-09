@@ -39,6 +39,18 @@ keel eval --task fix-typo --trials 1 --out /tmp/one.jsonl --transcript-dir /tmp/
 
 # Compare two result files after running the same suite on two keel versions.
 keel eval compare --base /tmp/old.jsonl --head /tmp/new.jsonl
+
+# Run the pre-registered #590 Slice 1.5 control/treatment calibration.
+keel eval --suite evals/experiments/subagent-slice-1-5/tasks \
+  --provider deepseek --model deepseek-v4-flash --trials 3 \
+  --out /tmp/subagent-calibration.jsonl \
+  --transcript-dir /tmp/subagent-calibration-transcripts
+
+# Run the separately frozen explicit-user-intent supplement.
+keel eval --suite evals/experiments/subagent-explicit-intent-v1/tasks \
+  --provider deepseek --model deepseek-v4-flash --trials 3 \
+  --out /tmp/subagent-explicit-intent.jsonl \
+  --transcript-dir /tmp/subagent-explicit-intent-transcripts
 ```
 
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
@@ -49,7 +61,9 @@ schema-versioned JSONL transcript per trial.
 For a standard task, the exit code is non-zero when any trial fails to verify,
 times out, or crashes. For a `memory_pair` task, the disabled arm may fail
 verification because it intentionally lacks the required fact; it must still
-complete without timing out or crashing, and the enabled arm must verify.
+complete without timing out or crashing, and the enabled arm must verify. For a
+`delegation_pair`, the control harness must complete, the treatment must verify,
+and the treatment must satisfy its independently recorded delegation policy.
 `keel eval compare` is report-only: it exits non-zero for unreadable or
 invalid inputs, but regressions are printed rather than used as a failure
 gate.
@@ -94,7 +108,7 @@ Each standard trial appends one JSON line:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "timestamp": "2026-06-13T02:11:09.123Z",
   "keelVersion": "0.0.1",
   "taskId": "fix-typo",
@@ -102,11 +116,12 @@ Each standard trial appends one JSON line:
   "condition": "standard",
   "requiredToPass": true,
   "pass": true,
-  "outcome": "verified",
+  "harnessOutcome": "completed",
+  "taskOutcome": "verified",
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 19,
+    "schemaVersion": 20,
     "tasks": [
       {
         "ordinal": 1,
@@ -176,17 +191,22 @@ Each standard trial appends one JSON line:
 }
 ```
 
-- `outcome` separates harness failures from graded failures: `verified` /
-  `verify_failed` are the agent's score; `timeout` / `crashed` mean the
-  environment or harness broke and the trial must not be read as agent
-  quality. `pass` is true exactly when `outcome` is `verified`; compare rejects
-  a current-schema result line when those fields contradict each other.
-- `condition` is `standard`, `memory_disabled`, or `memory_enabled`.
-  `requiredToPass` is false exactly for `memory_disabled` and true for the
-  other conditions; compare also rejects lines that contradict this rule. A
-  memory-paired trial appends two lines in disabled/enabled order. Each line
-  carries the ordinary report, so memory IDs, bytes, model usage, cost, and
-  timing remain inspectable without a second result format.
+- `harnessOutcome` is `completed`, `timeout`, or `crashed`. Only a completed
+  harness carries `taskOutcome`, which is `verified` or `verify_failed`.
+  `pass` is true exactly for a completed, verified trial. The schema rejects
+  impossible combinations instead of asking consumers to repair them.
+- `condition` is `standard`, `memory_disabled`, `memory_enabled`,
+  `delegation_control`, or `delegation_treatment`. `requiredToPass` is false
+  for the observational `memory_disabled` and `delegation_control` conditions
+  and true otherwise. A delegation treatment line also carries a required
+  `delegationSelection` observation with policy, distinct child count, and
+  satisfaction; the schema rejects a satisfaction value that contradicts its
+  policy and child count. Control and task outcome never carry that judgment. A
+  paired trial appends two lines in stable control/treatment or
+  disabled/enabled order.
+  Each line carries the ordinary report, so model operations, child
+  attribution, usage, cost, and timing remain inspectable without a second
+  result format.
 - `report.tasks` attributes each admitted user Task to one or more Agent Runs.
   `humanInterventionCount` counts user messages actually injected as steering
   into an active Agent Run, while later Task prompts and runtime messages stay
@@ -204,10 +224,11 @@ Each standard trial appends one JSON line:
   assistant / tool message.
 - Regression comparison is `diff`-shaped by design: run the suite on two
   keel versions, then run `keel eval compare --base <old.jsonl> --head
-  <new.jsonl>`. It prints per-task pass, outcome, human-intervention, turn,
-  token, cost, and wall-time deltas, separates `timeout` / `crashed` harness
-  failures from verifier failures, and includes failed head-side
-  `transcriptPath` values for regression rows.
+  <new.jsonl>`. It prints per-task pass, harness, task-outcome, selection,
+  human-intervention, turn, token, cost, and wall-time deltas and includes
+  failed head-side `transcriptPath` values for regression rows. Its suite gate
+  includes both semantic task pass and any required delegation-selection
+  observation; observational control conditions remain excluded.
 - One trial says little: agent behavior varies between runs. Use
   `--trials 3` or more before claiming a change helped. Per-task pass
   fractions give you pass^k-style reliability reading; a task passing
@@ -215,11 +236,11 @@ Each standard trial appends one JSON line:
 
 ## Task format
 
-A task is a directory under `evals/tasks/`:
+A task is a directory under a selected suite:
 
 ```
-evals/tasks/<task-id>/
-  task.json       # strict standard or memory_pair configuration
+<suite>/<task-id>/
+  task.json       # strict standard, memory_pair, or delegation_pair config
   workspace/      # fixture files copied into a fresh temp dir per trial
   verify.sh       # runs in the workspace after the agent; exit 0 = pass
   solution.sh     # reference solution applied without an LLM; required
@@ -267,6 +288,35 @@ lines are written in one append operation. This first paired slice deliberately
 supports one explicit project-memory entry; poisoning, forget/purge, distractor
 scaling, and broader lifecycle corpora remain later parts of issue #462 rather
 than hidden modes in this task shape.
+
+Delegation calibration tasks use `"kind": "delegation_pair"` with explicit
+timeouts, bash policy, root max cost, and a treatment-only `delegationPolicy`:
+
+```json
+{
+  "kind": "delegation_pair",
+  "prompt": "Review two independent modules and write review.md.",
+  "timeoutMs": 240000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.03,
+  "delegationPolicy": "require_one"
+}
+```
+
+Each trial restores the same pristine workspace for a single-agent control and
+an `--experimental-agents` treatment. Odd trials run control first and even
+trials run treatment first to reduce fixed order bias, while JSONL stays in
+control/treatment order. The control harness must complete; its semantic task
+failure remains a valid observation. The treatment must verify and separately
+satisfy `require_one`, `forbid`, or `at_most_one` using distinct child
+identities from the run report. Selection never changes `taskOutcome`. The
+frozen Slice 1.5 corpus, transcript rubric, provider/model, trial count,
+budgets, and Continue/Pause/Stop gate live in
+[`evals/experiments/subagent-slice-1-5/README.md`](evals/experiments/subagent-slice-1-5/README.md).
+The later product clarification and independently pre-registered exact-prefix
+experiment live in
+[`evals/experiments/subagent-explicit-intent-v1/README.md`](evals/experiments/subagent-explicit-intent-v1/README.md).
 
 ## Writing good tasks
 

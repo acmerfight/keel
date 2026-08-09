@@ -5,8 +5,13 @@ import { errorMessage } from "../core/error.ts";
 
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 60_000;
-const delegationPolicySchema = z.enum(["require_one", "forbid", "at_most_one"]);
-type EvalDelegationPolicy = z.infer<typeof delegationPolicySchema>;
+export const evalDelegationPolicies = [
+  "require_one",
+  "forbid",
+  "at_most_one",
+] as const;
+const delegationPolicySchema = z.enum(evalDelegationPolicies);
+export type EvalDelegationPolicy = z.infer<typeof delegationPolicySchema>;
 
 const standardTaskConfigSchema = z
   .object({
@@ -23,7 +28,16 @@ const standardTaskConfigSchema = z
     experimentalAgents: z.boolean().default(false),
     delegationPolicy: delegationPolicySchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((task, ctx) => {
+    if (task.delegationPolicy !== undefined && !task.experimentalAgents) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["delegationPolicy"],
+        message: "requires experimentalAgents to be true",
+      });
+    }
+  });
 
 const memoryPairTaskConfigSchema = z
   .object({
@@ -37,9 +51,22 @@ const memoryPairTaskConfigSchema = z
   })
   .strict();
 
+const delegationPairTaskConfigSchema = z
+  .object({
+    kind: z.literal("delegation_pair"),
+    prompt: z.string().min(1),
+    timeoutMs: z.number().int().positive(),
+    scriptTimeoutMs: z.number().int().positive(),
+    allowBash: z.boolean(),
+    maxCostUsd: z.number().positive(),
+    delegationPolicy: delegationPolicySchema,
+  })
+  .strict();
+
 const taskConfigSchema = z.discriminatedUnion("kind", [
   standardTaskConfigSchema,
   memoryPairTaskConfigSchema,
+  delegationPairTaskConfigSchema,
 ]);
 
 interface EvalTaskBase {
@@ -51,14 +78,24 @@ interface EvalTaskBase {
   readonly timeoutMs: number;
   readonly scriptTimeoutMs: number;
   readonly allowBash: boolean;
-  readonly experimentalAgents: boolean;
-  readonly delegationPolicy?: EvalDelegationPolicy;
 }
 
-export interface StandardEvalTask extends EvalTaskBase {
+interface StandardEvalTaskBase extends EvalTaskBase {
   readonly kind: "standard";
   readonly maxCostUsd?: number;
 }
+
+export type StandardEvalTask = StandardEvalTaskBase &
+  (
+    | {
+        readonly experimentalAgents: false;
+        readonly delegationPolicy?: never;
+      }
+    | {
+        readonly experimentalAgents: true;
+        readonly delegationPolicy?: EvalDelegationPolicy;
+      }
+  );
 
 export interface MemoryPairEvalTask extends EvalTaskBase {
   readonly kind: "memory_pair";
@@ -66,7 +103,16 @@ export interface MemoryPairEvalTask extends EvalTaskBase {
   readonly memory: string;
 }
 
-export type EvalTask = StandardEvalTask | MemoryPairEvalTask;
+export interface DelegationPairEvalTask extends EvalTaskBase {
+  readonly kind: "delegation_pair";
+  readonly maxCostUsd: number;
+  readonly delegationPolicy: EvalDelegationPolicy;
+}
+
+export type EvalTask =
+  | StandardEvalTask
+  | MemoryPairEvalTask
+  | DelegationPairEvalTask;
 
 function parseTaskConfig(
   id: string,
@@ -127,9 +173,40 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       timeoutMs: config.timeoutMs,
       scriptTimeoutMs: config.scriptTimeoutMs,
       allowBash: config.allowBash,
-      experimentalAgents: false,
       maxCostUsd: config.maxCostUsd,
       memory: config.memory,
+    };
+  }
+  if (config.kind === "delegation_pair") {
+    return {
+      kind: "delegation_pair",
+      id,
+      workspaceDir,
+      verifyScript,
+      solutionScript,
+      prompt: config.prompt,
+      timeoutMs: config.timeoutMs,
+      scriptTimeoutMs: config.scriptTimeoutMs,
+      allowBash: config.allowBash,
+      maxCostUsd: config.maxCostUsd,
+      delegationPolicy: config.delegationPolicy,
+    };
+  }
+  if (!config.experimentalAgents) {
+    return {
+      kind: "standard",
+      id,
+      workspaceDir,
+      verifyScript,
+      solutionScript,
+      prompt: config.prompt,
+      timeoutMs: config.timeoutMs,
+      scriptTimeoutMs: config.scriptTimeoutMs,
+      allowBash: config.allowBash,
+      experimentalAgents: false,
+      ...(config.maxCostUsd === undefined
+        ? {}
+        : { maxCostUsd: config.maxCostUsd }),
     };
   }
   return {
@@ -142,7 +219,7 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     timeoutMs: config.timeoutMs,
     scriptTimeoutMs: config.scriptTimeoutMs,
     allowBash: config.allowBash,
-    experimentalAgents: config.experimentalAgents,
+    experimentalAgents: true,
     ...(config.delegationPolicy !== undefined
       ? { delegationPolicy: config.delegationPolicy }
       : {}),

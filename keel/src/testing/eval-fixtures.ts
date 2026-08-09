@@ -1,10 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import type { RunReport } from "../eval/report-schema.ts";
 import {
+  type EvalDelegationSelection,
+  type EvalHarnessOutcome,
+  type EvalResultCondition,
   type EvalResultLine,
-  type EvalTrialCondition,
-  type EvalTrialOutcome,
-  evalResultRequirement,
   evalResultVerdict,
 } from "../eval/result-schema.ts";
 
@@ -23,20 +23,76 @@ export interface EvalRunReportOptions {
 interface EvalResultLineOptionsBase {
   readonly taskId: string;
   readonly trial: number;
-  readonly condition?: EvalTrialCondition;
   readonly wallMs?: number;
   readonly report?: EvalRunReport;
   readonly transcriptPath?: string;
 }
 
+type EvalResultVerdictOptions =
+  | {
+      readonly pass: true;
+      readonly harnessOutcome?: never;
+      readonly taskOutcome?: never;
+    }
+  | {
+      readonly pass: false;
+      readonly harnessOutcome?: "completed";
+      readonly taskOutcome?: "verify_failed";
+    }
+  | {
+      readonly pass: false;
+      readonly harnessOutcome: Exclude<EvalHarnessOutcome, "completed">;
+      readonly taskOutcome?: never;
+    };
+
+type EvalResultConditionOptions =
+  | {
+      readonly condition?: "standard";
+      readonly delegationSelection?: EvalDelegationSelection;
+    }
+  | {
+      readonly condition:
+        | "memory_enabled"
+        | "memory_disabled"
+        | "delegation_control";
+      readonly delegationSelection?: never;
+    }
+  | {
+      readonly condition: "delegation_treatment";
+      readonly delegationSelection: EvalDelegationSelection;
+    };
+
 export type EvalResultLineOptions = EvalResultLineOptionsBase &
-  (
-    | { readonly pass: true; readonly outcome?: never }
-    | {
-        readonly pass: false;
-        readonly outcome?: Exclude<EvalTrialOutcome, "verified">;
-      }
-  );
+  EvalResultVerdictOptions &
+  EvalResultConditionOptions;
+
+function evalFixtureCondition(
+  options: EvalResultConditionOptions,
+): EvalResultCondition {
+  if (options.condition === "delegation_treatment") {
+    return {
+      condition: options.condition,
+      requiredToPass: true,
+      delegationSelection: options.delegationSelection,
+    };
+  }
+  if (options.condition === "memory_enabled") {
+    return { condition: options.condition, requiredToPass: true };
+  }
+  if (
+    options.condition === "memory_disabled" ||
+    options.condition === "delegation_control"
+  ) {
+    return { condition: options.condition, requiredToPass: false };
+  }
+  return {
+    condition: "standard",
+    requiredToPass: true,
+    ...(options.delegationSelection === undefined
+      ? {}
+      : { delegationSelection: options.delegationSelection }),
+  };
+}
 
 export function evalRunReport(
   options: EvalRunReportOptions = {},
@@ -156,17 +212,25 @@ export function evalRunReport(
 }
 
 export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
-  const condition = options.condition ?? "standard";
-  const outcome =
-    options.pass === true ? "verified" : (options.outcome ?? "verify_failed");
+  const observation =
+    options.pass === true
+      ? ({ harnessOutcome: "completed", taskOutcome: "verified" } as const)
+      : options.harnessOutcome === "timeout" ||
+          options.harnessOutcome === "crashed"
+        ? { harnessOutcome: options.harnessOutcome }
+        : ({
+            harnessOutcome: "completed",
+            taskOutcome: "verify_failed",
+          } as const);
+  const resultCondition = evalFixtureCondition(options);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     timestamp: "2026-06-22T00:00:00.000Z",
     keelVersion: "0.0.1",
     taskId: options.taskId,
     trial: options.trial,
-    ...evalResultRequirement(condition),
-    ...evalResultVerdict(outcome),
+    ...resultCondition,
+    ...evalResultVerdict(observation),
     wallMs: options.wallMs ?? 1000,
     ...(options.report !== undefined ? { report: options.report } : {}),
     ...(options.transcriptPath !== undefined

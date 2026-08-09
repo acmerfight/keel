@@ -45,6 +45,18 @@ export interface MemoryPairTaskFixture {
   readonly memory: string;
 }
 
+export interface DelegationPairTaskFixture {
+  readonly prompt: string;
+  readonly files?: Record<string, string>;
+  readonly verify: string;
+  readonly solution: string;
+  readonly timeoutMs: number;
+  readonly scriptTimeoutMs: number;
+  readonly allowBash: boolean;
+  readonly maxCostUsd: number;
+  readonly delegationPolicy: "require_one" | "forbid" | "at_most_one";
+}
+
 export async function createEvalDir(): Promise<{
   readonly root: string;
   readonly suiteDir: string;
@@ -116,6 +128,27 @@ export async function createMemoryPairTask(
       allowBash: fixture.allowBash,
       maxCostUsd: fixture.maxCostUsd,
       memory: fixture.memory,
+    }),
+    "utf8",
+  );
+}
+
+export async function createDelegationPairTask(
+  suiteDir: string,
+  id: string,
+  fixture: DelegationPairTaskFixture,
+): Promise<void> {
+  await createTask(suiteDir, id, fixture);
+  await writeFile(
+    join(suiteDir, id, "task.json"),
+    JSON.stringify({
+      kind: "delegation_pair",
+      prompt: fixture.prompt,
+      timeoutMs: fixture.timeoutMs,
+      scriptTimeoutMs: fixture.scriptTimeoutMs,
+      allowBash: fixture.allowBash,
+      maxCostUsd: fixture.maxCostUsd,
+      delegationPolicy: fixture.delegationPolicy,
     }),
     "utf8",
   );

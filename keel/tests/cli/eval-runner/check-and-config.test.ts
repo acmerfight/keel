@@ -19,6 +19,45 @@ const PATH_ENV = "PATH";
 const KEEL_HOME_ENV = "KEEL_HOME";
 
 describe("Eval Runner", () => {
+  test(`Given a standard task declares a delegation policy without enabling agents,
+    When the eval runner loads the suite,
+    Then it rejects the statically contradictory task mode`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "contradictory-delegation-mode", {
+      ...FIX_NOTE_TASK,
+      solution: "printf 'hello new world\\n' > note.txt\n",
+      delegationPolicy: "require_one",
+    });
+    let stderr = "";
+    const writeStderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderr += chunk.toString();
+        return true;
+      });
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: true,
+        cliEntry: CLI_ENTRY,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain(
+        "delegationPolicy: requires experimentalAgents to be true",
+      );
+    } finally {
+      writeStderr.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given Git cannot initialize a memory-pair workspace,
     When the eval runner prepares the pair,
     Then it fails setup before recording partial results`, async () => {

@@ -303,6 +303,37 @@ end_of_record
     }
   });
 
+  test(`Given the branch contains a large non-coverable evidence artifact,
+    When patch coverage is checked,
+    Then the complete git diff is analyzed without exceeding the process buffer`, async () => {
+    // Given
+    const workspace = await createOneLinePatchCoverageWorkspace(`TN:
+SF:src/feature.ts
+DA:1,1
+end_of_record
+`);
+    await mkdir(join(workspace, "artifacts"), { recursive: true });
+    await writeFile(
+      join(workspace, "artifacts", "evidence.jsonl"),
+      `${"e".repeat(2 * 1024 * 1024)}\n`,
+      "utf8",
+    );
+    await runGit(workspace, ["add", "artifacts/evidence.jsonl"]);
+    await runGit(workspace, ["commit", "-m", "retain evidence"]);
+
+    try {
+      // When
+      const result = await runCoveragePatch(workspace);
+
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("1/1 changed coverable lines covered");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given coverage data has malformed records before valid hits,
     When patch coverage is checked,
     Then malformed records are skipped and valid coverage still passes`, async () => {

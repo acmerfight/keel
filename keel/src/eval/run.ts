@@ -21,13 +21,18 @@ import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import { type RunReport, runReportSchema } from "./report-schema.ts";
 import {
+  delegationPolicySatisfied,
+  type EvalDelegationSelection,
+  type EvalResultCondition,
+  type EvalResultConditionForTask,
   type EvalResultLine,
   type EvalTrialCondition,
-  type EvalTrialOutcome,
-  evalResultRequirement,
+  type EvalTrialObservation,
   evalResultVerdict,
 } from "./result-schema.ts";
 import {
+  type DelegationPairEvalTask,
+  type EvalDelegationPolicy,
   type EvalTask,
   loadEvalTasks,
   type MemoryPairEvalTask,
@@ -53,11 +58,16 @@ function keelVersion(): string {
   return packageJsonSchema.parse(JSON.parse(raw)).version;
 }
 
-interface TrialResult {
-  readonly outcome: EvalTrialOutcome;
+interface TrialResultMetadata {
   readonly wallMs: number;
   readonly report?: RunReport;
   readonly transcriptPath?: string;
+}
+
+type TrialResult = EvalTrialObservation & TrialResultMetadata;
+
+interface TrialDelegationMode {
+  readonly experimentalAgents: boolean;
 }
 
 interface ProcessResult {
@@ -177,9 +187,8 @@ function readRunReport(reportPath: string): RunReport | null {
   }
 }
 
-function delegationPolicySatisfied(task: EvalTask, report: RunReport): boolean {
-  if (task.delegationPolicy === undefined) return true;
-  const childRuns = new Set(
+function childRunCount(report: RunReport): number {
+  return new Set(
     report.modelOperations.flatMap((operation) =>
       operation.attribution?.type === "subagent"
         ? [
@@ -188,14 +197,16 @@ function delegationPolicySatisfied(task: EvalTask, report: RunReport): boolean {
         : [],
     ),
   ).size;
-  switch (task.delegationPolicy) {
-    case "require_one":
-      return childRuns === 1;
-    case "forbid":
-      return childRuns === 0;
-    case "at_most_one":
-      return childRuns <= 1;
-  }
+}
+
+function delegationSelection(
+  policy: EvalDelegationPolicy,
+  report: RunReport | undefined,
+): EvalDelegationSelection {
+  if (report === undefined) return { status: "unavailable", policy };
+  const childRuns = childRunCount(report);
+  const satisfied = delegationPolicySatisfied(policy, childRuns);
+  return { status: "observed", policy, childRuns, satisfied };
 }
 
 function readableTranscriptResult(transcriptPath: string | undefined): {
@@ -233,6 +244,7 @@ async function runTrialInWorkspace(
   metaDir: string,
   env: Readonly<NodeJS.ProcessEnv>,
   transcriptPath: string | undefined,
+  delegation: TrialDelegationMode,
 ): Promise<TrialResult> {
   const reportPath = join(metaDir, `${condition}-report.json`);
   const cliArgs = [
@@ -246,7 +258,7 @@ async function runTrialInWorkspace(
     ...(task.maxCostUsd !== undefined
       ? ["--max-cost", String(task.maxCostUsd)]
       : []),
-    ...(task.experimentalAgents ? ["--experimental-agents"] : []),
+    ...(delegation.experimentalAgents ? ["--experimental-agents"] : []),
     ...(condition === "memory_enabled" ? [] : ["--no-memory"]),
     "--report",
     reportPath,
@@ -264,7 +276,7 @@ async function runTrialInWorkspace(
 
   if (run.timedOut) {
     return {
-      outcome: "timeout",
+      harnessOutcome: "timeout",
       wallMs,
       ...readableTranscriptResult(transcriptPath),
     };
@@ -275,19 +287,8 @@ async function runTrialInWorkspace(
       process.stderr.write(`[${task.id}] agent stderr: ${run.stderrTail}\n`);
     }
     return {
-      outcome: "crashed",
+      harnessOutcome: "crashed",
       wallMs,
-      ...readableTranscriptResult(transcriptPath),
-    };
-  }
-  if (!delegationPolicySatisfied(task, report)) {
-    process.stderr.write(
-      `[${task.id}] delegation policy ${task.delegationPolicy} failed\n`,
-    );
-    return {
-      outcome: "verify_failed",
-      wallMs,
-      report,
       ...readableTranscriptResult(transcriptPath),
     };
   }
@@ -299,7 +300,7 @@ async function runTrialInWorkspace(
   });
   if (verify.spawnFailed) {
     return {
-      outcome: "crashed",
+      harnessOutcome: "crashed",
       wallMs,
       report,
       ...readableTranscriptResult(transcriptPath),
@@ -307,7 +308,7 @@ async function runTrialInWorkspace(
   }
   if (verify.timedOut) {
     return {
-      outcome: "timeout",
+      harnessOutcome: "timeout",
       wallMs,
       report,
       ...readableTranscriptResult(transcriptPath),
@@ -315,14 +316,15 @@ async function runTrialInWorkspace(
   }
   if (verify.exitCode === null) {
     return {
-      outcome: "crashed",
+      harnessOutcome: "crashed",
       wallMs,
       report,
       ...readableTranscriptResult(transcriptPath),
     };
   }
   return {
-    outcome: verify.exitCode === 0 ? "verified" : "verify_failed",
+    harnessOutcome: "completed",
+    taskOutcome: verify.exitCode === 0 ? "verified" : "verify_failed",
     wallMs,
     report,
     ...readableTranscriptResult(transcriptPath),
@@ -345,6 +347,7 @@ function runStandardTrial(
       metaDir,
       process.env,
       transcriptPath,
+      { experimentalAgents: task.experimentalAgents },
     ),
   );
 }
@@ -416,6 +419,7 @@ async function runMemoryPairTrial(
       metaDir,
       env,
       transcriptPaths.disabled,
+      { experimentalAgents: false },
     );
 
     rmSync(workDir, { recursive: true, force: true });
@@ -429,8 +433,64 @@ async function runMemoryPairTrial(
       metaDir,
       env,
       transcriptPaths.enabled,
+      { experimentalAgents: false },
     );
     return { disabled, enabled };
+  } finally {
+    rmSync(pairRoot, { recursive: true, force: true });
+  }
+}
+
+interface DelegationPairTrial {
+  readonly control: TrialResult;
+  readonly treatment: TrialResult;
+}
+
+async function runDelegationPairTrial(
+  task: DelegationPairEvalTask,
+  cliEntry: string,
+  selection: EvalProviderSelection,
+  treatmentFirst: boolean,
+  transcriptPaths: {
+    readonly control: string | undefined;
+    readonly treatment: string | undefined;
+  },
+): Promise<DelegationPairTrial> {
+  const pairRoot = mkdtempSync(join(tmpdir(), `keel-eval-${task.id}-pair-`));
+  const workDir = join(pairRoot, "workspace");
+  const snapshotDir = join(pairRoot, "snapshot");
+  const metaDir = join(pairRoot, "meta");
+  cpSync(task.workspaceDir, snapshotDir, { recursive: true });
+  mkdirSync(metaDir, { recursive: true });
+
+  const runArm = async (
+    condition: "delegation_control" | "delegation_treatment",
+  ): Promise<TrialResult> => {
+    rmSync(workDir, { recursive: true, force: true });
+    cpSync(snapshotDir, workDir, { recursive: true });
+    const treatment = condition === "delegation_treatment";
+    return await runTrialInWorkspace(
+      task,
+      cliEntry,
+      selection,
+      condition,
+      workDir,
+      metaDir,
+      process.env,
+      treatment ? transcriptPaths.treatment : transcriptPaths.control,
+      { experimentalAgents: treatment },
+    );
+  };
+
+  try {
+    if (treatmentFirst) {
+      const treatment = await runArm("delegation_treatment");
+      const control = await runArm("delegation_control");
+      return { control, treatment };
+    }
+    const control = await runArm("delegation_control");
+    const treatment = await runArm("delegation_treatment");
+    return { control, treatment };
   } finally {
     rmSync(pairRoot, { recursive: true, force: true });
   }
@@ -505,27 +565,47 @@ function appendResultLines(
   }
 }
 
-function trialResultLine(
+function trialResultLine<Task extends EvalTask>(
   version: string,
-  task: EvalTask,
+  task: Task,
   trial: number,
-  condition: EvalTrialCondition,
+  condition: EvalResultConditionForTask<NoInfer<Task>>,
   result: TrialResult,
 ): EvalResultLine {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     timestamp: new Date().toISOString(),
     keelVersion: version,
     taskId: task.id,
     trial,
-    ...evalResultRequirement(condition),
-    ...evalResultVerdict(result.outcome),
+    ...condition,
+    ...evalResultVerdict(result),
     wallMs: result.wallMs,
     ...(result.report !== undefined ? { report: result.report } : {}),
     ...(result.transcriptPath !== undefined
       ? { transcriptPath: result.transcriptPath }
       : {}),
   };
+}
+
+function taskVerified(result: TrialResult): boolean {
+  return (
+    result.harnessOutcome === "completed" && result.taskOutcome === "verified"
+  );
+}
+
+function harnessCompleted(result: TrialResult): boolean {
+  return result.harnessOutcome === "completed";
+}
+
+function selectionSatisfied(selection: EvalDelegationSelection): boolean {
+  return selection.status === "observed" && selection.satisfied;
+}
+
+function trialResultSummary(result: TrialResult): string {
+  return result.harnessOutcome === "completed"
+    ? result.taskOutcome
+    : result.harnessOutcome;
 }
 
 function ensureTranscriptRunDirectory(transcriptRunDir: string): boolean {
@@ -612,6 +692,89 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
   let passingTasks = 0;
   let passingTrials = 0;
   for (const task of tasks) {
+    if (task.kind === "delegation_pair") {
+      let controlPasses = 0;
+      let treatmentPasses = 0;
+      let selectionPasses = 0;
+      let pairPasses = 0;
+      for (let trial = 1; trial <= args.trials; trial++) {
+        const transcriptPrefix =
+          transcriptRunDir === undefined
+            ? undefined
+            : join(transcriptRunDir, `${artifactName(task.id)}-trial-${trial}`);
+        const pair = await runDelegationPairTrial(
+          task,
+          args.cliEntry,
+          selection,
+          trial % 2 === 0,
+          {
+            control:
+              transcriptPrefix === undefined
+                ? undefined
+                : `${transcriptPrefix}-delegation-control.jsonl`,
+            treatment:
+              transcriptPrefix === undefined
+                ? undefined
+                : `${transcriptPrefix}-delegation-treatment.jsonl`,
+          },
+        );
+        const treatmentSelection = delegationSelection(
+          task.delegationPolicy,
+          pair.treatment.report,
+        );
+        if (
+          !appendResultLines(args.outFile, [
+            trialResultLine(
+              version,
+              task,
+              trial,
+              {
+                condition: "delegation_control",
+                requiredToPass: false,
+              },
+              pair.control,
+            ),
+            trialResultLine(
+              version,
+              task,
+              trial,
+              {
+                condition: "delegation_treatment",
+                requiredToPass: true,
+                delegationSelection: treatmentSelection,
+              },
+              pair.treatment,
+            ),
+          ])
+        ) {
+          return 1;
+        }
+        process.stderr.write(
+          `[${task.id}] trial ${trial} control: ${trialResultSummary(pair.control)} (${pair.control.wallMs}ms)\n`,
+        );
+        process.stderr.write(
+          `[${task.id}] trial ${trial} treatment: ${trialResultSummary(pair.treatment)} (${pair.treatment.wallMs}ms)\n`,
+        );
+
+        if (taskVerified(pair.control)) controlPasses++;
+        if (taskVerified(pair.treatment)) treatmentPasses++;
+        if (selectionSatisfied(treatmentSelection)) selectionPasses++;
+        if (
+          harnessCompleted(pair.control) &&
+          taskVerified(pair.treatment) &&
+          selectionSatisfied(treatmentSelection)
+        ) {
+          pairPasses++;
+        }
+      }
+      if (pairPasses === args.trials) passingTasks++;
+      passingTrials += pairPasses;
+      process.stdout.write(
+        `${task.id}: control ${controlPasses}/${args.trials}, treatment ${treatmentPasses}/${args.trials}, expected selection ${selectionPasses}/${args.trials}\n`,
+      );
+      continue;
+    }
+
     if (task.kind === "memory_pair") {
       let disabledPasses = 0;
       let enabledPasses = 0;
@@ -646,14 +809,14 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
               version,
               task,
               trial,
-              "memory_disabled",
+              { condition: "memory_disabled", requiredToPass: false },
               pair.disabled,
             ),
             trialResultLine(
               version,
               task,
               trial,
-              "memory_enabled",
+              { condition: "memory_enabled", requiredToPass: true },
               pair.enabled,
             ),
           ])
@@ -661,19 +824,15 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
           return 1;
         }
         process.stderr.write(
-          `[${task.id}] trial ${trial} disabled: ${pair.disabled.outcome} (${pair.disabled.wallMs}ms)\n`,
+          `[${task.id}] trial ${trial} disabled: ${trialResultSummary(pair.disabled)} (${pair.disabled.wallMs}ms)\n`,
         );
         process.stderr.write(
-          `[${task.id}] trial ${trial} enabled: ${pair.enabled.outcome} (${pair.enabled.wallMs}ms)\n`,
+          `[${task.id}] trial ${trial} enabled: ${trialResultSummary(pair.enabled)} (${pair.enabled.wallMs}ms)\n`,
         );
 
-        if (pair.disabled.outcome === "verified") disabledPasses++;
-        if (pair.enabled.outcome === "verified") enabledPasses++;
-        if (
-          pair.enabled.outcome === "verified" &&
-          pair.disabled.outcome !== "timeout" &&
-          pair.disabled.outcome !== "crashed"
-        ) {
+        if (taskVerified(pair.disabled)) disabledPasses++;
+        if (taskVerified(pair.enabled)) enabledPasses++;
+        if (taskVerified(pair.enabled) && harnessCompleted(pair.disabled)) {
           pairPasses++;
         }
       }
@@ -700,14 +859,30 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
         selection,
         transcriptPath,
       );
-      const pass = result.outcome === "verified";
+      const trialSelection =
+        task.experimentalAgents && task.delegationPolicy !== undefined
+          ? delegationSelection(task.delegationPolicy, result.report)
+          : undefined;
+      const pass =
+        taskVerified(result) &&
+        (trialSelection === undefined || selectionSatisfied(trialSelection));
       if (pass) passes++;
+      const resultCondition: Extract<
+        EvalResultCondition,
+        { readonly condition: "standard" }
+      > = {
+        condition: "standard",
+        requiredToPass: true,
+        ...(trialSelection === undefined
+          ? {}
+          : { delegationSelection: trialSelection }),
+      };
       const appended = appendResultLines(args.outFile, [
-        trialResultLine(version, task, trial, "standard", result),
+        trialResultLine(version, task, trial, resultCondition, result),
       ]);
       if (!appended) return 1;
       process.stderr.write(
-        `[${task.id}] trial ${trial}: ${result.outcome} (${result.wallMs}ms)\n`,
+        `[${task.id}] trial ${trial}: ${trialResultSummary(result)} (${result.wallMs}ms)\n`,
       );
     }
     if (passes === args.trials) passingTasks++;

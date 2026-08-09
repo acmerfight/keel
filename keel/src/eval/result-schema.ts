@@ -1,44 +1,136 @@
 import { z } from "zod";
 import { runReportSchema } from "./report-schema.ts";
+import {
+  type DelegationPairEvalTask,
+  type EvalDelegationPolicy,
+  type EvalTask,
+  evalDelegationPolicies,
+  type MemoryPairEvalTask,
+  type StandardEvalTask,
+} from "./task.ts";
 
-const failedEvalTrialOutcomes = [
-  "verify_failed",
-  "timeout",
-  "crashed",
+export const evalHarnessOutcomes = ["completed", "timeout", "crashed"] as const;
+export const evalTaskOutcomes = ["verified", "verify_failed"] as const;
+
+const requiredEvalTrialConditions = [
+  "standard",
+  "memory_enabled",
+  "delegation_treatment",
 ] as const;
-const requiredEvalTrialConditions = ["standard", "memory_enabled"] as const;
-
-export const evalTrialOutcomes = [
-  "verified",
-  ...failedEvalTrialOutcomes,
+const observationalEvalTrialConditions = [
+  "memory_disabled",
+  "delegation_control",
 ] as const;
 const evalTrialConditions = [
   ...requiredEvalTrialConditions,
-  "memory_disabled",
+  ...observationalEvalTrialConditions,
 ] as const;
 
-export type EvalTrialOutcome = (typeof evalTrialOutcomes)[number];
+export type EvalHarnessOutcome = (typeof evalHarnessOutcomes)[number];
+export type EvalTaskOutcome = (typeof evalTaskOutcomes)[number];
 export type EvalTrialCondition = (typeof evalTrialConditions)[number];
 
-export type EvalResultVerdict =
-  | { readonly outcome: "verified"; readonly pass: true }
+export type EvalTrialObservation =
   | {
-      readonly outcome: (typeof failedEvalTrialOutcomes)[number];
+      readonly harnessOutcome: "completed";
+      readonly taskOutcome: EvalTaskOutcome;
+    }
+  | {
+      readonly harnessOutcome: Exclude<EvalHarnessOutcome, "completed">;
+      readonly taskOutcome?: never;
+    };
+
+export type EvalResultVerdict =
+  | {
+      readonly harnessOutcome: "completed";
+      readonly taskOutcome: "verified";
+      readonly pass: true;
+    }
+  | {
+      readonly harnessOutcome: "completed";
+      readonly taskOutcome: "verify_failed";
+      readonly pass: false;
+    }
+  | {
+      readonly harnessOutcome: Exclude<EvalHarnessOutcome, "completed">;
+      readonly taskOutcome?: never;
       readonly pass: false;
     };
 
-export type EvalResultRequirement =
+export type EvalDelegationSelection =
+  | {
+      readonly status: "observed";
+      readonly policy: EvalDelegationPolicy;
+      readonly childRuns: number;
+      readonly satisfied: boolean;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly policy: EvalDelegationPolicy;
+      readonly childRuns?: never;
+      readonly satisfied?: never;
+    };
+
+export function delegationPolicySatisfied(
+  policy: EvalDelegationPolicy,
+  childRuns: number,
+): boolean {
+  switch (policy) {
+    case "require_one":
+      return childRuns === 1;
+    case "forbid":
+      return childRuns === 0;
+    case "at_most_one":
+      return childRuns <= 1;
+  }
+}
+
+export type EvalResultCondition =
+  | {
+      readonly condition: "standard";
+      readonly requiredToPass: true;
+      readonly delegationSelection?: EvalDelegationSelection;
+    }
+  | {
+      readonly condition: "memory_enabled";
+      readonly requiredToPass: true;
+      readonly delegationSelection?: never;
+    }
+  | {
+      readonly condition: "delegation_treatment";
+      readonly requiredToPass: true;
+      readonly delegationSelection: EvalDelegationSelection;
+    }
   | {
       readonly condition: "memory_disabled";
       readonly requiredToPass: false;
+      readonly delegationSelection?: never;
     }
   | {
-      readonly condition: (typeof requiredEvalTrialConditions)[number];
-      readonly requiredToPass: true;
+      readonly condition: "delegation_control";
+      readonly requiredToPass: false;
+      readonly delegationSelection?: never;
     };
 
+export type EvalResultConditionForTask<Task extends EvalTask> =
+  Task extends StandardEvalTask
+    ? Extract<EvalResultCondition, { readonly condition: "standard" }>
+    : Task extends MemoryPairEvalTask
+      ? Extract<
+          EvalResultCondition,
+          { readonly condition: "memory_disabled" | "memory_enabled" }
+        >
+      : Task extends DelegationPairEvalTask
+        ? Extract<
+            EvalResultCondition,
+            {
+              readonly condition: "delegation_control" | "delegation_treatment";
+            }
+          >
+        : never;
+
 const evalResultLineBaseSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   timestamp: z.string(),
   keelVersion: z.string(),
   taskId: z.string(),
@@ -48,43 +140,103 @@ const evalResultLineBaseSchema = z.object({
   transcriptPath: z.string().optional(),
 });
 
-const evalResultVerdictSchema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("verified"), pass: z.literal(true) }),
+const completedResultVerdictSchema = z.discriminatedUnion("taskOutcome", [
   z.object({
-    outcome: z.enum(failedEvalTrialOutcomes),
+    harnessOutcome: z.literal("completed"),
+    taskOutcome: z.literal("verified"),
+    pass: z.literal(true),
+  }),
+  z.object({
+    harnessOutcome: z.literal("completed"),
+    taskOutcome: z.literal("verify_failed"),
     pass: z.literal(false),
   }),
 ]);
 
-const evalResultRequirementSchema = z.discriminatedUnion("condition", [
+const evalResultVerdictSchema = z.union([
+  completedResultVerdictSchema,
   z.object({
-    condition: z.literal("memory_disabled"),
-    requiredToPass: z.literal(false),
+    harnessOutcome: z.enum(["timeout", "crashed"]),
+    taskOutcome: z.never().optional(),
+    pass: z.literal(false),
+  }),
+]);
+
+const observedDelegationSelectionSchema = z.object({
+  status: z.literal("observed"),
+  policy: z.enum(evalDelegationPolicies),
+  childRuns: z.number().int().nonnegative(),
+  satisfied: z.boolean(),
+});
+const unavailableDelegationSelectionSchema = z.object({
+  status: z.literal("unavailable"),
+  policy: z.enum(evalDelegationPolicies),
+  childRuns: z.never().optional(),
+  satisfied: z.never().optional(),
+});
+const delegationSelectionSchema = z.discriminatedUnion("status", [
+  observedDelegationSelectionSchema,
+  unavailableDelegationSelectionSchema,
+]);
+
+const evalResultConditionSchema = z.discriminatedUnion("condition", [
+  z.object({
+    condition: z.literal("standard"),
+    requiredToPass: z.literal(true),
+    delegationSelection: delegationSelectionSchema.optional(),
   }),
   z.object({
-    condition: z.enum(requiredEvalTrialConditions),
+    condition: z.literal("memory_enabled"),
     requiredToPass: z.literal(true),
+    delegationSelection: z.never().optional(),
+  }),
+  z.object({
+    condition: z.literal("delegation_treatment"),
+    requiredToPass: z.literal(true),
+    delegationSelection: delegationSelectionSchema,
+  }),
+  z.object({
+    condition: z.enum(observationalEvalTrialConditions),
+    requiredToPass: z.literal(false),
+    delegationSelection: z.never().optional(),
   }),
 ]);
 
 export const evalResultLineSchema = evalResultLineBaseSchema
   .and(evalResultVerdictSchema)
-  .and(evalResultRequirementSchema);
+  .and(evalResultConditionSchema)
+  .superRefine((line, ctx) => {
+    const selection = line.delegationSelection;
+    if (
+      selection?.status === "observed" &&
+      selection.satisfied !==
+        delegationPolicySatisfied(selection.policy, selection.childRuns)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["delegationSelection", "satisfied"],
+        message: "must match policy and distinct child count",
+      });
+    }
+  });
 
 export type EvalResultLine = z.infer<typeof evalResultLineSchema>;
 
 export function evalResultVerdict(
-  outcome: EvalTrialOutcome,
+  observation: EvalTrialObservation,
 ): EvalResultVerdict {
-  return outcome === "verified"
-    ? { outcome, pass: true }
-    : { outcome, pass: false };
-}
-
-export function evalResultRequirement(
-  condition: EvalTrialCondition,
-): EvalResultRequirement {
-  return condition === "memory_disabled"
-    ? { condition, requiredToPass: false }
-    : { condition, requiredToPass: true };
+  if (observation.harnessOutcome !== "completed") {
+    return { harnessOutcome: observation.harnessOutcome, pass: false };
+  }
+  return observation.taskOutcome === "verified"
+    ? {
+        harnessOutcome: "completed",
+        taskOutcome: "verified",
+        pass: true,
+      }
+    : {
+        harnessOutcome: "completed",
+        taskOutcome: "verify_failed",
+        pass: false,
+      };
 }

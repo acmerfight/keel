@@ -1,0 +1,9 @@
+{
+  "kind": "delegation_pair",
+  "prompt": "The rollout decision in policy.md is intentionally unresolved. Leave policy.md unchanged and create no files.",
+  "timeoutMs": 180000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.01,
+  "delegationPolicy": "forbid"
+}
