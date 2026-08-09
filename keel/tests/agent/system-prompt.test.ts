@@ -8,7 +8,7 @@ import {
 describe("Agent System Prompt", () => {
   test(`Given a bounded child handoff can truncate verbose evidence,
     When main and child delegation prompts are built,
-    Then child leads with a compact direct answer and main changes it only for directly contradictory evidence`, () => {
+    Then both agents preserve named facts while keeping the handoff compact`, () => {
     const mainPrompt = appendDelegationToSystemPrompt("base");
     const childPrompt = buildReadOnlySubagentSystemPrompt({
       workspace: "/tmp/project",
@@ -22,6 +22,12 @@ describe("Agent System Prompt", () => {
     expect(mainPrompt).toContain(
       "Change a reported fact only when direct evidence for that same fact contradicts it",
     );
+    expect(mainPrompt).toContain(
+      "use evidence that defines that field, not a related observation",
+    );
+    expect(mainPrompt).toContain(
+      "do not reread child-covered resources merely to reconfirm a supported fact",
+    );
     expect(childPrompt).toContain(
       "Start the final message with the direct answer or requested structured output",
     );
@@ -30,6 +36,9 @@ describe("Agent System Prompt", () => {
     );
     expect(childPrompt).toContain(
       "Do not paste bulk source, logs, CSV rows, or repeated evidence",
+    );
+    expect(childPrompt).toContain(
+      "Keep configured or declared values distinct from observations, examples, and sampled values",
     );
   });
 
