@@ -1,0 +1,6 @@
+acknowledgement: before_completion_marker
+redelivery_on_worker_exit: true
+idempotency_record: false
+completion_marker:
+  storage: checkout_results
+  commit_before_ack: false
