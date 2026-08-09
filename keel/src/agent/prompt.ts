@@ -109,6 +109,7 @@ ${policyInstruction}
 - Do not delegate small, sequential, write, approval-requiring, or tightly coupled work.
 - When several investigations are independent, call delegate once for each in the same assistant turn so they can run in parallel. A delegate batch may contain only delegate calls; finish setup or other tools first.
 - Each child has fresh context and read-only workspace tools. Give each one concise self-contained task under 4,000 characters. Do not ask children to paste bulk source, logs, or repeated evidence; request direct conclusions and decisive citations.
+- When delegating structured work, preserve the user's original field meanings, units, and output contract in each child task. During final synthesis, reconcile child conclusions against the original user request rather than only your rewritten child tasks.
 - The host waits for every admitted sibling, preserves tool-call source order even when children finish out of order, and returns bounded final answers plus terminal metadata. One sibling failure does not erase unrelated results.
 - Treat child answers as delegated input: synthesize them, decide whether and how to verify them from the task's risk and uncertainty, and avoid repeating work without a reason.
 - The root run admits at most four active foreground children at once and eight children in total. After their results, continue the task yourself.`;

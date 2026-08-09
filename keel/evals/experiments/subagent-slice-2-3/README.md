@@ -33,7 +33,22 @@ more distinct children. Production prompt, runtime, tasks, workspaces, budgets,
 provider, model, trial count, order, and all other gates are unchanged. This is
 a complete new window, not a selective rescore of V1.
 
-## Final v2 protocol
+V2 ran once from `9a23274c143aa80ea76d6ac592f562d66c7b0335`.
+Positive and negative selection both passed 3/3, all controls and negative
+treatments verified, and positive treatments verified 2/3. The failed
+treatment changed the meaning of `positiveClockSkewSeconds` from a duration to
+a record count while writing its child task, then propagated 7 instead of 300
+despite directly reading the decisive evidence. V2 had zero retries and zero
+budget overshoot; complete evidence is retained under
+[`artifacts/v2/`](artifacts/v2/).
+
+V3 adds one production prompt rule: preserve original field meanings, units,
+and output contracts when constructing child tasks, then reconcile final
+synthesis against the original user request. It changes no runtime rule,
+fixture, verifier, budget, provider, model, trial count, order, or selection
+gate, and reruns the complete window.
+
+## Final v3 protocol
 
 - Experiment: `subagent-slice-2-3`.
 - Provider: DeepSeek.
@@ -57,8 +72,8 @@ node --experimental-strip-types src/cli/index.ts eval \
   --provider deepseek \
   --model deepseek-v4-flash \
   --trials 3 \
-  --out /tmp/keel-subagent-slice-2-3-v2.jsonl \
-  --transcript-dir /tmp/keel-subagent-slice-2-3-v2-transcripts
+  --out /tmp/keel-subagent-slice-2-3-v3.jsonl \
+  --transcript-dir /tmp/keel-subagent-slice-2-3-v3-transcripts
 ```
 
 ## Corpus and budgets
