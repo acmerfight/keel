@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
-import { createSharedCostBudgetedProvider } from "../agent/cost-budget.ts";
 import { runAgent } from "../agent/loop.ts";
 import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import {
@@ -11,7 +10,6 @@ import {
 } from "../agent/prompt.ts";
 import type { SessionMessage } from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
-import { createSubagentSupervisor } from "../agent/subagent-supervisor.ts";
 import { isAbortThrow } from "../core/error.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
@@ -89,6 +87,7 @@ import {
   SkillUserConfigError,
   skillPolicyReport,
 } from "./skill-user-config.ts";
+import { createCliSubagentRuntime } from "./subagent-runtime.ts";
 import {
   cleanupExpiredToolOutputArtifacts,
   createToolOutputArtifactStore,
@@ -392,45 +391,24 @@ export async function runOneShotCli(
             costModel: trackedCostModel,
           }
         : undefined;
-    const rootBudget =
+    const subagentRuntime =
       cliArgs.experimentalAgents === true &&
       cliArgs.maxCostUsd !== undefined &&
       trackedCostModel !== undefined
-        ? createSharedCostBudgetedProvider({
-            provider: resolved.provider,
-            model: trackedCostModel,
-            maxCostUsd: cliArgs.maxCostUsd,
-            ...(modelMaxOutputTokens !== undefined
-              ? { modelMaxOutputTokens }
-              : {}),
-          })
-        : undefined;
-    const subagentSupervisor =
-      rootBudget !== undefined &&
-      cliArgs.maxCostUsd !== undefined &&
-      trackedCostModel !== undefined
-        ? createSubagentSupervisor({
+        ? createCliSubagentRuntime({
             workspace,
             platform: runtime.platform,
             parentRunId: `main-${randomUUID()}`,
-            provider: rootBudget.provider,
+            provider: resolved.provider,
             providerId: resolved.provider.id,
             model: resolved.model,
+            maxCostUsd: cliArgs.maxCostUsd,
             costModel: trackedCostModel,
-            rootBudget,
-            ...(projectInstructions !== undefined
-              ? { projectInstructions }
-              : {}),
-            ...(hiddenWorkspacePaths.length > 0
-              ? { hiddenWorkspacePaths }
-              : {}),
-            ...(resolved.contextCompaction !== undefined
-              ? { contextCompaction: resolved.contextCompaction }
-              : {}),
-            ...(modelMaxOutputTokens !== undefined
-              ? { modelMaxOutputTokens }
-              : {}),
-            ...(modelOperations !== undefined ? { modelOperations } : {}),
+            projectInstructions,
+            hiddenWorkspacePaths,
+            contextCompaction: resolved.contextCompaction,
+            modelMaxOutputTokens,
+            modelOperations,
             transcriptStore: toolOutputArtifacts.store,
             now: runtime.now,
             onProgress: (event) => {
@@ -455,11 +433,11 @@ export async function runOneShotCli(
         : {}),
       signal: abortController.signal,
       bash: bashRuntime,
-      ...(subagentSupervisor !== undefined
-        ? { delegation: subagentSupervisor.capability }
+      ...(subagentRuntime !== undefined
+        ? { delegation: subagentRuntime.supervisor.capability }
         : {}),
-      ...(rootBudget !== undefined
-        ? { costBudgetProvider: rootBudget.provider }
+      ...(subagentRuntime !== undefined
+        ? { costBudgetProvider: subagentRuntime.costBudgetProvider }
         : {}),
       ...(mcpRuntime !== undefined
         ? {

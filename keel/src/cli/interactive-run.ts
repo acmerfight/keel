@@ -1512,6 +1512,15 @@ async function runActiveSessionCli(
             }
           : {}),
         toolOutputArtifacts,
+        ...(cliArgs.experimentalAgents === true &&
+        cliArgs.maxCostUsd !== undefined
+          ? {
+              delegation: {
+                transcriptStore: toolOutputArtifacts.store,
+                maxCostUsd: cliArgs.maxCostUsd,
+              },
+            }
+          : {}),
         input: runtime.input,
         ...(invocation?.lineInput !== undefined
           ? { lineInput: invocation.lineInput }

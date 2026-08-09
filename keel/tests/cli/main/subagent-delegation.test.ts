@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
@@ -10,7 +11,10 @@ import {
   requestWithMessagesSchema,
   requestWithToolsSchema,
 } from "../../../src/testing/cli-main-schemas.ts";
-import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
+import {
+  createRuntime,
+  type SigintCapture,
+} from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
   getPort,
@@ -503,6 +507,424 @@ describe("CLI Main - Subagent Delegation", () => {
         "module.ts:1 exports answer with value 42.",
       );
     } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an experimental interactive session and an explicit delegated investigation,
+    When one read-only child returns evidence and the user sends a follow-up,
+    Then main shows child progress, keeps the child transcript separate, and continues the same session`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-subagent-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    await writeFile(
+      join(workspace, "module.ts"),
+      "export const answer = 42;\n",
+      "utf8",
+    );
+    const requests: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        requests.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            res.end(
+              [
+                sseToolCall("interactive_delegate", "delegate", {
+                  task: "Read module.ts and report the exported value.",
+                  focusPaths: ["module.ts"],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            res.end(
+              [
+                sseToolCall("interactive_child_read", "read", {
+                  path: "module.ts",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            res.end(sseTextReplyWithUsage("module.ts:1 exports answer = 42."));
+            return;
+          case 4:
+            res.end(
+              sseTextReplyWithUsage(
+                "The subagent found that module.ts exports answer = 42.",
+              ),
+            );
+            return;
+          case 5:
+            res.end(
+              sseTextReplyWithUsage(
+                "Follow-up confirmed from the existing main conversation.",
+              ),
+            );
+            return;
+          default:
+            res.writeHead(500);
+            res.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    let renderedOutput = "";
+    let markFirstAnswer: () => void = () => {};
+    const firstAnswer = new Promise<void>((resolve) => {
+      markFirstAnswer = resolve;
+    });
+    const fixture = createRuntime(
+      [
+        "--experimental-agents",
+        "--no-skills",
+        "--max-cost",
+        "0.05",
+        "--report",
+        reportPath,
+        "--ephemeral",
+      ],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: join(workspace, ".keel-home"),
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        onStdout: (text) => {
+          renderedOutput += text;
+          if (
+            renderedOutput.includes(
+              "The subagent found that module.ts exports answer = 42.",
+            )
+          ) {
+            markFirstAnswer();
+          }
+        },
+      },
+    );
+
+    try {
+      // When
+      const run = runCliMain(fixture.runtime);
+      input.write("Use a subagent to investigate module.ts.\n");
+      await withTimeout(
+        firstAnswer,
+        5_000,
+        "interactive main did not answer after delegation",
+      );
+      input.end("What did we establish?\n");
+      const exitCode = await run;
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(requests).toHaveLength(5);
+      expect(toolNames(requests[0])).toContain("delegate");
+      expect(toolNames(requests[1])).not.toContain("delegate");
+      expect(toolNames(requests[1])).not.toContain("write");
+      expect(toolNames(requests[4])).toContain("delegate");
+      const continuedMain = requestText(requests[4]);
+      expect(continuedMain).toContain(
+        "Use a subagent to investigate module.ts.",
+      );
+      expect(continuedMain).toContain(
+        "The subagent found that module.ts exports answer = 42.",
+      );
+      expect(continuedMain).toContain("What did we establish?");
+      expect(continuedMain).not.toContain("interactive_child_read");
+      expect(fixture.stdout()).toBe(
+        [
+          "The subagent found that module.ts exports answer = 42.",
+          "Follow-up confirmed from the existing main conversation.",
+          "",
+        ].join("\n"),
+      );
+      expect(fixture.stderr()).toMatch(/Subagent .*: queued/u);
+      expect(fixture.stderr()).toMatch(/Subagent .*: running/u);
+      expect(fixture.stderr()).toMatch(/Subagent .*: tool read/u);
+      expect(fixture.stderr()).toMatch(/Subagent .*: completed/u);
+      const report = z
+        .object({
+          modelOperationCount: z.number(),
+          providerRequestAttemptCount: z.number(),
+          usage: z.object({
+            inputTokens: z.number(),
+            outputTokens: z.number(),
+          }),
+          modelOperations: z.array(
+            z.object({ purpose: z.string() }).passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      expect(report.modelOperationCount).toBe(5);
+      expect(report.providerRequestAttemptCount).toBe(5);
+      expect(report.usage).toMatchObject({
+        inputTokens: 50,
+        outputTokens: 15,
+      });
+      expect(
+        report.modelOperations.filter(
+          (operation) => operation.purpose === "subagent_turn",
+        ),
+      ).toHaveLength(2);
+    } finally {
+      input.end();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive foreground child has an active provider request,
+    When the user presses Ctrl-C once,
+    Then the turn is cancelled, the child request closes, and no child answer enters the session`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-subagent-abort-"),
+    );
+    let requestCount = 0;
+    let markChildStarted: () => void = () => {};
+    let markChildClosed: () => void = () => {};
+    const childStarted = new Promise<void>((resolve) => {
+      markChildStarted = resolve;
+    });
+    const childClosed = new Promise<void>((resolve) => {
+      markChildClosed = resolve;
+    });
+    const server = createServer((req, res) => {
+      requestCount++;
+      req.resume();
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (requestCount === 1) {
+        res.end(
+          [
+            sseToolCall("interactive_delegate_abort", "delegate", {
+              task: "Inspect the workspace until cancelled.",
+            }),
+            sseToolFinish(),
+            "data: [DONE]\n\n",
+          ].join(""),
+        );
+        return;
+      }
+      markChildStarted();
+      res.on("close", markChildClosed);
+      res.write(
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: "still investigating" } }],
+        })}\n\n`,
+      );
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const interrupt: SigintCapture = { handler: null };
+    const fixture = createRuntime(
+      ["--experimental-agents", "--max-cost", "0.05", "--ephemeral"],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: join(workspace, ".keel-home"),
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        onSigint: (handler) => {
+          interrupt.handler = handler;
+        },
+        offSigint: (handler) => {
+          if (interrupt.handler === handler) interrupt.handler = null;
+        },
+      },
+    );
+
+    try {
+      const run = runCliMain(fixture.runtime);
+      input.write("Use a subagent to investigate until I interrupt.\n");
+      await withTimeout(childStarted, 5_000, "interactive child did not start");
+
+      // When
+      expect(interrupt.handler).not.toBeNull();
+      interrupt.handler?.();
+
+      // Then
+      await withTimeout(childClosed, 5_000, "interactive child remained live");
+      input.end();
+      expect(
+        await withTimeout(run, 5_000, "interactive session did not stop"),
+      ).toBe(0);
+      expect(requestCount).toBe(2);
+      expect(fixture.stderr()).toMatch(/Subagent .*: cancelled/u);
+      expect(fixture.stdout()).not.toContain("still investigating");
+    } finally {
+      input.end();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an interactive child has completed and main synthesis is still running,
+    When the user presses Ctrl-C,
+    Then the next turn's cumulative cost still includes the completed child`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-interactive-subagent-accounting-abort-"),
+    );
+    const reportPath = join(workspace, "report.json");
+    let requestCount = 0;
+    let markMainSynthesisStarted: () => void = () => {};
+    let markMainSynthesisClosed: () => void = () => {};
+    const mainSynthesisStarted = new Promise<void>((resolve) => {
+      markMainSynthesisStarted = resolve;
+    });
+    const mainSynthesisClosed = new Promise<void>((resolve) => {
+      markMainSynthesisClosed = resolve;
+    });
+    const server = createServer((req, res) => {
+      requestCount++;
+      req.resume();
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      if (requestCount === 1) {
+        res.end(
+          [
+            sseToolCall("interactive_delegate_then_abort", "delegate", {
+              task: "Return one concise read-only finding.",
+            }),
+            sseToolFinish(),
+            "data: [DONE]\n\n",
+          ].join(""),
+        );
+        return;
+      }
+      if (requestCount === 2) {
+        res.end(sseTextReplyWithUsage("The child completed its finding."));
+        return;
+      }
+      if (requestCount === 3) {
+        markMainSynthesisStarted();
+        res.on("close", markMainSynthesisClosed);
+        res.write(
+          `data: ${JSON.stringify({
+            choices: [{ delta: { content: "main synthesis in progress" } }],
+          })}\n\n`,
+        );
+        return;
+      }
+      res.end(sseTextReplyWithUsage("The next main turn completed."));
+    });
+    await listen(server);
+    const input = new PassThrough();
+    const interrupt: SigintCapture = { handler: null };
+    const fixture = createRuntime(
+      [
+        "--experimental-agents",
+        "--max-cost",
+        "0.05",
+        "--report",
+        reportPath,
+        "--ephemeral",
+      ],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: join(workspace, ".keel-home"),
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        onSigint: (handler) => {
+          interrupt.handler = handler;
+        },
+        offSigint: (handler) => {
+          if (interrupt.handler === handler) interrupt.handler = null;
+        },
+      },
+    );
+
+    try {
+      const run = runCliMain(fixture.runtime);
+      input.write("Use a subagent, then summarize its finding.\n");
+      await withTimeout(
+        mainSynthesisStarted,
+        5_000,
+        "main synthesis did not start after child completion",
+      );
+      expect(fixture.stderr()).toMatch(/Subagent .*: completed/u);
+
+      // When
+      expect(interrupt.handler).not.toBeNull();
+      interrupt.handler?.();
+
+      // Then
+      await withTimeout(
+        mainSynthesisClosed,
+        5_000,
+        "aborted main synthesis request remained live",
+      );
+      input.end("Continue in main without delegating.\n");
+      expect(
+        await withTimeout(run, 5_000, "interactive session did not stop"),
+      ).toBe(0);
+      const report = z
+        .object({
+          usage: z.object({
+            inputTokens: z.number(),
+            outputTokens: z.number(),
+          }),
+          costUsd: z.number(),
+          modelOperations: z.array(
+            z.object({ purpose: z.string() }).passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      expect(report.usage).toEqual({
+        inputTokens: 30,
+        outputTokens: 9,
+      });
+      expect(report.costUsd).toBeGreaterThan(0);
+      expect(
+        report.modelOperations.filter(
+          (operation) => operation.purpose === "subagent_turn",
+        ),
+      ).toHaveLength(1);
+      const displayedCosts = Array.from(
+        fixture.stderr().matchAll(/^Cost: \$([0-9.]+)/gmu),
+        (match) => Number(match[1]),
+      );
+      expect(displayedCosts).toHaveLength(1);
+      expect(displayedCosts[0]).toBeCloseTo(report.costUsd, 6);
+    } finally {
+      input.end();
       await close(server);
       await rm(workspace, { recursive: true, force: true });
     }

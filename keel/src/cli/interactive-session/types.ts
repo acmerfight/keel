@@ -2,7 +2,10 @@ import type { ContextCompactionOptions } from "../../agent/context-compaction.ts
 import type { AgentEvent, CostReport } from "../../agent/events.ts";
 import type { ProjectInstructions } from "../../agent/prompt.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
-import type { ToolOutputArtifactsOptions } from "../../agent/tool-output-artifacts.ts";
+import type {
+  AbortableToolOutputArtifactStore,
+  ToolOutputArtifactsOptions,
+} from "../../agent/tool-output-artifacts.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
@@ -265,6 +268,10 @@ interface InteractiveSessionOptionsBase {
     grant: BashProjectApprovalGrant,
   ) => void;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly delegation?: {
+    readonly transcriptStore: AbortableToolOutputArtifactStore;
+    readonly maxCostUsd: number;
+  };
   readonly input: NodeJS.ReadableStream;
   readonly lineInput?: InteractiveLineInput;
   readonly writeStdout: (text: string) => void;

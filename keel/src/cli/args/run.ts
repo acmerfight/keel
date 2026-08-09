@@ -458,12 +458,6 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       "Error: --experimental-agents requires --max-cost <usd> so the root and child share a bounded budget.",
     );
   }
-  if (experimentalAgents && userMessage === undefined) {
-    return parseError(
-      "Error: --experimental-agents currently supports one-shot runs with a message only.",
-    );
-  }
-
   if (
     positionalMessagePresent &&
     (sessionId !== undefined || resumeSession !== undefined)
