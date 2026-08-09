@@ -521,6 +521,92 @@ describe("Subagent Supervisor", () => {
     }
   });
 
+  test(`Given the provider prices maxOutputTokens in the finalized child request,
+    When the root budget is two tokens short of funding both minimum child work and main continuation,
+    Then admission rejects before accepting a child or starting child provider work`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    let rawProviderCalls = 0;
+    const usage = {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+    } as const;
+    const rawProvider: LLMProvider = {
+      id: "shape-sensitive-child-admission",
+      abortSignalSupport: true,
+      estimateInputTokens: (options) =>
+        options.maxOutputTokens === undefined ? 100 : 110,
+      async *stream(options) {
+        rawProviderCalls++;
+        if (rawProviderCalls === 1) {
+          yield {
+            type: "tool_call",
+            id: "delegate-call",
+            tool: "delegate",
+            task: "Inspect the workspace.",
+          };
+        } else {
+          yield { type: "text", text: "unexpected child work" };
+        }
+        completeAttempt(options, usage);
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const rootBudget = createSharedCostBudgetedProvider({
+      provider: rawProvider,
+      model: costModel,
+      maxCostUsd: 0.008922,
+    });
+    const artifacts = createArtifactCapture();
+    const supervisor = createSubagentSupervisor({
+      workspace,
+      platform: process.platform,
+      parentRunId: "shape-sensitive-main",
+      provider: rootBudget.provider,
+      providerId: rawProvider.id,
+      model: "test-model",
+      costModel,
+      rootBudget,
+      transcriptStore: artifacts.store,
+      now: () => 0,
+      onProgress: () => {},
+    });
+
+    try {
+      for await (const _event of rootBudget.provider.stream({
+        systemPrompt: "main",
+        messages: [{ role: "user", content: "Use a subagent." }],
+        signal: new AbortController().signal,
+        toolExposure: { kind: "auto", delegation: true },
+      })) {
+        // Establish the completed main request used by the continuation lease.
+      }
+
+      const result = await supervisor.capability.delegate({
+        toolCallId: "delegate-call",
+        task: "Inspect the workspace.",
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toEqual({
+        delivery: "rejected",
+        ok: false,
+        content:
+          "Delegation rejected: the root budget cannot fund a child while preserving an admitted main continuation lease.",
+      });
+      expect(supervisor.totalAcceptedCount()).toBe(0);
+      expect(supervisor.runSnapshots()).toEqual([]);
+      expect(rawProviderCalls).toBe(1);
+      expect(artifacts.inputs).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a child returns more final text than main may admit,
     When Supervisor stores the canonical transcript and projects the result,
     Then the main-facing payload is bounded while the full final message remains inspectable`, async () => {

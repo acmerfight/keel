@@ -15,7 +15,7 @@ import type {
 } from "../llm/types.ts";
 import { modelToolExposureAccounting } from "../tools/registry.ts";
 
-const MIN_USEFUL_OUTPUT_TOKENS = 256;
+export const MIN_USEFUL_OUTPUT_TOKENS = 256;
 const UNKNOWN_PROVIDER_TOOL_SCHEMA_TOKEN_RESERVE = 16_384;
 const MAX_REQUEST_PRICING_ATTEMPTS = 8;
 

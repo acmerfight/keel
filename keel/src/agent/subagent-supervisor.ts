@@ -13,6 +13,7 @@ import type { ContextCompactionOptions } from "./context-compaction.ts";
 import {
   createSharedCostBudgetedProvider,
   estimateProviderInputTokens,
+  MIN_USEFUL_OUTPUT_TOKENS,
   type SharedCostBudgetedProvider,
 } from "./cost-budget.ts";
 import { runAgent } from "./loop.ts";
@@ -842,7 +843,10 @@ export function createSubagentSupervisor(
       };
       const minimumChildInputTokens = estimateProviderInputTokens(
         options.provider,
-        childInputOptions,
+        {
+          ...childInputOptions,
+          maxOutputTokens: MIN_USEFUL_OUTPUT_TOKENS,
+        },
       );
       const continuationMaxOutputTokens = Math.min(
         MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
