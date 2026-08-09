@@ -1,3 +1,4 @@
+import type { PersistedSubagentCanonicalResult } from "../agent/subagent-lifecycle.ts";
 import type {
   AgentHistoryEntry,
   AgentTreeHistory,
@@ -39,13 +40,14 @@ export function formatAgentHistoryList(history: AgentTreeHistory): string {
   ].join("\n");
 }
 
-export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
+export function formatAgentHistoryDetail(
+  entry: AgentHistoryEntry,
+  result: PersistedSubagentCanonicalResult,
+): string {
   const terminalText =
-    entry.result === null
-      ? "result: (not terminal)"
-      : entry.result.status === "completed"
-        ? `result: ${entry.result.finalText}`
-        : `error: ${entry.result.error}`;
+    result.status === "completed"
+      ? `result: ${result.finalText}`
+      : `error: ${result.error}`;
   return [
     `Agent ${entry.index}: ${entry.childAgentId}`,
     `status: ${entry.status}`,
@@ -68,7 +70,7 @@ export function formatAgentTranscript(
 ): string {
   return [
     `Child transcript: ${entry.childAgentId}`,
-    history.transcript(entry.childAgentId).trimEnd(),
+    history.transcript(entry).trimEnd(),
     "",
   ].join("\n");
 }

@@ -28,8 +28,10 @@ import { buildReadOnlySubagentSystemPrompt } from "./prompt.ts";
 import type { SessionMessage } from "./session-message.ts";
 import { maxTurnFallbackPolicy } from "./stop-policy.ts";
 import type {
+  AgentId,
   SubagentCanonicalResult,
   SubagentLifecyclePersistence,
+  SubagentRunId,
   SubagentRunningPersistence,
   SubagentRunPersistence,
   SubagentTerminalOutcome,
@@ -105,8 +107,8 @@ interface AcceptedDelegation {
 
 interface SubagentRunRecord {
   readonly delegationId: string;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
   readonly task: string;
   state:
     | { readonly kind: "queued" | "running" }
@@ -119,16 +121,16 @@ interface SubagentRunRecord {
 type SubagentRunSnapshot =
   | {
       readonly delegationId: string;
-      readonly childAgentId: string;
-      readonly childRunId: string;
+      readonly childAgentId: AgentId;
+      readonly childRunId: SubagentRunId;
       readonly task: string;
       readonly state: "queued" | "running";
       readonly terminal: null;
     }
   | {
       readonly delegationId: string;
-      readonly childAgentId: string;
-      readonly childRunId: string;
+      readonly childAgentId: AgentId;
+      readonly childRunId: SubagentRunId;
       readonly task: string;
       readonly state: "terminal";
       readonly terminal: SubagentCanonicalResult;
@@ -162,8 +164,8 @@ interface PreparedDelegationCandidate {
 
 interface PreparedAcceptedCandidate {
   readonly childBudget: SubagentChildBudgetLease<PreparedDelegationCandidate>;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
   readonly persistence?: SubagentRunPersistence;
 }
 
@@ -386,7 +388,7 @@ function childFinalText(messages: readonly SessionMessage[]): string | null {
 
 function transcriptContent(input: {
   readonly delegationId: string;
-  readonly childRunId: string;
+  readonly childRunId: SubagentRunId;
   readonly provider: string;
   readonly model: string;
   readonly systemPrompt: string;
@@ -572,8 +574,8 @@ export function createSubagentSupervisor(
 
   const executeAccepted = async (input: {
     readonly delegationId: string;
-    readonly childAgentId: string;
-    readonly childRunId: string;
+    readonly childAgentId: AgentId;
+    readonly childRunId: SubagentRunId;
     readonly toolCallId: string;
     readonly task: string;
     readonly focusPaths: readonly string[];
@@ -689,8 +691,7 @@ export function createSubagentSupervisor(
             runningPersistence?.accounting({
               usage: accounting.usage,
               turns: accounting.turns,
-              costUsd:
-                accounting.cost?.spentUsd ?? childBudget.observedSpendUsd(),
+              costUsd: childBudget.observedSpendUsd(),
             });
             turnProgress(turns);
           },
@@ -780,15 +781,15 @@ export function createSubagentSupervisor(
       };
       const result: SubagentCanonicalResult = { ...resultBase, ...terminal };
       if (runningPersistence !== undefined) {
-        const persistedResult = runningPersistence.terminal({
+        runningPersistence.terminal({
           ...terminal,
           usage,
           turns,
           costUsd,
         });
-        commitTerminalResult(input.record, persistedResult);
-        progress(persistedResult.status);
-        return persistedResult;
+        commitTerminalResult(input.record, result);
+        progress(result.status);
+        return result;
       }
       commitTerminalResult(input.record, result);
       progress(result.status);
@@ -801,8 +802,8 @@ export function createSubagentSupervisor(
   const createAcceptedReceipt = (
     childBudget: SubagentChildBudgetLease<PreparedDelegationCandidate>,
     admissionLease: Pick<SubagentAdmissionLease<unknown>, "release">,
-    childAgentId: string,
-    childRunId: string,
+    childAgentId: AgentId,
+    childRunId: SubagentRunId,
     persistence: SubagentRunPersistence | undefined,
   ): AcceptedDelegation => {
     const candidate = childBudget.value;
@@ -838,7 +839,7 @@ export function createSubagentSupervisor(
       if (persistence === undefined) {
         commitTerminalResult(record, result);
       } else {
-        const persistedResult = persistence.terminal({
+        persistence.terminal({
           status: "cancelled",
           finalText: null,
           error: "Child was cancelled before execution started.",
@@ -846,7 +847,7 @@ export function createSubagentSupervisor(
           turns: result.turns,
           costUsd: result.costUsd,
         });
-        commitTerminalResult(record, persistedResult);
+        commitTerminalResult(record, result);
       }
       publishProgress({
         status: "cancelled",
@@ -916,6 +917,7 @@ export function createSubagentSupervisor(
           reason: content,
         });
       } catch (caught) {
+        if (caught instanceof SubagentPersistenceError) throw caught;
         durableContent = `${content} Lifecycle receipt could not be stored: ${errorMessage(caught)}`;
       }
       receipts.set(delegationId, {
@@ -1078,8 +1080,8 @@ export function createSubagentSupervisor(
       const preparedAccepted: PreparedAcceptedCandidate[] = [];
       for (const childBudget of budgetLease.children) {
         const candidate = childBudget.value;
-        const childAgentId = `agent-${randomUUID()}`;
-        const childRunId = `subagent-${randomUUID()}`;
+        const childAgentId: AgentId = `agent-${randomUUID()}`;
+        const childRunId: SubagentRunId = `subagent-${randomUUID()}`;
         try {
           const persistence = options.lifecyclePersistence?.accepted({
             delegationId: candidate.delegationId,

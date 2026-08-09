@@ -2,13 +2,26 @@ import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import type { SubagentAcceptedLifecycle } from "../../src/agent/subagent-lifecycle.ts";
+import type {
+  AgentId,
+  PersistedSubagentCanonicalResult,
+  SubagentAcceptedLifecycle,
+  SubagentRunId,
+} from "../../src/agent/subagent-lifecycle.ts";
+import type {
+  AgentResultRecord,
+  AgentRunAcceptedRecord,
+  AgentRunAccountingRecord,
+  AgentRunRunningRecord,
+  AgentRunTerminalRecord,
+} from "../../src/cli/agent-tree-store/model.ts";
+import { transcriptFilePath } from "../../src/cli/agent-tree-store/transcript.ts";
 import { createAgentTreeHistory } from "../../src/cli/agent-tree-store.ts";
 import { createSessionStore } from "../../src/cli/session-store.ts";
 
 function acceptedLifecycle(
-  childAgentId: string,
-  childRunId: string,
+  childAgentId: AgentId,
+  childRunId: SubagentRunId,
 ): SubagentAcceptedLifecycle {
   return {
     delegationId: `parent:tool-${childAgentId}`,
@@ -24,7 +37,404 @@ function acceptedLifecycle(
   };
 }
 
+function acceptedRecord(
+  lifecycle: SubagentAcceptedLifecycle,
+  sessionId: string,
+): AgentRunAcceptedRecord {
+  return {
+    schemaVersion: 1,
+    type: "agent_run_accepted",
+    timestamp: "2023-11-14T22:13:20.000Z",
+    transcriptRef: `agent-transcript:${sessionId}/${lifecycle.childAgentId}`,
+    ...lifecycle,
+  };
+}
+
+function runningRecord(
+  accepted: AgentRunAcceptedRecord,
+): AgentRunRunningRecord {
+  return {
+    schemaVersion: 1,
+    type: "agent_run_running",
+    timestamp: "2023-11-14T22:13:21.000Z",
+    childAgentId: accepted.childAgentId,
+    childRunId: accepted.childRunId,
+  };
+}
+
+function accountingRecord(
+  accepted: AgentRunAcceptedRecord,
+): AgentRunAccountingRecord {
+  return {
+    schemaVersion: 1,
+    type: "agent_run_accounting",
+    timestamp: "2023-11-14T22:13:22.000Z",
+    childAgentId: accepted.childAgentId,
+    childRunId: accepted.childRunId,
+    usage: {
+      inputTokens: 10,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 10,
+      outputTokens: 2,
+    },
+    turns: 1,
+    costUsd: 0.0001,
+  };
+}
+
+function completedResult(
+  accepted: AgentRunAcceptedRecord,
+): PersistedSubagentCanonicalResult {
+  return {
+    delegationId: accepted.delegationId,
+    childAgentId: accepted.childAgentId,
+    childRunId: accepted.childRunId,
+    task: accepted.task,
+    transcriptRef: accepted.transcriptRef,
+    status: "completed",
+    finalText: "Complete.",
+    error: null,
+    usage: {
+      inputTokens: 10,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 10,
+      outputTokens: 2,
+    },
+    turns: 1,
+    costUsd: 0.0001,
+  };
+}
+
+function resultRecord(accepted: AgentRunAcceptedRecord): AgentResultRecord {
+  return {
+    schemaVersion: 1,
+    type: "agent_result",
+    timestamp: "2023-11-14T22:13:23.000Z",
+    result: completedResult(accepted),
+  };
+}
+
+function terminalRecord(
+  accepted: AgentRunAcceptedRecord,
+  status: AgentRunTerminalRecord["status"] = "completed",
+): AgentRunTerminalRecord {
+  return {
+    schemaVersion: 1,
+    type: "agent_run_terminal",
+    timestamp: "2023-11-14T22:13:24.000Z",
+    childAgentId: accepted.childAgentId,
+    childRunId: accepted.childRunId,
+    status,
+  };
+}
+
 describe("Agent Tree Store", () => {
+  test(`Given one durable rejection and one accepted child move through the live lifecycle,
+    When callers inspect each state and accidentally reuse stale lifecycle handles,
+    Then history stays truthful and terminal facts cannot be mutated`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    createSessionStore({ sessionId: "live-lifecycle", workspace, runtime });
+    const lifecycle = acceptedLifecycle(
+      "agent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "subagent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
+
+    try {
+      const history = createAgentTreeHistory({
+        sessionId: "live-lifecycle",
+        runtime,
+      });
+      history.persistence.rejected({
+        delegationId: "parent:hard-rejection",
+        parentRunId: "parent",
+        parentToolCallId: "hard-rejection",
+        task: "Do not admit this child.",
+        reason: "Delegation rejected before admission.",
+      });
+      expect(history.entries()).toEqual([]);
+
+      const run = history.persistence.accepted(lifecycle);
+      run.transcript.initialize([
+        {
+          role: "user",
+          content: "Inspect the live child.",
+          origin: { type: "runtime_subagent_delegation" },
+        },
+      ]);
+      run.transcript.replace([
+        {
+          role: "user",
+          content: "Inspect only the durable boundary.",
+          origin: { type: "runtime_subagent_delegation" },
+        },
+      ]);
+      const queued = history.entries()[0];
+      if (queued === undefined) throw new Error("missing queued child");
+      expect(queued).toMatchObject({ status: "queued", result: null });
+      expect(history.transcript(queued)).toContain(
+        "Inspect only the durable boundary.",
+      );
+
+      const running = run.running();
+      expect(() => run.running()).toThrow("started twice");
+      running.accounting({
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 10,
+          uncachedInputTokens: 20,
+          outputTokens: 5,
+        },
+        turns: 1,
+        costUsd: 0.00004,
+      });
+      expect(history.entries()).toMatchObject([
+        { status: "running", accounting: { turns: 1 }, result: null },
+      ]);
+      running.terminal({
+        status: "failed",
+        finalText: null,
+        error: "Provider rejected the request.",
+        usage: {
+          inputTokens: 30,
+          cachedInputTokens: 10,
+          uncachedInputTokens: 20,
+          outputTokens: 5,
+        },
+        turns: 1,
+        costUsd: 0.00004,
+      });
+
+      expect(() =>
+        running.accounting({
+          usage: {
+            inputTokens: 40,
+            cachedInputTokens: 10,
+            uncachedInputTokens: 30,
+            outputTokens: 6,
+          },
+          turns: 2,
+          costUsd: 0.00006,
+        }),
+      ).toThrow("is terminal");
+      expect(() =>
+        running.terminal({
+          status: "completed",
+          finalText: "must not replace the failure",
+          error: null,
+          usage: {
+            inputTokens: 40,
+            cachedInputTokens: 10,
+            uncachedInputTokens: 30,
+            outputTokens: 6,
+          },
+          turns: 2,
+          costUsd: 0.00006,
+        }),
+      ).toThrow("is terminal");
+      expect(() => history.persistence.accepted(lifecycle)).toThrow(
+        "duplicate child agent id",
+      );
+
+      const cancelledBeforeStart = history.persistence.accepted(
+        acceptedLifecycle(
+          "agent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaac",
+          "subagent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaac",
+        ),
+      );
+      cancelledBeforeStart.terminal({
+        status: "cancelled",
+        finalText: null,
+        error: "Child was cancelled before execution started.",
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+        },
+        turns: 0,
+        costUsd: 0,
+      });
+
+      const reopened = createAgentTreeHistory({
+        sessionId: "live-lifecycle",
+        runtime,
+      });
+      const failed = reopened.entries()[0];
+      if (failed === undefined) throw new Error("missing failed child");
+      expect(failed).toMatchObject({
+        status: "failed",
+        result: {
+          status: "failed",
+          error: "Provider rejected the request.",
+        },
+      });
+      expect(reopened.transcript(failed)).toContain(
+        '"type":"transcript_terminal","status":"failed","complete":true',
+      );
+      const cancelled = reopened.entries()[1];
+      if (cancelled === undefined) throw new Error("missing cancelled child");
+      expect(reopened.transcript(cancelled)).toContain(
+        '"type":"transcript_initialize","messages":[]',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given secret-like text crosses every child-history persistence boundary,
+    When a rejected delegation and a completed child are stored,
+    Then raw secrets never reach either durable JSONL ledger`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-redaction-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "redacted-history";
+    const secrets = {
+      task: "sk-taskSecret123456",
+      prompt: "sk-promptSecret123456",
+      message: "sk-messageSecret123456",
+      result: "sk-resultSecret123456",
+      rejection: "sk-rejectionSecret123456",
+    };
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      history.persistence.rejected({
+        delegationId: "parent:secret-rejection",
+        parentRunId: "parent",
+        parentToolCallId: "secret-rejection",
+        task: secrets.task,
+        reason: secrets.rejection,
+      });
+      const run = history.persistence.accepted({
+        ...acceptedLifecycle(
+          "agent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+          "subagent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+        ),
+        task: secrets.task,
+        systemPrompt: secrets.prompt,
+      });
+      run.transcript.initialize([
+        {
+          role: "user",
+          content: secrets.message,
+          origin: { type: "runtime_subagent_delegation" },
+        },
+      ]);
+      run.running().terminal({
+        status: "completed",
+        finalText: secrets.result,
+        error: null,
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 10,
+          outputTokens: 2,
+        },
+        turns: 1,
+        costUsd: 0.0001,
+      });
+
+      const agentsDirectory = join(keelHome, "sessions", sessionId, "agents");
+      const durableText = [
+        await readFile(join(agentsDirectory, "events.jsonl"), "utf8"),
+        await readFile(
+          join(
+            agentsDirectory,
+            "transcripts",
+            "agent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab.jsonl",
+          ),
+          "utf8",
+        ),
+      ].join("\n");
+      expect(durableText).toContain("[REDACTED_SECRET]");
+      for (const secret of Object.values(secrets)) {
+        expect(durableText).not.toContain(secret);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  const missingTranscriptStatuses: readonly ("running" | "completed")[] = [
+    "running",
+    "completed",
+  ];
+  test.each(missingTranscriptStatuses)(
+    `Given a $status child has an accepted event but its transcript file is missing,
+    When saved history is reopened,
+    Then recovery fails closed instead of fabricating an empty transcript`,
+    async (status) => {
+      const workspace = await mkdtemp(join(tmpdir(), "keel-agent-missing-"));
+      const keelHome = join(workspace, ".keel-home");
+      let now = 1_700_000_000_000;
+      const runtime = {
+        env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+        now: () => now++,
+      };
+      const sessionId = `missing-${status}`;
+      const lifecycle = acceptedLifecycle(
+        "agent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "subagent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      );
+      createSessionStore({ sessionId, workspace, runtime });
+
+      try {
+        const history = createAgentTreeHistory({ sessionId, runtime });
+        const run = history.persistence.accepted(lifecycle);
+        run.transcript.initialize([
+          {
+            role: "user",
+            content: "Inspect before the transcript disappears.",
+            origin: { type: "runtime_subagent_delegation" },
+          },
+        ]);
+        const running = run.running();
+        if (status === "completed") {
+          running.terminal({
+            status: "completed",
+            finalText: "Done.",
+            error: null,
+            usage: {
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              uncachedInputTokens: 10,
+              outputTokens: 2,
+            },
+            turns: 1,
+            costUsd: 0.0001,
+          });
+        }
+        await rm(
+          join(
+            keelHome,
+            "sessions",
+            sessionId,
+            "agents",
+            "transcripts",
+            `${lifecycle.childAgentId}.jsonl`,
+          ),
+        );
+
+        expect(() => createAgentTreeHistory({ sessionId, runtime })).toThrow(
+          "cannot read",
+        );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
   test(`Given a completed child has a canonical result and transcript,
     When the saved session history is opened again,
     Then its terminal facts remain unchanged and are not duplicated`, async () => {
@@ -219,7 +629,10 @@ describe("Agent Tree Store", () => {
           result: { status: "interrupted" },
         },
       ]);
-      expect(recovered.transcript(lifecycle.childAgentId)).toContain(
+      const recoveredEntry = recovered.entries()[0];
+      if (recoveredEntry === undefined)
+        throw new Error("missing recovered child");
+      expect(recovered.transcript(recoveredEntry)).toContain(
         '"type":"transcript_terminal","status":"interrupted","complete":false',
       );
 
@@ -236,6 +649,177 @@ describe("Agent Tree Store", () => {
       );
       expect(events.match(/"type":"agent_result"/gu)).toHaveLength(1);
       expect(events.match(/"type":"agent_run_terminal"/gu)).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a child persisted running immediately before its transcript initialization,
+    When the foreground owner exits in that valid crash window,
+    Then recovery creates one empty initialization and one incomplete interrupted terminal`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "running-before-transcript-initialize";
+    const lifecycle = acceptedLifecycle(
+      "agent-44444444-4444-4444-8444-444444444444",
+      "subagent-44444444-4444-4444-8444-444444444444",
+    );
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      history.persistence.accepted(lifecycle).running();
+
+      const recovered = createAgentTreeHistory({ sessionId, runtime });
+      const recoveredEntry = recovered.entries()[0];
+      if (recoveredEntry === undefined)
+        throw new Error("missing recovered child");
+      expect(recoveredEntry).toMatchObject({
+        status: "interrupted",
+        result: { status: "interrupted" },
+      });
+      const transcript = recovered.transcript(recoveredEntry);
+      expect(
+        transcript.match(/"type":"transcript_initialize","messages":\[\]/gu),
+      ).toHaveLength(1);
+      expect(
+        transcript.match(
+          /"type":"transcript_terminal","status":"interrupted","complete":false/gu,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a running child result is durable but its transcript still has only a header,
+    When recovery inspects the completed lifecycle,
+    Then it rejects the missing started transcript instead of fabricating one`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "running-result-without-transcript";
+    const lifecycle = acceptedLifecycle(
+      "agent-66666666-6666-4666-8666-666666666666",
+      "subagent-66666666-6666-4666-8666-666666666666",
+    );
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      const running = history.persistence.accepted(lifecycle).running();
+      expect(() =>
+        running.terminal({
+          status: "completed",
+          finalText: "Done.",
+          error: null,
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 10,
+            outputTokens: 2,
+          },
+          turns: 1,
+          costUsd: 0.0001,
+        }),
+      ).toThrow("was never initialized");
+      expect(() => createAgentTreeHistory({ sessionId, runtime })).toThrow(
+        "was never initialized",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given accounting proves a running child initialized its transcript,
+    When the transcript is later truncated back to its header,
+    Then recovery rejects the lost evidence instead of synthesizing an empty transcript`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "accounted-transcript-truncated";
+    const lifecycle = acceptedLifecycle(
+      "agent-77777777-7777-4777-8777-777777777777",
+      "subagent-77777777-7777-4777-8777-777777777777",
+    );
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      const run = history.persistence.accepted(lifecycle);
+      run.transcript.initialize([]);
+      run.running().accounting({
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 10,
+          outputTokens: 2,
+        },
+        turns: 1,
+        costUsd: 0.0001,
+      });
+      const transcriptPath = join(
+        keelHome,
+        "sessions",
+        sessionId,
+        "agents",
+        "transcripts",
+        `${lifecycle.childAgentId}.jsonl`,
+      );
+      const header = (await readFile(transcriptPath, "utf8")).split("\n")[0];
+      if (header === undefined) throw new Error("missing transcript header");
+      await writeFile(transcriptPath, `${header}\n`, "utf8");
+
+      expect(() => createAgentTreeHistory({ sessionId, runtime })).toThrow(
+        "was never initialized",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an accepted child never reached running but its ledger claims completion,
+    When the untrusted history is replayed,
+    Then the impossible queued result is rejected`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "queued-completed-result";
+    const lifecycle = acceptedLifecycle(
+      "agent-88888888-8888-4888-8888-888888888888",
+      "subagent-88888888-8888-4888-8888-888888888888",
+    );
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      history.persistence.accepted(lifecycle);
+      await appendFile(
+        join(keelHome, "sessions", sessionId, "agents", "events.jsonl"),
+        `${JSON.stringify(resultRecord(acceptedRecord(lifecycle, sessionId)))}\n`,
+        "utf8",
+      );
+
+      expect(() => createAgentTreeHistory({ sessionId, runtime })).toThrow(
+        "completed before execution started",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -295,6 +879,11 @@ describe("Agent Tree Store", () => {
       const lines = (await readFile(transcriptPath, "utf8"))
         .trimEnd()
         .split("\n");
+      const inspectTranscript = (): string => {
+        const entry = history.entries()[0];
+        if (entry === undefined) throw new Error("missing transcript entry");
+        return history.transcript(entry);
+      };
       const originalHeader = lines[0];
       if (originalHeader === undefined)
         throw new Error("missing transcript header");
@@ -302,14 +891,23 @@ describe("Agent Tree Store", () => {
       const originalTerminal = lines[terminalIndex];
       if (originalTerminal === undefined)
         throw new Error("missing transcript terminal");
+      const originalLines = [...lines];
       lines[terminalIndex] = originalTerminal.replace(
         '"status":"completed"',
         '"status":"failed"',
       );
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
-      expect(() => history.transcript(lifecycle.childAgentId)).toThrow(
-        "conflicting terminal",
+      expect(inspectTranscript).toThrow("conflicting terminal");
+
+      lines[terminalIndex] = originalTerminal.replace(
+        '"complete":true',
+        '"complete":false',
       );
+      await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
+      expect(inspectTranscript).toThrow("conflicting terminal");
+      expect(() =>
+        createAgentTreeHistory({ sessionId: "corrupt-transcript", runtime }),
+      ).toThrow("conflicting terminal");
 
       lines[terminalIndex] = originalTerminal;
       const changedHeader = originalHeader.replace(
@@ -318,20 +916,361 @@ describe("Agent Tree Store", () => {
       );
       lines[0] = changedHeader;
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
-      expect(() => history.transcript(lifecycle.childAgentId)).toThrow(
-        "identity mismatches acceptance",
-      );
+      expect(inspectTranscript).toThrow("identity mismatches acceptance");
 
       lines[0] = originalHeader;
       lines[1] =
         '{"schemaVersion":1,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
+      expect(inspectTranscript).toThrow("invalid agent transcript record");
 
-      expect(() => history.transcript(lifecycle.childAgentId)).toThrow(
-        "invalid agent transcript record",
+      await writeFile(
+        transcriptPath,
+        `${originalLines.slice(0, -1).join("\n")}\n`,
+        "utf8",
+      );
+      expect(inspectTranscript).toThrow("has no terminal record");
+
+      const initializeLine = originalLines[1];
+      if (initializeLine === undefined)
+        throw new Error("missing transcript initialization");
+      await writeFile(
+        transcriptPath,
+        `${originalLines.join("\n")}\n${initializeLine}\n`,
+        "utf8",
+      );
+      expect(inspectTranscript).toThrow("changed after terminal");
+
+      const appendLine = initializeLine.replace(
+        '"type":"transcript_initialize"',
+        '"type":"transcript_append"',
+      );
+      await writeFile(
+        transcriptPath,
+        `${originalHeader}\n${appendLine}\n${originalTerminal}\n`,
+        "utf8",
+      );
+      expect(inspectTranscript).toThrow("changed before initialization");
+
+      await writeFile(
+        transcriptPath,
+        `${originalHeader}\n${initializeLine}\n${initializeLine}\n${originalTerminal}\n`,
+        "utf8",
+      );
+      expect(inspectTranscript).toThrow("initialized more than once");
+
+      await writeFile(
+        transcriptPath,
+        `${originalHeader}\n${originalTerminal}\n`,
+        "utf8",
+      );
+      expect(inspectTranscript).toThrow("terminated before initialization");
+
+      await writeFile(
+        transcriptPath,
+        '{"schemaVersion":1,"type":"unknown"}\n',
+        "utf8",
+      );
+      expect(inspectTranscript).toThrow("invalid agent transcript header");
+
+      await writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf8");
+      const transcriptsDirectory = join(
+        keelHome,
+        "sessions",
+        "corrupt-transcript",
+        "agents",
+        "transcripts",
+      );
+      expect(() =>
+        transcriptFilePath(transcriptsDirectory, "agent-../../outside"),
+      ).toThrow("invalid child agent id");
+      const orphanPath = join(transcriptsDirectory, "agent-deadbeef.jsonl");
+      const invalidNamePath = join(transcriptsDirectory, "notes.jsonl");
+      const unrelatedPath = join(transcriptsDirectory, "notes.txt");
+      await writeFile(orphanPath, "orphan", "utf8");
+      await writeFile(invalidNamePath, "invalid agent id", "utf8");
+      await writeFile(unrelatedPath, "unrelated", "utf8");
+      createAgentTreeHistory({ sessionId: "corrupt-transcript", runtime });
+      await expect(readFile(orphanPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(readFile(invalidNamePath, "utf8")).resolves.toBe(
+        "invalid agent id",
+      );
+      await expect(readFile(unrelatedPath, "utf8")).resolves.toBe("unrelated");
+
+      const openLifecycle = acceptedLifecycle(
+        "agent-66666666-6666-4666-8666-666666666666",
+        "subagent-66666666-6666-4666-8666-666666666666",
+      );
+      history.persistence.accepted(openLifecycle);
+      const openEntry = history.entries()[1];
+      if (openEntry === undefined) throw new Error("missing open child");
+      await appendFile(
+        join(transcriptsDirectory, `${openLifecycle.childAgentId}.jsonl`),
+        '{"schemaVersion":1,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":1,"type":"transcript_terminal","status":"completed","complete":true}\n',
+        "utf8",
+      );
+      expect(() => history.transcript(openEntry)).toThrow(
+        "open agent transcript",
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given current-schema agent events violate identity, ordering, or terminal immutability,
+    When the exclusive owner replays the append-only ledger,
+    Then every invalid lifecycle is rejected before recovery can rewrite history`, async () => {
+    const scenarios: readonly {
+      readonly id: string;
+      readonly mutations: (
+        accepted: AgentRunAcceptedRecord,
+      ) => readonly object[];
+      readonly expected: string;
+    }[] = [
+      {
+        id: "wrong-run",
+        mutations: (accepted) => [
+          accepted,
+          {
+            ...runningRecord(accepted),
+            childRunId: "subagent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          },
+        ],
+        expected: "references unknown run",
+      },
+      {
+        id: "duplicate-acceptance",
+        mutations: (accepted) => [accepted, accepted],
+        expected: "duplicate child agent id",
+      },
+      {
+        id: "duplicate-delegation",
+        mutations: (accepted) => [
+          accepted,
+          {
+            ...accepted,
+            childAgentId: "agent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            childRunId: "subagent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            parentToolCallId: "different-tool",
+            transcriptRef:
+              "agent-transcript:test/agent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          },
+        ],
+        expected: "duplicate delegation id",
+      },
+      {
+        id: "duplicate-parent-tool",
+        mutations: (accepted) => [
+          accepted,
+          {
+            ...accepted,
+            delegationId: "parent:different-delegation",
+            childAgentId: "agent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            childRunId: "subagent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            transcriptRef:
+              "agent-transcript:test/agent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          },
+        ],
+        expected: "duplicate parent tool call",
+      },
+      {
+        id: "duplicate-child-run",
+        mutations: (accepted) => [
+          accepted,
+          {
+            ...accepted,
+            delegationId: "parent:different-tool",
+            childAgentId: "agent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            parentToolCallId: "different-tool",
+            transcriptRef:
+              "agent-transcript:test/agent-dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          },
+        ],
+        expected: "duplicate child run id",
+      },
+      {
+        id: "double-start",
+        mutations: (accepted) => [
+          accepted,
+          runningRecord(accepted),
+          runningRecord(accepted),
+        ],
+        expected: "started twice",
+      },
+      {
+        id: "early-accounting",
+        mutations: (accepted) => [accepted, accountingRecord(accepted)],
+        expected: "accounting outside a running lifecycle",
+      },
+      {
+        id: "duplicate-result",
+        mutations: (accepted) => [
+          accepted,
+          runningRecord(accepted),
+          resultRecord(accepted),
+          resultRecord(accepted),
+        ],
+        expected: "duplicate result",
+      },
+      {
+        id: "delegation-mismatch",
+        mutations: (accepted) => {
+          const result = resultRecord(accepted);
+          return [
+            accepted,
+            {
+              ...result,
+              result: { ...result.result, delegationId: "another:delegation" },
+            },
+          ];
+        },
+        expected: "result identity mismatches acceptance",
+      },
+      {
+        id: "terminal-without-result",
+        mutations: (accepted) => [accepted, terminalRecord(accepted)],
+        expected: "terminated without exactly one result",
+      },
+      {
+        id: "terminal-status-mismatch",
+        mutations: (accepted) => [
+          accepted,
+          runningRecord(accepted),
+          resultRecord(accepted),
+          terminalRecord(accepted, "failed"),
+        ],
+        expected: "terminal status mismatches result",
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+      const keelHome = join(workspace, ".keel-home");
+      let now = 1_700_000_000_000;
+      const runtime = {
+        env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+        now: () => now++,
+      };
+      const sessionId = `invalid-order-${scenario.id}`;
+      const lifecycle = acceptedLifecycle(
+        "agent-cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "subagent-cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      );
+      const accepted = acceptedRecord(lifecycle, sessionId);
+      createSessionStore({ sessionId, workspace, runtime });
+
+      try {
+        createAgentTreeHistory({ sessionId, runtime });
+        const events = [
+          {
+            schemaVersion: 1,
+            type: "agent_tree",
+            sessionId,
+            createdAt: "2023-11-14T22:13:20.000Z",
+          },
+          ...scenario.mutations(accepted),
+        ];
+        await writeFile(
+          join(keelHome, "sessions", sessionId, "agents", "events.jsonl"),
+          `${events.map((record) => JSON.stringify(record)).join("\n")}\n`,
+          "utf8",
+        );
+
+        expect(
+          () => createAgentTreeHistory({ sessionId, runtime }),
+          scenario.id,
+        ).toThrow(scenario.expected);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test.each([
+    {
+      id: "empty",
+      name: "an empty ledger",
+      events: () => "\n",
+      expected: "is empty",
+    },
+    {
+      id: "header",
+      name: "an invalid header",
+      events: () =>
+        `${JSON.stringify({ schemaVersion: 1, type: "unknown" })}\n`,
+      expected: "invalid agent tree header",
+    },
+    {
+      id: "session",
+      name: "a header for another session",
+      events: (sessionId: string) =>
+        `${JSON.stringify({
+          schemaVersion: 1,
+          type: "agent_tree",
+          sessionId: `${sessionId}-other`,
+          createdAt: "2023-11-14T22:13:20.000Z",
+        })}\n`,
+      expected: "does not match",
+    },
+    {
+      id: "json",
+      name: "a malformed middle record",
+      events: (sessionId: string) =>
+        `${JSON.stringify({
+          schemaVersion: 1,
+          type: "agent_tree",
+          sessionId,
+          createdAt: "2023-11-14T22:13:20.000Z",
+        })}\n{"schemaVersion":1,broken}\n`,
+      expected: "cannot parse",
+    },
+    {
+      id: "mutation",
+      name: "an unsupported mutation",
+      events: (sessionId: string) =>
+        `${[
+          {
+            schemaVersion: 1,
+            type: "agent_tree",
+            sessionId,
+            createdAt: "2023-11-14T22:13:20.000Z",
+          },
+          { schemaVersion: 1, type: "unknown" },
+        ]
+          .map((record) => JSON.stringify(record))
+          .join("\n")}\n`,
+      expected: "invalid agent tree record",
+    },
+  ])(
+    `Given a saved session agent ledger contains $name,
+    When the exclusive owner opens it,
+    Then the disk trust boundary fails closed`,
+    async ({ id, events, expected }) => {
+      const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+      const keelHome = join(workspace, ".keel-home");
+      let now = 1_700_000_000_000;
+      const runtime = {
+        env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+        now: () => now++,
+      };
+      const sessionId = `corrupt-tree-${id}`;
+      createSessionStore({ sessionId, workspace, runtime });
+
+      try {
+        createAgentTreeHistory({ sessionId, runtime });
+        await writeFile(
+          join(keelHome, "sessions", sessionId, "agents", "events.jsonl"),
+          events(sessionId),
+          "utf8",
+        );
+        expect(() => createAgentTreeHistory({ sessionId, runtime })).toThrow(
+          expected,
+        );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 });

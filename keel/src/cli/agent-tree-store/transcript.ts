@@ -1,13 +1,19 @@
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { SessionLedgerObserver } from "../../agent/session-ledger.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
-import type { SubagentTerminalStatus } from "../../agent/subagent-lifecycle.ts";
+import type {
+  AgentId,
+  SubagentTerminalStatus,
+} from "../../agent/subagent-lifecycle.ts";
+import { redactMessageForPersistence } from "../persistence-redaction.ts";
 import {
   agentTreeError,
+  type DirectorySync,
   type DurableJsonlWriter,
   parseJsonLine,
   readRepairableJsonl,
+  syncDurableDirectory,
 } from "./jsonl.ts";
 import {
   AGENT_TRANSCRIPT_MAX_BYTES,
@@ -23,25 +29,28 @@ import {
 interface ParsedTranscript {
   readonly content: string;
   readonly header: AgentTranscriptHeaderRecord;
-  readonly mutations: readonly ParsedTranscriptMutation[];
+  readonly state: TranscriptReplayState;
 }
 
 export type TranscriptTerminalExpectation =
   | { readonly kind: "open" }
   | { readonly kind: "terminal"; readonly status: SubagentTerminalStatus };
 
-type ParsedTranscriptMutation =
+export type TranscriptInitializationExpectation =
+  | { readonly kind: "optional" }
+  | { readonly kind: "required" };
+
+type TranscriptReplayState =
+  | { readonly kind: "uninitialized" }
+  | { readonly kind: "initialized" }
   | {
-      readonly type:
-        | "transcript_initialize"
-        | "transcript_append"
-        | "transcript_replace";
-    }
-  | AgentTranscriptTerminalRecord;
+      readonly kind: "terminal";
+      readonly record: AgentTranscriptTerminalRecord;
+    };
 
 export function transcriptFilePath(
   transcriptsDirectory: string,
-  childAgentId: string,
+  childAgentId: AgentId,
 ): string {
   const parsed = agentIdSchema.safeParse(childAgentId);
   if (!parsed.success) agentTreeError(`invalid child agent id ${childAgentId}`);
@@ -79,9 +88,13 @@ export function ensureTranscriptExists(
   writer.create(filePath, transcriptHeader(accepted), "agent transcript");
 }
 
-export function removeTranscript(filePath: string): void {
+export function removeTranscript(
+  filePath: string,
+  syncDirectory: DirectorySync = syncDurableDirectory,
+): void {
   try {
     unlinkSync(filePath);
+    syncDirectory(dirname(filePath));
   } catch (caught) {
     agentTreeError(
       `cannot remove uncommitted agent transcript ${filePath}: ${String(caught)}`,
@@ -92,6 +105,7 @@ export function removeTranscript(filePath: string): void {
 export function reconcileUnacceptedTranscripts(
   transcriptsDirectory: string,
   acceptedChildAgentIds: ReadonlySet<string>,
+  syncDirectory: DirectorySync = syncDurableDirectory,
 ): void {
   let names: readonly string[];
   try {
@@ -110,47 +124,61 @@ export function reconcileUnacceptedTranscripts(
     ) {
       continue;
     }
-    removeTranscript(join(transcriptsDirectory, name));
+    removeTranscript(join(transcriptsDirectory, name), syncDirectory);
   }
 }
 
 function parseTranscript(filePath: string): ParsedTranscript {
   const content = readRepairableJsonl(filePath, AGENT_TRANSCRIPT_MAX_BYTES);
-  const lines = content.split("\n").filter((line) => line !== "");
-  const headerLine = lines[0];
-  if (headerLine === undefined) {
-    agentTreeError(`agent transcript ${filePath} is empty`);
-  }
-  const parsedHeader = transcriptHeaderSchema.safeParse(
-    parseJsonLine(filePath, headerLine, 1),
-  );
+  const records = content
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line, offset) => parseJsonLine(filePath, line, offset + 1));
+  const [headerValue, ...mutationValues] = records;
+  const parsedHeader = transcriptHeaderSchema.safeParse(headerValue);
   if (!parsedHeader.success) {
     agentTreeError(`invalid agent transcript header ${filePath}`);
   }
-  const mutations: ParsedTranscriptMutation[] = [];
-  let terminalSeen = false;
-  for (let index = 1; index < lines.length; index++) {
-    const line = lines[index];
-    if (line === undefined) continue;
-    const parsed = transcriptMutationSchema.safeParse(
-      parseJsonLine(filePath, line, index + 1),
-    );
+  let state: TranscriptReplayState = { kind: "uninitialized" };
+  for (const [offset, mutationValue] of mutationValues.entries()) {
+    const lineNumber = offset + 2;
+    const parsed = transcriptMutationSchema.safeParse(mutationValue);
     if (!parsed.success) {
       agentTreeError(
-        `invalid agent transcript record ${filePath} line ${index + 1}`,
+        `invalid agent transcript record ${filePath} line ${lineNumber}`,
       );
     }
-    if (terminalSeen) {
+    if (state.kind === "terminal") {
       agentTreeError(`agent transcript ${filePath} changed after terminal`);
     }
-    terminalSeen = parsed.data.type === "transcript_terminal";
-    mutations.push(
-      parsed.data.type === "transcript_terminal"
-        ? parsed.data
-        : { type: parsed.data.type },
-    );
+    switch (parsed.data.type) {
+      case "transcript_initialize":
+        if (state.kind === "initialized") {
+          agentTreeError(
+            `agent transcript ${filePath} initialized more than once`,
+          );
+        }
+        state = { kind: "initialized" };
+        break;
+      case "transcript_append":
+      case "transcript_replace":
+        if (state.kind !== "initialized") {
+          agentTreeError(
+            `agent transcript ${filePath} changed before initialization`,
+          );
+        }
+        break;
+      case "transcript_terminal":
+        if (state.kind !== "initialized") {
+          agentTreeError(
+            `agent transcript ${filePath} terminated before initialization`,
+          );
+        }
+        state = { kind: "terminal", record: parsed.data };
+        break;
+    }
   }
-  return { content, header: parsedHeader.data, mutations };
+  return { content, header: parsedHeader.data, state };
 }
 
 function assertTranscriptIdentity(
@@ -188,21 +216,21 @@ export function readAgentTranscript(
 ): string {
   const parsed = parseTranscript(filePath);
   assertTranscriptIdentity(filePath, parsed.header, accepted);
-  const terminal = parsed.mutations.at(-1);
   if (terminalExpectation.kind === "open") {
-    if (terminal?.type === "transcript_terminal") {
+    if (parsed.state.kind === "terminal") {
       agentTreeError(`open agent transcript ${filePath} has a terminal record`);
     }
     return parsed.content;
   }
-  if (terminal?.type !== "transcript_terminal") {
+  if (parsed.state.kind !== "terminal") {
     agentTreeError(
       `terminal agent transcript ${filePath} has no terminal record`,
     );
   }
   if (
-    terminal.status !== terminalExpectation.status ||
-    terminal.complete !== (terminalExpectation.status !== "interrupted")
+    parsed.state.record.status !== terminalExpectation.status ||
+    parsed.state.record.complete !==
+      (terminalExpectation.status !== "interrupted")
   ) {
     agentTreeError(`agent transcript ${filePath} has a conflicting terminal`);
   }
@@ -222,7 +250,7 @@ export function createTranscriptObserver(
       {
         schemaVersion: AGENT_TREE_SCHEMA_VERSION,
         type,
-        messages,
+        messages: messages.map(redactMessageForPersistence),
       },
       "agent transcript",
     );
@@ -234,23 +262,65 @@ export function createTranscriptObserver(
   };
 }
 
+export function ensureInterruptedTranscriptInitialized(
+  writer: DurableJsonlWriter,
+  filePath: string,
+  accepted: AgentRunAcceptedRecord,
+  initialization: TranscriptInitializationExpectation,
+): void {
+  const parsed = parseTranscript(filePath);
+  assertTranscriptIdentity(filePath, parsed.header, accepted);
+  if (parsed.state.kind === "terminal") {
+    agentTreeError(
+      `agent transcript ${filePath} terminated before its interrupted result`,
+    );
+  }
+  if (parsed.state.kind === "initialized") return;
+  if (initialization.kind === "required") {
+    agentTreeError(`agent transcript ${filePath} was never initialized`);
+  }
+  writer.append(
+    filePath,
+    {
+      schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+      type: "transcript_initialize",
+      messages: [],
+    },
+    "agent transcript",
+  );
+}
+
 export function ensureTranscriptTerminal(
   writer: DurableJsonlWriter,
   filePath: string,
   accepted: AgentRunAcceptedRecord,
   status: SubagentTerminalStatus,
+  initialization: TranscriptInitializationExpectation,
 ): void {
   const parsed = parseTranscript(filePath);
   assertTranscriptIdentity(filePath, parsed.header, accepted);
-  const lastMutation = parsed.mutations.at(-1);
-  if (lastMutation?.type === "transcript_terminal") {
+  if (parsed.state.kind === "terminal") {
     if (
-      lastMutation.status !== status ||
-      lastMutation.complete !== (status !== "interrupted")
+      parsed.state.record.status !== status ||
+      parsed.state.record.complete !== (status !== "interrupted")
     ) {
       agentTreeError(`agent transcript ${filePath} has a conflicting terminal`);
     }
     return;
+  }
+  if (parsed.state.kind === "uninitialized") {
+    if (initialization.kind === "required") {
+      agentTreeError(`agent transcript ${filePath} was never initialized`);
+    }
+    writer.append(
+      filePath,
+      {
+        schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+        type: "transcript_initialize",
+        messages: [],
+      },
+      "agent transcript",
+    );
   }
   writer.append(
     filePath,

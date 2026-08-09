@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,9 +40,92 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Durable Subagent History", () => {
+  test(`Given a saved-session delegation has an invalid focus path,
+    When admission rejects it before creating a child run,
+    Then only the durable rejection receipt remains and main can continue`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-rejection-"));
+    const keelHome = join(workspace, ".keel-home");
+    const sessionId = "rejected-agent-history";
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (requests.length === 1) {
+          response.end(
+            [
+              sseToolCall("delegate_outside", "delegate", {
+                task: "Inspect a path outside the workspace.",
+                focusPaths: ["../outside"],
+              }),
+              sseToolFinish(),
+              "data: [DONE]\n\n",
+            ].join(""),
+          );
+          return;
+        }
+        response.end(
+          sseTextReplyWithUsage("The unsafe delegation was rejected."),
+        );
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("Use a subagent to inspect an unsafe path.\n");
+    const fixture = createRuntime(
+      [
+        "--session",
+        sessionId,
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "--no-skills",
+      ],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: keelHome,
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      expect(await runCliMain(fixture.runtime), fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(2);
+      expect(fixture.stdout()).toContain("The unsafe delegation was rejected.");
+      const agentsDirectory = join(keelHome, "sessions", sessionId, "agents");
+      const events = await readFile(
+        join(agentsDirectory, "events.jsonl"),
+        "utf8",
+      );
+      expect(events).toContain('"type":"delegation_rejected"');
+      expect(events).not.toContain('"type":"agent_run_accepted"');
+      expect(events).not.toContain('"type":"agent_result"');
+      await expect(
+        readdir(join(agentsDirectory, "transcripts")),
+      ).resolves.toEqual([]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a saved interactive session completed a foreground child,
-    When the user restarts Keel and inspects its agents, detail, and transcript,
-    Then the durable tree preserves terminal facts without copying the child history into the parent ledger`, async () => {
+    When the user restarts Keel, inspects its agents, and forks the parent session,
+    Then terminal facts survive restart while the parent ledger and fork stay free of copied child history`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-history-"));
     const keelHome = join(workspace, ".keel-home");
@@ -191,6 +274,41 @@ describe("CLI Main - Durable Subagent History", () => {
       expect(
         requestWithMessagesSchema.parse(requests.at(-1)).messages,
       ).toBeDefined();
+
+      const forkSessionId = "agent-history-fork";
+      const forked = createRuntime(
+        ["sessions", "fork", SESSION_ID, forkSessionId],
+        {
+          cwd: workspace,
+          env: { KEEL_HOME: keelHome },
+        },
+      );
+      expect(await runCliMain(forked.runtime), forked.stderr()).toBe(0);
+
+      const forkInput = new PassThrough();
+      forkInput.end("/agents\n");
+      const inspectFork = createRuntime(
+        ["--resume", forkSessionId, "--provider", "fake", "--no-skills"],
+        {
+          cwd: workspace,
+          input: forkInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+          },
+        },
+      );
+      expect(await runCliMain(inspectFork.runtime), inspectFork.stderr()).toBe(
+        0,
+      );
+      expect(inspectFork.stdout()).toContain("No subagents recorded.");
+      const forkEvents = await readFile(
+        join(keelHome, "sessions", forkSessionId, "agents", "events.jsonl"),
+        "utf8",
+      );
+      expect(forkEvents).toContain('"type":"agent_tree"');
+      expect(forkEvents).not.toContain('"type":"agent_run_accepted"');
+      expect(requests).toHaveLength(4);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });

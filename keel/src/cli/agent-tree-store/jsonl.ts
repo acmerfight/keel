@@ -6,29 +6,41 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  rmSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { errorMessage } from "../../core/error.ts";
 
 type JsonlKind = "agent tree" | "agent transcript";
+export type DirectorySync = (directory: string) => void;
 
 type WriterState =
   | { readonly kind: "writable" }
   | { readonly kind: "failed"; readonly error: Error };
 
 export interface DurableJsonlWriter {
+  readonly ensureDirectory: (directory: string) => void;
+  readonly syncDirectory: DirectorySync;
   readonly create: (filePath: string, record: object, kind: JsonlKind) => void;
   readonly append: (filePath: string, record: object, kind: JsonlKind) => void;
 }
 
 export interface JsonlWriteRuntime {
-  readonly create: (filePath: string, content: string) => void;
+  readonly create: (filePath: string, content: string) => JsonlCreateResult;
   readonly append: (filePath: string, content: string) => void;
+  readonly syncDirectory?: (directory: string) => void;
 }
+
+type JsonlCreateResult =
+  | { readonly kind: "written" }
+  | {
+      readonly kind: "failed";
+      readonly ownership: "owned" | "unowned";
+      readonly error: unknown;
+    };
 
 export class IndeterminateJsonlWriteError extends Error {}
 
@@ -36,45 +48,74 @@ export function agentTreeError(message: string): never {
   throw new Error(`Error: ${message}`);
 }
 
-function closeAfterWrite(
-  fileDescriptor: number | undefined,
-  failure: unknown,
-): unknown {
-  if (fileDescriptor === undefined) return failure;
+function withSyncedFile(
+  filePath: string,
+  flags: "a" | "r" | "r+" | "wx",
+  operation: (fileDescriptor: number) => void,
+): void {
+  const fileDescriptor = openSync(filePath, flags, 0o600);
   try {
+    operation(fileDescriptor);
+    fsyncSync(fileDescriptor);
+  } finally {
     closeSync(fileDescriptor);
-    return failure;
-  } catch (caught) {
-    return failure ?? caught;
   }
 }
 
-function nodeCreate(filePath: string, content: string): void {
-  let fileDescriptor: number | undefined;
-  let failure: unknown;
-  try {
-    fileDescriptor = openSync(filePath, "wx", 0o600);
-    writeFileSync(fileDescriptor, content, "utf8");
-    fsyncSync(fileDescriptor);
-  } catch (caught) {
-    failure = caught;
+function syncDirectoryHandle(directory: string): void {
+  withSyncedFile(directory, "r", () => {});
+}
+
+export function createPlatformDirectorySync(
+  platform: NodeJS.Platform,
+  syncDirectory: DirectorySync = syncDirectoryHandle,
+): DirectorySync {
+  return platform === "win32" ? () => {} : syncDirectory;
+}
+
+export const syncDurableDirectory = createPlatformDirectorySync(
+  process.platform,
+);
+
+function ensureDurableDirectory(
+  directory: string,
+  syncDirectory: DirectorySync = syncDurableDirectory,
+): void {
+  const targetDirectory = resolve(directory);
+  mkdirSync(targetDirectory, {
+    recursive: true,
+    mode: 0o700,
+  });
+  const ancestorDirectories: string[] = [];
+  let current = targetDirectory;
+  for (;;) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    ancestorDirectories.push(parent);
+    current = parent;
   }
-  failure = closeAfterWrite(fileDescriptor, failure);
-  if (failure !== undefined) throw failure;
+  for (const ancestor of ancestorDirectories.reverse()) {
+    syncDirectory(ancestor);
+  }
+}
+
+function nodeCreate(filePath: string, content: string): JsonlCreateResult {
+  let ownership: "owned" | "unowned" = "unowned";
+  try {
+    withSyncedFile(filePath, "wx", (fileDescriptor) => {
+      ownership = "owned";
+      writeFileSync(fileDescriptor, content, "utf8");
+    });
+    return { kind: "written" };
+  } catch (error) {
+    return { kind: "failed", ownership, error };
+  }
 }
 
 function nodeAppend(filePath: string, content: string): void {
-  let fileDescriptor: number | undefined;
-  let failure: unknown;
-  try {
-    fileDescriptor = openSync(filePath, "a", 0o600);
+  withSyncedFile(filePath, "a", (fileDescriptor) => {
     appendFileSync(fileDescriptor, content, "utf8");
-    fsyncSync(fileDescriptor);
-  } catch (caught) {
-    failure = caught;
-  }
-  failure = closeAfterWrite(fileDescriptor, failure);
-  if (failure !== undefined) throw failure;
+  });
 }
 
 const nodeJsonlWriteRuntime: JsonlWriteRuntime = {
@@ -83,23 +124,17 @@ const nodeJsonlWriteRuntime: JsonlWriteRuntime = {
 };
 
 function rollbackAppend(filePath: string, originalBytes: number): void {
-  let fileDescriptor: number | undefined;
-  let failure: unknown;
-  try {
-    fileDescriptor = openSync(filePath, "r+");
+  withSyncedFile(filePath, "r+", (fileDescriptor) => {
     ftruncateSync(fileDescriptor, originalBytes);
-    fsyncSync(fileDescriptor);
-  } catch (caught) {
-    failure = caught;
-  }
-  failure = closeAfterWrite(fileDescriptor, failure);
-  if (failure !== undefined) throw failure;
+  });
 }
 
 export function createDurableJsonlWriter(
   runtime: JsonlWriteRuntime = nodeJsonlWriteRuntime,
 ): DurableJsonlWriter {
   let state: WriterState = { kind: "writable" };
+  const ensuredDirectories = new Set<string>();
+  const syncDirectory = runtime.syncDirectory ?? syncDurableDirectory;
 
   const writable = (): void => {
     if (state.kind === "failed") throw state.error;
@@ -109,21 +144,60 @@ export function createDurableJsonlWriter(
     state = { kind: "failed", error: failure };
     throw failure;
   };
+  const ensureDirectory = (directory: string): void => {
+    writable();
+    const targetDirectory = resolve(directory);
+    if (ensuredDirectories.has(targetDirectory)) return;
+    try {
+      ensureDurableDirectory(targetDirectory, syncDirectory);
+    } catch (caught) {
+      const failure = new IndeterminateJsonlWriteError(
+        `Error: cannot establish durable directory ${targetDirectory}: ${errorMessage(caught)}`,
+      );
+      state = { kind: "failed", error: failure };
+      throw failure;
+    }
+    let current = targetDirectory;
+    for (;;) {
+      ensuredDirectories.add(current);
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  };
 
   return {
+    ensureDirectory,
+    syncDirectory,
     create: (filePath, record, kind) => {
       writable();
-      try {
-        mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
-        runtime.create(filePath, `${JSON.stringify(record)}\n`);
-      } catch (caught) {
+      ensureDirectory(dirname(filePath));
+      const result = runtime.create(filePath, `${JSON.stringify(record)}\n`);
+      if (result.kind === "written") {
         try {
-          unlinkSync(filePath);
-        } catch {
-          // Reopening fails closed if an incomplete new ledger cannot be removed.
+          syncDirectory(dirname(filePath));
+        } catch (caught) {
+          const failure = new IndeterminateJsonlWriteError(
+            `Error: cannot publish ${kind} ${filePath}: ${errorMessage(caught)}`,
+          );
+          state = { kind: "failed", error: failure };
+          throw failure;
         }
-        fail(`cannot create ${kind} ${filePath}`, caught);
+        return;
       }
+      if (result.ownership === "owned") {
+        try {
+          rmSync(filePath);
+          syncDirectory(dirname(filePath));
+        } catch (cleanupFailure) {
+          const failure = new IndeterminateJsonlWriteError(
+            `Error: cannot create ${kind} ${filePath}: ${errorMessage(result.error)}; cleanup failed: ${errorMessage(cleanupFailure)}`,
+          );
+          state = { kind: "failed", error: failure };
+          throw failure;
+        }
+      }
+      fail(`cannot create ${kind} ${filePath}`, result.error);
     },
     append: (filePath, record, kind) => {
       writable();
@@ -185,37 +259,25 @@ function decodeUtf8(filePath: string, bytes: Uint8Array): string {
 }
 
 function appendFinalNewline(filePath: string): void {
-  let fileDescriptor: number | undefined;
-  let failure: unknown;
   try {
-    fileDescriptor = openSync(filePath, "a", 0o600);
-    appendFileSync(fileDescriptor, "\n", "utf8");
-    fsyncSync(fileDescriptor);
+    withSyncedFile(filePath, "a", (fileDescriptor) => {
+      appendFileSync(fileDescriptor, "\n", "utf8");
+    });
   } catch (caught) {
-    failure = caught;
-  }
-  failure = closeAfterWrite(fileDescriptor, failure);
-  if (failure !== undefined) {
     agentTreeError(
-      `cannot complete JSONL tail ${filePath}: ${errorMessage(failure)}`,
+      `cannot complete JSONL tail ${filePath}: ${errorMessage(caught)}`,
     );
   }
 }
 
 function truncateTail(filePath: string, byteLength: number): void {
-  let fileDescriptor: number | undefined;
-  let failure: unknown;
   try {
-    fileDescriptor = openSync(filePath, "r+");
-    ftruncateSync(fileDescriptor, byteLength);
-    fsyncSync(fileDescriptor);
+    withSyncedFile(filePath, "r+", (fileDescriptor) => {
+      ftruncateSync(fileDescriptor, byteLength);
+    });
   } catch (caught) {
-    failure = caught;
-  }
-  failure = closeAfterWrite(fileDescriptor, failure);
-  if (failure !== undefined) {
     agentTreeError(
-      `cannot repair incomplete JSONL tail ${filePath}: ${errorMessage(failure)}`,
+      `cannot repair incomplete JSONL tail ${filePath}: ${errorMessage(caught)}`,
     );
   }
 }

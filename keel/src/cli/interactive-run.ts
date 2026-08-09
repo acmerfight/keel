@@ -1271,8 +1271,7 @@ async function runActiveSessionCli(
                   },
                 },
                 entries: () => requireHistory().entries(),
-                transcript: (childAgentId) =>
-                  requireHistory().transcript(childAgentId),
+                transcript: (entry) => requireHistory().transcript(entry),
               };
             })();
       const displaySession =

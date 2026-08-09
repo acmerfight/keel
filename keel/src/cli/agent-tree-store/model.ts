@@ -1,8 +1,10 @@
 import { z } from "zod";
 import type {
+  AgentId,
   PersistedSubagentCanonicalResult,
   SubagentAcceptedLifecycle,
   SubagentAccountingSnapshot,
+  SubagentRunId,
   SubagentTerminalStatus,
 } from "../../agent/subagent-lifecycle.ts";
 import {
@@ -16,8 +18,16 @@ export const AGENT_TREE_SCHEMA_VERSION = 1;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
-export const agentIdSchema = z.string().regex(/^agent-[a-f0-9-]+$/u);
-const childRunIdSchema = z.string().regex(/^subagent-[a-f0-9-]+$/u);
+export const agentIdSchema: z.ZodType<AgentId> = z
+  .string()
+  .regex(/^agent-[a-f0-9-]+$/u)
+  .transform((value): AgentId => `agent-${value.slice("agent-".length)}`);
+const childRunIdSchema: z.ZodType<SubagentRunId> = z
+  .string()
+  .regex(/^subagent-[a-f0-9-]+$/u)
+  .transform(
+    (value): SubagentRunId => `subagent-${value.slice("subagent-".length)}`,
+  );
 
 export interface AgentTreeHeaderRecord {
   readonly schemaVersion: 1;
@@ -37,16 +47,16 @@ export interface AgentRunRunningRecord {
   readonly schemaVersion: 1;
   readonly type: "agent_run_running";
   readonly timestamp: string;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
 }
 
 export interface AgentRunAccountingRecord extends SubagentAccountingSnapshot {
   readonly schemaVersion: 1;
   readonly type: "agent_run_accounting";
   readonly timestamp: string;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
 }
 
 export interface AgentResultRecord {
@@ -60,8 +70,8 @@ export interface AgentRunTerminalRecord {
   readonly schemaVersion: 1;
   readonly type: "agent_run_terminal";
   readonly timestamp: string;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
   readonly status: SubagentTerminalStatus;
 }
 

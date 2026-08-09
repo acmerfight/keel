@@ -20,10 +20,13 @@ export type SubagentTerminalStatus = (typeof subagentTerminalStatuses)[number];
 
 export class SubagentPersistenceError extends Error {}
 
+export type AgentId = `agent-${string}`;
+export type SubagentRunId = `subagent-${string}`;
+
 interface SubagentRunIdentity {
   readonly delegationId: string;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
   readonly parentRunId: string;
   readonly parentToolCallId: string;
   readonly task: string;
@@ -65,10 +68,16 @@ export type SubagentTerminalOutcome =
 export type SubagentTerminalSnapshot = SubagentAccountingSnapshot &
   SubagentTerminalOutcome;
 
+type SubagentQueuedTerminalSnapshot = SubagentAccountingSnapshot & {
+  readonly status: "cancelled";
+  readonly finalText: null;
+  readonly error: string;
+};
+
 interface SubagentCanonicalResultBase extends SubagentAccountingSnapshot {
   readonly delegationId: string;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
   readonly task: string;
   readonly transcriptRef: string | null;
 }
@@ -80,21 +89,19 @@ export type PersistedSubagentCanonicalResult = SubagentCanonicalResult & {
   readonly transcriptRef: string;
 };
 
-interface SubagentTerminalPersistence {
+interface SubagentPersistenceBase {
   readonly transcriptRef: string;
   readonly transcript: SessionLedgerObserver;
-  readonly terminal: (
-    snapshot: SubagentTerminalSnapshot,
-  ) => PersistedSubagentCanonicalResult;
 }
 
-export interface SubagentRunningPersistence
-  extends SubagentTerminalPersistence {
+export interface SubagentRunningPersistence extends SubagentPersistenceBase {
   readonly accounting: (snapshot: SubagentAccountingSnapshot) => void;
+  readonly terminal: (snapshot: SubagentTerminalSnapshot) => void;
 }
 
-export interface SubagentRunPersistence extends SubagentTerminalPersistence {
+export interface SubagentRunPersistence extends SubagentPersistenceBase {
   readonly running: () => SubagentRunningPersistence;
+  readonly terminal: (snapshot: SubagentQueuedTerminalSnapshot) => void;
 }
 
 export interface SubagentLifecyclePersistence {

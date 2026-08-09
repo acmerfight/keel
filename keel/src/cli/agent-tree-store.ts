@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  type AgentId,
   type PersistedSubagentCanonicalResult,
   type SubagentAccountingSnapshot,
   type SubagentLifecyclePersistence,
   SubagentPersistenceError,
+  type SubagentRunId,
   type SubagentRunningPersistence,
   type SubagentRunPersistence,
   type SubagentTerminalSnapshot,
@@ -37,32 +39,47 @@ import {
 } from "./agent-tree-store/model.ts";
 import {
   createTranscriptObserver,
+  ensureInterruptedTranscriptInitialized,
   ensureTranscriptExists,
   ensureTranscriptTerminal,
   readAgentTranscript,
   reconcileUnacceptedTranscripts,
   removeTranscript,
+  type TranscriptInitializationExpectation,
   type TranscriptTerminalExpectation,
   transcriptFilePath,
 } from "./agent-tree-store/transcript.ts";
+import { redactTextForPersistence } from "./persistence-redaction.ts";
 import type { SessionStoreRuntime } from "./session-store.ts";
 import { sessionFilePath } from "./session-store.ts";
 
 type AgentRunMutableStatus = "queued" | "running";
 
-type AgentRunState =
+type AgentRunActiveState =
   | {
-      readonly kind: "queued" | "running";
+      readonly kind: "queued";
       readonly accounting: SubagentAccountingSnapshot;
     }
   | {
+      readonly kind: "running";
+      readonly accounting: SubagentAccountingSnapshot;
+      readonly transcriptInitialization: TranscriptInitializationExpectation;
+    };
+
+type AgentRunTerminalState = {
+  readonly kind: "terminal";
+  readonly result: PersistedSubagentCanonicalResult;
+  readonly terminal: AgentRunTerminalRecord;
+};
+
+type AgentRunState = AgentRunActiveState | AgentRunTerminalState;
+
+type ReplayedAgentRunState =
+  | AgentRunState
+  | {
       readonly kind: "result";
       readonly result: PersistedSubagentCanonicalResult;
-    }
-  | {
-      readonly kind: "terminal";
-      readonly result: PersistedSubagentCanonicalResult;
-      readonly terminal: AgentRunTerminalRecord;
+      readonly transcriptInitialization: TranscriptInitializationExpectation;
     };
 
 interface MutableAgentRun {
@@ -70,11 +87,45 @@ interface MutableAgentRun {
   state: AgentRunState;
 }
 
+interface ReplayedAgentRun {
+  readonly accepted: AgentRunAcceptedRecord;
+  state: ReplayedAgentRunState;
+}
+
+interface IdentifiedAgentRun {
+  readonly accepted: AgentRunAcceptedRecord;
+}
+
+function assertUniqueAcceptance(
+  runs: Iterable<IdentifiedAgentRun>,
+  candidate: AgentRunAcceptedRecord,
+): void {
+  for (const run of runs) {
+    if (run.accepted.childAgentId === candidate.childAgentId) {
+      agentTreeError(`duplicate child agent id ${candidate.childAgentId}`);
+    }
+    if (run.accepted.childRunId === candidate.childRunId) {
+      agentTreeError(`duplicate child run id ${candidate.childRunId}`);
+    }
+    if (run.accepted.delegationId === candidate.delegationId) {
+      agentTreeError(`duplicate delegation id ${candidate.delegationId}`);
+    }
+    if (
+      run.accepted.parentRunId === candidate.parentRunId &&
+      run.accepted.parentToolCallId === candidate.parentToolCallId
+    ) {
+      agentTreeError(
+        `duplicate parent tool call ${candidate.parentRunId}/${candidate.parentToolCallId}`,
+      );
+    }
+  }
+}
+
 export interface AgentHistoryEntry {
   readonly index: number;
   readonly delegationId: string;
-  readonly childAgentId: string;
-  readonly childRunId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
   readonly parentRunId: string;
   readonly parentToolCallId: string;
   readonly task: string;
@@ -92,7 +143,7 @@ export interface AgentTreeHistory {
   readonly sessionId: string;
   readonly persistence: SubagentLifecyclePersistence;
   readonly entries: () => readonly AgentHistoryEntry[];
-  readonly transcript: (childAgentId: string) => string;
+  readonly transcript: (entry: AgentHistoryEntry) => string;
 }
 
 export interface AgentTreeStoreRuntime extends SessionStoreRuntime {
@@ -104,7 +155,6 @@ function timestamp(runtime: SessionStoreRuntime): string {
 }
 
 function persistenceFailure(caught: unknown): never {
-  if (caught instanceof SubagentPersistenceError) throw caught;
   throw new SubagentPersistenceError(String(caught));
 }
 
@@ -136,15 +186,14 @@ function readAgentTreeRecords(filePath: string): {
     );
   }
   const mutations: AgentTreeMutationRecord[] = [];
-  for (let index = 1; index < lines.length; index++) {
-    const line = lines[index];
-    if (line === undefined) continue;
+  for (const [offset, line] of lines.slice(1).entries()) {
+    const lineNumber = offset + 2;
     const parsed = mutationRecordSchema.safeParse(
-      parseJsonLine(filePath, line, index + 1),
+      parseJsonLine(filePath, line, lineNumber),
     );
     if (!parsed.success) {
       agentTreeError(
-        `invalid agent tree record ${filePath} line ${index + 1}: ${parsed.error.message}`,
+        `invalid agent tree record ${filePath} line ${lineNumber}: ${parsed.error.message}`,
       );
     }
     mutations.push(parsed.data);
@@ -152,11 +201,11 @@ function readAgentTreeRecords(filePath: string): {
   return { header: parsedHeader.data, mutations };
 }
 
-function requireRun(
-  runs: Map<string, MutableAgentRun>,
-  childAgentId: string,
-  childRunId: string,
-): MutableAgentRun {
+function requireRun<T extends IdentifiedAgentRun>(
+  runs: Map<AgentId, T>,
+  childAgentId: AgentId,
+  childRunId: SubagentRunId,
+): T {
   const run = runs.get(childAgentId);
   if (run === undefined || run.accepted.childRunId !== childRunId) {
     agentTreeError(
@@ -167,7 +216,7 @@ function requireRun(
 }
 
 function assertResultIdentity(
-  run: MutableAgentRun,
+  run: IdentifiedAgentRun,
   result: PersistedSubagentCanonicalResult,
 ): void {
   if (
@@ -183,16 +232,14 @@ function assertResultIdentity(
 
 function replayAgentRuns(
   mutations: readonly AgentTreeMutationRecord[],
-): Map<string, MutableAgentRun> {
-  const runs = new Map<string, MutableAgentRun>();
+): Map<AgentId, ReplayedAgentRun> {
+  const runs = new Map<AgentId, ReplayedAgentRun>();
   for (const mutation of mutations) {
     switch (mutation.type) {
       case "delegation_rejected":
         break;
       case "agent_run_accepted":
-        if (runs.has(mutation.childAgentId)) {
-          agentTreeError(`duplicate accepted agent ${mutation.childAgentId}`);
-        }
+        assertUniqueAcceptance(runs.values(), mutation);
         runs.set(mutation.childAgentId, {
           accepted: mutation,
           state: {
@@ -213,6 +260,7 @@ function replayAgentRuns(
         run.state = {
           kind: "running",
           accounting: copyAccounting(run.state.accounting),
+          transcriptInitialization: { kind: "optional" },
         };
         break;
       }
@@ -230,6 +278,7 @@ function replayAgentRuns(
         run.state = {
           kind: "running",
           accounting: copyAccounting(mutation),
+          transcriptInitialization: { kind: "required" },
         };
         break;
       }
@@ -245,9 +294,23 @@ function replayAgentRuns(
           );
         }
         assertResultIdentity(run, mutation.result);
+        if (
+          run.state.kind === "queued" &&
+          mutation.result.status !== "cancelled" &&
+          mutation.result.status !== "interrupted"
+        ) {
+          agentTreeError(
+            `agent ${mutation.result.childAgentId} ${mutation.result.status} before execution started`,
+          );
+        }
+        const transcriptInitialization: TranscriptInitializationExpectation =
+          run.state.kind === "queued"
+            ? { kind: "optional" }
+            : { kind: "required" };
         run.state = {
           kind: "result",
           result: copyCanonicalResult(mutation.result),
+          transcriptInitialization,
         };
         break;
       }
@@ -283,23 +346,37 @@ function canonicalResult(
   accepted: AgentRunAcceptedRecord,
   snapshot: SubagentTerminalSnapshot,
 ): PersistedSubagentCanonicalResult {
+  const outcome =
+    snapshot.status === "completed"
+      ? {
+          status: snapshot.status,
+          finalText: redactTextForPersistence(snapshot.finalText),
+          error: snapshot.error,
+        }
+      : {
+          status: snapshot.status,
+          finalText: snapshot.finalText,
+          error: redactTextForPersistence(snapshot.error),
+        };
   return {
     delegationId: accepted.delegationId,
     childAgentId: accepted.childAgentId,
     childRunId: accepted.childRunId,
     task: accepted.task,
     transcriptRef: accepted.transcriptRef,
-    ...snapshot,
+    usage: { ...snapshot.usage },
+    turns: snapshot.turns,
+    costUsd: snapshot.costUsd,
+    ...outcome,
   };
 }
 
 function appendTerminalEvent(input: {
   readonly filePath: string;
   readonly runtime: SessionStoreRuntime;
-  readonly run: MutableAgentRun;
   readonly writer: DurableJsonlWriter;
   readonly result: PersistedSubagentCanonicalResult;
-}): void {
+}): AgentRunTerminalRecord {
   const terminalRecord: AgentRunTerminalRecord = {
     schemaVersion: AGENT_TREE_SCHEMA_VERSION,
     type: "agent_run_terminal",
@@ -309,11 +386,7 @@ function appendTerminalEvent(input: {
     status: input.result.status,
   };
   input.writer.append(input.filePath, terminalRecord, "agent tree");
-  input.run.state = {
-    kind: "terminal",
-    result: copyCanonicalResult(input.result),
-    terminal: terminalRecord,
-  };
+  return terminalRecord;
 }
 
 function appendCanonicalTerminal(input: {
@@ -323,6 +396,7 @@ function appendCanonicalTerminal(input: {
   readonly run: MutableAgentRun;
   readonly writer: DurableJsonlWriter;
   readonly snapshot: SubagentTerminalSnapshot;
+  readonly transcriptInitialization: TranscriptInitializationExpectation;
 }): PersistedSubagentCanonicalResult {
   const result = canonicalResult(input.run.accepted, input.snapshot);
   const resultRecord: AgentResultRecord = {
@@ -332,50 +406,56 @@ function appendCanonicalTerminal(input: {
     result: copyCanonicalResult(result),
   };
   input.writer.append(input.filePath, resultRecord, "agent tree");
-  input.run.state = { kind: "result", result: copyCanonicalResult(result) };
   ensureTranscriptTerminal(
     input.writer,
     input.transcriptPath,
     input.run.accepted,
     result.status,
+    input.transcriptInitialization,
   );
-  appendTerminalEvent({
+  const terminal = appendTerminalEvent({
     filePath: input.filePath,
     runtime: input.runtime,
-    run: input.run,
     writer: input.writer,
     result,
   });
+  input.run.state = {
+    kind: "terminal",
+    result: copyCanonicalResult(result),
+    terminal,
+  };
   return copyCanonicalResult(result);
-}
-
-function unsettledAccounting(run: MutableAgentRun): SubagentAccountingSnapshot {
-  if (run.state.kind === "queued" || run.state.kind === "running") {
-    return copyAccounting(run.state.accounting);
-  }
-  agentTreeError(`agent ${run.accepted.childAgentId} is already settled`);
 }
 
 function repairInterruptedRuns(input: {
   readonly filePath: string;
   readonly transcriptsDirectory: string;
   readonly runtime: SessionStoreRuntime;
-  readonly runs: Map<string, MutableAgentRun>;
+  readonly runs: ReadonlyMap<AgentId, ReplayedAgentRun>;
   readonly writer: DurableJsonlWriter;
-}): void {
+}): Map<AgentId, MutableAgentRun> {
+  const repairedRuns = new Map<AgentId, MutableAgentRun>();
   for (const run of input.runs.values()) {
     const transcriptPath = transcriptFilePath(
       input.transcriptsDirectory,
       run.accepted.childAgentId,
     );
-    ensureTranscriptExists(input.writer, transcriptPath, run.accepted);
     if (run.state.kind === "terminal") {
       ensureTranscriptTerminal(
         input.writer,
         transcriptPath,
         run.accepted,
         run.state.result.status,
+        { kind: "required" },
       );
+      repairedRuns.set(run.accepted.childAgentId, {
+        accepted: run.accepted,
+        state: {
+          kind: "terminal",
+          result: copyCanonicalResult(run.state.result),
+          terminal: run.state.terminal,
+        },
+      });
       continue;
     }
     if (run.state.kind === "result") {
@@ -384,23 +464,53 @@ function repairInterruptedRuns(input: {
         transcriptPath,
         run.accepted,
         run.state.result.status,
+        run.state.transcriptInitialization,
       );
-      appendTerminalEvent({
+      const terminal = appendTerminalEvent({
         filePath: input.filePath,
         runtime: input.runtime,
-        run,
         writer: input.writer,
         result: run.state.result,
       });
+      repairedRuns.set(run.accepted.childAgentId, {
+        accepted: run.accepted,
+        state: {
+          kind: "terminal",
+          result: copyCanonicalResult(run.state.result),
+          terminal,
+        },
+      });
       continue;
     }
-    const accounting = unsettledAccounting(run);
+    const accounting = copyAccounting(run.state.accounting);
+    const transcriptInitialization: TranscriptInitializationExpectation =
+      run.state.kind === "queued"
+        ? { kind: "optional" }
+        : run.state.transcriptInitialization;
+    const interruptedRun: MutableAgentRun = {
+      accepted: run.accepted,
+      state:
+        run.state.kind === "queued"
+          ? { kind: "queued", accounting }
+          : {
+              kind: "running",
+              accounting,
+              transcriptInitialization,
+            },
+    };
+    ensureInterruptedTranscriptInitialized(
+      input.writer,
+      transcriptPath,
+      run.accepted,
+      transcriptInitialization,
+    );
     appendCanonicalTerminal({
       filePath: input.filePath,
       transcriptPath,
       runtime: input.runtime,
-      run,
+      run: interruptedRun,
       writer: input.writer,
+      transcriptInitialization: { kind: "required" },
       snapshot: {
         status: "interrupted",
         finalText: null,
@@ -409,7 +519,9 @@ function repairInterruptedRuns(input: {
         ...accounting,
       },
     });
+    repairedRuns.set(run.accepted.childAgentId, interruptedRun);
   }
+  return repairedRuns;
 }
 
 function historyEntryState(run: MutableAgentRun): {
@@ -425,7 +537,6 @@ function historyEntryState(run: MutableAgentRun): {
         accounting: copyAccounting(run.state.accounting),
         result: null,
       };
-    case "result":
     case "terminal":
       return {
         status: run.state.result.status,
@@ -442,14 +553,13 @@ function transcriptTerminalExpectation(
     case "queued":
     case "running":
       return { kind: "open" };
-    case "result":
     case "terminal":
       return { kind: "terminal", status: run.state.result.status };
   }
 }
 
 function historyEntries(
-  runs: ReadonlyMap<string, MutableAgentRun>,
+  runs: ReadonlyMap<AgentId, MutableAgentRun>,
 ): readonly AgentHistoryEntry[] {
   return [...runs.values()].map((run, offset) => ({
     index: offset + 1,
@@ -488,7 +598,7 @@ export function createAgentTreeHistory(options: {
   const transcriptsDirectory = join(agentsDirectory, "transcripts");
   const filePath = join(agentsDirectory, "events.jsonl");
   const writer = createDurableJsonlWriter(options.runtime.agentTreeJsonlWrite);
-  mkdirSync(transcriptsDirectory, { recursive: true, mode: 0o700 });
+  writer.ensureDirectory(transcriptsDirectory);
   if (!existsSync(filePath)) {
     const header: AgentTreeHeaderRecord = {
       schemaVersion: AGENT_TREE_SCHEMA_VERSION,
@@ -504,28 +614,35 @@ export function createAgentTreeHistory(options: {
       `agent tree session ${records.header.sessionId} does not match ${options.sessionId}`,
     );
   }
-  const runs = replayAgentRuns(records.mutations);
-  reconcileUnacceptedTranscripts(transcriptsDirectory, new Set(runs.keys()));
-  repairInterruptedRuns({
+  const replayedRuns = replayAgentRuns(records.mutations);
+  reconcileUnacceptedTranscripts(
+    transcriptsDirectory,
+    new Set(replayedRuns.keys()),
+    writer.syncDirectory,
+  );
+  const runs = repairInterruptedRuns({
     filePath,
     transcriptsDirectory,
     runtime: options.runtime,
-    runs,
+    runs: replayedRuns,
     writer,
   });
 
   const persistence: SubagentLifecyclePersistence = {
     accepted: (lifecycle): SubagentRunPersistence => {
-      if (runs.has(lifecycle.childAgentId)) {
-        agentTreeError(`duplicate child agent ${lifecycle.childAgentId}`);
-      }
       const acceptedRecord: AgentRunAcceptedRecord = {
         schemaVersion: AGENT_TREE_SCHEMA_VERSION,
         type: "agent_run_accepted",
         timestamp: timestamp(options.runtime),
         transcriptRef: `agent-transcript:${options.sessionId}/${lifecycle.childAgentId}`,
         ...lifecycle,
+        task: redactTextForPersistence(lifecycle.task),
+        focusPaths: lifecycle.focusPaths.map(redactTextForPersistence),
+        providerId: redactTextForPersistence(lifecycle.providerId),
+        model: redactTextForPersistence(lifecycle.model),
+        systemPrompt: redactTextForPersistence(lifecycle.systemPrompt),
       };
+      assertUniqueAcceptance(runs.values(), acceptedRecord);
       const transcriptPath = transcriptFilePath(
         transcriptsDirectory,
         lifecycle.childAgentId,
@@ -535,7 +652,7 @@ export function createAgentTreeHistory(options: {
         writer.append(filePath, acceptedRecord, "agent tree");
       } catch (caught) {
         try {
-          removeTranscript(transcriptPath);
+          removeTranscript(transcriptPath, writer.syncDirectory);
         } catch (cleanupFailure) {
           persistenceFailure(cleanupFailure);
         }
@@ -563,12 +680,12 @@ export function createAgentTreeHistory(options: {
         replace: (messages: Parameters<typeof transcript.replace>[0]) =>
           persist(() => transcript.replace(messages)),
       };
-      const terminal = (
-        snapshot: SubagentTerminalSnapshot,
-      ): PersistedSubagentCanonicalResult => {
+      const terminal = (snapshot: SubagentTerminalSnapshot): void => {
         const current = requireMutableRun();
-        requireUnsettledRun(current);
-        return persist(() =>
+        const state = requireUnsettledRun(current);
+        const transcriptInitialization: TranscriptInitializationExpectation =
+          state.kind === "queued" ? { kind: "optional" } : { kind: "required" };
+        persist(() =>
           appendCanonicalTerminal({
             filePath,
             transcriptPath,
@@ -576,6 +693,7 @@ export function createAgentTreeHistory(options: {
             run: current,
             writer,
             snapshot,
+            transcriptInitialization,
           }),
         );
       };
@@ -601,16 +719,16 @@ export function createAgentTreeHistory(options: {
           current.state = {
             kind: "running",
             accounting: copyAccounting(state.accounting),
+            transcriptInitialization: { kind: "optional" },
           };
           return {
             transcriptRef: acceptedRecord.transcriptRef,
             transcript: persistedTranscript,
             accounting: (accounting) => {
               const running = requireMutableRun();
-              const runningState = requireUnsettledRun(running);
-              if (runningState.kind !== "running") {
+              if (running.state.kind !== "running") {
                 agentTreeError(
-                  `child agent ${lifecycle.childAgentId} is not running`,
+                  `child agent ${lifecycle.childAgentId} is terminal`,
                 );
               }
               const accountingRecord: AgentRunAccountingRecord = {
@@ -627,6 +745,7 @@ export function createAgentTreeHistory(options: {
               running.state = {
                 kind: "running",
                 accounting: copyAccounting(accounting),
+                transcriptInitialization: { kind: "required" },
               };
             },
             terminal,
@@ -636,16 +755,25 @@ export function createAgentTreeHistory(options: {
       };
     },
     rejected: (lifecycle) => {
-      writer.append(
-        filePath,
-        {
-          schemaVersion: AGENT_TREE_SCHEMA_VERSION,
-          type: "delegation_rejected",
-          timestamp: timestamp(options.runtime),
-          ...lifecycle,
-        },
-        "agent tree",
-      );
+      try {
+        writer.append(
+          filePath,
+          {
+            schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+            type: "delegation_rejected",
+            timestamp: timestamp(options.runtime),
+            ...lifecycle,
+            task: redactTextForPersistence(lifecycle.task),
+            reason: redactTextForPersistence(lifecycle.reason),
+          },
+          "agent tree",
+        );
+      } catch (caught) {
+        if (caught instanceof IndeterminateJsonlWriteError) {
+          persistenceFailure(caught);
+        }
+        throw caught;
+      }
     },
   };
 
@@ -653,12 +781,10 @@ export function createAgentTreeHistory(options: {
     sessionId: options.sessionId,
     persistence,
     entries: () => historyEntries(runs),
-    transcript: (childAgentId) => {
-      const run = runs.get(childAgentId);
-      if (run === undefined)
-        agentTreeError(`unknown child agent ${childAgentId}`);
+    transcript: (entry) => {
+      const run = requireRun(runs, entry.childAgentId, entry.childRunId);
       return readAgentTranscript(
-        transcriptFilePath(transcriptsDirectory, childAgentId),
+        transcriptFilePath(transcriptsDirectory, run.accepted.childAgentId),
         run.accepted,
         transcriptTerminalExpectation(run),
       );

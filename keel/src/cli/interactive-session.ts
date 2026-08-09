@@ -1806,10 +1806,14 @@ export async function runInteractiveSession(
           consumeQueuedInputLines([rawInput]);
           continue;
         }
+        assert(
+          entry.result !== null,
+          "foreground subagent history must be terminal before command handling",
+        );
         try {
           options.writeStdout(
             interactiveCommand.action === "show"
-              ? formatAgentHistoryDetail(entry)
+              ? formatAgentHistoryDetail(entry, entry.result)
               : formatAgentTranscript(options.agentHistory, entry),
           );
         } catch (error) {
