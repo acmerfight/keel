@@ -1014,6 +1014,9 @@ describe("Agent Tree Store", () => {
       expect(() => history.transcript(openEntry)).toThrow(
         "open agent transcript",
       );
+      expect(() =>
+        createAgentTreeHistory({ sessionId: "corrupt-transcript", runtime }),
+      ).toThrow("terminated before its interrupted result");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

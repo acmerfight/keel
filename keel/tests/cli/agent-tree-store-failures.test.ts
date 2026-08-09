@@ -567,6 +567,52 @@ describe("Agent Tree Store Crash Boundaries", () => {
     }
   });
 
+  test(`Given a rejection receipt append is partial but rollback restores the ledger,
+    When the store reports the recoverable write failure,
+    Then no rejection record remains and reopening the session stays valid`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-failpoint-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const sessionId = "recoverable-rejection";
+    const runtime = testRuntime(
+      keelHome,
+      () => now++,
+      partialAppendRuntime('"type":"delegation_rejected"'),
+    );
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      expect(() =>
+        history.persistence.rejected({
+          delegationId: "parent:recoverable-rejection",
+          parentRunId: "parent",
+          parentToolCallId: "recoverable-rejection",
+          task: "Reject without retaining a partial receipt.",
+          reason: "Admission is unavailable.",
+        }),
+      ).toThrow("simulated partial");
+      const eventsPath = join(
+        keelHome,
+        "sessions",
+        sessionId,
+        "agents",
+        "events.jsonl",
+      );
+      await expect(readFile(eventsPath, "utf8")).resolves.not.toContain(
+        '"type":"delegation_rejected"',
+      );
+      expect(
+        createAgentTreeHistory({
+          sessionId,
+          runtime: testRuntime(keelHome, () => now++),
+        }).entries(),
+      ).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given acceptance fails after transcript setup and provisional transcript cleanup also fails,
     When the store rolls admission back,
     Then the cleanup failure is fatal and no AgentRun becomes visible`, async () => {
