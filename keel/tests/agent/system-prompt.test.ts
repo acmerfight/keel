@@ -1,50 +1,7 @@
 import { describe, expect, test } from "vitest";
-import {
-  appendDelegationToSystemPrompt,
-  buildAgentSystemPrompt,
-  buildReadOnlySubagentSystemPrompt,
-} from "../../src/agent/prompt.ts";
+import { buildAgentSystemPrompt } from "../../src/agent/prompt.ts";
 
 describe("Agent System Prompt", () => {
-  test(`Given a bounded child handoff can truncate verbose evidence,
-    When main and child delegation prompts are built,
-    Then both agents preserve named facts while keeping the handoff compact`, () => {
-    const mainPrompt = appendDelegationToSystemPrompt("base");
-    const childPrompt = buildReadOnlySubagentSystemPrompt({
-      workspace: "/tmp/project",
-      platform: "linux",
-      focusPaths: ["src"],
-    });
-
-    expect(mainPrompt).toContain(
-      "Do not ask the child to paste bulk source, logs, or repeated evidence",
-    );
-    expect(mainPrompt).toContain(
-      "Call delegate as the only tool in that assistant turn",
-    );
-    expect(mainPrompt).toContain(
-      "Change a reported fact only when direct evidence for that same fact contradicts it",
-    );
-    expect(mainPrompt).toContain(
-      "use evidence that defines that field, not a related observation",
-    );
-    expect(mainPrompt).toContain(
-      "do not reread child-covered resources merely to reconfirm a supported fact",
-    );
-    expect(childPrompt).toContain(
-      "Start the final message with the direct answer or requested structured output",
-    );
-    expect(childPrompt).toContain(
-      "Keep the entire final message under 4,000 characters",
-    );
-    expect(childPrompt).toContain(
-      "Do not paste bulk source, logs, CSV rows, or repeated evidence",
-    );
-    expect(childPrompt).toContain(
-      "Keep configured or declared values distinct from observations, examples, and sampled values",
-    );
-  });
-
   test(`Given a workspace and platform,
     When the agent's system prompt is built,
     Then it presents keel as a coding agent bound to that workspace with read-before-edit and search-first discipline`, () => {

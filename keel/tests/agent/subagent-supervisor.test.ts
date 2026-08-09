@@ -630,7 +630,6 @@ describe("Subagent Supervisor", () => {
         .object({
           status: z.literal("completed"),
           finalText: z.string(),
-          observedResources: z.array(z.object({ path: z.string() })),
           transcriptRef: z.string(),
         })
         .passthrough()
@@ -639,7 +638,6 @@ describe("Subagent Supervisor", () => {
       expect(result.ok).toBe(true);
       expect(admitted.finalText).toHaveLength(4_000);
       expect(admitted.finalText.endsWith("...")).toBe(true);
-      expect(admitted.observedResources).toEqual([]);
       expect(fixture.artifacts.inputs[0]?.content).toContain("s".repeat(7_000));
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -671,7 +669,6 @@ describe("Subagent Supervisor", () => {
           transcriptRef: z.string(),
           truncated: z.literal(true),
           finalText: z.string(),
-          observedResources: z.array(z.never()),
         })
         .passthrough()
         .parse(JSON.parse(result.content));
@@ -849,9 +846,9 @@ describe("Subagent Supervisor", () => {
     }
   });
 
-  test(`Given a child repeats one bounded read alongside a non-read tool but its final text claims another path,
+  test(`Given a child uses workspace tools but its final text claims another path,
     When host constructs the handoff and a separate transcript store fails,
-    Then observed resources preserve the trusted range once and storage failure cannot complete`, async () => {
+    Then the handoff stays tool-agnostic, the transcript preserves the calls, and storage failure cannot complete`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-subagent-supervisor-"),
     );
@@ -873,14 +870,6 @@ describe("Subagent Supervisor", () => {
             yield {
               type: "tool_call",
               id: "observed-read",
-              tool: "read",
-              path: "module.ts",
-              offset: 1,
-              limit: 1,
-            };
-            yield {
-              type: "tool_call",
-              id: "duplicate-observed-read",
               tool: "read",
               path: "module.ts",
               offset: 1,
@@ -929,10 +918,16 @@ describe("Subagent Supervisor", () => {
       );
 
       expect(provenance.ok).toBe(true);
-      expect(JSON.parse(provenance.content).observedResources).toEqual([
-        { path: "module.ts", offset: 1, limit: 1 },
-      ]);
-      expect(provenance.content).not.toContain('"path":"../outside"');
+      expect(provenance.content).not.toContain("observedResources");
+      expect(provenanceFixture.artifacts.inputs[0]?.content).toContain(
+        '"tool":"read","path":"module.ts","offset":1,"limit":1',
+      );
+      expect(provenanceFixture.artifacts.inputs[0]?.content).toContain(
+        '"role":"tool","toolCallId":"observed-read"',
+      );
+      expect(provenanceFixture.artifacts.inputs[0]?.content).toContain(
+        '"tool":"ls"',
+      );
       expect(storageFailed.ok).toBe(false);
       expect(storageFailed.content).toContain(
         "Child transcript could not be stored: artifact store unavailable",
@@ -957,7 +952,7 @@ describe("Subagent Supervisor", () => {
   ])(
     `Given a child reaches $scenario,
     When Supervisor maps the agent stop reason,
-    Then main receives the $expected terminal status without fabricated evidence`,
+    Then main receives the $expected terminal status without fabricated completion`,
     async ({ scenario, expected }) => {
       const workspace = await mkdtemp(
         join(tmpdir(), "keel-subagent-supervisor-"),
@@ -1010,7 +1005,6 @@ describe("Subagent Supervisor", () => {
         expect(result.ok).toBe(false);
         expect(result.content).toContain(`"status":"${expected}"`);
         expect(result.content).toContain('"finalText":null');
-        expect(result.content).toContain('"observedResources"');
       } finally {
         await rm(workspace, { recursive: true, force: true });
       }

@@ -271,7 +271,7 @@ describe("CLI Main - Subagent Delegation", () => {
 
   test(`Given the user explicitly requests a subagent and a root cost budget is enabled,
     When one read-only child finishes with a normal evidence-based answer,
-    Then host hands its observed resources to main, removes delegate, and main writes the result`, async () => {
+    Then host hands its bounded final to main without tool-specific evidence, removes delegate, and main writes the result`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-"));
     const keelHome = join(workspace, ".keel-home");
@@ -362,7 +362,7 @@ describe("CLI Main - Subagent Delegation", () => {
         "0.05",
         "--report",
         reportPath,
-        "PRIVATE PARENT CONTEXT: do not copy this. Analyze module.ts.",
+        "使用 subagent 调研这个任务。\n\nPRIVATE PARENT CONTEXT: do not copy this. Analyze module.ts.",
       ],
       {
         cwd: workspace,
@@ -414,8 +414,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(delegatedToolResult).toContain(
         "module.ts:1 exports answer with value 42.",
       );
-      expect(delegatedToolResult).toContain('"observedResources"');
-      expect(delegatedToolResult).toContain('"path":"module.ts"');
+      expect(delegatedToolResult).not.toContain("observedResources");
       expect(delegatedToolResult).toContain('"childLimitReached":true');
       const artifactRef = artifactRefSchema.parse(
         delegatedToolResult?.match(

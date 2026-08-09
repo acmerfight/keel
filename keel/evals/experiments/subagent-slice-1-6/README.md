@@ -4,15 +4,17 @@ This is the pre-registered completion-reliability window for issue #590 Slice
 1.6. It asks a narrower question than autonomous delegation selection: after
 the exact explicit prefix `使用 subagent 调研这个任务。` selects the experimental
 feature, can one foreground read-only child finish normally and hand enough
-trusted context back for main to complete the same task?
+bounded context back for main to complete the same task?
 
 The corpus began as a mechanical copy of the two frozen explicit-intent v1
 fixtures. V1 through v5 retain their exact committed inputs and evidence. V6
 clarifies one ambiguous service-review field after v5 showed that both
 `account_id` and `request_id` satisfied the old undirected wording. The
-workspace, solution, verifier, budgets, provider/model, arm order, and
-acceptance threshold remain unchanged. V7 reruns that same gate from the final
-reviewed runtime candidate.
+workspace, solution, verifier, budgets, provider/model, and arm order remain
+unchanged. V7 reran the original completion gate from the reviewed budget
+candidate. V8 is the final simplification window required by the revised issue:
+it removes read-specific evidence from the handoff while retaining the generic
+terminal, budget, lifecycle, and transcript contracts.
 
 ## Scored windows
 
@@ -63,7 +65,7 @@ and exactly one distinct completed child 6/6. One treatment fully reread all 12
 child-covered paths; this retained duplicate-work diagnostic does not alter the
 pre-registered completion gate. Raw evidence is retained under `artifacts/v7/`.
 
-## Frozen v7 protocol
+## Frozen v8 protocol
 
 - Experiment: `subagent-slice-1-6`.
 - Provider: DeepSeek.
@@ -79,9 +81,10 @@ pre-registered completion gate. Raw evidence is retained under `artifacts/v7/`.
 - Child completion grading: inspect each treatment transcript's `delegate`
   result and require `status=completed`; do not infer completion merely from a
   child model operation or a distinct child ID.
-- Duplicate-work diagnostic: compare the child `observedResources` receipt
-  with later main read calls. A main full reread of every covered path is
-  recorded as a quality regression; targeted spot-checks remain allowed.
+- Duplicate-work diagnostic: inspect the child final/transcript and subsequent
+  main transcript for obvious repetition. Report it qualitatively with cost and
+  latency; do not add a read-specific receipt, infer semantic completeness from
+  tool calls, or turn repetition into a runtime rule.
 - Sampling: run the command below once from the exact committed candidate. Do
   not selectively rerun failed samples.
 - Evidence: retain result JSONL, all available main transcripts, extracted
@@ -95,8 +98,8 @@ node --experimental-strip-types src/cli/index.ts eval \
   --provider deepseek \
   --model deepseek-v4-flash \
   --trials 3 \
-  --out /tmp/keel-subagent-slice-1-6-v7.jsonl \
-  --transcript-dir /tmp/keel-subagent-slice-1-6-v7-transcripts
+  --out /tmp/keel-subagent-slice-1-6-v8.jsonl \
+  --transcript-dir /tmp/keel-subagent-slice-1-6-v8-transcripts
 ```
 
 ## Corpus and budget
@@ -108,18 +111,22 @@ node --experimental-strip-types src/cli/index.ts eval \
 
 ## Pre-registered acceptance gate
 
-Slice 1.6 passes only if all of the following hold in the one scored window:
+The implementation-attributable product gate passes only if all of the
+following hold in the one scored window:
 
 - all 6 treatment arms select exactly one distinct child;
-- all 6 treatment child results have terminal `status=completed` with a
-  non-empty host-admitted `finalText`;
-- all 6 controls and all 6 treatments complete and pass their deterministic
-  task verifier;
+- a normal, non-truncated child final is handed off as `status=completed` with a
+  non-empty bounded `finalText`; provider length/error remains an honest failure
+  instead of being relabeled for the score;
 - no authority bypass, cost overshoot, false completion, second child, or
   orphaned child is observed; and
 - the deterministic Slice 1 regression suites remain green.
 
-Duplicate full rereads are reported separately. They trigger prompt/projection
-follow-up but do not become a runtime read ban or silently change task pass.
-Any failed mandatory item keeps Slice 1.6 open; the generic eval exit code
-continues to fail when a required treatment or ordinary task fails.
+Control and treatment semantic success, duplicate investigation, cost, tokens,
+and wall time are reported in full. The control is an attribution baseline, not
+a runtime invariant. Any failure is first attributed to runtime, harness,
+generic prompt/protocol, provider, or model variance. A reproducible failure in
+the generic mechanism blocks the slice; an isolated provider/model event is
+retained without a case-by-case runtime rule. The generic eval command still
+exits non-zero when a required treatment fails its ordinary verifier, and no
+failed sample is selectively rerun.

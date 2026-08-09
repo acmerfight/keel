@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CostModel } from "../core/cost.ts";
 import { errorMessage, isAbortThrow, KeelError } from "../core/error.ts";
-import type { ReadResourceObservation } from "../core/resource-observation.ts";
-import { copyReadResourceObservation } from "../core/resource-observation.ts";
 import type { LLMProvider, StreamOptions, Usage } from "../llm/types.ts";
 import type {
   DelegationCapability,
@@ -35,8 +33,6 @@ const DEFAULT_SETTLEMENT_GRACE_MS = 2_000;
 const DEFAULT_CHILD_MAX_TURNS = 16;
 const MAIN_CONTINUATION_MAX_OUTPUT_TOKENS = 4_096;
 const MAX_ADMITTED_FINAL_TEXT_CHARS = 4_000;
-const MAX_ADMITTED_OBSERVED_RESOURCES = 20;
-const MAX_ADMITTED_RESOURCE_PATH_CHARS = 500;
 const MAX_ADMITTED_ERROR_CHARS = 2_000;
 const MAX_ADMITTED_ID_CHARS = 512;
 const MAX_ADMITTED_TRANSCRIPT_REF_CHARS = 512;
@@ -92,18 +88,10 @@ export type SubagentProgressEvent =
       readonly deadlineMs: number;
     };
 
-interface ObservedSubagentResource {
-  readonly path: string;
-  readonly offset?: number;
-  readonly limit?: number;
-  readonly observation: ReadResourceObservation;
-}
-
 interface SubagentCanonicalResultBase {
   readonly delegationId: string;
   readonly childRunId: string;
   readonly task: string;
-  readonly observedResources: readonly ObservedSubagentResource[];
   readonly usage: Usage;
   readonly turns: number;
   readonly costUsd: number;
@@ -239,7 +227,7 @@ function childTaskMessage(
       ? ["- none"]
       : focusPaths.map((path) => `- ${path}`)),
     "",
-    "Return one concise final answer with the findings, exact workspace paths you inspected, and remaining uncertainty.",
+    "Return one concise final answer with the findings, key grounds, relevant workspace locations, and remaining uncertainty.",
   ].join("\n");
 }
 
@@ -295,17 +283,9 @@ function admittedAgentResult(result: SubagentCanonicalResult): string {
       : admittedText(result.transcriptRef, MAX_ADMITTED_TRANSCRIPT_REF_CHARS);
   const transcriptRef =
     transcriptRefText?.truncated === false ? transcriptRefText.value : null;
-  const observedResources = result.observedResources
-    .slice(0, MAX_ADMITTED_OBSERVED_RESOURCES)
-    .map((resource) => ({
-      resource,
-      path: admittedText(resource.path, MAX_ADMITTED_RESOURCE_PATH_CHARS),
-    }));
   const truncated =
     delegationId.truncated ||
     admittedResultText.truncated ||
-    result.observedResources.length > MAX_ADMITTED_OBSERVED_RESOURCES ||
-    observedResources.some((item) => item.path.truncated) ||
     (result.transcriptRef !== null && transcriptRef === null);
   const projection = {
     delegationId: delegationId.value,
@@ -314,11 +294,6 @@ function admittedAgentResult(result: SubagentCanonicalResult): string {
     childLimitReached: true,
     truncated,
     ...admittedTerminalText(result, admittedResultText.value),
-    observedResources: observedResources.map(({ resource, path }) => ({
-      path: path.value,
-      ...(resource.offset !== undefined ? { offset: resource.offset } : {}),
-      ...(resource.limit !== undefined ? { limit: resource.limit } : {}),
-    })),
   };
   const serialized = JSON.stringify(projection);
   if (serialized.length <= MAX_ADMITTED_RESULT_CHARS) return serialized;
@@ -332,7 +307,6 @@ function admittedAgentResult(result: SubagentCanonicalResult): string {
       result,
       admittedText(rawText, MAX_AGGREGATE_FALLBACK_TEXT_CHARS).value,
     ),
-    observedResources: [],
   });
 }
 
@@ -348,51 +322,6 @@ function childFinalText(messages: readonly SessionMessage[]): string | null {
     }
   }
   return null;
-}
-
-function observedChildResources(
-  messages: readonly SessionMessage[],
-): readonly ObservedSubagentResource[] {
-  const readCalls = new Map<
-    string,
-    {
-      readonly path: string;
-      readonly offset?: number;
-      readonly limit?: number;
-    }
-  >();
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const toolCall of message.toolCalls) {
-      /* v8 ignore start -- the fixed read-only child catalog cannot produce MCP calls; keep the guard for the wider SessionMessage contract. */
-      if ("kind" in toolCall) continue;
-      /* v8 ignore stop */
-      if (toolCall.tool !== "read") continue;
-      readCalls.set(toolCall.id, {
-        path: toolCall.path,
-        ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
-        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
-      });
-    }
-  }
-  const resources: ObservedSubagentResource[] = [];
-  const seen = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "tool" || message.resourceObservation === undefined)
-      continue;
-    /* v8 ignore next -- successful read observations are emitted from the same canonical tool call ledger; retain fail-closed handling if that internal invariant changes. */
-    const readCall = readCalls.get(message.toolCallId);
-    /* v8 ignore next -- see the canonical read-observation invariant above. */
-    if (readCall === undefined) continue;
-    const key = JSON.stringify(readCall);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    resources.push({
-      ...readCall,
-      observation: copyReadResourceObservation(message.resourceObservation),
-    });
-  }
-  return resources;
 }
 
 function transcriptContent(input: {
@@ -471,10 +400,6 @@ function cloneCanonicalResult(
 ): SubagentCanonicalResult {
   return {
     ...result,
-    observedResources: result.observedResources.map((resource) => ({
-      ...resource,
-      observation: copyReadResourceObservation(resource.observation),
-    })),
     usage: { ...result.usage },
   };
 }
@@ -712,7 +637,6 @@ export function createSubagentSupervisor(
 
       usage = childBudget.observedUsage();
       costUsd = childBudget.observedSpendUsd();
-      const observedResources = observedChildResources(transcriptMessages);
       let saved: ToolOutputArtifactSaveResult;
       try {
         saved = await options.transcriptStore.save({
@@ -760,7 +684,6 @@ export function createSubagentSupervisor(
         delegationId: input.delegationId,
         childRunId: input.childRunId,
         task: input.task,
-        observedResources,
         usage,
         turns,
         costUsd,
@@ -915,7 +838,6 @@ export function createSubagentSupervisor(
                   status: "failed",
                   task: input.task,
                   finalText: null,
-                  observedResources: [],
                   usage,
                   turns: 0,
                   costUsd: 0,
