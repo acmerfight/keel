@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { runAgentTurn } from "../agent/loop.ts";
@@ -8,6 +9,7 @@ import type {
 } from "../agent/model-operations.ts";
 import { postCompactionReadToolCallId } from "../agent/post-compaction-read-id.ts";
 import {
+  appendDelegationToSystemPrompt,
   appendWorkflowSkillsToSystemPrompt,
   buildAgentSystemPrompt,
 } from "../agent/prompt.ts";
@@ -169,6 +171,7 @@ import type {
 import { createMcpPermissionPolicy } from "./mcp-approval.ts";
 import {
   formatLiveSessionGoalStatus,
+  formatSubagentProgress,
   formatUndoCheckpointList,
   formatUndoCheckpointWarning,
   sanitizeStatusLineText,
@@ -186,6 +189,7 @@ import {
   formatSessionTasks,
 } from "./session-status-format.ts";
 import type { SessionModelSelection } from "./session-store.ts";
+import { createCliSubagentRuntime } from "./subagent-runtime.ts";
 
 export type {
   InteractiveActiveSession,
@@ -483,7 +487,9 @@ export async function runInteractiveSession(
   };
   const baseSystemPromptWithGoal = (): string =>
     systemPromptWithSessionGoal(
-      systemPrompt,
+      options.delegation !== undefined
+        ? appendDelegationToSystemPrompt(systemPrompt)
+        : systemPrompt,
       sessionGoal,
       bashRuntimeExposesTool(bash),
     );
@@ -1149,10 +1155,43 @@ export async function runInteractiveSession(
     setComposerMode("steer");
 
     try {
-      const remainingCostUsd = remainingMaxCostUsd();
+      const remainingCostUsd =
+        options.delegation === undefined
+          ? remainingMaxCostUsd()
+          : Math.max(0, options.delegation.maxCostUsd - sessionCostUsd);
       const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
         resolved.modelMetadata,
       );
+      const turnCostModel =
+        shouldTrackInteractiveCost(options.cliArgs) ||
+        options.delegation !== undefined
+          ? options.requireKnownCostModel(resolved)
+          : undefined;
+      const subagentRuntime =
+        options.delegation !== undefined &&
+        remainingCostUsd !== undefined &&
+        turnCostModel !== undefined
+          ? createCliSubagentRuntime({
+              workspace: options.workspace,
+              platform: options.platform,
+              parentRunId: `interactive-${randomUUID()}`,
+              provider: resolved.provider,
+              providerId: resolved.providerId,
+              model: resolved.model,
+              costModel: turnCostModel,
+              maxCostUsd: remainingCostUsd,
+              projectInstructions: options.projectInstructions,
+              hiddenWorkspacePaths,
+              contextCompaction: resolved.contextCompaction,
+              modelMaxOutputTokens,
+              modelOperations: turnModelOperations ?? undefined,
+              transcriptStore: options.delegation.transcriptStore,
+              now,
+              onProgress: (event) => {
+                options.writeStderr(formatSubagentProgress(event));
+              },
+            })
+          : undefined;
       const stream = observeAgentStateEvents(
         runAgentTurn({
           workspace: options.workspace,
@@ -1162,6 +1201,12 @@ export async function runInteractiveSession(
           ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
           bash,
+          ...(subagentRuntime !== undefined
+            ? { delegation: subagentRuntime.supervisor.capability }
+            : {}),
+          ...(subagentRuntime !== undefined
+            ? { costBudgetProvider: subagentRuntime.costBudgetProvider }
+            : {}),
           ...(turnMcpRuntime !== undefined
             ? {
                 mcp: {
@@ -1177,10 +1222,10 @@ export async function runInteractiveSession(
           stopPolicy: defaultStopPolicy(),
           taskProgress,
           ...(sessionGoal !== undefined ? { sessionGoal } : {}),
-          ...(shouldTrackInteractiveCost(options.cliArgs)
+          ...(turnCostModel !== undefined
             ? {
                 costTracking: {
-                  model: options.requireKnownCostModel(resolved),
+                  model: turnCostModel,
                   ...(modelMaxOutputTokens !== undefined
                     ? { modelMaxOutputTokens }
                     : {}),
@@ -1204,7 +1249,7 @@ export async function runInteractiveSession(
           recordCheckpointOperations: (operations) => {
             checkpointOperations.push(...operations);
           },
-          onAgentLoopTurnCompleted: (accounting) => {
+          onAgentLoopAccountingUpdated: (accounting) => {
             latestAgentLoopAccounting = accounting;
           },
           drainInjectedUserMessages: () => {

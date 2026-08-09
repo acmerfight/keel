@@ -271,13 +271,19 @@ describe("CLI Args", () => {
     });
   });
 
-  test(`Given experimental delegation is requested for an interactive run,
+  test(`Given experimental delegation has an explicit budget for an interactive run,
     When the CLI parses the invocation,
-    Then it rejects the unsupported lifecycle before provider resolution`, () => {
-    expect(parseCliArgs(["--experimental-agents", "--max-cost", "1"])).toEqual({
-      ok: false,
-      message:
-        "Error: --experimental-agents currently supports one-shot runs with a message only.",
+    Then it records the opt-in on the interactive session contract`, () => {
+    expect(
+      parseCliArgs(["--experimental-agents", "--max-cost", "1"]),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        mode: "interactive",
+        experimentalAgents: true,
+        maxCostUsd: 1,
+      },
     });
   });
 

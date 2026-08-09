@@ -607,7 +607,7 @@ export function createSubagentSupervisor(
           onTranscriptReady: (messages) => {
             transcriptMessages = messages;
           },
-          onAgentLoopTurnCompleted: (accounting) => {
+          onAgentLoopAccountingUpdated: (accounting) => {
             turns = accounting.turns;
             turnProgress(turns);
           },

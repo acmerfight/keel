@@ -142,7 +142,7 @@ interface RunAgentOptionsBase {
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly onTranscriptReady?: (messages: readonly SessionMessage[]) => void;
-  readonly onAgentLoopTurnCompleted?: RunAgentTurnOptions["onAgentLoopTurnCompleted"];
+  readonly onAgentLoopAccountingUpdated?: RunAgentTurnOptions["onAgentLoopAccountingUpdated"];
 }
 
 interface MainRunAgentOptions {
@@ -194,7 +194,7 @@ interface RunAgentTurnOptionsBase {
   readonly recordCheckpointOperations?: (
     operations: readonly RecordLastBatchCheckpointOperation[],
   ) => void;
-  readonly onAgentLoopTurnCompleted?: (
+  readonly onAgentLoopAccountingUpdated?: (
     accounting: Pick<
       Extract<AgentEvent, { readonly type: "end" }>,
       "usage" | "turns" | "cost"
@@ -893,6 +893,15 @@ export async function* runAgentTurn(
   };
 
   for (let completedTurns = 1; ; completedTurns++) {
+    const publishAccountingUpdate = () => {
+      const cost = buildCostReport(state.accounting.totalCostUsd, costTracking);
+      options.onAgentLoopAccountingUpdated?.({
+        usage: state.accounting.totalUsage,
+        turns: completedTurns,
+        ...(cost !== undefined ? { cost } : {}),
+      });
+      return cost;
+    };
     await options.mcp?.runtime.prepareTurn(options.mcp.schemaTarget, signal);
     const mcpExposure = await options.mcp?.runtime.exposureSnapshot();
     const currentMemorySource = currentMemoryUserMessage();
@@ -991,12 +1000,7 @@ export async function* runAgentTurn(
       turnResult.usage,
       costTracking,
     );
-    const cost = buildCostReport(state.accounting.totalCostUsd, costTracking);
-    options.onAgentLoopTurnCompleted?.({
-      usage: state.accounting.totalUsage,
-      turns: completedTurns,
-      ...(cost !== undefined ? { cost } : {}),
-    });
+    const cost = publishAccountingUpdate();
 
     const decision = stopPolicy.shouldStopAfterTurn({
       completedTurns,
@@ -1289,6 +1293,7 @@ export async function* runAgentTurn(
           delegation.usage,
           costTracking,
         );
+        publishAccountingUpdate();
       }
     };
     const taskProgressEventFromExecution = (
@@ -1488,9 +1493,10 @@ export async function* runAgent(
         systemPrompt: options.systemPrompt,
         signal: options.signal,
         ...agentTurnExecutionOptions(options),
-        ...(options.onAgentLoopTurnCompleted !== undefined
+        ...(options.onAgentLoopAccountingUpdated !== undefined
           ? {
-              onAgentLoopTurnCompleted: options.onAgentLoopTurnCompleted,
+              onAgentLoopAccountingUpdated:
+                options.onAgentLoopAccountingUpdated,
             }
           : {}),
         hiddenWorkspacePaths: options.hiddenWorkspacePaths ?? [],
