@@ -6,12 +6,12 @@ the exact explicit prefix `使用 subagent 调研这个任务。` selects the ex
 feature, can one foreground read-only child finish normally and hand enough
 trusted context back for main to complete the same task?
 
-The corpus is a mechanical copy of the two frozen explicit-intent v1 fixtures.
-Their prompts, workspaces, solutions, and deterministic verifiers are unchanged
-so the new window measures the host-owned result handoff and continuation
-budget rather than a new task distribution. The experiment has a new path and
-decision rule because the earlier Slice 1.5 explicit-intent v1 scored window
-remains immutable.
+The corpus began as a mechanical copy of the two frozen explicit-intent v1
+fixtures. V1 through v5 retain their exact committed inputs and evidence. V6
+clarifies one ambiguous service-review field after v5 showed that both
+`account_id` and `request_id` satisfied the old undirected wording. The
+workspace, solution, verifier, budgets, provider/model, arm order, and
+acceptance threshold remain unchanged.
 
 ## Scored windows
 
@@ -36,7 +36,21 @@ evidence for that same fact contradicts it. It passed the unchanged gate: all
 and all 6 child handoffs were completed with non-empty final text. Raw evidence
 is retained under `artifacts/v3/`.
 
-## Frozen protocol
+V4 ran from `a8b2949` after continuation admission began pricing the complete
+provider-shaped assistant and worst-case bounded tool-result envelopes. All
+children completed and budget invariants held, but treatment task verification
+was 4/6 because the configured-value/sample-value confusion recurred. Raw
+evidence remains under `artifacts/v4/`; the window was not selectively rerun.
+
+V5 ran from `3e456f1` after a general named-fact prompt rule. The recurring
+release-audit case verified 3/3, and overall treatment verification was 5/6.
+The sole failure answered `account_id` for an undirected
+`missingCorrelationField`; the verifier expected `request_id`, while both were
+missing from one side of the two audits. Raw evidence remains under
+`artifacts/v5/`. V6 changes only that fixture wording to say the field must be
+present in the API request audit and absent from the worker delivery audit.
+
+## Frozen v6 protocol
 
 - Experiment: `subagent-slice-1-6`.
 - Provider: DeepSeek.
@@ -48,7 +62,7 @@ is retained under `artifacts/v3/`.
 - Pairing: each pair uses the same prompt, model, root budget, base tools, and
   pristine workspace; delegation is the only treatment capability delta.
 - Order: odd trials run control first and even trials run treatment first.
-- Task grading: the unchanged deterministic workspace verifiers.
+- Task grading: the deterministic workspace verifiers.
 - Child completion grading: inspect each treatment transcript's `delegate`
   result and require `status=completed`; do not infer completion merely from a
   child model operation or a distinct child ID.
@@ -68,8 +82,8 @@ node --experimental-strip-types src/cli/index.ts eval \
   --provider deepseek \
   --model deepseek-v4-flash \
   --trials 3 \
-  --out /tmp/keel-subagent-slice-1-6-v3.jsonl \
-  --transcript-dir /tmp/keel-subagent-slice-1-6-v3-transcripts
+  --out /tmp/keel-subagent-slice-1-6-v6.jsonl \
+  --transcript-dir /tmp/keel-subagent-slice-1-6-v6-transcripts
 ```
 
 ## Corpus and budget

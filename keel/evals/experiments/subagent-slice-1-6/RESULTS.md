@@ -77,3 +77,28 @@ truncated and still verified. Full raw evidence and checksums are retained
 under `artifacts/v3/`. Slice 1.6's explicit single-child completion gate is
 therefore satisfied. This does not establish autonomous selection, parallel
 speedup, or lower cost.
+
+## V4 — budget reliable, task gate failed
+
+V4 ran all 12 arms once from `a8b2949` after the main continuation lease began
+pricing the complete provider-shaped assistant and a worst-case bounded tool
+result. Controls verified 6/6, treatments verified 4/6, every treatment child
+completed, and no cost overshoot occurred. Both failures again substituted a
+240-second observed sample for a separately configured 300-second policy. Raw
+evidence is retained under `artifacts/v4/`; no sample was selectively rerun.
+
+## V5 — named-fact regression fixed, eval ambiguity found
+
+V5 ran all 12 arms once from `3e456f1` after a general named-fact distinction
+was added to the child and main handoff prompts. The recurring release-audit
+case verified 3/3. Overall controls verified 6/6 and treatments verified 5/6;
+all treatment children completed and no cost overshoot occurred.
+
+The sole service-review failure reported `account_id`, which is present in the
+worker audit and absent from the API audit. The verifier expected `request_id`,
+which is present in the API audit and absent from the worker audit. Because the
+old `missingCorrelationField` prompt did not specify a direction, both answers
+were supported. V6 therefore clarifies only that semantic contract and keeps
+the workspace, solution, verifier, runtime, provider/model, budgets, trials,
+ordering, and acceptance threshold unchanged. V5 evidence is retained under
+`artifacts/v5/`.
