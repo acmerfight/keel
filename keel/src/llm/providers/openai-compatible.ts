@@ -9,6 +9,7 @@ import {
   type OpenAICompatibleMessageOptions,
 } from "./openai-compatible-messages.ts";
 import {
+  coordinatedRetryDecision,
   type ProviderConfig,
   ProviderRetryController,
   requestChatCompletions,
@@ -108,6 +109,8 @@ export function createOpenAICompatibleProvider<
           providerConfig.providerName,
           retry,
           options.providerRequestAttempts ?? null,
+          options.providerRetryCoordination,
+          options.providerRequestConcurrency,
         );
         let attemptFinished = false;
         const finishAttempt = (result: ProviderRequestAttemptFinish): void => {
@@ -177,7 +180,10 @@ export function createOpenAICompatibleProvider<
             );
             throw error;
           }
-          const decision = retry.transportDecision(error.code);
+          const decision = coordinatedRetryDecision(
+            retry.transportDecision(error.code),
+            options.providerRetryCoordination,
+          );
           if (decision === null) {
             finishAttempt({
               outcome: "terminal_error",
@@ -192,6 +198,7 @@ export function createOpenAICompatibleProvider<
               decision,
             ),
           });
+          response.close();
           yield* waitForProviderRetry(
             retry,
             providerConfig.providerName,

@@ -27,9 +27,15 @@ import {
 } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
-import type { DelegationCapability } from "../tools/delegation.ts";
+import type {
+  DelegationBatchEntry,
+  DelegationCapability,
+  DelegationExecutor,
+} from "../tools/delegation.ts";
+import { createDelegationExecutor } from "../tools/delegation.ts";
 import {
   executeToolCall,
+  invalidToolCallFailureMessage,
   type ToolExecution,
   toolExecutionEffect,
   toolExecutionEffects,
@@ -44,6 +50,8 @@ import {
 } from "../tools/scoped-project-instructions.ts";
 import { toolCallAccesses } from "../tools/tool-access.ts";
 import {
+  type InvalidToolCall,
+  isInvalidToolCall,
   isMcpToolInvocation,
   isUntrustedMcpContentToolCall,
 } from "../tools/tool-call.ts";
@@ -433,21 +441,66 @@ function scheduledToolCalls(
 }
 
 const NON_ISOLATED_DELEGATION_RESULT =
-  "Delegation rejected: delegate must be the only tool call in its assistant turn so the host can preserve an isolated main continuation budget.";
+  "Delegation rejected: delegate calls may share a tool round only with other delegate calls so the host can preserve one aggregate main continuation budget.";
+
+interface TurnDelegation {
+  readonly executor: DelegationExecutor | undefined;
+  readonly close: () => void;
+}
+
+type DelegationToolCall =
+  | Extract<ToolCall, { readonly tool: "delegate" }>
+  | (InvalidToolCall & { readonly tool: "delegate" });
+
+function isDelegationToolCall(
+  toolCall: ToolCall,
+): toolCall is DelegationToolCall {
+  return !isMcpToolInvocation(toolCall) && toolCall.tool === "delegate";
+}
+
+function delegationBatchEntry(
+  toolCall: DelegationToolCall,
+  signal: AbortSignal,
+): DelegationBatchEntry {
+  if (isInvalidToolCall(toolCall)) {
+    return {
+      kind: "result",
+      toolCallId: toolCall.id,
+      content: invalidToolCallFailureMessage(toolCall),
+    };
+  }
+  return {
+    kind: "request",
+    request: {
+      toolCallId: toolCall.id,
+      task: toolCall.task,
+      focusPaths: toolCall.focusPaths ?? [],
+      signal,
+    },
+  };
+}
 
 function delegationForToolRound(
   delegation: DelegationCapability | undefined,
   toolCalls: readonly ToolCall[],
-): DelegationCapability | undefined {
-  if (delegation === undefined || toolCalls.length === 1) return delegation;
+  signal: AbortSignal,
+): TurnDelegation {
+  if (delegation === undefined) {
+    return { executor: undefined, close: () => {} };
+  }
+  if (toolCalls.every(isDelegationToolCall)) {
+    const batch = delegation.prepareBatch(
+      toolCalls.map((toolCall) => delegationBatchEntry(toolCall, signal)),
+    );
+    return { executor: batch.executor, close: batch.close };
+  }
   return {
-    /* v8 ignore next -- executeDelegateTool calls delegate directly for this already-issued mixed round; availability is required only by the shared capability interface. */
-    available: () => false,
-    delegate: async () => ({
+    executor: createDelegationExecutor(async () => ({
       delivery: "rejected",
       ok: false,
       content: NON_ISOLATED_DELEGATION_RESULT,
-    }),
+    })),
+    close: () => {},
   };
 }
 
@@ -1138,6 +1191,7 @@ export async function* runAgentTurn(
     const turnDelegation = delegationForToolRound(
       options.delegation,
       turnResult.toolCalls,
+      signal,
     );
 
     const executeTurnToolCall = async (
@@ -1163,7 +1217,9 @@ export async function* runAgentTurn(
         signal,
         bash,
         builtinToolAuthority: toolExposure,
-        ...(turnDelegation !== undefined ? { delegation: turnDelegation } : {}),
+        ...(turnDelegation.executor !== undefined
+          ? { delegation: turnDelegation.executor }
+          : {}),
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: readVisibility,
@@ -1340,91 +1396,101 @@ export async function* runAgentTurn(
       };
     };
 
-    for (const segment of planToolCallExecutionSegments(scheduled)) {
-      if (segment.kind === "parallel") {
-        for (const { toolCall } of segment.toolCalls) {
-          yield { type: "tool_start", toolCall };
-        }
-        const results = await executeParallelToolCallsInSourceOrder({
-          toolCalls: segment.toolCalls,
-          execute: executeTurnToolCall,
-        });
-        for (const result of results) {
-          if (result.status === "rejected") {
+    try {
+      for (const segment of planToolCallExecutionSegments(scheduled)) {
+        if (segment.kind === "parallel") {
+          for (const { toolCall } of segment.toolCalls) {
+            yield { type: "tool_start", toolCall };
+          }
+          const results = await executeParallelToolCallsInSourceOrder({
+            toolCalls: segment.toolCalls,
+            execute: executeTurnToolCall,
+          });
+          for (const result of results) {
+            if (result.status === "rejected") {
+              for (const notice of await settlePendingToolExecutions()) {
+                yield { type: "tool_output_artifact", ...notice };
+              }
+              throw result.reason;
+            }
+            const { toolCall, result: execution } = result;
+            yield toolEndEvent(toolCall, execution);
+            recordCompletedToolExecution({ toolCall, execution });
+          }
+        } else {
+          const { toolCall } = segment.toolCall;
+          if (
+            !isMcpToolInvocation(toolCall) &&
+            toolCall.tool === "update_goal"
+          ) {
             for (const notice of await settlePendingToolExecutions()) {
               yield { type: "tool_output_artifact", ...notice };
             }
-            throw result.reason;
           }
-          const { toolCall, result: execution } = result;
+          yield { type: "tool_start", toolCall };
+          let execution: ToolExecution;
+          try {
+            execution = await executeTurnToolCall(toolCall);
+          } catch (error) {
+            for (const notice of await settlePendingToolExecutions()) {
+              yield { type: "tool_output_artifact", ...notice };
+            }
+            throw error;
+          }
+          if (
+            toolCostBudgetAdmission !== null &&
+            costTracking?.maxCostUsd !== undefined
+          ) {
+            recordCompletedToolExecution({
+              toolCall,
+              execution: {
+                content: COST_BUDGET_ADMISSION_TOOL_RESULT,
+                ok: false,
+                effects: [],
+              },
+            });
+            await settlePendingToolExecutions();
+            yield {
+              type: "end",
+              usage: state.accounting.totalUsage,
+              turns: completedTurns,
+              stopReason: "cost_budget",
+              cost: buildCostBudgetLimitedReport(
+                state.accounting.totalCostUsd,
+                {
+                  ...costTracking,
+                  maxCostUsd: costTracking.maxCostUsd,
+                },
+              ),
+            };
+            return;
+          }
           yield toolEndEvent(toolCall, execution);
+          if (execution.ok) {
+            const skillActivation = toolExecutionEffect(
+              execution,
+              "skill_activation",
+            );
+            if (skillActivation !== undefined) {
+              yield { type: "skill_activated", ...skillActivation.activation };
+            }
+          }
+          const taskProgressEvent = taskProgressEventFromExecution(execution);
+          if (taskProgressEvent !== null) {
+            yield taskProgressEvent;
+          }
+          const sessionGoalEvent = sessionGoalEventFromExecution(execution);
+          if (sessionGoalEvent !== null) {
+            yield sessionGoalEvent;
+          }
           recordCompletedToolExecution({ toolCall, execution });
-        }
-      } else {
-        const { toolCall } = segment.toolCall;
-        if (!isMcpToolInvocation(toolCall) && toolCall.tool === "update_goal") {
-          for (const notice of await settlePendingToolExecutions()) {
-            yield { type: "tool_output_artifact", ...notice };
+          if (!isMcpToolInvocation(toolCall) && toolCall.tool === "delegate") {
+            signal.throwIfAborted();
           }
-        }
-        yield { type: "tool_start", toolCall };
-        let execution: ToolExecution;
-        try {
-          execution = await executeTurnToolCall(toolCall);
-        } catch (error) {
-          for (const notice of await settlePendingToolExecutions()) {
-            yield { type: "tool_output_artifact", ...notice };
-          }
-          throw error;
-        }
-        if (
-          toolCostBudgetAdmission !== null &&
-          costTracking?.maxCostUsd !== undefined
-        ) {
-          recordCompletedToolExecution({
-            toolCall,
-            execution: {
-              content: COST_BUDGET_ADMISSION_TOOL_RESULT,
-              ok: false,
-              effects: [],
-            },
-          });
-          await settlePendingToolExecutions();
-          yield {
-            type: "end",
-            usage: state.accounting.totalUsage,
-            turns: completedTurns,
-            stopReason: "cost_budget",
-            cost: buildCostBudgetLimitedReport(state.accounting.totalCostUsd, {
-              ...costTracking,
-              maxCostUsd: costTracking.maxCostUsd,
-            }),
-          };
-          return;
-        }
-        yield toolEndEvent(toolCall, execution);
-        if (execution.ok) {
-          const skillActivation = toolExecutionEffect(
-            execution,
-            "skill_activation",
-          );
-          if (skillActivation !== undefined) {
-            yield { type: "skill_activated", ...skillActivation.activation };
-          }
-        }
-        const taskProgressEvent = taskProgressEventFromExecution(execution);
-        if (taskProgressEvent !== null) {
-          yield taskProgressEvent;
-        }
-        const sessionGoalEvent = sessionGoalEventFromExecution(execution);
-        if (sessionGoalEvent !== null) {
-          yield sessionGoalEvent;
-        }
-        recordCompletedToolExecution({ toolCall, execution });
-        if (!isMcpToolInvocation(toolCall) && toolCall.tool === "delegate") {
-          signal.throwIfAborted();
         }
       }
+    } finally {
+      turnDelegation.close();
     }
     for (const notice of await settlePendingToolExecutions()) {
       yield { type: "tool_output_artifact", ...notice };

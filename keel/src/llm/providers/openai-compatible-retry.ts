@@ -8,7 +8,10 @@ import type {
   LLMEvent,
   ProviderRequestAttemptHandle,
   ProviderRequestAttemptObserver,
+  ProviderRequestConcurrency,
   ProviderRequestRetryDecision,
+  ProviderRequestSlot,
+  ProviderRetryCoordination,
 } from "../types.ts";
 
 export interface ProviderRetryConfig {
@@ -56,6 +59,18 @@ interface RetryDecision {
   readonly delayMs: number;
   readonly attemptIndex: number;
   readonly maxRetries: number;
+}
+
+export function coordinatedRetryDecision(
+  decision: RetryDecision | null,
+  coordination: ProviderRetryCoordination | undefined,
+): RetryDecision | null {
+  if (decision === null || coordination === undefined) return decision;
+  const delayMs = coordination.reserveRetry({
+    reason: decision.reason,
+    suggestedDelayMs: decision.delayMs,
+  });
+  return delayMs === null ? null : { ...decision, delayMs };
 }
 
 const DEFAULT_PROVIDER_RETRY_CONFIG: ResolvedProviderRetryConfig = {
@@ -462,6 +477,10 @@ export interface ChatCompletionsResponse {
   readonly close: () => void;
 }
 
+const unboundedProviderRequestSlot: ProviderRequestSlot = {
+  release: () => {},
+};
+
 type RequestTermination =
   | "active"
   | "caller_abort"
@@ -635,11 +654,29 @@ export async function* requestChatCompletions(
   providerName: string,
   retry: ProviderRetryController,
   providerRequestAttempts: ProviderRequestAttemptObserver | null,
+  retryCoordination: ProviderRetryCoordination | undefined,
+  requestConcurrency: ProviderRequestConcurrency | undefined,
 ): AsyncGenerator<LLMEvent, ChatCompletionsResponse> {
   const liveness = resolveProviderLivenessConfig(config.liveness);
   for (;;) {
     const body = requestBody();
-    const attempt = providerRequestAttempts?.begin() ?? null;
+    const providerRequestSlot =
+      requestConcurrency === undefined
+        ? unboundedProviderRequestSlot
+        : await requestConcurrency.acquire(signal);
+    let providerRequestSlotReleased = false;
+    const releaseProviderRequestSlot = (): void => {
+      if (providerRequestSlotReleased) return;
+      providerRequestSlotReleased = true;
+      providerRequestSlot.release();
+    };
+    let attempt: ProviderRequestAttemptHandle | null;
+    try {
+      attempt = providerRequestAttempts?.begin() ?? null;
+    } catch (error) {
+      releaseProviderRequestSlot();
+      throw error;
+    }
     const requestControl = createProviderRequestControl(
       signal,
       liveness.firstResponseTimeoutMs,
@@ -666,15 +703,20 @@ export async function* requestChatCompletions(
       if (failure.outcome === "aborted") {
         attempt?.finish({ outcome: "aborted" });
         requestControl.close();
+        releaseProviderRequestSlot();
         throw failure.error;
       }
-      const decision = retry.transportDecision(failure.reason);
+      const decision = coordinatedRetryDecision(
+        retry.transportDecision(failure.reason),
+        retryCoordination,
+      );
       if (decision === null) {
         attempt?.finish({
           outcome: "terminal_error",
           errorCode: failure.reason,
         });
         requestControl.close();
+        releaseProviderRequestSlot();
         throw failure.error;
       }
       attempt?.finish({
@@ -682,6 +724,7 @@ export async function* requestChatCompletions(
         retryDecision: requestRetryDecisionForReport(providerName, decision),
       });
       requestControl.close();
+      releaseProviderRequestSlot();
       yield* waitForProviderRetry(retry, providerName, signal, decision);
       continue;
     }
@@ -693,11 +736,17 @@ export async function* requestChatCompletions(
         abortForStreamInactivity: requestControl.abortForStreamInactivity,
         streamInactivityTimedOut: () =>
           requestControl.termination() === "stream_inactivity_timeout",
-        close: requestControl.close,
+        close: () => {
+          requestControl.close();
+          releaseProviderRequestSlot();
+        },
       };
     }
 
-    const retryDecision = retry.responseDecision(response);
+    const retryDecision = coordinatedRetryDecision(
+      retry.responseDecision(response),
+      retryCoordination,
+    );
     if (retryDecision !== null) {
       await discardResponseBody(response);
       attempt?.finish({
@@ -708,6 +757,7 @@ export async function* requestChatCompletions(
         ),
       });
       requestControl.close();
+      releaseProviderRequestSlot();
       yield* waitForProviderRetry(retry, providerName, signal, retryDecision);
       continue;
     }
@@ -735,6 +785,7 @@ export async function* requestChatCompletions(
           : { outcome: "terminal_error", errorCode: keelError.code },
       );
       requestControl.close();
+      releaseProviderRequestSlot();
       throw keelError;
     }
     const code = isContextOverflowHttpError(response.status, text)
@@ -746,6 +797,7 @@ export async function* requestChatCompletions(
         : { outcome: "terminal_error", errorCode: code },
     );
     requestControl.close();
+    releaseProviderRequestSlot();
     throw new KeelError(
       code,
       `${providerName} API error (${response.status}): ${text}`,

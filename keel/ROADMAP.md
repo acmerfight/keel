@@ -137,14 +137,21 @@ What a user can do today:
   budget with conservative request admission, provider output bounds, and
   post-response accounting.
 - `keel --experimental-agents --max-cost <usd> "<message>"` — a default-off,
-  time-boxed #590 experiment for one foreground read-only child. Main may
-  delegate one fresh-context workspace investigation, shows bounded lifecycle
-  progress, shares the root cost budget, waits for real cancellation/settlement,
-  and remains the only final answerer. Slice 1.5 now supports **Continue for
+  time-boxed #590 foreground read-only orchestration experiment. Main may
+  delegate one or several fresh-context workspace investigations, shows bounded
+  lifecycle progress, shares the root cost budget, waits for real
+  cancellation/settlement, and remains the only final answerer. Slice 2.2
+  admits up to four active children and eight total children per root run.
+  Independent delegate calls in one pure-delegate tool round use the shared
+  scheduler and settle in source order; sibling failure is isolated. Tree-level
+  continuation, child, and aggregate result budgets price every fresh,
+  rejected, or replayed source outcome. Two physical provider request slots are
+  separate from agent-run slots, with shared retry/backoff, auth/quota circuit,
+  and parent cancellation. Slice 1.5 historically established **Continue for
   explicit user-directed development**: autonomous eligible prompts selected a
   child 0/6 times, but the separately frozen exact prefix
   `使用 subagent 调研这个任务。` selected one child 6/6 times. The feature
-  remains default-off and autonomous selection is uncommitted. Slice 1.6
+  remains default-off and autonomous selection is uncommitted. Slice 1.6 then
   removes the model-authored `submit_agent_result` protocol: a child now ends
   with a normal final message, while the host creates a typed, bounded,
   tool-agnostic handoff with a reference to the complete transcript. The root
@@ -152,26 +159,28 @@ What a user can do today:
   finalized provider-shaped assistant and bounded tool-result envelopes. The
   root ledger holds that reservation until child settlement, child minimum
   admission uses the same finalized request shape, mixed delegate/tool rounds
-  are rejected before child creation, and `delegate` disappears after the
-  single accepted child. Main receives the bounded child conclusion and
-  terminal metadata, then decides for itself whether further verification is
-  warranted. Invalid arguments for a currently exposed `delegate` call are
-  recoverable without starting a child or consuming the one-shot slot. The
-  final Slice 1.6 v8 DeepSeek window passed all 12 arms: controls 6/6,
+  are rejected before child creation, and `delegate` remains available while
+  tree admission and provider health permit another child. Main receives each
+  bounded child conclusion and terminal metadata, then decides for itself
+  whether further verification is warranted. Invalid arguments for a currently
+  exposed `delegate` call are recoverable without starting a child or consuming
+  a child slot. The final historical Slice 1.6 v8 DeepSeek window passed all 12
+  arms: controls 6/6,
   treatments 6/6, exactly one completed child 6/6, zero cost overshoot, and
   delegate-only assistant turns 6/6. No handoff included read-specific
   evidence. All six mains still repeated some read/search work after child
   completion, and treatment remained slower and more expensive in this serial
-  corpus. This proves explicit single-child completion reliability, not
-  autonomous selection, lower cost, parallel speedup, or the elimination of
-  duplicate work. See the
+  corpus. That window proved explicit single-child completion reliability, not
+  autonomous selection, lower cost, or the elimination of duplicate work;
+  Slice 2.2 separately proves deterministic transport overlap and a 3/3 real
+  DeepSeek explicit parallel window. See the
   [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md)
   and
   [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md).
   [Slice 1.6 completion result](evals/experiments/subagent-slice-1-6/RESULTS.md).
-  After #590 closes, any further delegation capability requires a fresh user
-  problem, issue, priority, and architecture decision; passing 1.6 is not an
-  automatic commitment to concurrency or a broader multi-agent system.
+  #590 remains the governing epic; foreground parallelism does not imply
+  background persistence, write authority, nesting, or default-on autonomous
+  delegation before their own slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -212,7 +221,7 @@ Known limits that shape the priorities below:
   a restored user-message point into an independent named session.
   `--resume --pick` and `/sessions` group related sessions into a graph-aware
   numbered tree, while `/fork --pick` provides an interactive fork-point
-  picker. Future sub-agent state is still absent.
+  picker. Persistent agent-tree state is still absent.
   Forks do not copy bash approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
@@ -259,11 +268,11 @@ Known limits that shape the priorities below:
   compaction, resume, and fork. Deterministic package audit now excludes blocked
   Skills from routing and activation and exposes actionable diagnostics through
   `keel skills doctor`. The next Skill work should calibrate catalog routing and
-  task outcomes before pinned distribution. Sub-agents have one explicit,
-  default-off, time-boxed read-only Slice 1 experiment under #590; every later
-  slice requires a fresh next-slice decision and remains subject to the issue's
-  reliability and same-budget value gates. Marketplaces and IDE integration
-  remain deferred.
+  task outcomes before pinned distribution. Sub-agents now have explicit,
+  default-off foreground read-only parallelism through #590 Slice 2.2; later
+  background, persistence, profiles, writes, nesting, and policy slices remain
+  subject to the issue's reliability and same-budget value gates. Marketplaces
+  and IDE integration remain deferred.
 - MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
   transport over the same runtime and policy core, and Keel is a client only.
   Remaining work is calibrating progressive tool selection on real tasks.
@@ -287,7 +296,7 @@ Known limits that shape the priorities below:
    and persistent durable Goal status. The startup and `--resume --pick`
    session picker groups independent fork ledgers into a numbered branch tree;
    `/sessions` reuses that graph in a running process and transfers queued input
-   to the selected ledger. Remaining work includes future sub-agent state.
+   to the selected ledger. Remaining work includes persistent agent-tree state.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -385,7 +394,7 @@ Codex/Claude Code — or directly moves the eval numbers.
   history without copying pending queued input. `keel --resume --pick` groups
   those ledgers into a graph-aware numbered tree, and `/sessions` switches the
   active ledger from the same graph without restarting Keel. Remaining work is
-  future sub-agent state.
+  persistent agent-tree state.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
@@ -425,15 +434,17 @@ Codex/Claude Code — or directly moves the eval numbers.
   and advisory portability, script, authority, and dangerous-instruction
   findings without executing package code. Remaining work is catalog-budget and
   routing calibration through evals, then pinned installation and update.
-  Marketplace, multi-agent execution, and remote installation remain deferred.
+  Marketplace, profile-governed/write-capable child execution, and remote
+  installation remain deferred.
 
 ## P2 — After the replacement works
 
 Not needed to switch; revisit once P0/P1 are done.
 
-- Sub-agents — #590 Slice 1 is an explicit default-off, time-boxed experiment;
-  parallelism, persistence, and any default-on decision remain P2 and require
-  the issue's reliability and same-budget go/no-go gates.
+- Sub-agents — #590 Slice 2.2 provides explicit default-off foreground
+  read-only parallelism. Persistent/background control, governed profiles,
+  isolated writes, bounded nesting, and any default-on decision remain gated by
+  their later epic slices and same-budget value evidence.
 - Plan mode
 - IDE integration
 - Skill marketplace

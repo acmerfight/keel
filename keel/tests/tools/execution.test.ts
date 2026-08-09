@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
+import { createDelegationExecutor } from "../../src/tools/delegation.ts";
 import {
   type ExecuteToolCallOptions,
   executeToolCall,
@@ -168,17 +169,14 @@ describe("Tool Execution", () => {
         signal: new AbortController().signal,
         bash: { kind: "disabled" },
         builtinToolAuthority: { kind: "auto" },
-        delegation: {
-          available: () => true,
-          delegate: async () => {
-            delegateCalled = true;
-            return {
-              delivery: "replayed",
-              ok: true,
-              content: "unexpected",
-            };
-          },
-        },
+        delegation: createDelegationExecutor(async () => {
+          delegateCalled = true;
+          return {
+            delivery: "replayed",
+            ok: true,
+            content: "unexpected",
+          };
+        }),
       });
       const forgedWrite = await executeToolCall({
         workspace,
@@ -322,49 +320,40 @@ describe("Tool Execution", () => {
     const failed = await executeToolCall({
       ...base,
       signal: new AbortController().signal,
-      delegation: {
-        available: () => true,
-        delegate: async () => ({
-          delivery: "rejected",
-          ok: false,
-          content: "child failed",
-        }),
-      },
+      delegation: createDelegationExecutor(async () => ({
+        delivery: "rejected",
+        ok: false,
+        content: "child failed",
+      })),
     });
     const noUsage = await executeToolCall({
       ...base,
       signal: new AbortController().signal,
-      delegation: {
-        available: () => true,
-        delegate: async () => ({
-          delivery: "replayed",
-          ok: true,
-          content: "child completed",
-        }),
-      },
+      delegation: createDelegationExecutor(async () => ({
+        delivery: "replayed",
+        ok: true,
+        content: "child completed",
+      })),
     });
     const controller = new AbortController();
     const cancellation = new Error("cancel after child settlement");
     const cancelled = await executeToolCall({
       ...base,
       signal: controller.signal,
-      delegation: {
-        available: () => true,
-        delegate: async () => {
-          controller.abort(cancellation);
-          return {
-            delivery: "fresh",
-            ok: false,
-            content: "child cancelled",
-            usage: {
-              inputTokens: 5,
-              cachedInputTokens: 1,
-              uncachedInputTokens: 4,
-              outputTokens: 2,
-            },
-          };
-        },
-      },
+      delegation: createDelegationExecutor(async () => {
+        controller.abort(cancellation);
+        return {
+          delivery: "fresh",
+          ok: false,
+          content: "child cancelled",
+          usage: {
+            inputTokens: 5,
+            cachedInputTokens: 1,
+            uncachedInputTokens: 4,
+            outputTokens: 2,
+          },
+        };
+      }),
     });
 
     expect(failed).toEqual({ ok: false, content: "child failed", effects: [] });
@@ -406,20 +395,17 @@ describe("Tool Execution", () => {
       signal,
       bash: { kind: "disabled" },
       builtinToolAuthority: { kind: "auto", delegation: true },
-      delegation: {
-        available: () => true,
-        delegate: async (input) => ({
-          delivery: "fresh",
-          ok: true,
-          content: `${input.task}:${input.focusPaths.join(",")}`,
-          usage: {
-            inputTokens: 10,
-            cachedInputTokens: 2,
-            uncachedInputTokens: 8,
-            outputTokens: 3,
-          },
-        }),
-      },
+      delegation: createDelegationExecutor(async (input) => ({
+        delivery: "fresh",
+        ok: true,
+        content: `${input.task}:${input.focusPaths.join(",")}`,
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 2,
+          uncachedInputTokens: 8,
+          outputTokens: 3,
+        },
+      })),
     });
     expect(delegated).toEqual({
       ok: true,

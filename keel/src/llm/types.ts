@@ -89,6 +89,21 @@ export interface ProviderRequestAttemptObserver {
   readonly begin: () => ProviderRequestAttemptHandle;
 }
 
+export interface ProviderRetryCoordination {
+  readonly reserveRetry: (input: {
+    readonly reason: KeelErrorCode;
+    readonly suggestedDelayMs: number;
+  }) => number | null;
+}
+
+export interface ProviderRequestSlot {
+  readonly release: () => void;
+}
+
+export interface ProviderRequestConcurrency {
+  readonly acquire: (signal: AbortSignal) => Promise<ProviderRequestSlot>;
+}
+
 export type LLMEvent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "reasoning"; readonly text: string }
@@ -117,6 +132,8 @@ export interface StreamOptions {
   readonly toolExposure?: ModelToolExposure;
   readonly maxOutputTokens?: number;
   readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
+  readonly providerRetryCoordination?: ProviderRetryCoordination;
+  readonly providerRequestConcurrency?: ProviderRequestConcurrency;
 }
 
 export interface LLMProvider {

@@ -189,7 +189,7 @@ export interface SharedCostBudgetedProvider {
   readonly leaseContinuation: (input: {
     readonly additionalMessages: readonly ProviderMessage[];
     readonly maxOutputTokens: number;
-    readonly minimumChildInputTokens: number;
+    readonly minimumAdditionalRequestCostUsd: number;
   }) => ContinuationBudgetLease;
 }
 
@@ -197,7 +197,7 @@ type ContinuationBudgetLease =
   | {
       readonly kind: "granted";
       readonly reservedUsd: number;
-      readonly childMaxCostUsd: number;
+      readonly additionalRequestBudgetUsd: number;
       readonly estimatedContinuationInputTokens: number;
       readonly release: () => void;
     }
@@ -252,7 +252,6 @@ export function createSharedCostBudgetedProvider(
     outputTokens: 0,
   };
   let reservedAttemptSpendUsd = 0;
-  let currentAttemptReservationUsd = 0;
   let latestEstimatedInputTokens: number | null = null;
   let continuationBaseline: ContinuationBaseline | null = null;
   let activeContinuationReservation: {
@@ -314,11 +313,6 @@ export function createSharedCostBudgetedProvider(
           });
         }
         reservedAttemptSpendUsd += requestReservationUsd;
-        currentAttemptReservationUsd = requestReservationUsd;
-      };
-      const releaseCompletedAttempt = (): void => {
-        reservedAttemptSpendUsd -= currentAttemptReservationUsd;
-        currentAttemptReservationUsd = 0;
       };
       const providerRequestAttempts: ProviderRequestAttemptObserver = {
         begin: (): ProviderRequestAttemptHandle => {
@@ -328,7 +322,7 @@ export function createSharedCostBudgetedProvider(
           return {
             finish: (result) => {
               if (result.outcome === "completed") {
-                releaseCompletedAttempt();
+                reservedAttemptSpendUsd -= requestReservationUsd;
                 observedUsage = {
                   inputTokens:
                     observedUsage.inputTokens + result.usage.inputTokens,
@@ -427,14 +421,9 @@ export function createSharedCostBudgetedProvider(
         input.maxOutputTokens,
         options.model,
       );
-      const childMaxCostUsd = remainingUsd() - reservedUsd;
-      const minimumChildCostUsd = calculateConservativeRequestCostUsd(
-        input.minimumChildInputTokens,
-        MIN_USEFUL_OUTPUT_TOKENS,
-        options.model,
-      );
+      const additionalRequestBudgetUsd = remainingUsd() - reservedUsd;
       if (
-        childMaxCostUsd < minimumChildCostUsd ||
+        additionalRequestBudgetUsd < input.minimumAdditionalRequestCostUsd ||
         input.maxOutputTokens < MIN_USEFUL_OUTPUT_TOKENS
       ) {
         return { kind: "rejected", reason: "insufficient_budget" };
@@ -444,7 +433,7 @@ export function createSharedCostBudgetedProvider(
       return {
         kind: "granted",
         reservedUsd,
-        childMaxCostUsd,
+        additionalRequestBudgetUsd,
         estimatedContinuationInputTokens,
         release: () => {
           /* v8 ignore else -- the single accepted child owns one finally release; retain the generation guard so a stale duplicate release cannot clear a future lease. */

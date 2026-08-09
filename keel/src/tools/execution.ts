@@ -14,7 +14,7 @@ import type { SkillActivationCapability } from "../skills/model.ts";
 import { WorkflowSkillError } from "../skills/model.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
-import type { DelegationCapability } from "./delegation.ts";
+import type { DelegationExecutor } from "./delegation.ts";
 import { executeEdit } from "./edit.ts";
 import {
   type DelegationToolExecutionEffect,
@@ -122,7 +122,7 @@ type DelegateToolCall = Extract<ValidToolCall, { readonly tool: "delegate" }>;
 
 interface BuiltinToolExecutionContext extends GoalExecutionContext {
   readonly builtinToolAuthority?: ModelToolExposure;
-  readonly delegation?: DelegationCapability;
+  readonly delegation?: DelegationExecutor;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly skillActivation?: Pick<
     SkillActivationCapability,
@@ -574,7 +574,9 @@ function unhandledToolFailureMessage(
   return `Tool failed: ${toolMessage}\nRecovery: Inspect the failed tool request and current workspace state, then retry with corrected arguments or choose another approach.`;
 }
 
-function invalidToolCallFailureMessage(toolCall: InvalidToolCall): string {
+export function invalidToolCallFailureMessage(
+  toolCall: InvalidToolCall,
+): string {
   return `Tool failed: ${toolCall.tool} failed: invalid arguments: ${toolCall.validationError}\nRecovery: ${toolCall.recovery}`;
 }
 

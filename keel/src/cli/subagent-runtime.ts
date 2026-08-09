@@ -7,6 +7,7 @@ import {
   type SubagentProgressEvent,
   type SubagentSupervisor,
 } from "../agent/subagent-supervisor.ts";
+import { createSubagentTreeProvider } from "../agent/subagent-tree-provider.ts";
 import type { AbortableToolOutputArtifactStore } from "../agent/tool-output-artifacts.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { LLMProvider } from "../llm/types.ts";
@@ -38,8 +39,11 @@ export interface CliSubagentRuntime {
 export function createCliSubagentRuntime(
   options: CreateCliSubagentRuntimeOptions,
 ): CliSubagentRuntime {
-  const rootBudget = createSharedCostBudgetedProvider({
+  const treeProvider = createSubagentTreeProvider({
     provider: options.provider,
+  });
+  const rootBudget = createSharedCostBudgetedProvider({
+    provider: treeProvider.provider,
     model: options.costModel,
     maxCostUsd: options.maxCostUsd,
     ...(options.modelMaxOutputTokens !== undefined
@@ -73,6 +77,7 @@ export function createCliSubagentRuntime(
       transcriptStore: options.transcriptStore,
       now: options.now,
       onProgress: options.onProgress,
+      providerBlocked: treeProvider.blocked,
     }),
   };
 }

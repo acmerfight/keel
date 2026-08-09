@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -146,9 +146,195 @@ describe("CLI Main - Subagent Delegation", () => {
     }
   });
 
+  test(`Given the user requests two independent read-only investigations,
+    When main delegates both in one tool round and the second child finishes first,
+    Then the children overlap while main receives both settled results in source order`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-parallel-"));
+    const reportPath = join(workspace, "report.json");
+    await writeFile(join(workspace, "alpha.ts"), "export const alpha = 1;\n");
+    await writeFile(join(workspace, "beta.ts"), "export const beta = 2;\n");
+    const requests: unknown[] = [];
+    const childResponses = new Map<string, ServerResponse>();
+    const completionOrder: string[] = [];
+    let activeChildRequests = 0;
+    let maxActiveChildRequests = 0;
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const request: unknown = JSON.parse(body);
+        requests.push(request);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (requests.length === 1) {
+          res.end(
+            [
+              sseToolCall(
+                "delegate_alpha",
+                "delegate",
+                {
+                  task: "Inspect alpha.ts only and report its exported value.",
+                  focusPaths: ["alpha.ts"],
+                },
+                { index: 0 },
+              ),
+              sseToolCall(
+                "delegate_beta",
+                "delegate",
+                {
+                  task: "Inspect beta.ts only and report its exported value.",
+                  focusPaths: ["beta.ts"],
+                },
+                { index: 1 },
+              ),
+              sseToolFinish(),
+              "data: [DONE]\n\n",
+            ].join(""),
+          );
+          return;
+        }
+
+        const parsed = requestSchema.parse(request);
+        const requestMessages = JSON.stringify(parsed.messages);
+        const isChildRequest = !toolNames(request).includes("delegate");
+        const childName = isChildRequest
+          ? requestMessages.includes("Inspect alpha.ts only")
+            ? "alpha"
+            : requestMessages.includes("Inspect beta.ts only")
+              ? "beta"
+              : null
+          : null;
+        if (childName !== null) {
+          activeChildRequests++;
+          maxActiveChildRequests = Math.max(
+            maxActiveChildRequests,
+            activeChildRequests,
+          );
+          res.on("close", () => {
+            activeChildRequests--;
+          });
+          childResponses.set(childName, res);
+          const alphaResponse = childResponses.get("alpha");
+          const betaResponse = childResponses.get("beta");
+          if (alphaResponse !== undefined && betaResponse !== undefined) {
+            completionOrder.push("beta");
+            betaResponse.end(
+              sseTextReplyWithUsage("beta.ts:1 exports beta = 2."),
+            );
+            completionOrder.push("alpha");
+            alphaResponse.end(
+              sseTextReplyWithUsage("alpha.ts:1 exports alpha = 1."),
+            );
+          }
+          return;
+        }
+
+        res.end(sseTextReplyWithUsage("Synthesized alpha then beta."));
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--experimental-agents",
+        "--no-skills",
+        "--max-cost",
+        "0.05",
+        "--report",
+        reportPath,
+        "Use subagents to investigate alpha.ts and beta.ts independently in parallel.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: join(workspace, ".keel-home"),
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(
+        maxActiveChildRequests,
+        JSON.stringify({
+          stderr: fixture.stderr(),
+          stdout: fixture.stdout(),
+          requestCount: requests.length,
+          toolNames: requests.map(toolNames),
+          toolResults: requests.map((request) =>
+            requestSchema
+              .parse(request)
+              .messages?.filter((message) => message.role === "tool")
+              .map((message) => ({
+                id: message.tool_call_id,
+                content: message.content,
+              })),
+          ),
+        }),
+      ).toBe(2);
+      expect(completionOrder).toEqual(["beta", "alpha"]);
+      const mainSynthesis = requestSchema.parse(requests.at(-1));
+      const toolResults =
+        mainSynthesis.messages?.filter((message) => message.role === "tool") ??
+        [];
+      expect(toolResults.map((message) => message.tool_call_id)).toEqual([
+        "delegate_alpha",
+        "delegate_beta",
+      ]);
+      expect(toolResults[0]?.content).toContain(
+        "alpha.ts:1 exports alpha = 1.",
+      );
+      expect(toolResults[1]?.content).toContain("beta.ts:1 exports beta = 2.");
+      expect(fixture.stdout()).toBe("Synthesized alpha then beta.\n");
+
+      const report = z
+        .object({
+          modelOperations: z.array(
+            z
+              .object({
+                purpose: z.string(),
+                attribution: z
+                  .object({
+                    type: z.literal("subagent"),
+                    delegationId: z.string(),
+                    childRunId: z.string(),
+                  })
+                  .optional(),
+              })
+              .passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      const childOperations = report.modelOperations.filter(
+        (operation) => operation.purpose === "subagent_turn",
+      );
+      expect(childOperations).toHaveLength(2);
+      expect(
+        new Set(
+          childOperations.map((operation) => operation.attribution?.childRunId),
+        ).size,
+      ).toBe(2);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given experimental agents are enabled and the model first supplies an overlong delegation task,
     When main retries with valid arguments and the child finishes normally,
-    Then the invalid call is recoverable, consumes no child slot, and delegation remains one-shot`, async () => {
+    Then the invalid call is recoverable, consumes no child slot, and the valid child runs once`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-retry-"));
     const reportPath = join(workspace, "report.json");
@@ -239,7 +425,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(toolNames(requests[0])).toContain("delegate");
       expect(toolNames(requests[1])).toContain("delegate");
       expect(toolNames(requests[2])).not.toContain("delegate");
-      expect(toolNames(requests[3])).not.toContain("delegate");
+      expect(toolNames(requests[3])).toContain("delegate");
       expect(requestText(requests[1])).toContain(
         "delegate failed: invalid arguments",
       );
@@ -275,7 +461,7 @@ describe("CLI Main - Subagent Delegation", () => {
 
   test(`Given the user explicitly requests a subagent and a root cost budget is enabled,
     When one read-only child finishes with a normal evidence-based answer,
-    Then host hands its bounded final to main without tool-specific evidence, removes delegate, and main writes the result`, async () => {
+    Then host hands its bounded final to main without tool-specific evidence and main writes the result`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-"));
     const keelHome = join(workspace, ".keel-home");
@@ -411,7 +597,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(toolNames(requests[1])).not.toContain("delegate");
 
       const resumedMainRequest = requestSchema.parse(requests[3]);
-      expect(toolNames(requests[3])).not.toContain("delegate");
+      expect(toolNames(requests[3])).toContain("delegate");
       const delegatedToolResult = resumedMainRequest.messages?.find(
         (message) => message.tool_call_id === "delegate_once",
       )?.content;
@@ -419,7 +605,6 @@ describe("CLI Main - Subagent Delegation", () => {
         "module.ts:1 exports answer with value 42.",
       );
       expect(delegatedToolResult).not.toContain("observedResources");
-      expect(delegatedToolResult).toContain('"childLimitReached":true');
       const artifactRef = artifactRefSchema.parse(
         delegatedToolResult?.match(
           /tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/u,

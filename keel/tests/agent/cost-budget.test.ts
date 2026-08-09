@@ -7,7 +7,6 @@ import {
   createCostBudgetedProvider,
   createSharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
-import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
@@ -16,6 +15,7 @@ import {
 } from "../../src/agent/stop-policy.ts";
 import {
   type CostModel,
+  calculateConservativeRequestCostUsd,
   maxAffordableOutputTokens,
 } from "../../src/core/cost.ts";
 import type { SessionGoal } from "../../src/core/session-goal.ts";
@@ -25,11 +25,10 @@ import type {
   ToolCall,
 } from "../../src/llm/types.ts";
 import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
+import { createDelegationExecutor } from "../../src/tools/delegation.ts";
 
-async function collect(
-  source: AsyncIterable<AgentEvent>,
-): Promise<AgentEvent[]> {
-  const events: AgentEvent[] = [];
+async function collect<Event>(source: AsyncIterable<Event>): Promise<Event[]> {
+  const events: Event[] = [];
   for await (const event of source) {
     events.push(event);
   }
@@ -66,6 +65,70 @@ const tieredBudgetModel: CostModel = {
 };
 
 describe("Cost Budget", () => {
+  test(`Given two child provider attempts reserve the shared root budget concurrently,
+    When they complete out of order,
+    Then each attempt releases only its own reservation without leaking or overselling budget`, async () => {
+    const bothStarted = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const releaseSecond = Promise.withResolvers<void>();
+    let started = 0;
+    const usage = {
+      inputTokens: 100,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 100,
+      outputTokens: 10,
+    } as const;
+    const underlying: LLMProvider = {
+      id: "concurrent-root-budget",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        const index = started++;
+        const attempt = options.providerRequestAttempts?.begin();
+        if (started === 2) bothStarted.resolve();
+        await bothStarted.promise;
+        await (index === 0 ? releaseFirst.promise : releaseSecond.promise);
+        attempt?.finish({ outcome: "completed", usage });
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const root = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd: 1,
+    });
+    const first = collect(
+      root.provider.stream({
+        systemPrompt: "first child",
+        messages: [],
+        signal: freshSignal(),
+        maxOutputTokens: 256,
+      }),
+    );
+    const second = collect(
+      root.provider.stream({
+        systemPrompt: "second child",
+        messages: [],
+        signal: freshSignal(),
+        maxOutputTokens: 256,
+      }),
+    );
+
+    await bothStarted.promise;
+    releaseSecond.resolve();
+    await Promise.resolve();
+    releaseFirst.resolve();
+    await Promise.all([first, second]);
+
+    expect(root.observedSpendUsd()).toBeCloseTo(0.00024, 10);
+    expect(root.remainingUsd()).toBeCloseTo(0.99976, 10);
+    expect(root.observedUsage()).toEqual({
+      inputTokens: 200,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 200,
+      outputTokens: 20,
+    });
+  });
+
   test(`Given delegate is emitted beside another tool call,
     When the host executes the tool round,
     Then it rejects delegation before child work because the continuation shape is not isolated`, async () => {
@@ -119,6 +182,23 @@ describe("Cost Budget", () => {
           stopPolicy: defaultStopPolicy(),
           delegation: {
             available: () => true,
+            prepareBatch: () => ({
+              close: () => {},
+              executor: createDelegationExecutor(async () => {
+                childCalls++;
+                return {
+                  delivery: "fresh",
+                  ok: true,
+                  content: "unexpected child result",
+                  usage: {
+                    inputTokens: 1,
+                    cachedInputTokens: 0,
+                    uncachedInputTokens: 1,
+                    outputTokens: 1,
+                  },
+                };
+              }),
+            }),
             delegate: async () => {
               childCalls++;
               return {
@@ -146,7 +226,7 @@ describe("Cost Budget", () => {
           role: "tool",
           toolCallId: "delegate-call",
           content: expect.stringContaining(
-            "delegate must be the only tool call in its assistant turn",
+            "delegate calls may share a tool round only with other delegate calls",
           ),
         }),
       );
@@ -356,7 +436,11 @@ describe("Cost Budget", () => {
     const lease = root.leaseContinuation({
       additionalMessages: [toolResultMessage],
       maxOutputTokens: 256,
-      minimumChildInputTokens: childInputTokens,
+      minimumAdditionalRequestCostUsd: calculateConservativeRequestCostUsd(
+        childInputTokens,
+        256,
+        budgetModel,
+      ),
     });
     expect(lease).toMatchObject({
       kind: "granted",
@@ -367,7 +451,11 @@ describe("Cost Budget", () => {
       root.leaseContinuation({
         additionalMessages: [toolResultMessage],
         maxOutputTokens: 256,
-        minimumChildInputTokens: childInputTokens,
+        minimumAdditionalRequestCostUsd: calculateConservativeRequestCostUsd(
+          childInputTokens,
+          256,
+          budgetModel,
+        ),
       }),
     ).toEqual({ kind: "rejected", reason: "active_lease" });
     await expect(
@@ -383,7 +471,7 @@ describe("Cost Budget", () => {
     const child = createCostBudgetedProvider({
       provider: root.provider,
       model: budgetModel,
-      maxCostUsd: lease.childMaxCostUsd,
+      maxCostUsd: lease.additionalRequestBudgetUsd,
       modelMaxOutputTokens: 256,
     });
 
@@ -458,7 +546,11 @@ describe("Cost Budget", () => {
         { role: "tool", toolCallId: "delegate-call", content: "result" },
       ],
       maxOutputTokens: 256,
-      minimumChildInputTokens: 100,
+      minimumAdditionalRequestCostUsd: calculateConservativeRequestCostUsd(
+        100,
+        256,
+        budgetModel,
+      ),
     } as const;
 
     expect(root.leaseContinuation(request)).toEqual({
