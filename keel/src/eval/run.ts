@@ -17,6 +17,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
+import type { AgentPolicy } from "../core/agent-policy.ts";
 import { errorMessage } from "../core/error.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import { type RunReport, runReportSchema } from "./report-schema.ts";
@@ -67,7 +68,7 @@ interface TrialResultMetadata {
 type TrialResult = EvalTrialObservation & TrialResultMetadata;
 
 interface TrialDelegationMode {
-  readonly experimentalAgents: boolean;
+  readonly agentPolicy: AgentPolicy;
 }
 
 interface ProcessResult {
@@ -258,7 +259,8 @@ async function runTrialInWorkspace(
     ...(task.maxCostUsd !== undefined
       ? ["--max-cost", String(task.maxCostUsd)]
       : []),
-    ...(delegation.experimentalAgents ? ["--experimental-agents"] : []),
+    "--agent-policy",
+    delegation.agentPolicy,
     ...(condition === "memory_enabled" ? [] : ["--no-memory"]),
     "--report",
     reportPath,
@@ -347,7 +349,7 @@ function runStandardTrial(
       metaDir,
       process.env,
       transcriptPath,
-      { experimentalAgents: task.experimentalAgents },
+      { agentPolicy: task.agentPolicy },
     ),
   );
 }
@@ -419,7 +421,7 @@ async function runMemoryPairTrial(
       metaDir,
       env,
       transcriptPaths.disabled,
-      { experimentalAgents: false },
+      { agentPolicy: "off" },
     );
 
     rmSync(workDir, { recursive: true, force: true });
@@ -433,7 +435,7 @@ async function runMemoryPairTrial(
       metaDir,
       env,
       transcriptPaths.enabled,
-      { experimentalAgents: false },
+      { agentPolicy: "off" },
     );
     return { disabled, enabled };
   } finally {
@@ -478,7 +480,7 @@ async function runDelegationPairTrial(
       metaDir,
       process.env,
       treatment ? transcriptPaths.treatment : transcriptPaths.control,
-      { experimentalAgents: treatment },
+      { agentPolicy: treatment ? task.agentPolicy : "off" },
     );
   };
 
@@ -860,7 +862,7 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
         transcriptPath,
       );
       const trialSelection =
-        task.experimentalAgents && task.delegationPolicy !== undefined
+        task.agentPolicy !== "off" && task.delegationPolicy !== undefined
           ? delegationSelection(task.delegationPolicy, result.report)
           : undefined;
       const pass =

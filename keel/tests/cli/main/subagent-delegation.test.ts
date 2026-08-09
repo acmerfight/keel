@@ -64,13 +64,13 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Subagent Delegation", () => {
-  test(`Given experimental agents are enabled with a minimal provider configuration,
+  test(`Given auto agent policy is enabled with a minimal provider configuration,
     When main answers without delegating or writing a report,
     Then optional child metadata remains absent without changing one-shot behavior`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-minimal-"));
     const keelHome = await mkdtemp(join(tmpdir(), "keel-subagent-home-"));
     const fixture = createRuntime(
-      ["--experimental-agents", "--max-cost", "1", "Say hello."],
+      ["--agent-policy", "auto", "--max-cost", "1", "Say hello."],
       {
         cwd: workspace,
         env: { KEEL_PROVIDER: "fake", KEEL_HOME: keelHome },
@@ -87,7 +87,7 @@ describe("CLI Main - Subagent Delegation", () => {
     }
   });
 
-  test(`Given experimental agents are disabled,
+  test(`Given agent policy is off by default,
     When the provider fabricates a delegate tool call,
     Then delegate is absent from the schema and dispatch fails closed without a child run`, async () => {
     // Given
@@ -241,7 +241,8 @@ describe("CLI Main - Subagent Delegation", () => {
     await listen(server);
     const fixture = createRuntime(
       [
-        "--experimental-agents",
+        "--agent-policy",
+        "explicit",
         "--no-skills",
         "--max-cost",
         "0.05",
@@ -397,7 +398,8 @@ describe("CLI Main - Subagent Delegation", () => {
     await listen(server);
     const fixture = createRuntime(
       [
-        "--experimental-agents",
+        "--agent-policy",
+        "explicit",
         "--no-skills",
         "--max-cost",
         "0.05",
@@ -546,7 +548,8 @@ describe("CLI Main - Subagent Delegation", () => {
     await listen(server);
     const fixture = createRuntime(
       [
-        "--experimental-agents",
+        "--agent-policy",
+        "explicit",
         "--no-skills",
         "--max-cost",
         "0.05",
@@ -779,7 +782,8 @@ describe("CLI Main - Subagent Delegation", () => {
     });
     const fixture = createRuntime(
       [
-        "--experimental-agents",
+        "--agent-policy",
+        "explicit",
         "--no-skills",
         "--max-cost",
         "0.05",
@@ -928,7 +932,7 @@ describe("CLI Main - Subagent Delegation", () => {
     const input = new PassThrough();
     const interrupt: SigintCapture = { handler: null };
     const fixture = createRuntime(
-      ["--experimental-agents", "--max-cost", "0.05", "--ephemeral"],
+      ["--agent-policy", "explicit", "--max-cost", "0.05", "--ephemeral"],
       {
         cwd: workspace,
         input,
@@ -1030,7 +1034,8 @@ describe("CLI Main - Subagent Delegation", () => {
     const interrupt: SigintCapture = { handler: null };
     const fixture = createRuntime(
       [
-        "--experimental-agents",
+        "--agent-policy",
+        "explicit",
         "--max-cost",
         "0.05",
         "--report",
@@ -1160,7 +1165,8 @@ describe("CLI Main - Subagent Delegation", () => {
     await listen(server);
     const { child, result } = runCliProcess(
       [
-        "--experimental-agents",
+        "--agent-policy",
+        "explicit",
         "--max-cost",
         "0.05",
         "Delegate a read-only investigation.",

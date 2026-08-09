@@ -6,6 +6,7 @@ import type {
   AbortableToolOutputArtifactStore,
   ToolOutputArtifactsOptions,
 } from "../../agent/tool-output-artifacts.ts";
+import type { DelegatingAgentPolicy } from "../../core/agent-policy.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
@@ -269,6 +270,7 @@ interface InteractiveSessionOptionsBase {
   ) => void;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly delegation?: {
+    readonly policy: DelegatingAgentPolicy;
     readonly transcriptStore: AbortableToolOutputArtifactStore;
     readonly maxCostUsd: number;
   };

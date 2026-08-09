@@ -1,3 +1,4 @@
+import type { AgentPolicyConfiguration } from "../../core/agent-policy.ts";
 import type { ApiKeyProviderId, ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoalBudget } from "../../core/session-goal.ts";
 import type { BashMode } from "../../permissions/bash.ts";
@@ -308,18 +309,16 @@ export type MemoryCliArgs =
       readonly purgeLinkedMemories: boolean;
     };
 
-interface RunCliCommonArgs {
+type RunCliCommonArgs = {
   readonly command: "run";
   readonly bashMode: BashMode;
   readonly skillsEnabled: boolean;
-  readonly experimentalAgents?: boolean;
-  readonly maxCostUsd?: number;
   readonly reportFile?: string;
   readonly memoryEnabled: boolean;
   readonly providerId?: ProviderId;
   readonly model?: string;
   readonly skillNames?: readonly string[];
-}
+} & AgentPolicyConfiguration;
 
 export type InteractiveSessionCliIntent =
   | { readonly kind: "automatic" }
@@ -335,21 +334,21 @@ export type InteractiveSessionCliIntent =
       readonly beforeMessageId: string | null;
     };
 
-interface OneShotRunCliArgs extends RunCliCommonArgs {
+type OneShotRunCliArgs = RunCliCommonArgs & {
   readonly mode: "one-shot";
   readonly userMessage: string;
   readonly transcriptFile: string | null;
-}
+};
 
-interface InteractiveRunCliArgs extends RunCliCommonArgs {
+type InteractiveRunCliArgs = RunCliCommonArgs & {
   readonly mode: "interactive";
   readonly session: InteractiveSessionCliIntent;
-}
+};
 
-interface ForkPointsRunCliArgs extends RunCliCommonArgs {
+type ForkPointsRunCliArgs = RunCliCommonArgs & {
   readonly mode: "fork-points";
   readonly sessionId: string;
-}
+};
 
 export type RunCliArgs =
   | OneShotRunCliArgs

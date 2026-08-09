@@ -21,14 +21,23 @@ const KEEL_HOME_ENV = "KEEL_HOME";
 describe("Eval Runner", () => {
   test(`Given a standard task declares a delegation policy without enabling agents,
     When the eval runner loads the suite,
-    Then it rejects the statically contradictory task mode`, async () => {
+    Then it rejects the contradictory external task schema`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "contradictory-delegation-mode", {
       ...FIX_NOTE_TASK,
       solution: "printf 'hello new world\\n' > note.txt\n",
-      delegationPolicy: "require_one",
     });
+    await writeFile(
+      join(suiteDir, "contradictory-delegation-mode", "task.json"),
+      JSON.stringify({
+        kind: "standard",
+        prompt: FIX_NOTE_TASK.prompt,
+        agentPolicy: "off",
+        delegationPolicy: "require_one",
+      }),
+      "utf8",
+    );
     let stderr = "";
     const writeStderr = vi
       .spyOn(process.stderr, "write")
@@ -49,9 +58,7 @@ describe("Eval Runner", () => {
 
       // Then
       expect(exitCode).toBe(1);
-      expect(stderr).toContain(
-        "delegationPolicy: requires experimentalAgents to be true",
-      );
+      expect(stderr).toContain("delegationPolicy");
     } finally {
       writeStderr.mockRestore();
       await rm(root, { recursive: true, force: true });

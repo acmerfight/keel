@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { type AgentPolicy, agentPolicies } from "../../core/agent-policy.ts";
 import { type ProviderId, providerIds } from "../../core/provider-id.ts";
 import type { BashPolicy } from "../../permissions/bash.ts";
 
@@ -32,6 +33,7 @@ const maxCostSchema = z
   .transform((value) => Number(value))
   .pipe(z.number().finite().positive());
 const bashPolicySchema = z.enum(["ask", "deny", "trusted"]);
+const agentPolicySchema = z.enum(agentPolicies);
 const providerIdSchema = z.enum(providerIds);
 const trialsSchema = z
   .string()
@@ -61,6 +63,18 @@ export function parseBashPolicy(
   if (!result.success) {
     return parseError(
       "Error: --bash-policy must be one of: ask, deny, trusted.",
+    );
+  }
+  return parseOk(result.data);
+}
+
+export function parseAgentPolicy(
+  raw: string | undefined,
+): ParseResult<AgentPolicy> {
+  const result = agentPolicySchema.safeParse(raw);
+  if (!result.success) {
+    return parseError(
+      "Error: --agent-policy must be one of: off, explicit, auto.",
     );
   }
   return parseOk(result.data);

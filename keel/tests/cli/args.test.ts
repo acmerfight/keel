@@ -259,40 +259,40 @@ describe("CLI Args", () => {
     });
   });
 
-  test(`Given experimental delegation has no root cost budget,
+  test(`Given an enabled agent policy has no root cost budget,
     When the CLI parses the one-shot request,
-    Then it rejects the experiment before provider resolution`, () => {
+    Then it rejects delegation before provider resolution`, () => {
     expect(
-      parseCliArgs(["--experimental-agents", "inspect the project"]),
+      parseCliArgs(["--agent-policy", "explicit", "inspect the project"]),
     ).toEqual({
       ok: false,
       message:
-        "Error: --experimental-agents requires --max-cost <usd> so the root and child share a bounded budget.",
+        "Error: --agent-policy explicit requires --max-cost <usd> so the root and children share a bounded budget.",
     });
   });
 
-  test(`Given experimental delegation has an explicit budget for an interactive run,
+  test(`Given explicit agent policy has a root budget for an interactive run,
     When the CLI parses the invocation,
-    Then it records the opt-in on the interactive session contract`, () => {
+    Then it records one typed policy and budget contract`, () => {
     expect(
-      parseCliArgs(["--experimental-agents", "--max-cost", "1"]),
+      parseCliArgs(["--agent-policy", "explicit", "--max-cost", "1"]),
     ).toMatchObject({
       ok: true,
       value: {
         command: "run",
         mode: "interactive",
-        experimentalAgents: true,
+        agentPolicy: "explicit",
         maxCostUsd: 1,
       },
     });
   });
 
-  test(`Given experimental delegation has an explicit budget and one-shot task,
+  test(`Given autonomous agent policy has a root budget and one-shot task,
     When the CLI parses the invocation,
-    Then it records the opt-in without changing the default run contract`, () => {
+    Then it records auto while ordinary runs remain off`, () => {
     expect(
       parseCliArgs([
-        "--experimental-agents",
+        "--agent-policy=auto",
         "--max-cost=1.25",
         "inspect the project",
       ]),
@@ -301,7 +301,7 @@ describe("CLI Args", () => {
       value: {
         command: "run",
         mode: "one-shot",
-        experimentalAgents: true,
+        agentPolicy: "auto",
         maxCostUsd: 1.25,
         userMessage: "inspect the project",
       },
@@ -311,13 +311,26 @@ describe("CLI Args", () => {
       value: {
         command: "run",
         mode: "one-shot",
+        agentPolicy: "off",
         userMessage: "inspect the project",
       },
     });
-    expect(parseCliArgs(["inspect the project"])).not.toHaveProperty(
-      "value.experimentalAgents",
-    );
   });
+
+  test.each([
+    ["separate", ["--agent-policy", "sometimes", "inspect the project"]],
+    ["inline", ["--agent-policy=sometimes", "inspect the project"]],
+  ])(
+    `Given an unknown agent policy uses the %s form,
+    When the CLI parses the invocation,
+    Then it rejects the external value before constructing run state`,
+    (_, args) => {
+      expect(parseCliArgs(args)).toEqual({
+        ok: false,
+        message: "Error: --agent-policy must be one of: off, explicit, auto.",
+      });
+    },
+  );
 
   test.each([
     [

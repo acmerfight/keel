@@ -488,7 +488,10 @@ export async function runInteractiveSession(
   const baseSystemPromptWithGoal = (): string =>
     systemPromptWithSessionGoal(
       options.delegation !== undefined
-        ? appendDelegationToSystemPrompt(systemPrompt)
+        ? appendDelegationToSystemPrompt(
+            systemPrompt,
+            options.delegation.policy,
+          )
         : systemPrompt,
       sessionGoal,
       bashRuntimeExposesTool(bash),

@@ -1,3 +1,4 @@
+import type { DelegatingAgentPolicy } from "../core/agent-policy.ts";
 import { skillCatalogEntry } from "../skills/catalog.ts";
 import {
   MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN,
@@ -92,14 +93,23 @@ export function appendProjectMemoryToSystemPrompt(
     : `${systemPrompt}\n\n${memoryPrompt}`;
 }
 
-export function appendDelegationToSystemPrompt(systemPrompt: string): string {
+export function appendDelegationToSystemPrompt(
+  systemPrompt: string,
+  policy: DelegatingAgentPolicy,
+): string {
+  const policyInstruction =
+    policy === "explicit"
+      ? "- Policy is explicit: call delegate only when the current user explicitly asks to use a subagent or delegate work. Interpret the request semantically; no exact phrase is required."
+      : "- Policy is auto: you may call delegate without an explicit user request when the task meets the delegation criteria below.";
   return `${systemPrompt}
 
-Experimental read-only delegation:
+Stable read-only delegation:
+${policyInstruction}
 - Use delegate only for independent, context-heavy workspace investigations that can finish without parent history or feedback.
 - Do not delegate small, sequential, write, approval-requiring, or tightly coupled work.
 - When several investigations are independent, call delegate once for each in the same assistant turn so they can run in parallel. A delegate batch may contain only delegate calls; finish setup or other tools first.
 - Each child has fresh context and read-only workspace tools. Give each one concise self-contained task under 4,000 characters. Do not ask children to paste bulk source, logs, or repeated evidence; request direct conclusions and decisive citations.
+- When delegating structured work, preserve the user's original field meanings, units, and output contract in each child task. During final synthesis, reconcile child conclusions against the original user request rather than only your rewritten child tasks.
 - The host waits for every admitted sibling, preserves tool-call source order even when children finish out of order, and returns bounded final answers plus terminal metadata. One sibling failure does not erase unrelated results.
 - Treat child answers as delegated input: synthesize them, decide whether and how to verify them from the task's risk and uncertainty, and avoid repeating work without a reason.
 - The root run admits at most four active foreground children at once and eight children in total. After their results, continue the task yourself.`;

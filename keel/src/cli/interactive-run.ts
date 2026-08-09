@@ -218,9 +218,14 @@ type HeadlessSessionCliIntent = Extract<
   InteractiveRunCliArgs["session"],
   { readonly kind: "create" | "resume" | "resume-latest" }
 >;
-export type HeadlessSessionCliArgs = Omit<InteractiveRunCliArgs, "session"> & {
-  readonly session: HeadlessSessionCliIntent;
-};
+type DisabledAgentInteractiveRunCliArgs = Extract<
+  InteractiveRunCliArgs,
+  { readonly agentPolicy: "off" }
+>;
+export type HeadlessSessionCliArgs = Omit<
+  DisabledAgentInteractiveRunCliArgs,
+  "session"
+> & { readonly session: HeadlessSessionCliIntent };
 
 const RESUME_PICK_REQUIRES_TTY_ERROR =
   "Error: --resume --pick requires a real TTY so the session choice cannot be read from piped input. Use keel --resume for the latest session or keel --resume <id> for automation.";
@@ -1512,10 +1517,10 @@ async function runActiveSessionCli(
             }
           : {}),
         toolOutputArtifacts,
-        ...(cliArgs.experimentalAgents === true &&
-        cliArgs.maxCostUsd !== undefined
+        ...(cliArgs.agentPolicy !== "off"
           ? {
               delegation: {
+                policy: cliArgs.agentPolicy,
                 transcriptStore: toolOutputArtifacts.store,
                 maxCostUsd: cliArgs.maxCostUsd,
               },

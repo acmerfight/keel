@@ -173,6 +173,7 @@ function headlessGoalRunArgs(cliArgs: GoalCliArgs): HeadlessSessionCliArgs {
   return {
     command: "run",
     mode: "interactive",
+    agentPolicy: "off",
     bashMode: cliArgs.bashMode,
     skillsEnabled: cliArgs.skillsEnabled,
     memoryEnabled: cliArgs.memoryEnabled,
