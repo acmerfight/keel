@@ -441,6 +441,7 @@ function delegationForToolRound(
 ): DelegationCapability | undefined {
   if (delegation === undefined || toolCalls.length === 1) return delegation;
   return {
+    /* v8 ignore next -- executeDelegateTool calls delegate directly for this already-issued mixed round; availability is required only by the shared capability interface. */
     available: () => false,
     delegate: async () => ({
       delivery: "rejected",

@@ -170,6 +170,7 @@ function priceFinalProviderRequest(options: {
     estimatedInputTokens = finalEstimatedInputTokens;
   }
 
+  /* v8 ignore next -- a deterministic provider estimator converges as the output ceiling shrinks; retain a bounded fail-closed result for nonconforming oscillating estimators. */
   return { kind: "rejected", estimatedInputTokens };
 }
 
@@ -446,6 +447,7 @@ export function createSharedCostBudgetedProvider(
         childMaxCostUsd,
         estimatedContinuationInputTokens,
         release: () => {
+          /* v8 ignore else -- the single accepted child owns one finally release; retain the generation guard so a stale duplicate release cannot clear a future lease. */
           if (activeContinuationReservation?.id === reservationId) {
             activeContinuationReservation = null;
           }
