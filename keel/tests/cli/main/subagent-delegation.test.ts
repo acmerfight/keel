@@ -142,6 +142,133 @@ describe("CLI Main - Subagent Delegation", () => {
     }
   });
 
+  test(`Given experimental agents are enabled and the model first supplies an overlong delegation task,
+    When main retries with valid arguments and the child finishes normally,
+    Then the invalid call is recoverable, consumes no child slot, and delegation remains one-shot`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-retry-"));
+    const reportPath = join(workspace, "report.json");
+    const requests: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        requests.push(JSON.parse(body));
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            res.end(
+              [
+                sseToolCall("delegate_too_long", "delegate", {
+                  task: "x".repeat(4_001),
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            res.end(
+              [
+                sseToolCall("delegate_retry", "delegate", {
+                  task: "Inspect the workspace and return a concise evidence summary.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            res.end(
+              sseTextReplyWithUsage(
+                "The delegated read-only investigation completed with no findings.",
+              ),
+            );
+            return;
+          case 4:
+            res.end(
+              sseTextReplyWithUsage(
+                "Completed after one recovered delegation attempt.",
+              ),
+            );
+            return;
+          default:
+            res.writeHead(500);
+            res.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--experimental-agents",
+        "--no-skills",
+        "--max-cost",
+        "0.05",
+        "--report",
+        reportPath,
+        "Use a subagent to inspect this workspace.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: join(workspace, ".keel-home"),
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(requests).toHaveLength(4);
+      expect(toolNames(requests[0])).toContain("delegate");
+      expect(toolNames(requests[1])).toContain("delegate");
+      expect(toolNames(requests[2])).not.toContain("delegate");
+      expect(toolNames(requests[3])).not.toContain("delegate");
+      expect(requestText(requests[1])).toContain(
+        "delegate failed: invalid arguments",
+      );
+      expect(requestText(requests[1])).toContain(
+        "no longer than 4,000 characters",
+      );
+      expect(requestText(requests[3])).toContain(
+        "The delegated read-only investigation completed with no findings.",
+      );
+      expect(fixture.stdout()).toBe(
+        "Completed after one recovered delegation attempt.\n",
+      );
+      expect(fixture.stderr()).toContain("Tool failed: delegate");
+
+      const report = z
+        .object({
+          modelOperations: z.array(
+            z.object({ purpose: z.string() }).passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      expect(
+        report.modelOperations.filter(
+          (operation) => operation.purpose === "subagent_turn",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the user explicitly requests a subagent and a root cost budget is enabled,
     When one read-only child finishes with a normal evidence-based answer,
     Then host hands its observed resources to main, removes delegate, and main writes the result`, async () => {

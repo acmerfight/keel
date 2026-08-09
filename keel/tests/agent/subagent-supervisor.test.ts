@@ -480,6 +480,20 @@ describe("Subagent Supervisor", () => {
         focusPaths: [],
         signal: new AbortController().signal,
       });
+      const invalidEstimateFixture = supervisorFixture({
+        workspace,
+        provider: {
+          ...provider,
+          estimateInputTokens: () => Number.NaN,
+        },
+      });
+      const invalidEstimate =
+        await invalidEstimateFixture.supervisor.capability.delegate({
+          toolCallId: "invalid-input-estimate",
+          task: "Reject before running with an invalid provider estimate.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        });
 
       expect(invalid.ok).toBe(false);
       expect(invalid.content).toContain("invalid focus path");
@@ -490,8 +504,10 @@ describe("Subagent Supervisor", () => {
         content:
           "Delegation rejected: the root budget cannot fund a child while preserving an admitted main continuation lease.",
       });
+      expect(invalidEstimate).toEqual(noBudget);
       expect(invalidFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(budgetFixture.supervisor.totalAcceptedCount()).toBe(0);
+      expect(invalidEstimateFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(providerCalls).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -732,9 +748,9 @@ describe("Subagent Supervisor", () => {
     }
   });
 
-  test(`Given a child reads one workspace resource but its final text claims another path,
+  test(`Given a child repeats one bounded read alongside a non-read tool but its final text claims another path,
     When host constructs the handoff and a separate transcript store fails,
-    Then observed resources come only from the successful read and storage failure cannot complete`, async () => {
+    Then observed resources preserve the trusted range once and storage failure cannot complete`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-subagent-supervisor-"),
     );
@@ -750,9 +766,24 @@ describe("Subagent Supervisor", () => {
           if (calls === 1) {
             yield {
               type: "tool_call",
+              id: "workspace-list",
+              tool: "ls",
+            };
+            yield {
+              type: "tool_call",
               id: "observed-read",
               tool: "read",
               path: "module.ts",
+              offset: 1,
+              limit: 1,
+            };
+            yield {
+              type: "tool_call",
+              id: "duplicate-observed-read",
+              tool: "read",
+              path: "module.ts",
+              offset: 1,
+              limit: 1,
             };
           } else {
             yield {
@@ -798,7 +829,7 @@ describe("Subagent Supervisor", () => {
 
       expect(provenance.ok).toBe(true);
       expect(JSON.parse(provenance.content).observedResources).toEqual([
-        { path: "module.ts" },
+        { path: "module.ts", offset: 1, limit: 1 },
       ]);
       expect(provenance.content).not.toContain('"path":"../outside"');
       expect(storageFailed.ok).toBe(false);
@@ -884,6 +915,49 @@ describe("Subagent Supervisor", () => {
       }
     },
   );
+
+  test(`Given the admitted child allocation cannot fund its minimum provider request,
+    When the child loop reaches the shared cost guard,
+    Then main receives an honest budget_limited handoff without provider work`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      rootMaxCostUsd: 0.00001,
+      provider: {
+        id: "child-budget-limited",
+        estimateInputTokens: () => 100,
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "child-budget-limited",
+        task: "Reach the child budget guard.",
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain('"status":"budget_limited"');
+      expect(result.content).toContain("Child exhausted its cost budget.");
+      expect(providerCalls).toBe(0);
+      expect(fixture.supervisor.runSnapshots()).toMatchObject([
+        {
+          state: "terminal",
+          terminal: { status: "budget_limited", error: expect.any(String) },
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 
   test(`Given the child finishes but transcript storage crosses the full lifecycle deadline,
     When storage eventually settles,

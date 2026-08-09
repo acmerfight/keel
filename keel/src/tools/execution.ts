@@ -1025,18 +1025,18 @@ export async function executeToolCall(
       };
     }
   }
+  if (
+    context.builtinToolAuthority !== undefined &&
+    !builtinToolAuthorityAllows(context.builtinToolAuthority, toolCall.tool)
+  ) {
+    return unavailableBuiltinToolExecution(toolCall.tool);
+  }
   if (isInvalidToolCall(toolCall)) {
     return {
       content: invalidToolCallFailureMessage(toolCall),
       ok: false,
       effects: NO_TOOL_EXECUTION_EFFECTS,
     };
-  }
-  if (
-    context.builtinToolAuthority !== undefined &&
-    !builtinToolAuthorityAllows(context.builtinToolAuthority, toolCall.tool)
-  ) {
-    return unavailableBuiltinToolExecution(toolCall.tool);
   }
   try {
     return await executeBuiltinToolCall(context, toolCall);

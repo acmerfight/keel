@@ -162,6 +162,7 @@ export function builtinToolAuthorityAllows(
 export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;
 
 const recoverableAgentStateToolNames = [
+  "delegate",
   "update_plan",
   "update_goal",
   "memory_add",
@@ -209,6 +210,8 @@ type ParsedToolCall =
 
 const INVALID_UPDATE_PLAN_RECOVERY =
   "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.";
+const INVALID_DELEGATE_RECOVERY =
+  "Provide one self-contained read-only investigation task no longer than 4,000 characters. Keep only the scope, expected output, and completion criteria; put workspace-relative focus areas in focusPaths.";
 const INVALID_UPDATE_GOAL_RECOVERY =
   "Set status to completed only when the active session goal is actually achieved and no required work remains; Runtime will evaluate the assertion evidence or run the configured command verifier. Set status to blocked only with a concise reason after the required blocker audit.";
 const INVALID_MEMORY_ADD_RECOVERY =
@@ -223,6 +226,7 @@ const INVALID_MCP_SEARCH_RECOVERY =
 const agentStateRecovery: Readonly<
   Record<RecoverableAgentStateToolName, string>
 > = {
+  delegate: INVALID_DELEGATE_RECOVERY,
   update_plan: INVALID_UPDATE_PLAN_RECOVERY,
   update_goal: INVALID_UPDATE_GOAL_RECOVERY,
   memory_add: INVALID_MEMORY_ADD_RECOVERY,

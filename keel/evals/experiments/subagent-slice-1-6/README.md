@@ -10,7 +10,22 @@ The corpus is a mechanical copy of the two frozen explicit-intent v1 fixtures.
 Their prompts, workspaces, solutions, and deterministic verifiers are unchanged
 so the new window measures the host-owned result handoff and continuation
 budget rather than a new task distribution. The experiment has a new path and
-decision rule because the v1 scored window remains immutable.
+decision rule because the earlier Slice 1.5 explicit-intent v1 scored window
+remains immutable.
+
+## Scored windows
+
+Slice 1.6 v1 ran from commit `714abd9f`. It failed the frozen gate when one of
+six treatments emitted a `delegate.task` beyond the 4,000-character schema
+bound and the provider treated validation as fatal. The other five treatments
+completed and verified. Raw evidence remains under `artifacts/v1/`; that window
+was not selectively rerun.
+
+V2 is pre-registered after one narrowly scoped recovery change: invalid
+arguments for a currently exposed `delegate` call return a recoverable tool
+failure without starting a child or consuming the one-shot slot. The bound and
+all experimental inputs and thresholds below remain unchanged. V2 runs the
+entire 12-arm window once and stores evidence under `artifacts/v2/`.
 
 ## Frozen protocol
 
@@ -33,8 +48,10 @@ decision rule because the v1 scored window remains immutable.
   recorded as a quality regression; targeted spot-checks remain allowed.
 - Sampling: run the command below once from the exact committed candidate. Do
   not selectively rerun failed samples.
-- Evidence: retain result JSONL, all main transcripts, extracted child
-  transcripts, command metadata, and SHA-256 checksums under `artifacts/v1/`.
+- Evidence: retain result JSONL, all available main transcripts, extracted
+  child transcripts, command metadata, and SHA-256 checksums under the scored
+  window's `artifacts/vN/` directory. A crash before report creation is retained
+  as an explicit absence, not replaced by a synthetic transcript.
 
 ```bash
 node --experimental-strip-types src/cli/index.ts eval \
@@ -42,8 +59,8 @@ node --experimental-strip-types src/cli/index.ts eval \
   --provider deepseek \
   --model deepseek-v4-flash \
   --trials 3 \
-  --out /tmp/keel-subagent-slice-1-6.jsonl \
-  --transcript-dir /tmp/keel-subagent-slice-1-6-transcripts
+  --out /tmp/keel-subagent-slice-1-6-v2.jsonl \
+  --transcript-dir /tmp/keel-subagent-slice-1-6-v2-transcripts
 ```
 
 ## Corpus and budget

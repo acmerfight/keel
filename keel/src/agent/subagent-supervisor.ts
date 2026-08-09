@@ -104,18 +104,19 @@ interface SubagentCanonicalResultBase {
 }
 
 type SubagentCanonicalResult = SubagentCanonicalResultBase &
-  (
-    | {
-        readonly status: "completed";
-        readonly finalText: string;
-        readonly error: null;
-      }
-    | {
-        readonly status: Exclude<AgentTerminalStatus, "completed">;
-        readonly finalText: null;
-        readonly error: string;
-      }
-  );
+  ChildTerminalOutcome;
+
+type ChildTerminalOutcome =
+  | {
+      readonly status: "completed";
+      readonly finalText: string;
+      readonly error: null;
+    }
+  | {
+      readonly status: Exclude<AgentTerminalStatus, "completed">;
+      readonly finalText: null;
+      readonly error: string;
+    };
 
 interface AcceptedDelegation {
   readonly kind: "accepted";
@@ -261,6 +262,17 @@ function admittedText(
       };
 }
 
+function admittedTerminalText(
+  result: SubagentCanonicalResult,
+  value: string,
+):
+  | { readonly finalText: string; readonly error: null }
+  | { readonly finalText: null; readonly error: string } {
+  return result.status === "completed"
+    ? { finalText: value, error: null }
+    : { finalText: null, error: value };
+}
+
 function admittedAgentResult(result: SubagentCanonicalResult): string {
   const rawText =
     result.status === "completed" ? result.finalText : result.error;
@@ -294,8 +306,7 @@ function admittedAgentResult(result: SubagentCanonicalResult): string {
     transcriptRef,
     childLimitReached: true,
     truncated,
-    finalText: result.status === "completed" ? admittedResultText.value : null,
-    error: result.status === "completed" ? null : admittedResultText.value,
+    ...admittedTerminalText(result, admittedResultText.value),
     observedResources: observedResources.map(({ resource, path }) => ({
       path: path.value,
       ...(resource.offset !== undefined ? { offset: resource.offset } : {}),
@@ -310,14 +321,10 @@ function admittedAgentResult(result: SubagentCanonicalResult): string {
     transcriptRef,
     childLimitReached: true,
     truncated: true,
-    finalText:
-      result.status === "completed"
-        ? admittedText(rawText, MAX_AGGREGATE_FALLBACK_TEXT_CHARS).value
-        : null,
-    error:
-      result.status === "completed"
-        ? null
-        : admittedText(rawText, MAX_AGGREGATE_FALLBACK_TEXT_CHARS).value,
+    ...admittedTerminalText(
+      result,
+      admittedText(rawText, MAX_AGGREGATE_FALLBACK_TEXT_CHARS).value,
+    ),
     observedResources: [],
   });
 }
@@ -350,7 +357,10 @@ function observedChildResources(
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const toolCall of message.toolCalls) {
-      if ("kind" in toolCall || toolCall.tool !== "read") continue;
+      /* v8 ignore start -- the fixed read-only child catalog cannot produce MCP calls; keep the guard for the wider SessionMessage contract. */
+      if ("kind" in toolCall) continue;
+      /* v8 ignore stop */
+      if (toolCall.tool !== "read") continue;
       readCalls.set(toolCall.id, {
         path: toolCall.path,
         ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
@@ -363,7 +373,9 @@ function observedChildResources(
   for (const message of messages) {
     if (message.role !== "tool" || message.resourceObservation === undefined)
       continue;
+    /* v8 ignore next -- successful read observations are emitted from the same canonical tool call ledger; retain fail-closed handling if that internal invariant changes. */
     const readCall = readCalls.get(message.toolCallId);
+    /* v8 ignore next -- see the canonical read-observation invariant above. */
     if (readCall === undefined) continue;
     const key = JSON.stringify(readCall);
     if (seen.has(key)) continue;
@@ -401,30 +413,35 @@ function transcriptContent(input: {
   return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
 }
 
-function terminalStatusFromStopReason(
+function terminalOutcomeFromStopReason(
   stopReason: string,
   finalText: string | null,
-): AgentTerminalStatus {
-  if (stopReason === "turn_limit") return "turn_limited";
-  if (stopReason === "cost_budget") return "budget_limited";
-  if (stopReason === "completed" && finalText !== null) return "completed";
-  return "failed";
-}
-
-function terminalErrorFromStopReason(stopReason: string): string {
-  if (stopReason === "turn_limit") return "Child exhausted its turn limit.";
-  if (stopReason === "cost_budget") return "Child exhausted its cost budget.";
-  if (stopReason === "provider_length") {
-    return "Child output was truncated by the provider length limit.";
+): ChildTerminalOutcome {
+  if (stopReason === "completed" && finalText !== null) {
+    return { status: "completed", finalText, error: null };
   }
-  return "Child ended without a non-empty final assistant message.";
+  const status: Exclude<AgentTerminalStatus, "completed"> =
+    stopReason === "turn_limit"
+      ? "turn_limited"
+      : stopReason === "cost_budget"
+        ? "budget_limited"
+        : "failed";
+  const error =
+    stopReason === "turn_limit"
+      ? "Child exhausted its turn limit."
+      : stopReason === "cost_budget"
+        ? "Child exhausted its cost budget."
+        : stopReason === "provider_length"
+          ? "Child output was truncated by the provider length limit."
+          : "Child ended without a non-empty final assistant message.";
+  return { status, finalText: null, error };
 }
 
 function terminalStatusFromError(
   error: unknown,
   signal: AbortSignal,
   deadlineExpired: boolean,
-): AgentTerminalStatus {
+): Exclude<AgentTerminalStatus, "completed"> {
   if (isAbortThrow(error, signal)) {
     return deadlineExpired ? "timed_out" : "cancelled";
   }
@@ -601,9 +618,11 @@ export function createSubagentSupervisor(
       let usage = zeroUsage();
       let turns = 0;
       let costUsd = 0;
-      let status: AgentTerminalStatus = "failed";
-      let error: string | null = null;
-      let finalText: string | null = null;
+      let terminal: ChildTerminalOutcome = {
+        status: "failed",
+        finalText: null,
+        error: "Child ended without a usable terminal result.",
+      };
       const childBudget = createSharedCostBudgetedProvider({
         provider: options.provider,
         model: options.costModel,
@@ -666,19 +685,22 @@ export function createSubagentSupervisor(
           }
           if (event.type === "end") {
             turns = event.turns;
-            finalText = childFinalText(transcriptMessages);
-            status = terminalStatusFromStopReason(event.stopReason, finalText);
-            if (status !== "completed")
-              error = terminalErrorFromStopReason(event.stopReason);
+            terminal = terminalOutcomeFromStopReason(
+              event.stopReason,
+              childFinalText(transcriptMessages),
+            );
           }
         }
       } catch (caught) {
-        status = terminalStatusFromError(
-          caught,
-          input.lifecycle.abortController.signal,
-          input.lifecycle.deadlineExpired(),
-        );
-        error = errorMessage(caught);
+        terminal = {
+          status: terminalStatusFromError(
+            caught,
+            input.lifecycle.abortController.signal,
+            input.lifecycle.deadlineExpired(),
+          ),
+          finalText: null,
+          error: errorMessage(caught),
+        };
       }
 
       usage = childBudget.observedUsage();
@@ -708,15 +730,24 @@ export function createSubagentSupervisor(
         };
       }
       if (saved.status === "failed") {
-        status = "failed";
-        error = `Child transcript could not be stored: ${saved.reason}`;
+        terminal = {
+          status: "failed",
+          finalText: null,
+          error: `Child transcript could not be stored: ${saved.reason}`,
+        };
       }
       if (input.lifecycle.deadlineExpired()) {
-        status = "timed_out";
-        error = "Child exceeded its full lifecycle deadline.";
+        terminal = {
+          status: "timed_out",
+          finalText: null,
+          error: "Child exceeded its full lifecycle deadline.",
+        };
       } else if (input.lifecycle.abortController.signal.aborted) {
-        status = "cancelled";
-        error = "Child was cancelled before lifecycle settlement completed.";
+        terminal = {
+          status: "cancelled",
+          finalText: null,
+          error: "Child was cancelled before lifecycle settlement completed.",
+        };
       }
       const resultBase: SubagentCanonicalResultBase = {
         delegationId: input.delegationId,
@@ -728,25 +759,12 @@ export function createSubagentSupervisor(
         costUsd,
         transcriptRef: saved.status === "stored" ? saved.ref : null,
       };
-      const result: SubagentCanonicalResult =
-        status === "completed" && finalText !== null
-          ? {
-              ...resultBase,
-              status: "completed",
-              finalText,
-              error: null,
-            }
-          : {
-              ...resultBase,
-              status: status === "completed" ? "failed" : status,
-              finalText: null,
-              error: error ?? "Child ended without a usable terminal result.",
-            };
+      const result: SubagentCanonicalResult = { ...resultBase, ...terminal };
       commitTerminalResult(input.record, result);
-      progress(status);
+      progress(result.status);
       return {
         delivery: "fresh",
-        ok: status === "completed",
+        ok: result.status === "completed",
         content: admittedAgentResult(result),
         usage,
       };
