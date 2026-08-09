@@ -398,9 +398,9 @@ describe("Agent Tree Store Crash Boundaries", () => {
       ).toThrow("cannot read");
       const unreadablePath = join(workspace, "unreadable.jsonl");
       mkdirSync(unreadablePath);
-      expect(() => readRepairableJsonl(unreadablePath, 100)).toThrow(
-        "cannot read",
-      );
+      expect(() =>
+        readRepairableJsonl(unreadablePath, Number.MAX_SAFE_INTEGER),
+      ).toThrow("cannot read");
 
       const oversizedPath = join(workspace, "oversized.jsonl");
       writeFileSync(oversizedPath, "1234");
