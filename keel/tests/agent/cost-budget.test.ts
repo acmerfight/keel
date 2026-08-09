@@ -279,7 +279,7 @@ describe("Cost Budget", () => {
     expect(providerCalls).toBe(3);
   });
 
-  test(`Given no admitted root request baseline or insufficient remaining budget,
+  test(`Given no baseline, an invalid continuation estimate, or insufficient remaining budget,
     When host asks for a continuation lease,
     Then the typed lease result rejects before child work can start`, async () => {
     const underlying: LLMProvider = {
@@ -303,6 +303,17 @@ describe("Cost Budget", () => {
       model: budgetModel,
       maxCostUsd: 0.001,
     });
+    const invalidEstimateRoot = createSharedCostBudgetedProvider({
+      provider: {
+        ...underlying,
+        estimateInputTokens: (options) =>
+          options.messages.some((message) => message.role === "tool")
+            ? Number.NaN
+            : 100,
+      },
+      model: budgetModel,
+      maxCostUsd: 0.01,
+    });
     const request = {
       additionalMessages: [
         { role: "tool", toolCallId: "delegate-call", content: "result" },
@@ -314,6 +325,17 @@ describe("Cost Budget", () => {
     expect(root.leaseContinuation(request)).toEqual({
       kind: "rejected",
       reason: "missing_baseline",
+    });
+    for await (const _event of invalidEstimateRoot.provider.stream({
+      systemPrompt: "valid baseline",
+      messages: [],
+      signal: freshSignal(),
+    })) {
+      // Establish a valid baseline before the provider rejects the full shape.
+    }
+    expect(invalidEstimateRoot.leaseContinuation(request)).toEqual({
+      kind: "rejected",
+      reason: "invalid_estimate",
     });
     for await (const _event of root.provider.stream({
       systemPrompt: "spend baseline",
