@@ -150,14 +150,20 @@ What a user can do today:
   derives covered paths only from successful read observations. The root
   budget leases one admitted main continuation before child work, and the
   `delegate` tool disappears after the single accepted child. Main receives a
-  bounded coverage receipt, synthesizes by default, and may perform targeted
-  spot-checks without a brittle read ban. See the
+  conclusion-first bounded coverage receipt, synthesizes by default, and may
+  perform targeted spot-checks without a brittle read ban. Invalid arguments
+  for a currently exposed `delegate` call are recoverable without starting a
+  child or consuming the one-shot slot. The frozen Slice 1.6 v3 DeepSeek window
+  passed all 12 arms: controls 6/6, treatments 6/6, exactly one completed child
+  6/6, zero cost overshoot, and zero full rereads of every child-covered path.
+  This proves explicit single-child completion reliability, not autonomous
+  selection, lower cost, or parallel speedup. See the
   [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md)
   and
   [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md).
-  The frozen
-  [Slice 1.6 completion gate](evals/experiments/subagent-slice-1-6/README.md)
-  must pass before Slice 2a concurrency.
+  [Slice 1.6 completion result](evals/experiments/subagent-slice-1-6/RESULTS.md).
+  Any Slice 2a concurrency work still requires a fresh priority and architecture
+  decision; passing 1.6 is necessary evidence, not an automatic commitment.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,

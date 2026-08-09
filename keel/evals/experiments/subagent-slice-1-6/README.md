@@ -28,12 +28,13 @@ bound. The two failures confused a configured value with a related sample
 measurement despite correct child evidence. Raw evidence remains under
 `artifacts/v2/`; the window was not selectively rerun.
 
-V3 is pre-registered after one prompt-only handoff change: child final messages
-must put the direct answer first, stay under the existing 4,000-character bound,
-and omit bulk source/log copying; main changes a reported fact only when direct
-evidence for that same fact contradicts it. All experimental inputs and
-thresholds below remain unchanged. V3 runs the entire 12-arm window once and
-stores evidence under `artifacts/v3/`.
+V3 ran from `093ae6e` after one prompt-only handoff change: child final messages
+put the direct answer first, stay under the existing 4,000-character bound, and
+omit bulk source/log copying; main changes a reported fact only when direct
+evidence for that same fact contradicts it. It passed the unchanged gate: all
+12 arms completed and verified, all 6 treatments selected exactly one child,
+and all 6 child handoffs were completed with non-empty final text. Raw evidence
+is retained under `artifacts/v3/`.
 
 ## Frozen protocol
 
