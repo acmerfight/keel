@@ -173,3 +173,49 @@ with a 24.972-second median; treatments cost `$0.0559316072` with a
 Slice 1.6's explicit single-child completion gate is satisfied under the final
 root-held continuation reservation. This does not establish autonomous
 selection, parallel speedup, lower cost, or elimination of duplicate work.
+
+## V8 — simplified final candidate passed
+
+V8 is the one pre-registered rerun required after Step 1 simplified the
+product protocol. Candidate `3313988` removes `observedResources`, read-specific
+canonical-result projection, and case-specific verification prompt rules. It
+keeps the typed terminal outcome, bounded final/error projection, transcript
+reference, delegate-only admission, one-shot/replay behavior, root-held
+continuation budget, cancellation, and settlement invariants.
+
+The complete 12-arm window ran once without selective reruns and exited 0:
+
+| Metric | Control | Treatment |
+| --- | ---: | ---: |
+| Harness + task verifier | 6/6 | 6/6 |
+| Exactly one distinct child | n/a | 6/6 |
+| Completed non-empty child handoff | n/a | 6/6 |
+| Delegate-only assistant turn | n/a | 6/6 |
+| Handoff omits `observedResources` | n/a | 6/6 |
+| Cost overshoot | 0/6 | 0/6 |
+| Input tokens | 912,036 | 777,032 |
+| Output tokens | 22,739 | 48,379 |
+| Observable cost | `$0.0281555120` | `$0.0449717520` |
+| Median wall time | 30.355 s | 60.849 s |
+
+The total observable cost was `$0.0731272640`. Six distinct child identities
+account for 35 attributed child model operations. Five child finals fit below
+the 4,000-character handoff bound; one was projected to exactly 4,000
+characters with `truncated=true`, and its task still verified. All delegate
+results were `status=completed`, `error=null`, and carried an inspectable
+`transcriptRef`. No second child, false completion, crash, or orphan was
+observed.
+
+The duplicate-work result is deliberately qualitative now that the product no
+longer manufactures a read receipt. In all six treatments, main performed at
+least some read/search work after receiving the child final and revisited
+decisive files the child had already inspected. Treatment therefore remained
+slower and more expensive than control in this serial corpus. This is a model
+behavior and product limitation, not evidence that read traces should become a
+semantic handoff protocol.
+
+Full result JSONL, all 12 main transcripts, all 6 child transcripts, command
+metadata, and checksums are retained under `artifacts/v8/`. Slice 1.6 passes
+the final explicit single-child completion gate with a smaller, tool-agnostic
+handoff. It does not establish autonomous selection, parallel speedup, lower
+cost, lower latency, or elimination of duplicate work.

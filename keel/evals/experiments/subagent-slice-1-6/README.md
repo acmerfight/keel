@@ -65,7 +65,15 @@ and exactly one distinct completed child 6/6. One treatment fully reread all 12
 child-covered paths; this retained duplicate-work diagnostic does not alter the
 pre-registered completion gate. Raw evidence is retained under `artifacts/v7/`.
 
-## Frozen v8 protocol
+V8 ran once from `3313988` after Step 1 removed `observedResources`,
+read-specific handoff logic, and case-specific verification prompt rules. It
+passed all 12 arms: controls 6/6, treatments 6/6, and exactly one distinct
+completed child 6/6. No treatment handoff contained `observedResources`. All
+six mains still performed some read/search work after the child returned, so
+the simpler generic protocol is accepted without claiming that it eliminates
+duplicate investigation. Raw evidence is retained under `artifacts/v8/`.
+
+## Final v8 protocol
 
 - Experiment: `subagent-slice-1-6`.
 - Provider: DeepSeek.
