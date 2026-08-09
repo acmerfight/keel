@@ -316,10 +316,10 @@ an `--agent-policy <explicit|auto>` treatment. Odd trials run control first and
 even trials run treatment first to reduce fixed order bias, while JSONL stays
 in control/treatment order. The control harness must complete; its semantic
 task failure remains a valid observation. The treatment must verify and
-separately satisfy `require_one`, `forbid`, or `at_most_one` using distinct
-child identities from the run report. Selection never changes `taskOutcome`.
-The
-frozen Slice 1.5 corpus, transcript rubric, provider/model, trial count,
+separately satisfy `require_one`, `require_any`, `forbid`, or `at_most_one`
+using distinct child identities from the run report. Selection never changes
+`taskOutcome`. The frozen Slice 1.5 corpus, transcript rubric, provider/model,
+trial count,
 budgets, and Continue/Pause/Stop gate live in
 [`evals/experiments/subagent-slice-1-5/README.md`](evals/experiments/subagent-slice-1-5/README.md).
 The later product clarification and independently pre-registered exact-prefix

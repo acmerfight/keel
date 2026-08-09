@@ -872,7 +872,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
     }
   });
 
-  test(`Given fixed delegation-policy tasks require one, forbid, or bound child identities,
+  test(`Given fixed delegation-policy tasks require one, require any, forbid, or bound child identities,
     When the eval runner scores reports with child attribution,
     Then task outcomes remain verified while independent selection observations fail the gate`, async () => {
     const { root, suiteDir, outFile } = await createEvalDir();
@@ -882,6 +882,7 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
       ["duplicate", "at_most_one"],
       ["duplicate-overflow", "at_most_one"],
       ["missing-required", "require_one"],
+      ["parallel", "require_any"],
     ] as const;
     for (const [prompt, delegationPolicy] of taskCases) {
       await createTask(suiteDir, prompt, {
@@ -935,6 +936,22 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
         providerRequestAttemptCount: 2,
       },
       "missing-required": VALID_REPORT,
+      parallel: {
+        ...VALID_REPORT,
+        modelOperations: [
+          { ...childOperation, ordinal: 1 },
+          {
+            ...childOperation,
+            ordinal: 2,
+            attribution: {
+              ...childOperation.attribution,
+              childRunId: "subagent-2",
+            },
+          },
+        ],
+        modelOperationCount: 2,
+        providerRequestAttemptCount: 2,
+      },
     };
     const cliEntry = join(root, "delegation-policy-cli.mjs");
     await writeFile(
@@ -985,6 +1002,15 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
             status: "observed",
             childRuns: 0,
             satisfied: false,
+          },
+        },
+        {
+          taskId: "parallel",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 2,
+            satisfied: true,
           },
         },
         {

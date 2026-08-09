@@ -11,6 +11,7 @@ const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 60_000;
 export const evalDelegationPolicies = [
   "require_one",
+  "require_any",
   "forbid",
   "at_most_one",
 ] as const;

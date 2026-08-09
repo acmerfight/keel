@@ -41,7 +41,11 @@ export type TaskFixture = TaskFixtureBase &
     | {
         readonly agentPolicy: DelegatingAgentPolicy;
         readonly maxCostUsd: number;
-        readonly delegationPolicy?: "require_one" | "forbid" | "at_most_one";
+        readonly delegationPolicy?:
+          | "require_one"
+          | "require_any"
+          | "forbid"
+          | "at_most_one";
       }
   );
 
@@ -67,7 +71,11 @@ export interface DelegationPairTaskFixture {
   readonly allowBash: boolean;
   readonly maxCostUsd: number;
   readonly agentPolicy: DelegatingAgentPolicy;
-  readonly delegationPolicy: "require_one" | "forbid" | "at_most_one";
+  readonly delegationPolicy:
+    | "require_one"
+    | "require_any"
+    | "forbid"
+    | "at_most_one";
 }
 
 export async function createEvalDir(): Promise<{

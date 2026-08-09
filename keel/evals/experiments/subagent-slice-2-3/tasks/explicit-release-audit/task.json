@@ -6,5 +6,5 @@
   "allowBash": false,
   "maxCostUsd": 0.04,
   "agentPolicy": "explicit",
-  "delegationPolicy": "require_one"
+  "delegationPolicy": "require_any"
 }
