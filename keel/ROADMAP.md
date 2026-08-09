@@ -149,16 +149,21 @@ What a user can do today:
   with a normal final message, while the host creates the typed handoff and
   derives covered paths only from successful read observations. The root
   budget leases one admitted main continuation before child work by pricing the
-  provider-shaped assistant and bounded tool-result envelopes, and the
-  `delegate` tool disappears after the single accepted child. Main receives a
+  finalized provider-shaped assistant and bounded tool-result envelopes. The
+  root ledger holds that reservation until child settlement, child minimum
+  admission uses the same finalized request shape, mixed delegate/tool rounds
+  are rejected before child creation, and `delegate` disappears after the
+  single accepted child. Main receives a
   conclusion-first bounded coverage receipt, synthesizes by default, and may
   perform targeted spot-checks without a brittle read ban. Invalid arguments
   for a currently exposed `delegate` call are recoverable without starting a
-  child or consuming the one-shot slot. The frozen Slice 1.6 v6 DeepSeek window
+  child or consuming the one-shot slot. The frozen Slice 1.6 v7 DeepSeek window
   passed all 12 arms: controls 6/6, treatments 6/6, exactly one completed child
-  6/6, zero cost overshoot, and zero full rereads of every child-covered path.
-  This proves explicit single-child completion reliability, not autonomous
-  selection, lower cost, or parallel speedup. See the
+  6/6, zero cost overshoot, and delegate-only assistant turns 6/6. One treatment
+  fully reread all 12 child-covered paths; that retained diagnostic does not
+  fail the completion gate. This proves explicit single-child completion
+  reliability, not autonomous selection, lower cost, parallel speedup, or the
+  elimination of duplicate work. See the
   [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md)
   and
   [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md).

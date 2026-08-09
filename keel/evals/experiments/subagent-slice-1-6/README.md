@@ -11,7 +11,8 @@ fixtures. V1 through v5 retain their exact committed inputs and evidence. V6
 clarifies one ambiguous service-review field after v5 showed that both
 `account_id` and `request_id` satisfied the old undirected wording. The
 workspace, solution, verifier, budgets, provider/model, arm order, and
-acceptance threshold remain unchanged.
+acceptance threshold remain unchanged. V7 reruns that same gate from the final
+reviewed runtime candidate.
 
 ## Scored windows
 
@@ -55,7 +56,14 @@ verified, every treatment selected exactly one distinct completed child, no
 cost overshoot or second child occurred, and no main fully reread all
 child-covered paths. Raw evidence is retained under `artifacts/v6/`.
 
-## Frozen v6 protocol
+V7 ran from `0cfae78` after review required delegate-only tool turns, finalized
+request-shape pricing, a root-held continuation reservation, and finalized
+minimum-child admission. It passed all 12 arms: controls 6/6, treatments 6/6,
+and exactly one distinct completed child 6/6. One treatment fully reread all 12
+child-covered paths; this retained duplicate-work diagnostic does not alter the
+pre-registered completion gate. Raw evidence is retained under `artifacts/v7/`.
+
+## Frozen v7 protocol
 
 - Experiment: `subagent-slice-1-6`.
 - Provider: DeepSeek.
@@ -87,8 +95,8 @@ node --experimental-strip-types src/cli/index.ts eval \
   --provider deepseek \
   --model deepseek-v4-flash \
   --trials 3 \
-  --out /tmp/keel-subagent-slice-1-6-v6.jsonl \
-  --transcript-dir /tmp/keel-subagent-slice-1-6-v6-transcripts
+  --out /tmp/keel-subagent-slice-1-6-v7.jsonl \
+  --transcript-dir /tmp/keel-subagent-slice-1-6-v7-transcripts
 ```
 
 ## Corpus and budget

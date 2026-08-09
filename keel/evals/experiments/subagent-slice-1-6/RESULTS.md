@@ -131,6 +131,45 @@ projected to 4,000 characters and still verified. Repeated-path counts were
 25.539-second median; treatments cost `$0.0515118576` with a 54.615-second
 median. Full raw evidence and checksums are retained under `artifacts/v6/`.
 
-Slice 1.6's explicit single-child completion gate is satisfied under the
-serialized continuation lease. This does not establish autonomous selection,
-parallel speedup, or lower cost.
+## V7 — final reviewed candidate passed
+
+Review of the post-v6 budget architecture found two ways a child could consume
+or invalidate a nominal main continuation reserve. V7 changes runtime admission
+without changing the corpus, task prompts, workspace, solution, verifier,
+provider/model, budgets, trials, ordering, or acceptance threshold:
+
+- delegate must be the only tool in its assistant turn, so sibling tool results
+  and state changes cannot make the leased continuation shape unbounded;
+- every request is re-estimated after the final `maxOutputTokens` field is set;
+- the root ledger holds the continuation reservation until child settlement;
+  and
+- minimum child admission prices the same finalized 256-output-token shape that
+  actual child admission requires.
+
+V7 ran all 12 arms once from `0cfae78` and passed:
+
+| Metric | Result |
+| --- | ---: |
+| Control harness + task verifier | 6/6 |
+| Treatment harness + task verifier | 6/6 |
+| Treatment exactly-one-child selection | 6/6 |
+| Completed child handoff with non-empty final text | 6/6 |
+| Delegate-only assistant turns | 6/6 |
+| Distinct child identities | 6/6 |
+| Child model operations correctly attributed | 44 |
+| Cost overshoot | 0/12 |
+| Full reread of every child-observed path | 1/6 diagnostic |
+| Observable report cost | `$0.0843432016` |
+
+Three child final messages stayed below the admitted bound; three were safely
+projected to 4,000 characters and still verified. Repeated-path counts were
+2/12, 10/12, 12/12, 0/12, 6/12, and 4/12. The one full reread is retained as the
+pre-registered duplicate-work diagnostic; it was not selectively rerun and
+does not introduce a brittle runtime read ban. Controls cost `$0.0284115944`
+with a 24.972-second median; treatments cost `$0.0559316072` with a
+60.809-second median. Full raw evidence and checksums are retained under
+`artifacts/v7/`.
+
+Slice 1.6's explicit single-child completion gate is satisfied under the final
+root-held continuation reservation. This does not establish autonomous
+selection, parallel speedup, lower cost, or elimination of duplicate work.
