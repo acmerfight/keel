@@ -2,22 +2,23 @@
 
 ## Decision
 
-**Pause** as of 2026-08-09. Keep `--experimental-agents` default-off and do
-not start #590 Slice 2a.
+**Continue explicit user-directed subagent development** as of 2026-08-09,
+while keeping autonomous selection paused and the feature default-off.
 
 The runtime safety baseline held, and the model avoided delegation on every
-negative control. However, it selected no child for either eligible ordinary
-workspace task. The scored run therefore has no positive evidence-handoff
-sample and cannot justify investing in multi-child concurrency.
+negative control. It selected no child for either eligible ordinary workspace
+task when the user did not mention subagents, so v5 still supports **Pause** for
+autonomous delegation selection.
 
-- Owner: `@acmerfight`
-- Review date: 2026-09-09
-- Experiment expiry: 2026-11-09
-- Expiry action: repeat next-slice triage using new product-demand evidence;
-  remove the experimental surface or record Stop if no evidence supports a
-  new, pre-registered calibration.
+The product requirement was subsequently narrowed: explicit user intent is
+sufficient because subagent cost is expected. A separately frozen supplement
+using only the prefix `使用 subagent 调研这个任务。` selected one child in 6/6
+treatments. Its treatment artifacts verified only 2/6, so the next slice must
+harden the single-child completion and main-synthesis path before concurrency.
+See
+[`subagent-explicit-intent-v1/RESULTS.md`](../subagent-explicit-intent-v1/RESULTS.md).
 
-## Authoritative run
+## Autonomous-selection run
 
 | Field | Value |
 | --- | --- |
@@ -105,15 +106,15 @@ No inspected output was overwritten or selectively rerun.
 Version 5 narrowed the unresolved-decision negative control to the only facts
 its deterministic verifier grades: leave `policy.md` unchanged and create no
 files. It then reran all 36 arms. The stable 0/6 eligible selection observation
-across all five complete windows supports Pause, while only v5 outcomes are
-used for the authoritative decision gate.
+across all five complete windows supports Pause for prompts that do not express
+subagent intent, while only v5 outcomes are used for that autonomous-selection
+gate.
 
 ## Limits and restart condition
 
 This is a small, single-provider, single-model, single-child experiment. It
 does not measure production base rates, multi-child parallel value, durable
-delivery, or write-agent behavior. A new experiment should start only when
-real Keel usage supplies repeated independent investigation demand or a scoped
-selection change is proposed. It must use a new pre-registered version and
-must not weaken the existing authority, budget, lifecycle, or negative-control
-gates.
+delivery, or write-agent behavior. Autonomous selection requires a new scoped
+proposal and a new pre-registered version; it is not required for explicit
+user-directed development. Any follow-up must preserve the existing authority,
+budget, lifecycle, and negative-control gates.

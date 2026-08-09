@@ -4,6 +4,13 @@ This is the pre-registered qualification gate for #590 Slice 1.5. It measures
 the existing single-child experiment. It does not add production runtime
 capability and does not claim or test parallel speedup.
 
+After v5 was scored, the product requirement was narrowed to explicit
+user-directed invocation. This frozen protocol and its Pause gate still govern
+autonomous selection only. The independent
+[`subagent-explicit-intent-v1`](../subagent-explicit-intent-v1/README.md)
+supplement governs the clarified continuation decision; v5 inputs and results
+are not reinterpreted or overwritten.
+
 ## Experiment version
 
 The authoritative scored run is `subagent-slice-1-5-v5`. Its freeze point is
@@ -130,7 +137,7 @@ Report raw numerators and denominators plus 95% Wilson intervals for eligible
 call rate and negative false-call rate. Do not call either metric precision:
 this curated corpus does not represent a production base rate.
 
-## Slice 1.5 decision
+## Slice 1.5 autonomous-selection decision
 
 `Continue` requires all of the following:
 

@@ -45,6 +45,12 @@ keel eval --suite evals/experiments/subagent-slice-1-5/tasks \
   --provider deepseek --model deepseek-v4-flash --trials 3 \
   --out /tmp/subagent-calibration.jsonl \
   --transcript-dir /tmp/subagent-calibration-transcripts
+
+# Run the separately frozen explicit-user-intent supplement.
+keel eval --suite evals/experiments/subagent-explicit-intent-v1/tasks \
+  --provider deepseek --model deepseek-v4-flash --trials 3 \
+  --out /tmp/subagent-explicit-intent.jsonl \
+  --transcript-dir /tmp/subagent-explicit-intent-transcripts
 ```
 
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
@@ -308,6 +314,9 @@ identities from the run report. Selection never changes `taskOutcome`. The
 frozen Slice 1.5 corpus, transcript rubric, provider/model, trial count,
 budgets, and Continue/Pause/Stop gate live in
 [`evals/experiments/subagent-slice-1-5/README.md`](evals/experiments/subagent-slice-1-5/README.md).
+The later product clarification and independently pre-registered exact-prefix
+experiment live in
+[`evals/experiments/subagent-explicit-intent-v1/README.md`](evals/experiments/subagent-explicit-intent-v1/README.md).
 
 ## Writing good tasks
 

@@ -140,14 +140,18 @@ What a user can do today:
   time-boxed #590 experiment for one foreground read-only child. Main may
   delegate one fresh-context workspace investigation, shows bounded lifecycle
   progress, shares the root cost budget, waits for real cancellation/settlement,
-  and remains the only final answerer. Slice 1.5 calibration is **Pause**:
-  36/36 authoritative DeepSeek harness arms completed, 35/36 task artifacts
-  verified, negative false calls were 0/9, but ordinary eligible tasks selected
-  a child 0/6 times. One treatment stopped safely at budget admission.
-  The feature remains default-off, and no Slice 2a concurrency work is funded.
-  Re-review on 2026-09-09; the experiment expires on 2026-11-09 without new
-  demand evidence. See
-  [`evals/experiments/subagent-slice-1-5/RESULTS.md`](evals/experiments/subagent-slice-1-5/RESULTS.md).
+  and remains the only final answerer. Slice 1.5 now supports **Continue for
+  explicit user-directed development**: autonomous eligible prompts selected a
+  child 0/6 times, but the separately frozen exact prefix
+  `使用 subagent 调研这个任务。` selected one child 6/6 times. The feature
+  remains default-off and autonomous selection is uncommitted. Because only
+  2/6 explicit treatments returned a verified artifact and 4/6 child results
+  failed DeepSeek `submit_agent_result` validation, the next slice must harden
+  the existing single-child result/synthesis path before Slice 2a concurrency.
+  See the
+  [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md)
+  and
+  [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md).
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,

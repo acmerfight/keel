@@ -9,6 +9,10 @@ faster, or make the feature default-on. The authoritative
 `subagent-slice-1-5-v5` result remains the evidence for prompts that do not
 mention subagents.
 
+The protocol was frozen at
+`c00cf08139c39a11f01e9477434ea164b1f7b245` and run once. See
+[`RESULTS.md`](RESULTS.md) for the scored result and product decision.
+
 ## Why this is a separate experiment
 
 The product requirement was clarified after v5 results were inspected:
