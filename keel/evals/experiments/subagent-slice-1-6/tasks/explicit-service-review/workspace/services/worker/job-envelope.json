@@ -1,0 +1,8 @@
+{
+  "required": ["cart_id", "account_id", "attempt"],
+  "properties": {
+    "cart_id": "string",
+    "account_id": "string",
+    "attempt": "integer"
+  }
+}

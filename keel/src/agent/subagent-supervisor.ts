@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { CostModel } from "../core/cost.ts";
 import { errorMessage, isAbortThrow, KeelError } from "../core/error.ts";
-import type { LLMProvider, Usage } from "../llm/types.ts";
+import type { ReadResourceObservation } from "../core/resource-observation.ts";
+import { copyReadResourceObservation } from "../core/resource-observation.ts";
+import type { LLMProvider, StreamOptions, Usage } from "../llm/types.ts";
 import type {
   DelegationCapability,
   DelegationToolResult,
-  SubmittedAgentResult,
 } from "../tools/delegation.ts";
-import { createAgentResultSubmissionCapability } from "../tools/delegation.ts";
 import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
 import type { ContextCompactionOptions } from "./context-compaction.ts";
 import {
   createSharedCostBudgetedProvider,
+  estimateProviderInputTokens,
   type SharedCostBudgetedProvider,
 } from "./cost-budget.ts";
 import { runAgent } from "./loop.ts";
@@ -31,17 +32,17 @@ import type {
 const DEFAULT_CHILD_DEADLINE_MS = 120_000;
 const DEFAULT_SETTLEMENT_GRACE_MS = 2_000;
 const DEFAULT_CHILD_MAX_TURNS = 16;
-const MAIN_SYNTHESIS_RESERVE_FRACTION = 0.25;
-const MAX_ADMITTED_SUMMARY_CHARS = 4_000;
-const MAX_ADMITTED_EVIDENCE = 10;
-const MAX_ADMITTED_EVIDENCE_DETAIL_CHARS = 500;
-const MAX_ADMITTED_RISKS = 5;
-const MAX_ADMITTED_RISK_CHARS = 500;
+const MAIN_CONTINUATION_MAX_OUTPUT_TOKENS = 4_096;
+const MAX_ADMITTED_FINAL_TEXT_CHARS = 4_000;
+const MAX_ADMITTED_OBSERVED_RESOURCES = 20;
+const MAX_ADMITTED_RESOURCE_PATH_CHARS = 500;
 const MAX_ADMITTED_ERROR_CHARS = 2_000;
 const MAX_ADMITTED_ID_CHARS = 512;
 const MAX_ADMITTED_TRANSCRIPT_REF_CHARS = 512;
 const MAX_ADMITTED_RESULT_CHARS = 24_000;
-const MAX_AGGREGATE_FALLBACK_SUMMARY_CHARS = 1_000;
+const MAIN_CONTINUATION_TOOL_RESULT_TOKEN_RESERVE =
+  MAX_ADMITTED_RESULT_CHARS + 512;
+const MAX_AGGREGATE_FALLBACK_TEXT_CHARS = 1_000;
 
 type AgentTerminalStatus =
   | "completed"
@@ -84,18 +85,37 @@ export type SubagentProgressEvent =
       readonly deadlineMs: number;
     };
 
-interface SubagentCanonicalResult {
+interface ObservedSubagentResource {
+  readonly path: string;
+  readonly offset?: number;
+  readonly limit?: number;
+  readonly observation: ReadResourceObservation;
+}
+
+interface SubagentCanonicalResultBase {
   readonly delegationId: string;
   readonly childRunId: string;
-  readonly status: AgentTerminalStatus;
   readonly task: string;
-  readonly submitted: SubmittedAgentResult | null;
+  readonly observedResources: readonly ObservedSubagentResource[];
   readonly usage: Usage;
   readonly turns: number;
   readonly costUsd: number;
   readonly transcriptRef: string | null;
-  readonly error: string | null;
 }
+
+type SubagentCanonicalResult = SubagentCanonicalResultBase &
+  (
+    | {
+        readonly status: "completed";
+        readonly finalText: string;
+        readonly error: null;
+      }
+    | {
+        readonly status: Exclude<AgentTerminalStatus, "completed">;
+        readonly finalText: null;
+        readonly error: string;
+      }
+  );
 
 interface AcceptedDelegation {
   readonly kind: "accepted";
@@ -166,7 +186,6 @@ interface CreateSubagentSupervisorOptions {
   readonly providerId: string;
   readonly model: string;
   readonly costModel: CostModel;
-  readonly rootMaxCostUsd: number;
   readonly rootBudget: SharedCostBudgetedProvider;
   readonly projectInstructions?: ProjectInstructions;
   readonly hiddenWorkspacePaths?: readonly string[];
@@ -212,7 +231,7 @@ function childTaskMessage(
       ? ["- none"]
       : focusPaths.map((path) => `- ${path}`)),
     "",
-    "Submit the result through submit_agent_result when the investigation is complete.",
+    "Return one concise final answer with the findings, exact workspace paths you inspected, and remaining uncertainty.",
   ].join("\n");
 }
 
@@ -243,54 +262,45 @@ function admittedText(
 }
 
 function admittedAgentResult(result: SubagentCanonicalResult): string {
-  const submitted = result.status === "completed" ? result.submitted : null;
-  const rawSummary =
-    submitted === null
-      ? (result.error ?? "The child did not submit a usable result.")
-      : submitted.summary;
-  const summaryLimit =
-    submitted === null ? MAX_ADMITTED_ERROR_CHARS : MAX_ADMITTED_SUMMARY_CHARS;
+  const rawText =
+    result.status === "completed" ? result.finalText : result.error;
+  const textLimit =
+    result.status === "completed"
+      ? MAX_ADMITTED_FINAL_TEXT_CHARS
+      : MAX_ADMITTED_ERROR_CHARS;
   const delegationId = admittedText(result.delegationId, MAX_ADMITTED_ID_CHARS);
-  const summary = admittedText(rawSummary, summaryLimit);
+  const admittedResultText = admittedText(rawText, textLimit);
   const transcriptRefText =
     result.transcriptRef === null
       ? null
       : admittedText(result.transcriptRef, MAX_ADMITTED_TRANSCRIPT_REF_CHARS);
   const transcriptRef =
     transcriptRefText?.truncated === false ? transcriptRefText.value : null;
-  const evidence =
-    submitted?.evidence.slice(0, MAX_ADMITTED_EVIDENCE).map((item) => {
-      const path = admittedText(item.path, 500);
-      const detail = admittedText(
-        item.detail,
-        MAX_ADMITTED_EVIDENCE_DETAIL_CHARS,
-      );
-      return { item, path, detail };
-    }) ?? [];
-  const risks =
-    submitted?.risks
-      .slice(0, MAX_ADMITTED_RISKS)
-      .map((risk) => admittedText(risk, MAX_ADMITTED_RISK_CHARS)) ?? [];
+  const observedResources = result.observedResources
+    .slice(0, MAX_ADMITTED_OBSERVED_RESOURCES)
+    .map((resource) => ({
+      resource,
+      path: admittedText(resource.path, MAX_ADMITTED_RESOURCE_PATH_CHARS),
+    }));
   const truncated =
     delegationId.truncated ||
-    summary.truncated ||
-    (submitted?.evidence.length ?? 0) > MAX_ADMITTED_EVIDENCE ||
-    evidence.some((item) => item.path.truncated || item.detail.truncated) ||
-    (submitted?.risks.length ?? 0) > MAX_ADMITTED_RISKS ||
-    risks.some((risk) => risk.truncated) ||
+    admittedResultText.truncated ||
+    result.observedResources.length > MAX_ADMITTED_OBSERVED_RESOURCES ||
+    observedResources.some((item) => item.path.truncated) ||
     (result.transcriptRef !== null && transcriptRef === null);
   const projection = {
     delegationId: delegationId.value,
     status: result.status,
     transcriptRef,
+    childLimitReached: true,
     truncated,
-    summary: summary.value,
-    evidence: evidence.map(({ item, path, detail }) => ({
+    finalText: result.status === "completed" ? admittedResultText.value : null,
+    error: result.status === "completed" ? null : admittedResultText.value,
+    observedResources: observedResources.map(({ resource, path }) => ({
       path: path.value,
-      ...(item.line !== undefined ? { line: item.line } : {}),
-      detail: detail.value,
+      ...(resource.offset !== undefined ? { offset: resource.offset } : {}),
+      ...(resource.limit !== undefined ? { limit: resource.limit } : {}),
     })),
-    risks: risks.map((risk) => risk.value),
   };
   const serialized = JSON.stringify(projection);
   if (serialized.length <= MAX_ADMITTED_RESULT_CHARS) return serialized;
@@ -298,12 +308,72 @@ function admittedAgentResult(result: SubagentCanonicalResult): string {
     delegationId: delegationId.value,
     status: result.status,
     transcriptRef,
+    childLimitReached: true,
     truncated: true,
-    summary: admittedText(rawSummary, MAX_AGGREGATE_FALLBACK_SUMMARY_CHARS)
-      .value,
-    evidence: [],
-    risks: [],
+    finalText:
+      result.status === "completed"
+        ? admittedText(rawText, MAX_AGGREGATE_FALLBACK_TEXT_CHARS).value
+        : null,
+    error:
+      result.status === "completed"
+        ? null
+        : admittedText(rawText, MAX_AGGREGATE_FALLBACK_TEXT_CHARS).value,
+    observedResources: [],
   });
+}
+
+function childFinalText(messages: readonly SessionMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (
+      message?.role === "assistant" &&
+      message.toolCalls.length === 0 &&
+      message.content.trim() !== ""
+    ) {
+      return message.content.trim();
+    }
+  }
+  return null;
+}
+
+function observedChildResources(
+  messages: readonly SessionMessage[],
+): readonly ObservedSubagentResource[] {
+  const readCalls = new Map<
+    string,
+    {
+      readonly path: string;
+      readonly offset?: number;
+      readonly limit?: number;
+    }
+  >();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const toolCall of message.toolCalls) {
+      if ("kind" in toolCall || toolCall.tool !== "read") continue;
+      readCalls.set(toolCall.id, {
+        path: toolCall.path,
+        ...(toolCall.offset !== undefined ? { offset: toolCall.offset } : {}),
+        ...(toolCall.limit !== undefined ? { limit: toolCall.limit } : {}),
+      });
+    }
+  }
+  const resources: ObservedSubagentResource[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "tool" || message.resourceObservation === undefined)
+      continue;
+    const readCall = readCalls.get(message.toolCallId);
+    if (readCall === undefined) continue;
+    const key = JSON.stringify(readCall);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    resources.push({
+      ...readCall,
+      observation: copyReadResourceObservation(message.resourceObservation),
+    });
+  }
+  return resources;
 }
 
 function transcriptContent(input: {
@@ -333,12 +403,21 @@ function transcriptContent(input: {
 
 function terminalStatusFromStopReason(
   stopReason: string,
-  submitted: SubmittedAgentResult | null,
+  finalText: string | null,
 ): AgentTerminalStatus {
   if (stopReason === "turn_limit") return "turn_limited";
   if (stopReason === "cost_budget") return "budget_limited";
-  if (stopReason === "completed" && submitted !== null) return "completed";
+  if (stopReason === "completed" && finalText !== null) return "completed";
   return "failed";
+}
+
+function terminalErrorFromStopReason(stopReason: string): string {
+  if (stopReason === "turn_limit") return "Child exhausted its turn limit.";
+  if (stopReason === "cost_budget") return "Child exhausted its cost budget.";
+  if (stopReason === "provider_length") {
+    return "Child output was truncated by the provider length limit.";
+  }
+  return "Child ended without a non-empty final assistant message.";
 }
 
 function terminalStatusFromError(
@@ -368,16 +447,10 @@ function cloneCanonicalResult(
 ): SubagentCanonicalResult {
   return {
     ...result,
-    submitted:
-      result.submitted === null
-        ? null
-        : {
-            summary: result.submitted.summary,
-            evidence: result.submitted.evidence.map((evidence) => ({
-              ...evidence,
-            })),
-            risks: [...result.submitted.risks],
-          },
+    observedResources: result.observedResources.map((resource) => ({
+      ...resource,
+      observation: copyReadResourceObservation(resource.observation),
+    })),
     usage: { ...result.usage },
   };
 }
@@ -482,6 +555,8 @@ export function createSubagentSupervisor(
     readonly toolCallId: string;
     readonly task: string;
     readonly focusPaths: readonly string[];
+    readonly systemPrompt: string;
+    readonly userMessage: string;
     readonly childMaxCostUsd: number;
     readonly lifecycle: ChildLifecycle;
     readonly record: SubagentRunRecord;
@@ -522,21 +597,13 @@ export function createSubagentSupervisor(
     input.record.state = { kind: "running" };
     progress("running");
     try {
-      const submission = createAgentResultSubmissionCapability();
-      const systemPrompt = buildReadOnlySubagentSystemPrompt({
-        workspace: options.workspace,
-        platform: options.platform,
-        ...(options.projectInstructions !== undefined
-          ? { projectInstructions: options.projectInstructions }
-          : {}),
-        focusPaths: input.focusPaths,
-      });
       let transcriptMessages: readonly SessionMessage[] = [];
       let usage = zeroUsage();
       let turns = 0;
       let costUsd = 0;
       let status: AgentTerminalStatus = "failed";
       let error: string | null = null;
+      let finalText: string | null = null;
       const childBudget = createSharedCostBudgetedProvider({
         provider: options.provider,
         model: options.costModel,
@@ -562,17 +629,12 @@ export function createSubagentSupervisor(
         for await (const event of runAgent({
           workspace: options.workspace,
           provider: options.provider,
-          userMessage: childTaskMessage(
-            input.delegationId,
-            input.task,
-            input.focusPaths,
-          ),
+          userMessage: input.userMessage,
           userMessageOrigin: { type: "runtime_subagent_delegation" },
-          systemPrompt,
+          systemPrompt: input.systemPrompt,
           signal: input.lifecycle.abortController.signal,
           bash: { kind: "disabled" },
           toolProfile: "read-only-subagent",
-          agentResultSubmission: submission,
           stopPolicy: maxTurnFallbackPolicy(maxTurns),
           costTracking: {
             model: options.costModel,
@@ -604,13 +666,10 @@ export function createSubagentSupervisor(
           }
           if (event.type === "end") {
             turns = event.turns;
-            status = terminalStatusFromStopReason(
-              event.stopReason,
-              submission.accepted(),
-            );
-            if (status === "failed") {
-              error = "Child ended without submit_agent_result.";
-            }
+            finalText = childFinalText(transcriptMessages);
+            status = terminalStatusFromStopReason(event.stopReason, finalText);
+            if (status !== "completed")
+              error = terminalErrorFromStopReason(event.stopReason);
           }
         }
       } catch (caught) {
@@ -624,18 +683,7 @@ export function createSubagentSupervisor(
 
       usage = childBudget.observedUsage();
       costUsd = childBudget.observedSpendUsd();
-
-      const submitted = submission.accepted();
-      if (
-        submitted !== null &&
-        validateWorkspacePaths(
-          options.workspace,
-          submitted.evidence.map((evidence) => evidence.path),
-        ) !== null
-      ) {
-        status = "failed";
-        error = "Submitted evidence includes an invalid workspace path.";
-      }
+      const observedResources = observedChildResources(transcriptMessages);
       let saved: ToolOutputArtifactSaveResult;
       try {
         saved = await options.transcriptStore.save({
@@ -646,7 +694,7 @@ export function createSubagentSupervisor(
             childRunId: input.childRunId,
             provider: options.providerId,
             model: options.model,
-            systemPrompt,
+            systemPrompt: input.systemPrompt,
             messages: transcriptMessages,
           }),
           sourceStatus: "complete",
@@ -670,18 +718,30 @@ export function createSubagentSupervisor(
         status = "cancelled";
         error = "Child was cancelled before lifecycle settlement completed.";
       }
-      const result: SubagentCanonicalResult = {
+      const resultBase: SubagentCanonicalResultBase = {
         delegationId: input.delegationId,
         childRunId: input.childRunId,
-        status,
         task: input.task,
-        submitted,
+        observedResources,
         usage,
         turns,
         costUsd,
         transcriptRef: saved.status === "stored" ? saved.ref : null,
-        error,
       };
+      const result: SubagentCanonicalResult =
+        status === "completed" && finalText !== null
+          ? {
+              ...resultBase,
+              status: "completed",
+              finalText,
+              error: null,
+            }
+          : {
+              ...resultBase,
+              status: status === "completed" ? "failed" : status,
+              finalText: null,
+              error: error ?? "Child ended without a usable terminal result.",
+            };
       commitTerminalResult(input.record, result);
       progress(status);
       return {
@@ -697,6 +757,7 @@ export function createSubagentSupervisor(
   };
 
   const capability: DelegationCapability = {
+    available: () => acceptedRuns === 0,
     delegate: async (input) => {
       const delegationId = `${options.parentRunId}:${input.toolCallId}`;
       const existing = receipts.get(delegationId);
@@ -736,13 +797,45 @@ export function createSubagentSupervisor(
         receipts.set(delegationId, { kind: "rejected", result });
         return result;
       }
-      const remainingUsd = options.rootBudget.remainingUsd();
-      const synthesisReserveUsd =
-        options.rootMaxCostUsd * MAIN_SYNTHESIS_RESERVE_FRACTION;
-      const childMaxCostUsd = remainingUsd - synthesisReserveUsd;
-      if (childMaxCostUsd <= 0) {
+      const systemPrompt = buildReadOnlySubagentSystemPrompt({
+        workspace: options.workspace,
+        platform: options.platform,
+        ...(options.projectInstructions !== undefined
+          ? { projectInstructions: options.projectInstructions }
+          : {}),
+        focusPaths: input.focusPaths,
+      });
+      const userMessage = childTaskMessage(
+        delegationId,
+        input.task,
+        input.focusPaths,
+      );
+      const childInputOptions: StreamOptions = {
+        systemPrompt,
+        messages: [{ role: "user", content: userMessage }],
+        signal: input.signal,
+        toolExposure: { kind: "auto", profile: "read-only-subagent" },
+      };
+      const minimumChildInputTokens = estimateProviderInputTokens(
+        options.provider,
+        childInputOptions,
+      );
+      const continuationMaxOutputTokens = Math.min(
+        MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
+        options.modelMaxOutputTokens ?? MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
+      );
+      const continuationLease =
+        minimumChildInputTokens === null
+          ? { kind: "rejected" as const }
+          : options.rootBudget.leaseContinuation({
+              additionalInputTokens:
+                MAIN_CONTINUATION_TOOL_RESULT_TOKEN_RESERVE,
+              maxOutputTokens: continuationMaxOutputTokens,
+              minimumChildInputTokens,
+            });
+      if (continuationLease.kind !== "granted") {
         const result = rejectedDelegation(
-          "Delegation rejected: the root budget cannot fund a child while preserving the main synthesis reserve.",
+          "Delegation rejected: the root budget cannot fund a child while preserving an admitted main continuation lease.",
         );
         receipts.set(delegationId, { kind: "rejected", result });
         return result;
@@ -767,7 +860,9 @@ export function createSubagentSupervisor(
             toolCallId: input.toolCallId,
             task: input.task,
             focusPaths: input.focusPaths,
-            childMaxCostUsd,
+            systemPrompt,
+            userMessage,
+            childMaxCostUsd: continuationLease.childMaxCostUsd,
             lifecycle,
             record,
           })
@@ -785,7 +880,8 @@ export function createSubagentSupervisor(
                   childRunId,
                   status: "failed",
                   task: input.task,
-                  submitted: null,
+                  finalText: null,
+                  observedResources: [],
                   usage,
                   turns: 0,
                   costUsd: 0,

@@ -51,6 +51,12 @@ keel eval --suite evals/experiments/subagent-explicit-intent-v1/tasks \
   --provider deepseek --model deepseek-v4-flash --trials 3 \
   --out /tmp/subagent-explicit-intent.jsonl \
   --transcript-dir /tmp/subagent-explicit-intent-transcripts
+
+# Run the frozen #590 Slice 1.6 explicit completion-reliability window.
+keel eval --suite evals/experiments/subagent-slice-1-6/tasks \
+  --provider deepseek --model deepseek-v4-flash --trials 3 \
+  --out /tmp/subagent-slice-1-6.jsonl \
+  --transcript-dir /tmp/subagent-slice-1-6-transcripts
 ```
 
 Defaults: `--suite evals/tasks`, `--trials 1`, `--out eval-results.jsonl`
@@ -317,6 +323,8 @@ budgets, and Continue/Pause/Stop gate live in
 The later product clarification and independently pre-registered exact-prefix
 experiment live in
 [`evals/experiments/subagent-explicit-intent-v1/README.md`](evals/experiments/subagent-explicit-intent-v1/README.md).
+The host-owned completion handoff and continuation-budget reliability gate live
+in [`evals/experiments/subagent-slice-1-6/README.md`](evals/experiments/subagent-slice-1-6/README.md).
 
 ## Writing good tasks
 

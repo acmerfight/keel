@@ -19,7 +19,6 @@ import type {
 import type { CostModel } from "../../src/core/cost.ts";
 import { KeelError } from "../../src/core/error.ts";
 import type { LLMProvider, Usage } from "../../src/llm/types.ts";
-import type { SubmittedAgentResult } from "../../src/tools/delegation.ts";
 import { openAICompatibleTools } from "../../src/tools/registry.ts";
 
 const costModel: CostModel = {
@@ -90,14 +89,7 @@ function scriptedSuccessfulProvider(capturedTools: string[][]): LLMProvider {
           path: "module.ts",
         };
       } else {
-        yield {
-          type: "tool_call",
-          id: "submit_once",
-          tool: "submit_agent_result",
-          summary: "module.ts exports 42.",
-          evidence: [{ path: "module.ts", line: 1, detail: "answer is 42" }],
-          risks: [],
-        };
+        yield { type: "text", text: "module.ts exports 42." };
       }
       completeAttempt(options, requestUsage);
       yield { type: "stop", reason: "stop", usage: requestUsage };
@@ -105,19 +97,12 @@ function scriptedSuccessfulProvider(capturedTools: string[][]): LLMProvider {
   };
 }
 
-function singleSubmissionProvider(result: SubmittedAgentResult): LLMProvider {
+function singleFinalProvider(finalText: string): LLMProvider {
   return {
-    id: "single-submission",
+    id: "single-final",
     estimateInputTokens: () => 100,
     async *stream(options) {
-      yield {
-        type: "tool_call",
-        id: "submit_once",
-        tool: "submit_agent_result",
-        summary: result.summary,
-        evidence: result.evidence.map((evidence) => ({ ...evidence })),
-        risks: [...result.risks],
-      };
+      yield { type: "text", text: finalText };
       completeAttempt(options, requestUsage);
       yield { type: "stop", reason: "stop", usage: requestUsage };
     },
@@ -146,11 +131,26 @@ function supervisorFixture(options: {
     options.providerAbortSignalSupport === false
       ? options.provider
       : { ...options.provider, abortSignalSupport: true };
-  const rootBudget = createSharedCostBudgetedProvider({
+  const sharedRootBudget = createSharedCostBudgetedProvider({
     provider,
     model: costModel,
     maxCostUsd: rootMaxCostUsd,
   });
+  const rootBudget: SharedCostBudgetedProvider = {
+    ...sharedRootBudget,
+    leaseContinuation: () => {
+      const reservedUsd = rootMaxCostUsd * 0.25;
+      const childMaxCostUsd = sharedRootBudget.remainingUsd() - reservedUsd;
+      return childMaxCostUsd > 0
+        ? {
+            kind: "granted",
+            reservedUsd,
+            childMaxCostUsd,
+            estimatedContinuationInputTokens: 1_000,
+          }
+        : { kind: "rejected", reason: "insufficient_budget" };
+    },
+  };
   const artifacts = createArtifactCapture();
   return {
     rootBudget,
@@ -163,7 +163,6 @@ function supervisorFixture(options: {
       providerId: provider.id,
       model: "test-model",
       costModel,
-      rootMaxCostUsd,
       rootBudget,
       transcriptStore: options.transcriptStore ?? artifacts.store,
       now: options.now ?? (() => 0),
@@ -246,6 +245,7 @@ describe("Subagent Supervisor", () => {
     const signal = new AbortController().signal;
 
     try {
+      expect(fixture.supervisor.capability.available()).toBe(true);
       // When
       const first = await fixture.supervisor.capability.delegate({
         toolCallId: "delegate-1",
@@ -287,6 +287,7 @@ describe("Subagent Supervisor", () => {
           "Delegation rejected: Slice 1 permits only one accepted child per root run.",
       });
       expect(fixture.supervisor.totalAcceptedCount()).toBe(1);
+      expect(fixture.supervisor.capability.available()).toBe(false);
       expect(fixture.supervisor.activeRunCount()).toBe(0);
       expect(fixture.supervisor.runSnapshots()).toEqual([
         {
@@ -314,15 +315,7 @@ describe("Subagent Supervisor", () => {
       expect(exposedTools).toHaveLength(2);
       for (const tools of exposedTools) {
         expect(tools.toSorted()).toEqual(
-          [
-            "git_diff",
-            "git_status",
-            "glob",
-            "grep",
-            "ls",
-            "read",
-            "submit_agent_result",
-          ].toSorted(),
+          ["git_diff", "git_status", "glob", "grep", "ls", "read"].toSorted(),
         );
       }
     } finally {
@@ -436,7 +429,6 @@ describe("Subagent Supervisor", () => {
           "turn",
           "tool",
           "turn",
-          "tool",
           "completed",
         ]);
         expect(progress.every((event) => event.elapsedMs === 0)).toBe(true);
@@ -496,7 +488,7 @@ describe("Subagent Supervisor", () => {
         delivery: "rejected",
         ok: false,
         content:
-          "Delegation rejected: the root budget cannot fund a child while preserving the main synthesis reserve.",
+          "Delegation rejected: the root budget cannot fund a child while preserving an admitted main continuation lease.",
       });
       expect(invalidFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(budgetFixture.supervisor.totalAcceptedCount()).toBe(0);
@@ -506,27 +498,16 @@ describe("Subagent Supervisor", () => {
     }
   });
 
-  test(`Given a child submits more valid content than main may admit,
+  test(`Given a child returns more final text than main may admit,
     When Supervisor stores the canonical transcript and projects the result,
-    Then the main-facing payload is bounded while full submitted content remains inspectable`, async () => {
+    Then the main-facing payload is bounded while the full final message remains inspectable`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-subagent-supervisor-"),
     );
     await writeFile(join(workspace, "module.ts"), "export const value = 1;\n");
     const fixture = supervisorFixture({
       workspace,
-      provider: singleSubmissionProvider({
-        summary: "s".repeat(8_000),
-        evidence: Array.from({ length: 20 }, (_, index) => ({
-          path: "module.ts",
-          ...(index === 0 ? { line: 1 } : {}),
-          detail: `e${index}:${"d".repeat(990)}`,
-        })),
-        risks: Array.from(
-          { length: 10 },
-          (_, index) => `r${index}:${"x".repeat(990)}`,
-        ),
-      }),
+      provider: singleFinalProvider("s".repeat(8_000)),
     });
 
     try {
@@ -539,33 +520,18 @@ describe("Subagent Supervisor", () => {
       const admitted = z
         .object({
           status: z.literal("completed"),
-          summary: z.string(),
-          evidence: z.array(
-            z.object({
-              path: z.string(),
-              line: z.number().optional(),
-              detail: z.string(),
-            }),
-          ),
-          risks: z.array(z.string()),
+          finalText: z.string(),
+          observedResources: z.array(z.object({ path: z.string() })),
           transcriptRef: z.string(),
         })
         .passthrough()
         .parse(JSON.parse(result.content));
 
       expect(result.ok).toBe(true);
-      expect(admitted.summary).toHaveLength(4_000);
-      expect(admitted.summary.endsWith("...")).toBe(true);
-      expect(admitted.evidence).toHaveLength(10);
-      expect(admitted.evidence[0]?.line).toBe(1);
-      expect(admitted.evidence[1]).not.toHaveProperty("line");
-      expect(
-        admitted.evidence.every((entry) => entry.detail.length <= 500),
-      ).toBe(true);
-      expect(admitted.risks).toHaveLength(5);
-      expect(admitted.risks.every((risk) => risk.length <= 500)).toBe(true);
-      expect(fixture.artifacts.inputs[0]?.content).toContain("d".repeat(900));
-      expect(fixture.artifacts.inputs[0]?.content).toContain("r9:");
+      expect(admitted.finalText).toHaveLength(4_000);
+      expect(admitted.finalText.endsWith("...")).toBe(true);
+      expect(admitted.observedResources).toEqual([]);
+      expect(fixture.artifacts.inputs[0]?.content).toContain("s".repeat(7_000));
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -580,11 +546,7 @@ describe("Subagent Supervisor", () => {
     await writeFile(join(workspace, "module.ts"), "export const value = 1;\n");
     const fixture = supervisorFixture({
       workspace,
-      provider: singleSubmissionProvider({
-        summary: "\0".repeat(8_000),
-        evidence: [{ path: "module.ts", detail: "\0".repeat(1_000) }],
-        risks: ["\0".repeat(1_000)],
-      }),
+      provider: singleFinalProvider("\0".repeat(8_000)),
     });
 
     try {
@@ -599,16 +561,15 @@ describe("Subagent Supervisor", () => {
           status: z.literal("completed"),
           transcriptRef: z.string(),
           truncated: z.literal(true),
-          summary: z.string(),
-          evidence: z.array(z.never()),
-          risks: z.array(z.never()),
+          finalText: z.string(),
+          observedResources: z.array(z.never()),
         })
         .passthrough()
         .parse(JSON.parse(result.content));
 
       expect(result.ok).toBe(true);
       expect(result.content.length).toBeLessThanOrEqual(24_000);
-      expect(admitted.summary).toHaveLength(1_000);
+      expect(admitted.finalText).toHaveLength(1_000);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -757,42 +718,56 @@ describe("Subagent Supervisor", () => {
           status: z.literal("failed"),
           transcriptRef: z.string(),
           truncated: z.literal(true),
-          summary: z.string(),
+          error: z.string(),
         })
         .passthrough()
         .parse(JSON.parse(result.content));
 
       expect(result.ok).toBe(false);
       expect(result.content.length).toBeLessThan(4_000);
-      expect(admitted.summary).toHaveLength(2_000);
-      expect(admitted.summary.endsWith("...")).toBe(true);
+      expect(admitted.error).toHaveLength(2_000);
+      expect(admitted.error.endsWith("...")).toBe(true);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });
 
-  test(`Given a child submits evidence outside the workspace and transcript storage fails,
-    When each run settles,
-    Then neither invalid canonical result is admitted as child evidence`, async () => {
+  test(`Given a child reads one workspace resource but its final text claims another path,
+    When host constructs the handoff and a separate transcript store fails,
+    Then observed resources come only from the successful read and storage failure cannot complete`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-subagent-supervisor-"),
     );
-    const submittedOutside = singleSubmissionProvider({
-      summary: "Untrusted summary must not be admitted.",
-      evidence: [{ path: "../outside", detail: "outside workspace" }],
-      risks: [],
-    });
-    const invalidFixture = supervisorFixture({
+    await writeFile(join(workspace, "module.ts"), "export const value = 1;\n");
+    let calls = 0;
+    const provenanceFixture = supervisorFixture({
       workspace,
-      provider: submittedOutside,
+      provider: {
+        id: "resource-provenance",
+        estimateInputTokens: () => 100,
+        async *stream(options) {
+          calls++;
+          if (calls === 1) {
+            yield {
+              type: "tool_call",
+              id: "observed-read",
+              tool: "read",
+              path: "module.ts",
+            };
+          } else {
+            yield {
+              type: "text",
+              text: "module.ts was inspected; ../outside was not inspected.",
+            };
+          }
+          completeAttempt(options, requestUsage);
+          yield { type: "stop", reason: "stop", usage: requestUsage };
+        },
+      },
     });
     const storageFixture = supervisorFixture({
       workspace,
-      provider: singleSubmissionProvider({
-        summary: "Storage-dependent result.",
-        evidence: [{ path: "ROADMAP.md", detail: "valid path" }],
-        risks: [],
-      }),
+      provider: singleFinalProvider("Storage-dependent result."),
       transcriptStore: {
         abortSignalSupport: true,
         verifyReusable: async () => ({ status: "not_reusable" }),
@@ -804,12 +779,14 @@ describe("Subagent Supervisor", () => {
     });
 
     try {
-      const invalid = await invalidFixture.supervisor.capability.delegate({
-        toolCallId: "invalid-evidence",
-        task: "Submit invalid evidence.",
-        focusPaths: [],
-        signal: new AbortController().signal,
-      });
+      const provenance = await provenanceFixture.supervisor.capability.delegate(
+        {
+          toolCallId: "resource-provenance",
+          task: "Report only observed resources.",
+          focusPaths: ["module.ts"],
+          signal: new AbortController().signal,
+        },
+      );
       const storageFailed = await storageFixture.supervisor.capability.delegate(
         {
           toolCallId: "storage-failed",
@@ -819,11 +796,11 @@ describe("Subagent Supervisor", () => {
         },
       );
 
-      expect(invalid.ok).toBe(false);
-      expect(invalid.content).toContain(
-        "Submitted evidence includes an invalid workspace path.",
-      );
-      expect(invalid.content).not.toContain("Untrusted summary");
+      expect(provenance.ok).toBe(true);
+      expect(JSON.parse(provenance.content).observedResources).toEqual([
+        { path: "module.ts" },
+      ]);
+      expect(provenance.content).not.toContain('"path":"../outside"');
       expect(storageFailed.ok).toBe(false);
       expect(storageFailed.content).toContain(
         "Child transcript could not be stored: artifact store unavailable",
@@ -842,9 +819,9 @@ describe("Subagent Supervisor", () => {
   });
 
   test.each([
-    { scenario: "completed without submission", expected: "failed" },
+    { scenario: "empty final message", expected: "failed" },
+    { scenario: "provider length", expected: "failed" },
     { scenario: "turn limit", expected: "turn_limited" },
-    { scenario: "child budget admission", expected: "budget_limited" },
   ])(
     `Given a child reaches $scenario,
     When Supervisor maps the agent stop reason,
@@ -867,10 +844,17 @@ describe("Subagent Supervisor", () => {
               path: "module.ts",
             };
           } else {
-            yield { type: "text", text: "no structured submission" };
+            yield {
+              type: "text",
+              text: scenario === "empty final message" ? "   " : "partial",
+            };
           }
           completeAttempt(options, requestUsage);
-          yield { type: "stop", reason: "stop", usage: requestUsage };
+          yield {
+            type: "stop",
+            reason: scenario === "provider length" ? "length" : "stop",
+            usage: requestUsage,
+          };
         },
       };
       await writeFile(
@@ -881,9 +865,6 @@ describe("Subagent Supervisor", () => {
         workspace,
         provider,
         ...(scenario === "turn limit" ? { maxTurns: 1 } : {}),
-        ...(scenario === "child budget admission"
-          ? { rootMaxCostUsd: 0.0005 }
-          : {}),
       });
 
       try {
@@ -896,8 +877,8 @@ describe("Subagent Supervisor", () => {
 
         expect(result.ok).toBe(false);
         expect(result.content).toContain(`"status":"${expected}"`);
-        expect(result.content).toContain('"evidence":[]');
-        expect(result.content).toContain('"risks":[]');
+        expect(result.content).toContain('"finalText":null');
+        expect(result.content).toContain('"observedResources"');
       } finally {
         await rm(workspace, { recursive: true, force: true });
       }
@@ -915,11 +896,7 @@ describe("Subagent Supervisor", () => {
     let storageSettled = false;
     const fixture = supervisorFixture({
       workspace,
-      provider: singleSubmissionProvider({
-        summary: "The child finished before storage.",
-        evidence: [{ path: "module.ts", detail: "valid evidence" }],
-        risks: [],
-      }),
+      provider: singleFinalProvider("The child finished before storage."),
       deadlineMs: 5,
       settlementGraceMs: 10,
       transcriptStore: {
@@ -1030,11 +1007,7 @@ describe("Subagent Supervisor", () => {
     });
     const fixture = supervisorFixture({
       workspace,
-      provider: singleSubmissionProvider({
-        summary: "Child work completed.",
-        evidence: [{ path: "module.ts", detail: "valid evidence" }],
-        risks: [],
-      }),
+      provider: singleFinalProvider("Child work completed."),
       settlementGraceMs: 100,
       transcriptStore: {
         abortSignalSupport: true,

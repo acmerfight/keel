@@ -17,7 +17,6 @@ import {
 } from "../../src/llm/providers/fake.ts";
 import type { LLMProvider } from "../../src/llm/types.ts";
 import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
-import { createAgentResultSubmissionCapability } from "../../src/tools/delegation.ts";
 
 type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 
@@ -73,16 +72,11 @@ const tieredBudgetModel: CostModel = {
 };
 
 describe("Run Outcome Reporting", () => {
-  test(`Given a host accepts a structured child result without enabling cost tracking,
-    When the submission tool completes the run,
+  test(`Given a read-only child returns a normal final message without cost tracking,
+    When its provider turn completes,
     Then the terminal event is completed and omits an unavailable cost report`, async () => {
-    const submission = createAgentResultSubmissionCapability();
     const provider = createFakeProvider([
-      fakeToolResponse("submit_agent_result", {
-        summary: "The requested file was inspected.",
-        evidence: [{ path: "ROADMAP.md", detail: "The roadmap was read." }],
-        risks: [],
-      }),
+      fakeResponse("The requested file was inspected."),
     ]);
 
     const events = await collect(
@@ -95,15 +89,11 @@ describe("Run Outcome Reporting", () => {
         userMessageOrigin: { type: "runtime_subagent_delegation" },
         bash: { kind: "disabled" },
         toolProfile: "read-only-subagent",
-        agentResultSubmission: submission,
         costBudgetProvider: provider,
         stopPolicy: defaultStopPolicy(),
       }),
     );
 
-    expect(submission.accepted()?.summary).toBe(
-      "The requested file was inspected.",
-    );
     expect(endEvent(events)).toEqual({
       type: "end",
       usage: {

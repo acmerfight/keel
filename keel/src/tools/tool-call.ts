@@ -135,14 +135,11 @@ function builtinToolIsExposed(
 ): boolean {
   if (exposure.profile === "read-only-subagent") {
     return (
-      (tool.availability === undefined &&
-        tool.risk.kind === "workspace-read") ||
-      tool.availability === "subagent-result"
+      tool.availability === undefined && tool.risk.kind === "workspace-read"
     );
   }
   return (
     (exposure.delegation === true || tool.availability !== "delegation") &&
-    tool.availability !== "subagent-result" &&
     (exposure.bash === true || tool.risk.kind !== "trusted-shell") &&
     (exposure.skill === true || tool.availability !== "skill-catalog") &&
     (exposure.mcp?.catalogAvailable === true ||

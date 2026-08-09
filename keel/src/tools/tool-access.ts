@@ -274,7 +274,6 @@ export function toolCallAccesses(
   if (isMcpToolInvocation(toolCall)) return ToolAccesses.all();
   switch (toolCall.tool) {
     case "delegate":
-    case "submit_agent_result":
       return ToolAccesses.all();
     case "update_plan":
     case "update_goal":

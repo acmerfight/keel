@@ -38,7 +38,7 @@ describe("CLI tool-output artifact store", () => {
     try {
       const saving = store.save({
         toolCallId: "cancelled_transcript",
-        toolName: "submit_agent_result",
+        toolName: "delegate",
         content: "partial transcript must never become visible",
         sourceStatus: "complete",
         purpose: "settlement",

@@ -140,6 +140,137 @@ describe("Cost Budget", () => {
     expect(root.remainingUsd()).toBeGreaterThanOrEqual(0.5);
   });
 
+  test(`Given a completed main request establishes the shared root baseline,
+    When host leases one bounded continuation before running a child,
+    Then child spend cannot consume the lease and the next main request is admitted`, async () => {
+    let providerCalls = 0;
+    const underlying: LLMProvider = {
+      id: "continuation-lease",
+      estimateInputTokens: (options) =>
+        options.systemPrompt === "main continuation" ? 1_100 : 100,
+      async *stream(options) {
+        providerCalls++;
+        const usage =
+          providerCalls === 1
+            ? {
+                inputTokens: 100,
+                cachedInputTokens: 0,
+                uncachedInputTokens: 100,
+                outputTokens: 50,
+              }
+            : {
+                inputTokens: 100,
+                cachedInputTokens: 0,
+                uncachedInputTokens: 100,
+                outputTokens: 100,
+              };
+        options.providerRequestAttempts
+          ?.begin()
+          .finish({ outcome: "completed", usage });
+        yield { type: "text", text: "done" };
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const root = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd: 0.01,
+    });
+
+    for await (const _event of root.provider.stream({
+      systemPrompt: "main baseline",
+      messages: [],
+      signal: freshSignal(),
+    })) {
+      // Establish the root request baseline used by the lease estimator.
+    }
+    const lease = root.leaseContinuation({
+      additionalInputTokens: 1_000,
+      maxOutputTokens: 1_000,
+      minimumChildInputTokens: 100,
+    });
+    expect(lease).toMatchObject({
+      kind: "granted",
+      estimatedContinuationInputTokens: 1_150,
+    });
+    if (lease.kind !== "granted") throw new Error("lease was not granted");
+    const child = createCostBudgetedProvider({
+      provider: root.provider,
+      model: budgetModel,
+      maxCostUsd: lease.childMaxCostUsd,
+    });
+
+    for await (const _event of child.stream({
+      systemPrompt: "child",
+      messages: [],
+      signal: freshSignal(),
+    })) {
+      // Child uses the residual budget only.
+    }
+    expect(root.remainingUsd()).toBeGreaterThanOrEqual(lease.reservedUsd);
+
+    await expect(
+      (async () => {
+        for await (const _event of root.provider.stream({
+          systemPrompt: "main continuation",
+          messages: [],
+          signal: freshSignal(),
+          maxOutputTokens: 1_000,
+        })) {
+          // The leased main continuation is now admitted on the root provider.
+        }
+      })(),
+    ).resolves.toBeUndefined();
+    expect(providerCalls).toBe(3);
+  });
+
+  test(`Given no admitted root request baseline or insufficient remaining budget,
+    When host asks for a continuation lease,
+    Then the typed lease result rejects before child work can start`, async () => {
+    const underlying: LLMProvider = {
+      id: "rejected-continuation-lease",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        const usage = {
+          inputTokens: 900,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 900,
+          outputTokens: 0,
+        };
+        options.providerRequestAttempts
+          ?.begin()
+          .finish({ outcome: "completed", usage });
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const root = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd: 0.001,
+    });
+    const request = {
+      additionalInputTokens: 100,
+      maxOutputTokens: 256,
+      minimumChildInputTokens: 100,
+    } as const;
+
+    expect(root.leaseContinuation(request)).toEqual({
+      kind: "rejected",
+      reason: "missing_baseline",
+    });
+    for await (const _event of root.provider.stream({
+      systemPrompt: "spend baseline",
+      messages: [],
+      signal: freshSignal(),
+    })) {
+      // Leave too little capacity for both leases.
+    }
+    expect(root.leaseContinuation(request)).toEqual({
+      kind: "rejected",
+      reason: "insufficient_budget",
+    });
+  });
+
   test(`Given the conservative input cost cannot fit the session budget,
     When the agent prepares its first model turn,
     Then it stops without calling the provider`, async () => {

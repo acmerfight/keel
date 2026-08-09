@@ -19,7 +19,6 @@ import {
   skillResourceToolArgumentsSchema,
   skillSearchToolArgumentsSchema,
   skillToolArgumentsSchema,
-  submitAgentResultToolArgumentsSchema,
   updateGoalToolArgumentsSchema,
   updatePlanToolArgumentsSchema,
   writeToolArgumentsSchema,
@@ -78,8 +77,7 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
     | "mcp-catalog"
     | "memory"
     | "memory-proposal"
-    | "skill-catalog"
-    | "subagent-result";
+    | "skill-catalog";
   readonly description: string;
   readonly args: {
     readonly schema: ToolArgsSchema<Shape>;
@@ -581,25 +579,8 @@ const delegateTool = defineTool({
   risk: { kind: "agent-state" },
 });
 
-const submitAgentResultTool = defineTool({
-  name: "submit_agent_result",
-  availability: "subagent-result",
-  description: [
-    "Submit the child agent's final structured result to the host and stop.",
-    "Use exactly once after gathering enough workspace evidence to answer the delegated task.",
-    "Summary answers the task, evidence contains concrete workspace-relative paths and observations, and risks lists remaining uncertainty.",
-    "Only the host creates lifecycle status, usage, cost, transcriptRef, and identity fields.",
-  ].join("\n"),
-  args: toolArgs(submitAgentResultToolArgumentsSchema),
-  permission: { kind: "none" },
-  output: { kind: "text" },
-  display: { formatLabel: () => "submit_agent_result" },
-  risk: { kind: "agent-state" },
-});
-
 export const builtinToolRegistry = {
   delegate: delegateTool,
-  submit_agent_result: submitAgentResultTool,
   update_plan: updatePlanTool,
   update_goal: updateGoalTool,
   memory_add: memoryAddTool,

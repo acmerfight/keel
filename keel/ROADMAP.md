@@ -144,14 +144,20 @@ What a user can do today:
   explicit user-directed development**: autonomous eligible prompts selected a
   child 0/6 times, but the separately frozen exact prefix
   `使用 subagent 调研这个任务。` selected one child 6/6 times. The feature
-  remains default-off and autonomous selection is uncommitted. Because only
-  2/6 explicit treatments returned a verified artifact and 4/6 child results
-  failed DeepSeek `submit_agent_result` validation, the next slice must harden
-  the existing single-child result/synthesis path before Slice 2a concurrency.
-  See the
+  remains default-off and autonomous selection is uncommitted. Slice 1.6
+  removes the model-authored `submit_agent_result` protocol: a child now ends
+  with a normal final message, while the host creates the typed handoff and
+  derives covered paths only from successful read observations. The root
+  budget leases one admitted main continuation before child work, and the
+  `delegate` tool disappears after the single accepted child. Main receives a
+  bounded coverage receipt, synthesizes by default, and may perform targeted
+  spot-checks without a brittle read ban. See the
   [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md)
   and
   [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md).
+  The frozen
+  [Slice 1.6 completion gate](evals/experiments/subagent-slice-1-6/README.md)
+  must pass before Slice 2a concurrency.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,

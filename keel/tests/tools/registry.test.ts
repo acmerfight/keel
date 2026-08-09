@@ -473,7 +473,6 @@ describe("tool registry", () => {
     const applyPatchTool = builtinToolRegistry.apply_patch;
     const bashTool = builtinToolRegistry.bash;
     const updateGoalTool = builtinToolRegistry.update_goal;
-    const submitAgentResultTool = builtinToolRegistry.submit_agent_result;
 
     expect(readTool.display.formatLabel({ path: "src/index.ts" })).toBe(
       "read src/index.ts",
@@ -536,14 +535,6 @@ describe("tool registry", () => {
     expect(updateGoalTool.display.formatLabel({ status: "completed" })).toBe(
       "update_goal",
     );
-    expect(
-      submitAgentResultTool.display.formatLabel({
-        summary: "summary",
-        evidence: [],
-        risks: [],
-      }),
-    ).toBe("submit_agent_result");
-
     expect(bashTool.permission.kind).toBe("approval");
     if (bashTool.permission.kind === "approval") {
       expect(bashTool.permission.renderPrompt({ command: "pnpm test" })).toBe(
@@ -559,7 +550,6 @@ describe("tool registry", () => {
 
     expect(names).toEqual([
       "delegate",
-      "submit_agent_result",
       "update_plan",
       "update_goal",
       "memory_add",
@@ -600,13 +590,6 @@ describe("tool registry", () => {
     expect(contracts).toEqual([
       {
         name: "delegate",
-        permission: "none",
-        output: "text",
-        risk: { kind: "agent-state" },
-        hasFormatLabel: true,
-      },
-      {
-        name: "submit_agent_result",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -943,10 +926,6 @@ describe("tool registry", () => {
         fields: ["task", "focusPaths"],
         required: ["task"],
       },
-      submit_agent_result: {
-        fields: ["summary", "evidence", "risks"],
-        required: ["summary", "evidence", "risks"],
-      },
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
       memory_add: {
@@ -1078,8 +1057,7 @@ describe("tool registry", () => {
           tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
           tool.availability !== "memory-proposal" &&
-          tool.availability !== "delegation" &&
-          tool.availability !== "subagent-result",
+          tool.availability !== "delegation",
       )
       .map((tool) => tool.name);
     const skillBuiltinToolNames = builtinTools
@@ -1089,19 +1067,15 @@ describe("tool registry", () => {
           tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
           tool.availability !== "memory-proposal" &&
-          tool.availability !== "delegation" &&
-          tool.availability !== "subagent-result",
+          tool.availability !== "delegation",
       )
       .map((tool) => tool.name);
-    const fullyEnabledMainToolNames = builtinTools
-      .filter((tool) => tool.availability !== "subagent-result")
-      .map((tool) => tool.name);
+    const fullyEnabledMainToolNames = builtinTools.map((tool) => tool.name);
     const readOnlySubagentToolNames = builtinTools
       .filter(
         (tool) =>
-          tool.availability === "subagent-result" ||
-          (tool.availability === undefined &&
-            tool.risk.kind === "workspace-read"),
+          tool.availability === undefined &&
+          tool.risk.kind === "workspace-read",
       )
       .map((tool) => tool.name);
 

@@ -142,9 +142,9 @@ describe("CLI Main - Subagent Delegation", () => {
     }
   });
 
-  test(`Given experimental agents and a root cost budget are enabled,
-    When main delegates one read-only workspace investigation,
-    Then a fresh bounded child submits evidence and main returns the only final answer`, async () => {
+  test(`Given the user explicitly requests a subagent and a root cost budget is enabled,
+    When one read-only child finishes with a normal evidence-based answer,
+    Then host hands its observed resources to main, removes delegate, and main writes the result`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-"));
     const keelHome = join(workspace, ".keel-home");
@@ -196,27 +196,27 @@ describe("CLI Main - Subagent Delegation", () => {
             return;
           case 3:
             res.end(
+              sseTextReplyWithUsage(
+                "module.ts:1 exports answer with value 42. I observed it with the read tool.",
+              ),
+            );
+            return;
+          case 4:
+            res.end(
               [
-                sseToolCall("child_submit", "submit_agent_result", {
-                  summary: "module.ts exports answer with value 42.",
-                  evidence: [
-                    {
-                      path: "module.ts",
-                      line: 1,
-                      detail: "export const answer = 42;",
-                    },
-                  ],
-                  risks: [],
+                sseToolCall("main_write", "write", {
+                  path: "delegated-result.md",
+                  content: "module.ts:1 exports answer = 42.\n",
                 }),
                 sseToolFinish(),
                 "data: [DONE]\n\n",
               ].join(""),
             );
             return;
-          case 4:
+          case 5:
             res.end(
               sseTextReplyWithUsage(
-                "The delegated read-only check found module.ts:1 exports answer = 42.",
+                "Wrote delegated-result.md from the child handoff.",
               ),
             );
             return;
@@ -260,7 +260,7 @@ describe("CLI Main - Subagent Delegation", () => {
           stderr: fixture.stderr(),
           tools: requests.map(toolNames),
         }),
-      ).toHaveLength(4);
+      ).toHaveLength(5);
       expect(toolNames(requests[0])).toContain("delegate");
 
       const childInitial = requestText(requests[1]);
@@ -271,15 +271,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(childInitial).toContain("DELEGATED_FIXTURE_RULE");
       expect(childInitial).not.toContain("PRIVATE PARENT CONTEXT");
       expect(toolNames(requests[1]).toSorted()).toEqual(
-        [
-          "git_diff",
-          "git_status",
-          "glob",
-          "grep",
-          "ls",
-          "read",
-          "submit_agent_result",
-        ].toSorted(),
+        ["git_diff", "git_status", "glob", "grep", "ls", "read"].toSorted(),
       );
       expect(toolNames(requests[1])).not.toContain("write");
       expect(toolNames(requests[1])).not.toContain("edit");
@@ -287,29 +279,34 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(toolNames(requests[1])).not.toContain("bash");
       expect(toolNames(requests[1])).not.toContain("delegate");
 
-      const finalMainRequest = requestSchema.parse(requests[3]);
-      const delegatedToolResult = finalMainRequest.messages?.find(
+      const resumedMainRequest = requestSchema.parse(requests[3]);
+      expect(toolNames(requests[3])).not.toContain("delegate");
+      const delegatedToolResult = resumedMainRequest.messages?.find(
         (message) => message.tool_call_id === "delegate_once",
       )?.content;
       expect(delegatedToolResult).toContain(
-        "module.ts exports answer with value 42.",
+        "module.ts:1 exports answer with value 42.",
       );
+      expect(delegatedToolResult).toContain('"observedResources"');
+      expect(delegatedToolResult).toContain('"path":"module.ts"');
+      expect(delegatedToolResult).toContain('"childLimitReached":true');
       const artifactRef = artifactRefSchema.parse(
         delegatedToolResult?.match(
           /tool-output:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/u,
         )?.[0],
       );
       expect(fixture.stdout()).toBe(
-        "The delegated read-only check found module.ts:1 exports answer = 42.\n",
+        "Wrote delegated-result.md from the child handoff.\n",
       );
+      expect(
+        await readFile(join(workspace, "delegated-result.md"), "utf8"),
+      ).toBe("module.ts:1 exports answer = 42.\n");
       expect(fixture.stderr()).toMatch(/Subagent .*: queued .*deadline/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: running/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: turn 1 .*deadline/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: tool read .*elapsed/u);
       expect(fixture.stderr()).toMatch(/Subagent .*: turn 2 .*deadline/u);
-      expect(fixture.stderr()).toMatch(
-        /Subagent .*: tool submit_agent_result .*elapsed/u,
-      );
+      expect(fixture.stderr()).not.toContain("submit_agent_result");
       expect(fixture.stderr()).toMatch(/Subagent .*: completed .*elapsed/u);
 
       const report = z
@@ -338,10 +335,10 @@ describe("CLI Main - Subagent Delegation", () => {
         })
         .passthrough()
         .parse(JSON.parse(await readFile(reportPath, "utf8")));
-      expect(report.modelOperationCount).toBe(4);
-      expect(report.providerRequestAttemptCount).toBe(4);
-      expect(report.usage.inputTokens).toBe(40);
-      expect(report.usage.outputTokens).toBe(12);
+      expect(report.modelOperationCount).toBe(5);
+      expect(report.providerRequestAttemptCount).toBe(5);
+      expect(report.usage.inputTokens).toBe(50);
+      expect(report.usage.outputTokens).toBe(15);
       expect(report.costUsd).toBeGreaterThan(0);
       const childOperations = report.modelOperations.filter(
         (operation) => operation.purpose === "subagent_turn",
@@ -377,7 +374,7 @@ describe("CLI Main - Subagent Delegation", () => {
         '"origin":"runtime_subagent_delegation"',
       );
       expect(inspectFixture.stdout()).toContain(
-        "module.ts exports answer with value 42.",
+        "module.ts:1 exports answer with value 42.",
       );
     } finally {
       await close(server);

@@ -1,0 +1,9 @@
+edge_proxy:
+  retry_statuses: [502]
+  max_attempts: 4
+  shared_budget: false
+checkout_api:
+  retry_statuses: [502]
+  max_attempts: 4
+  shared_budget: false
+  idempotency_key: false

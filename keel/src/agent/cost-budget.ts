@@ -55,6 +55,16 @@ function conservativeFallbackInputTokens(options: StreamOptions): number {
   );
 }
 
+export function estimateProviderInputTokens(
+  provider: LLMProvider,
+  options: StreamOptions,
+): number | null {
+  const estimate =
+    provider.estimateInputTokens?.(options) ??
+    conservativeFallbackInputTokens(options);
+  return validInputEstimate(estimate) ? estimate : null;
+}
+
 function admittedStreamOptions(
   options: StreamOptions,
   maxOutputTokens: number,
@@ -96,7 +106,24 @@ export interface SharedCostBudgetedProvider {
   readonly remainingUsd: () => number;
   readonly observedUsage: () => Usage;
   readonly observedSpendUsd: () => number;
+  readonly leaseContinuation: (input: {
+    readonly additionalInputTokens: number;
+    readonly maxOutputTokens: number;
+    readonly minimumChildInputTokens: number;
+  }) => ContinuationBudgetLease;
 }
+
+type ContinuationBudgetLease =
+  | {
+      readonly kind: "granted";
+      readonly reservedUsd: number;
+      readonly childMaxCostUsd: number;
+      readonly estimatedContinuationInputTokens: number;
+    }
+  | {
+      readonly kind: "rejected";
+      readonly reason: "missing_baseline" | "insufficient_budget";
+    };
 
 export function createSharedCostBudgetedProvider(
   options: CostBudgetedProviderOptions,
@@ -112,6 +139,8 @@ export function createSharedCostBudgetedProvider(
   };
   let reservedAttemptSpendUsd = 0;
   let currentAttemptReservationUsd = 0;
+  let latestEstimatedInputTokens: number | null = null;
+  let latestCompletedOutputTokens = 0;
   const remainingUsd = (): number =>
     Math.max(0, maxCostUsd - observedSpendUsd - reservedAttemptSpendUsd);
   const provider: LLMProvider = {
@@ -123,15 +152,18 @@ export function createSharedCostBudgetedProvider(
       ? { estimateInputTokens: options.provider.estimateInputTokens }
       : {}),
     async *stream(streamOptions) {
-      const estimatedInputTokens =
-        options.provider.estimateInputTokens?.(streamOptions) ??
-        conservativeFallbackInputTokens(streamOptions);
-      if (!validInputEstimate(estimatedInputTokens)) {
+      const estimatedInputTokens = estimateProviderInputTokens(
+        options.provider,
+        streamOptions,
+      );
+      if (estimatedInputTokens === null) {
         throw new CostBudgetAdmissionError({
           remainingUsd: Math.max(0, maxCostUsd - observedSpendUsd),
           estimatedInputTokens: null,
         });
       }
+      latestEstimatedInputTokens = estimatedInputTokens;
+      latestCompletedOutputTokens = 0;
       const authorizeRequestAttempt = (): number => {
         const remainingUsd = Math.max(
           0,
@@ -210,6 +242,7 @@ export function createSharedCostBudgetedProvider(
                   { requests: [{ usage: result.usage }] },
                   options.model,
                 );
+                latestCompletedOutputTokens = result.usage.outputTokens;
               }
               attempt?.finish(result);
             },
@@ -224,6 +257,9 @@ export function createSharedCostBudgetedProvider(
           providerRequestAttempts,
         ),
       )) {
+        if (event.type === "stop") {
+          latestCompletedOutputTokens = event.usage.outputTokens;
+        }
         yield event;
       }
     },
@@ -233,6 +269,38 @@ export function createSharedCostBudgetedProvider(
     remainingUsd,
     observedUsage: () => ({ ...observedUsage }),
     observedSpendUsd: () => observedSpendUsd,
+    leaseContinuation: (input) => {
+      if (latestEstimatedInputTokens === null) {
+        return { kind: "rejected", reason: "missing_baseline" };
+      }
+      const estimatedContinuationInputTokens =
+        latestEstimatedInputTokens +
+        latestCompletedOutputTokens +
+        input.additionalInputTokens;
+      const reservedUsd = calculateConservativeRequestCostUsd(
+        estimatedContinuationInputTokens,
+        input.maxOutputTokens,
+        options.model,
+      );
+      const childMaxCostUsd = remainingUsd() - reservedUsd;
+      const minimumChildCostUsd = calculateConservativeRequestCostUsd(
+        input.minimumChildInputTokens,
+        MIN_USEFUL_OUTPUT_TOKENS,
+        options.model,
+      );
+      if (
+        childMaxCostUsd < minimumChildCostUsd ||
+        input.maxOutputTokens < MIN_USEFUL_OUTPUT_TOKENS
+      ) {
+        return { kind: "rejected", reason: "insufficient_budget" };
+      }
+      return {
+        kind: "granted",
+        reservedUsd,
+        childMaxCostUsd,
+        estimatedContinuationInputTokens,
+      };
+    },
   };
 }
 

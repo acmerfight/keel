@@ -417,7 +417,6 @@ export async function runOneShotCli(
             providerId: resolved.provider.id,
             model: resolved.model,
             costModel: trackedCostModel,
-            rootMaxCostUsd: cliArgs.maxCostUsd,
             rootBudget,
             ...(projectInstructions !== undefined
               ? { projectInstructions }
