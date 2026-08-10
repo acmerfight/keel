@@ -19,10 +19,26 @@ interface PendingProviderRequest {
 
 interface CreateSubagentTreeProviderOptions {
   readonly provider: LLMProvider;
+  readonly coordination?: SubagentTreeProviderCoordination;
   readonly now?: () => number;
   readonly maxTreeRetries?: number;
   readonly retrySpacingMs?: number;
   readonly maxTotalRetryDelayMs?: number;
+}
+
+interface CreateSubagentTreeProviderCoordinationOptions {
+  readonly now?: () => number;
+  readonly maxTreeRetries?: number;
+  readonly retrySpacingMs?: number;
+  readonly maxTotalRetryDelayMs?: number;
+}
+
+export interface SubagentTreeProviderCoordination {
+  readonly retry: ProviderRetryCoordination;
+  readonly concurrency: ProviderRequestConcurrency;
+  readonly circuitSignal: AbortSignal;
+  readonly openCircuit: (error: KeelError) => void;
+  readonly blocked: () => boolean;
 }
 
 export interface SubagentTreeProvider {
@@ -40,22 +56,21 @@ function opensTreeCircuit(error: unknown): error is KeelError & {
   );
 }
 
-export function createSubagentTreeProvider(
-  options: CreateSubagentTreeProviderOptions,
-): SubagentTreeProvider {
+export function createSubagentTreeProviderCoordination(
+  options: CreateSubagentTreeProviderCoordinationOptions = {},
+): SubagentTreeProviderCoordination {
   const maxTreeRetries = options.maxTreeRetries ?? DEFAULT_MAX_TREE_RETRIES;
   const retrySpacingMs = options.retrySpacingMs ?? DEFAULT_RETRY_SPACING_MS;
   const maxTotalRetryDelayMs =
     options.maxTotalRetryDelayMs ?? DEFAULT_MAX_TOTAL_RETRY_DELAY_MS;
-  const circuit = new AbortController();
   let retryCount = 0;
   let totalRetryDelayMs = 0;
   let nextRetryAtMs = 0;
   let activeProviderRequests = 0;
   const pendingProviderRequests: PendingProviderRequest[] = [];
-
+  const circuit = new AbortController();
   const now = options.now ?? Date.now;
-  const retryCoordination: ProviderRetryCoordination = {
+  const retry: ProviderRetryCoordination = {
     reserveRetry: ({ suggestedDelayMs }) => {
       if (retryCount >= maxTreeRetries) return null;
       const observedNow = now();
@@ -80,11 +95,9 @@ export function createSubagentTreeProvider(
       pending.signal.removeEventListener("abort", pending.onAbort);
       pending.resolve(providerRequestSlot());
     };
-    return {
-      release: () => release(),
-    };
+    return { release: () => release() };
   };
-  const providerRequestConcurrency: ProviderRequestConcurrency = {
+  const concurrency: ProviderRequestConcurrency = {
     acquire: (signal) => {
       if (signal.aborted) {
         return Promise.reject(
@@ -112,40 +125,65 @@ export function createSubagentTreeProvider(
       });
     },
   };
-  const openCircuit = (error: KeelError): void => {
-    circuit.abort(error);
+  return {
+    retry,
+    concurrency,
+    circuitSignal: circuit.signal,
+    openCircuit: (error) => circuit.abort(error),
+    blocked: () => circuit.signal.aborted,
   };
+}
+
+export function createSubagentTreeProvider(
+  options: CreateSubagentTreeProviderOptions,
+): SubagentTreeProvider {
+  const coordination =
+    options.coordination ??
+    createSubagentTreeProviderCoordination({
+      ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.maxTreeRetries !== undefined
+        ? { maxTreeRetries: options.maxTreeRetries }
+        : {}),
+      ...(options.retrySpacingMs !== undefined
+        ? { retrySpacingMs: options.retrySpacingMs }
+        : {}),
+      ...(options.maxTotalRetryDelayMs !== undefined
+        ? { maxTotalRetryDelayMs: options.maxTotalRetryDelayMs }
+        : {}),
+    });
   const provider: LLMProvider = {
     ...options.provider,
     async *stream(streamOptions) {
-      if (circuit.signal.aborted) throw circuit.signal.reason;
+      if (coordination.circuitSignal.aborted) {
+        throw coordination.circuitSignal.reason;
+      }
       const treeSignal = AbortSignal.any([
         streamOptions.signal,
-        circuit.signal,
+        coordination.circuitSignal,
       ]);
       try {
         yield* options.provider.stream({
           ...streamOptions,
           signal: treeSignal,
-          providerRetryCoordination: retryCoordination,
-          providerRequestConcurrency,
+          providerRetryCoordination: coordination.retry,
+          providerRequestConcurrency: coordination.concurrency,
         });
       } catch (error) {
         if (opensTreeCircuit(error)) {
-          openCircuit(error);
+          coordination.openCircuit(error);
           throw error;
         }
         if (
-          circuit.signal.aborted &&
+          coordination.circuitSignal.aborted &&
           !streamOptions.signal.aborted &&
           isAbortThrow(error, treeSignal)
         ) {
-          throw circuit.signal.reason;
+          throw coordination.circuitSignal.reason;
         }
         throw error;
       }
     },
   };
 
-  return { provider, blocked: () => circuit.signal.aborted };
+  return { provider, blocked: coordination.blocked };
 }

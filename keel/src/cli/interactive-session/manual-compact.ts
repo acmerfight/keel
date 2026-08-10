@@ -2,10 +2,7 @@ import {
   compactMessages,
   contextCompactionStatsForCurrentMessages,
 } from "../../agent/context-compaction.ts";
-import {
-  CostBudgetAdmissionError,
-  createCostBudgetedProvider,
-} from "../../agent/cost-budget.ts";
+import { CostBudgetAdmissionError } from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
 import type { MainModelOperationInstrumentation } from "../../agent/model-operations.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
@@ -24,7 +21,10 @@ import {
   formatManualCompactionFailure,
   type ManualCompactCommand,
 } from "./commands.ts";
-import type { InteractiveCompactionCost } from "./cost.ts";
+import {
+  createInteractiveCostBudgetedProvider,
+  type InteractiveCompactionCost,
+} from "./cost.ts";
 import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
@@ -85,13 +85,11 @@ export async function executeManualCompaction(
   const provider =
     compactionCost.kind !== "budgeted"
       ? resolved.provider
-      : createCostBudgetedProvider({
+      : createInteractiveCostBudgetedProvider({
           provider: resolved.provider,
           model: compactionCost.model,
-          maxCostUsd: compactionCost.remainingCostUsd,
-          ...(modelMaxOutputTokens !== undefined
-            ? { modelMaxOutputTokens }
-            : {}),
+          admission: compactionCost.admission,
+          modelMaxOutputTokens,
         });
 
   try {

@@ -1,12 +1,10 @@
 import {
+  type ContextCompactionOptions,
   compactMessages,
   contextCompactionStatsForCurrentMessages,
   shouldCompactBeforeRequest,
 } from "../../agent/context-compaction.ts";
-import {
-  CostBudgetAdmissionError,
-  createCostBudgetedProvider,
-} from "../../agent/cost-budget.ts";
+import { CostBudgetAdmissionError } from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
 import type { MainModelOperationInstrumentation } from "../../agent/model-operations.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
@@ -22,15 +20,29 @@ import {
   formatToolOutputArtifactNotice,
 } from "../output.ts";
 import { formatManualCompactionFailure } from "./commands.ts";
-import type { InteractiveCompactionCost } from "./cost.ts";
+import {
+  createInteractiveCostBudgetedProvider,
+  type InteractiveCompactionCost,
+} from "./cost.ts";
 import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
 } from "./types.ts";
 
+type ModelSwitchCompactionTarget = InteractiveResolvedProvider & {
+  readonly contextCompaction: ContextCompactionOptions;
+};
+
+interface ModelSwitchCompactionCheck {
+  readonly systemPrompt: string;
+  readonly messages: readonly SessionMessage[];
+  readonly target: InteractiveResolvedProvider;
+  readonly bashToolVisible: boolean;
+}
+
 export interface ModelSwitchCompactionContext {
   readonly current: InteractiveResolvedProvider;
-  readonly target: InteractiveResolvedProvider;
+  readonly target: ModelSwitchCompactionTarget;
   readonly workspace: string;
   readonly messages: SessionMessage[];
   readonly systemPrompt: string;
@@ -107,15 +119,15 @@ function rollbackModelSwitchCompaction(options: {
   );
 }
 
-function switchWouldOverflowTargetContext(options: {
-  readonly systemPrompt: string;
-  readonly messages: readonly SessionMessage[];
-  readonly target: InteractiveResolvedProvider;
-  readonly bashToolVisible: boolean;
-}): boolean {
+function switchWouldOverflowTargetContext(
+  options: ModelSwitchCompactionCheck,
+): options is ModelSwitchCompactionCheck & {
+  readonly target: ModelSwitchCompactionTarget;
+} {
   if (options.messages.length === 0) {
     return false;
   }
+  if (options.target.contextCompaction === undefined) return false;
   return shouldCompactBeforeRequest(
     options.systemPrompt,
     options.messages,
@@ -128,12 +140,11 @@ function switchWouldOverflowTargetContext(options: {
   );
 }
 
-export function modelSwitchRequiresCompaction(options: {
-  readonly systemPrompt: string;
-  readonly messages: readonly SessionMessage[];
-  readonly target: InteractiveResolvedProvider;
-  readonly bashToolVisible: boolean;
-}): boolean {
+export function modelSwitchRequiresCompaction(
+  options: ModelSwitchCompactionCheck,
+): options is ModelSwitchCompactionCheck & {
+  readonly target: ModelSwitchCompactionTarget;
+} {
   return switchWouldOverflowTargetContext({
     systemPrompt: options.systemPrompt,
     messages: options.messages,
@@ -186,13 +197,11 @@ export async function executeModelSwitchCompaction(
   const provider =
     compactionCost.kind !== "budgeted"
       ? current.provider
-      : createCostBudgetedProvider({
+      : createInteractiveCostBudgetedProvider({
           provider: current.provider,
           model: compactionCost.model,
-          maxCostUsd: compactionCost.remainingCostUsd,
-          ...(modelMaxOutputTokens !== undefined
-            ? { modelMaxOutputTokens }
-            : {}),
+          admission: compactionCost.admission,
+          modelMaxOutputTokens,
         });
 
   try {
@@ -202,9 +211,7 @@ export async function executeModelSwitchCompaction(
       summarySystemPrompt,
       messages,
       signal,
-      ...(target.contextCompaction !== undefined
-        ? { contextCompaction: target.contextCompaction }
-        : {}),
+      contextCompaction: target.contextCompaction,
       ...(options.toolOutputArtifacts !== undefined
         ? { toolOutputArtifacts: options.toolOutputArtifacts }
         : {}),

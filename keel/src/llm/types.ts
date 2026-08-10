@@ -142,3 +142,12 @@ export interface LLMProvider {
   readonly estimateInputTokens?: (options: StreamOptions) => number;
   readonly stream: (options: StreamOptions) => AsyncIterable<LLMEvent>;
 }
+
+export interface ProviderContinuationLease {
+  readonly provider: LLMProvider;
+  readonly requestShape: {
+    readonly systemPrompt: string;
+    readonly toolExposure: ModelToolExposure;
+  };
+  readonly release: () => void;
+}

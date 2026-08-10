@@ -98,11 +98,22 @@ function providerToolByName(
   return tool;
 }
 
+function providerToolParameter(
+  tools: readonly OpenAICompatibleToolDefinition[],
+  toolName: ToolName,
+  parameterName: string,
+): unknown {
+  return providerToolByName(tools, toolName).function.parameters.properties[
+    parameterName
+  ];
+}
+
 function allBuiltinProviderTools(): readonly OpenAICompatibleToolDefinition[] {
   const candidates = [
     ...openAICompatibleTools({
       kind: "auto",
-      delegation: true,
+      delegation: "background",
+      agentControl: true,
       bash: true,
       skill: true,
       memory: "reviewed",
@@ -535,6 +546,19 @@ describe("tool registry", () => {
     expect(updateGoalTool.display.formatLabel({ status: "completed" })).toBe(
       "update_goal",
     );
+    expect(builtinToolRegistry.agent_list.display.formatLabel({})).toBe(
+      "agent_list",
+    );
+    expect(
+      builtinToolRegistry.agent_wait.display.formatLabel({
+        agentId: "agent-a1",
+      }),
+    ).toBe("agent_wait agent-a1");
+    expect(
+      builtinToolRegistry.agent_cancel.display.formatLabel({
+        agentId: "agent-a1",
+      }),
+    ).toBe("agent_cancel agent-a1");
     expect(bashTool.permission.kind).toBe("approval");
     if (bashTool.permission.kind === "approval") {
       expect(bashTool.permission.renderPrompt({ command: "pnpm test" })).toBe(
@@ -550,6 +574,9 @@ describe("tool registry", () => {
 
     expect(names).toEqual([
       "delegate",
+      "agent_list",
+      "agent_wait",
+      "agent_cancel",
       "update_plan",
       "update_goal",
       "memory_add",
@@ -590,6 +617,27 @@ describe("tool registry", () => {
     expect(contracts).toEqual([
       {
         name: "delegate",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "agent_list",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "agent_wait",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "agent_cancel",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -804,7 +852,20 @@ describe("tool registry", () => {
       command: "printf ok",
       timeoutMs: null,
     } as const;
+    const providerDelegateCall = {
+      id: "call_delegate",
+      tool: "delegate",
+      mode: null,
+      task: "Inspect one module.",
+    } as const;
     const callWithNullOptional = normalizeProviderToolCall(providerCall);
+    const delegateWithNullMode =
+      normalizeProviderToolCall(providerDelegateCall);
+
+    expect(delegateWithNullMode).toMatchObject({
+      tool: "delegate",
+      mode: "foreground",
+    });
 
     await expect(
       executeToolCall({
@@ -923,9 +984,12 @@ describe("tool registry", () => {
 
     expect(argumentsByTool).toEqual({
       delegate: {
-        fields: ["task", "focusPaths"],
+        fields: ["mode", "task", "focusPaths"],
         required: ["task"],
       },
+      agent_list: { fields: [], required: [] },
+      agent_wait: { fields: ["agentId"], required: ["agentId"] },
+      agent_cancel: { fields: ["agentId"], required: ["agentId"] },
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
       memory_add: {
@@ -992,7 +1056,9 @@ describe("tool registry", () => {
     for (const tool of builtinTools) {
       const providerTool = providerToolByName(providerTools, tool.name);
       const providerParameters = providerTool.function.parameters;
-      const jsonSchema = z.toJSONSchema(tool.args.schema);
+      const jsonSchema = z.toJSONSchema(
+        tool.providerArguments.default ?? tool.args.schema,
+      );
       const schemaFields = jsonSchema.properties ?? {};
       const providerFields = providerParameters.properties;
       const fieldKeys = Object.keys(providerFields).sort();
@@ -1006,7 +1072,9 @@ describe("tool registry", () => {
       const completeArgs =
         tool.name === "update_goal"
           ? { ...completeArgsFromMetadata, status: "blocked" }
-          : completeArgsFromMetadata;
+          : tool.name === "agent_wait" || tool.name === "agent_cancel"
+            ? { ...completeArgsFromMetadata, agentId: "agent-a1" }
+            : completeArgsFromMetadata;
 
       expect(jsonSchema.type, `${tool.name} schema must be an object`).toBe(
         "object",
@@ -1057,6 +1125,7 @@ describe("tool registry", () => {
           tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
           tool.availability !== "memory-proposal" &&
+          tool.availability !== "agent-control" &&
           tool.availability !== "delegation",
       )
       .map((tool) => tool.name);
@@ -1067,6 +1136,7 @@ describe("tool registry", () => {
           tool.availability !== "mcp-catalog" &&
           tool.availability !== "memory" &&
           tool.availability !== "memory-proposal" &&
+          tool.availability !== "agent-control" &&
           tool.availability !== "delegation",
       )
       .map((tool) => tool.name);
@@ -1094,7 +1164,8 @@ describe("tool registry", () => {
         skill: true,
         memory: "reviewed",
         mcp: emptyMcpExposure,
-        delegation: true,
+        delegation: "background",
+        agentControl: true,
       }).map((tool) => tool.function.name),
     ).toEqual(fullyEnabledMainToolNames);
     expect(
@@ -1103,6 +1174,33 @@ describe("tool registry", () => {
         profile: "read-only-subagent",
       }).map((tool) => tool.function.name),
     ).toEqual(readOnlySubagentToolNames);
+  });
+
+  test(`Given background ownership exists only in a saved interactive session,
+    When delegate and live-control schemas are exposed to the model,
+    Then foreground runs cannot request background mode and control tools stay session-scoped`, () => {
+    const foreground = openAICompatibleTools({
+      kind: "auto",
+      delegation: "foreground",
+    });
+    const attached = openAICompatibleTools({
+      kind: "auto",
+      delegation: "background",
+      agentControl: true,
+    });
+
+    expect(providerToolParameter(foreground, "delegate", "mode")).toMatchObject(
+      { enum: ["foreground"] },
+    );
+    expect(providerToolParameter(attached, "delegate", "mode")).toMatchObject({
+      enum: ["foreground", "background"],
+    });
+    expect(foreground.map((tool) => tool.function.name)).not.toEqual(
+      expect.arrayContaining(["agent_list", "agent_wait", "agent_cancel"]),
+    );
+    expect(attached.map((tool) => tool.function.name)).toEqual(
+      expect.arrayContaining(["agent_list", "agent_wait", "agent_cancel"]),
+    );
   });
 
   test(`Given direct memory and reviewed interactive memory have different runtime boundaries,

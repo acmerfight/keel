@@ -1,19 +1,25 @@
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
-import { createSharedCostBudgetedProvider } from "../agent/cost-budget.ts";
+import {
+  createSharedCostBudgetedProvider,
+  type SharedCostBudgetAccount,
+} from "../agent/cost-budget.ts";
 import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import type { ProjectInstructions } from "../agent/prompt.ts";
 import type { SubagentLifecyclePersistence } from "../agent/subagent-lifecycle.ts";
 import {
   createSubagentSupervisor,
+  type SubagentBackgroundRuntime,
   type SubagentProgressEvent,
   type SubagentSupervisor,
 } from "../agent/subagent-supervisor.ts";
+import type { SubagentTreeAdmission } from "../agent/subagent-tree-admission.ts";
+import type { SubagentTreeProviderCoordination } from "../agent/subagent-tree-provider.ts";
 import { createSubagentTreeProvider } from "../agent/subagent-tree-provider.ts";
 import type { AbortableToolOutputArtifactStore } from "../agent/tool-output-artifacts.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { LLMProvider } from "../llm/types.ts";
 
-interface CreateCliSubagentRuntimeOptions {
+interface CreateCliSubagentRuntimeOptionsBase {
   readonly workspace: string;
   readonly platform: string;
   readonly parentRunId: string;
@@ -28,10 +34,29 @@ interface CreateCliSubagentRuntimeOptions {
   readonly modelMaxOutputTokens: number | undefined;
   readonly modelOperations: MainModelOperationInstrumentation | undefined;
   readonly transcriptStore: AbortableToolOutputArtifactStore;
-  readonly lifecyclePersistence?: SubagentLifecyclePersistence;
   readonly now: () => number;
   readonly onProgress: (event: SubagentProgressEvent) => void;
 }
+
+interface AttachedSubagentSession {
+  readonly lifecyclePersistence: SubagentLifecyclePersistence;
+  readonly costBudget: SharedCostBudgetAccount;
+  readonly admission: SubagentTreeAdmission;
+  readonly providerCoordination: SubagentTreeProviderCoordination;
+  readonly background: SubagentBackgroundRuntime;
+  readonly modelOperations: MainModelOperationInstrumentation | undefined;
+}
+
+type CreateCliSubagentRuntimeOptions = CreateCliSubagentRuntimeOptionsBase &
+  (
+    | {
+        readonly attachedSession?: never;
+      }
+    | {
+        readonly attachedSession: AttachedSubagentSession;
+        readonly lifecyclePersistence?: never;
+      }
+  );
 
 export interface CliSubagentRuntime {
   readonly costBudgetProvider: LLMProvider;
@@ -43,15 +68,29 @@ export function createCliSubagentRuntime(
 ): CliSubagentRuntime {
   const treeProvider = createSubagentTreeProvider({
     provider: options.provider,
+    ...(options.attachedSession !== undefined
+      ? { coordination: options.attachedSession.providerCoordination }
+      : {}),
   });
   const rootBudget = createSharedCostBudgetedProvider({
     provider: treeProvider.provider,
     model: options.costModel,
     maxCostUsd: options.maxCostUsd,
+    ...(options.attachedSession !== undefined
+      ? { sharedAccount: options.attachedSession.costBudget }
+      : {}),
     ...(options.modelMaxOutputTokens !== undefined
       ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
       : {}),
   });
+  const lifecycleOwnership =
+    options.attachedSession === undefined
+      ? {}
+      : {
+          background: options.attachedSession.background,
+          lifecyclePersistence: options.attachedSession.lifecyclePersistence,
+          backgroundModelOperations: options.attachedSession.modelOperations,
+        };
   return {
     costBudgetProvider: rootBudget.provider,
     supervisor: createSubagentSupervisor({
@@ -63,6 +102,10 @@ export function createCliSubagentRuntime(
       model: options.model,
       costModel: options.costModel,
       rootBudget,
+      ...(options.attachedSession !== undefined
+        ? { admission: options.attachedSession.admission }
+        : {}),
+      ...lifecycleOwnership,
       ...(options.projectInstructions !== undefined
         ? { projectInstructions: options.projectInstructions }
         : {}),
@@ -77,9 +120,6 @@ export function createCliSubagentRuntime(
         ? { modelOperations: options.modelOperations }
         : {}),
       transcriptStore: options.transcriptStore,
-      ...(options.lifecyclePersistence !== undefined
-        ? { lifecyclePersistence: options.lifecyclePersistence }
-        : {}),
       now: options.now,
       onProgress: options.onProgress,
       providerBlocked: treeProvider.blocked,

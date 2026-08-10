@@ -17,6 +17,7 @@ import type {
   AssistantProviderMetadata,
   LLMProvider,
   ModelToolExposure,
+  ProviderContinuationLease,
   ToolCall,
 } from "../llm/types.ts";
 import type { McpProviderSchemaTarget } from "../mcp/provider-schema.ts";
@@ -27,6 +28,7 @@ import {
 } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
+import type { AgentControlCapability } from "../tools/agent-control.ts";
 import type {
   DelegationBatchEntry,
   DelegationCapability,
@@ -34,6 +36,8 @@ import type {
 } from "../tools/delegation.ts";
 import { createDelegationExecutor } from "../tools/delegation.ts";
 import {
+  type AgentControlExecutionContext,
+  type AgentWaitResultAdmission,
   executeToolCall,
   invalidToolCallFailureMessage,
   type ToolExecution,
@@ -50,9 +54,12 @@ import {
 } from "../tools/scoped-project-instructions.ts";
 import { toolCallAccesses } from "../tools/tool-access.ts";
 import {
+  builtinToolAuthorityAllows,
   type InvalidToolCall,
+  isAgentControlToolCall,
   isInvalidToolCall,
   isMcpToolInvocation,
+  isSubagentResultToolCall,
   isUntrustedMcpContentToolCall,
 } from "../tools/tool-call.ts";
 import {
@@ -100,6 +107,11 @@ import {
 } from "./session-ledger.ts";
 import type { SessionMessage, UserMessageOrigin } from "./session-message.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
+import {
+  maxSubagentResultCharsForBatch,
+  type SubagentResultContinuationBudget,
+  type SubagentResultContinuationLease,
+} from "./subagent-tree-budget.ts";
 import {
   DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
   DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS,
@@ -177,6 +189,8 @@ interface SubagentRunAgentOptions {
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "read-only-subagent";
   readonly delegation?: never;
+  readonly agentControl?: never;
+  readonly agentControlResultBudget?: never;
   readonly costBudgetProvider: LLMProvider;
   readonly skillActivation?: never;
   readonly taskProgress?: never;
@@ -212,7 +226,17 @@ interface RunAgentTurnOptionsBase {
   ) => void;
 }
 
-interface MainRunAgentTurnOptions {
+type MainAgentControlOptions =
+  | {
+      readonly agentControl?: never;
+      readonly agentControlResultBudget?: never;
+    }
+  | {
+      readonly agentControl: AgentControlCapability;
+      readonly agentControlResultBudget: SubagentResultContinuationBudget;
+    };
+
+type MainRunAgentTurnOptions = MainAgentControlOptions & {
   readonly memory?: AgentMemoryRuntime;
   readonly mcp?: AgentMcpRuntime;
   readonly bash: BashRuntime;
@@ -226,7 +250,7 @@ interface MainRunAgentTurnOptions {
     | readonly InjectedUserMessage[]
     | Promise<readonly InjectedUserMessage[]>;
   readonly modelOperations?: MainModelOperationInstrumentation;
-}
+};
 
 interface SubagentRunAgentTurnOptions {
   readonly memory?: never;
@@ -234,6 +258,8 @@ interface SubagentRunAgentTurnOptions {
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "read-only-subagent";
   readonly delegation?: never;
+  readonly agentControl?: never;
+  readonly agentControlResultBudget?: never;
   readonly costBudgetProvider: LLMProvider;
   readonly skillActivation?: never;
   readonly taskProgress?: never;
@@ -447,7 +473,25 @@ const NON_ISOLATED_DELEGATION_RESULT =
 
 interface TurnDelegation {
   readonly executor: DelegationExecutor | undefined;
+  readonly continuation: ProviderContinuationLease | undefined;
   readonly close: () => void;
+}
+
+interface PendingMainContinuation {
+  readonly continuation: ProviderContinuationLease;
+  readonly close: () => void;
+}
+
+function prepareWithContinuationCleanup<Value>(
+  pending: PendingMainContinuation | null,
+  prepare: () => Value,
+): Value {
+  try {
+    return prepare();
+  } catch (error) {
+    pending?.close();
+    throw error;
+  }
 }
 
 type DelegationToolCall =
@@ -475,6 +519,7 @@ function delegationBatchEntry(
     kind: "request",
     request: {
       toolCallId: toolCall.id,
+      mode: toolCall.mode,
       task: toolCall.task,
       focusPaths: toolCall.focusPaths ?? [],
       signal,
@@ -484,24 +529,40 @@ function delegationBatchEntry(
 
 function delegationForToolRound(
   delegation: DelegationCapability | undefined,
+  toolAuthority: ModelToolExposure,
   toolCalls: readonly ToolCall[],
   signal: AbortSignal,
 ): TurnDelegation {
-  if (delegation === undefined) {
-    return { executor: undefined, close: () => {} };
+  if (
+    delegation === undefined ||
+    !builtinToolAuthorityAllows(toolAuthority, "delegate")
+  ) {
+    return {
+      executor: undefined,
+      continuation: undefined,
+      close: () => {},
+    };
   }
   if (toolCalls.every(isDelegationToolCall)) {
     const batch = delegation.prepareBatch(
       toolCalls.map((toolCall) => delegationBatchEntry(toolCall, signal)),
     );
-    return { executor: batch.executor, close: batch.close };
+    return {
+      executor: batch.executor,
+      continuation: batch.continuation,
+      close: batch.close,
+    };
   }
   return {
     executor: createDelegationExecutor(async () => ({
       delivery: "rejected",
       ok: false,
-      content: NON_ISOLATED_DELEGATION_RESULT,
+      reason: NON_ISOLATED_DELEGATION_RESULT,
+      recovery:
+        "Delegate in a new isolated tool round, or continue the investigation in Main.",
+      maxResultChars: maxSubagentResultCharsForBatch(1),
     })),
+    continuation: undefined,
     close: () => {},
   };
 }
@@ -946,6 +1007,7 @@ export async function* runAgentTurn(
     contextAccounting: undefined,
     accounting: emptyRunAccounting(),
   };
+  let pendingMainContinuation: PendingMainContinuation | null = null;
 
   for (let completedTurns = 1; ; completedTurns++) {
     const publishAccountingUpdate = () => {
@@ -957,18 +1019,31 @@ export async function* runAgentTurn(
       });
       return cost;
     };
-    await options.mcp?.runtime.prepareTurn(options.mcp.schemaTarget, signal);
-    const mcpExposure = await options.mcp?.runtime.exposureSnapshot();
+    let mcpExposure: Awaited<
+      ReturnType<McpRuntime["exposureSnapshot"]>
+    > | null = null;
+    try {
+      await options.mcp?.runtime.prepareTurn(options.mcp.schemaTarget, signal);
+      mcpExposure = (await options.mcp?.runtime.exposureSnapshot()) ?? null;
+    } catch (error) {
+      pendingMainContinuation?.close();
+      pendingMainContinuation = null;
+      throw error;
+    }
     const currentMemorySource = currentMemoryUserMessage();
     const exposeMemoryTools =
       options.memory !== undefined &&
       currentMemorySource !== null &&
       !memoryToolsExposedForMessages.has(currentMemorySource);
+    const reviewedMemory =
+      options.memory?.kind === "reviewed" ? options.memory : null;
     const exposeReviewedMemory =
       exposeMemoryTools &&
-      options.memory?.kind === "reviewed" &&
+      reviewedMemory !== null &&
       currentMemorySource !== null &&
-      options.memory.proposal.sourceFor(currentMemorySource) !== undefined;
+      prepareWithContinuationCleanup(pendingMainContinuation, () =>
+        reviewedMemory.proposal.sourceFor(currentMemorySource),
+      ) !== undefined;
     const memoryToolExposure: Extract<
       ModelToolExposure,
       { readonly kind: "auto" }
@@ -980,11 +1055,14 @@ export async function* runAgentTurn(
     if (exposeMemoryTools) {
       memoryToolsExposedForMessages.add(currentMemorySource);
     }
+    const skillActivation = options.skillActivation;
     const workflowSystemPrompt = appendWorkflowSkillsToSystemPrompt(
       systemPrompt,
-      options.skillActivation === undefined
+      skillActivation === undefined
         ? []
-        : options.skillActivation.active().map(workflowSkillFromActivation),
+        : prepareWithContinuationCleanup(pendingMainContinuation, () =>
+            skillActivation.active(),
+          ).map(workflowSkillFromActivation),
     );
     const mcpBoundedSystemPrompt =
       options.mcp === undefined && !untrustedMcpContentObserved
@@ -1002,53 +1080,90 @@ export async function* runAgentTurn(
               baseTurnSystemPrompt,
               memoryPrompt(),
             );
-    const turnConfig: CompactionConfig = {
+    const preparedTurnConfig: CompactionConfig = {
       ...config,
       systemPrompt: baseTurnSystemPrompt,
       ...(requestSystemPrompt !== undefined ? { requestSystemPrompt } : {}),
       summarySystemPrompt: baseTurnSystemPrompt,
     };
-    const toolExposure: ModelToolExposure = {
+    const agentControlExposure: { readonly agentControl?: true } =
+      options.agentControl === undefined ? {} : { agentControl: true };
+    const delegation = options.delegation;
+    const delegationAvailable =
+      delegation !== undefined &&
+      prepareWithContinuationCleanup(pendingMainContinuation, () =>
+        delegation.available(),
+      );
+    const preparedToolExposure: ModelToolExposure = {
       kind: "auto",
       ...(options.toolProfile !== undefined
         ? { profile: options.toolProfile }
         : {}),
-      ...(options.delegation?.available() === true ? { delegation: true } : {}),
+      ...(delegationAvailable
+        ? {
+            delegation: delegation.mode,
+          }
+        : {}),
+      ...agentControlExposure,
       ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
       ...(allowSkill && !untrustedMcpContentObserved ? { skill: true } : {}),
       ...(memoryToolExposure !== undefined
         ? { memory: memoryToolExposure }
         : {}),
-      ...(mcpExposure !== undefined ? { mcp: mcpExposure } : {}),
+      ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
     };
     let turnResult: AgentTurn;
+    const mainContinuation = pendingMainContinuation;
+    pendingMainContinuation = null;
+    const continuationRequestShape =
+      mainContinuation?.continuation.requestShape;
+    const toolExposure =
+      continuationRequestShape === undefined
+        ? preparedToolExposure
+        : continuationRequestShape.toolExposure;
+    const turnSystemPrompt =
+      continuationRequestShape?.systemPrompt ?? baseTurnSystemPrompt;
+    const turnConfig: CompactionConfig =
+      continuationRequestShape === undefined
+        ? preparedTurnConfig
+        : {
+            ...config,
+            systemPrompt: turnSystemPrompt,
+            summarySystemPrompt: baseTurnSystemPrompt,
+          };
+    let retainTurnDelegation = false;
+    let retainSubagentResultContinuation = false;
     try {
-      turnResult = yield* streamTurnWithOverflowRecovery(turnConfig, state, {
-        provider: requestProvider,
-        systemPrompt: baseTurnSystemPrompt,
-        ledger: sessionLedger,
-        signal,
-        toolExposure,
-        modelOperation: agentTurnModelOperation(options),
-      });
-    } catch (error) {
-      if (
-        !(error instanceof CostBudgetAdmissionError) ||
-        costTracking?.maxCostUsd === undefined
-      ) {
-        throw error;
+      try {
+        turnResult = yield* streamTurnWithOverflowRecovery(turnConfig, state, {
+          provider: mainContinuation?.continuation.provider ?? requestProvider,
+          systemPrompt: turnSystemPrompt,
+          ledger: sessionLedger,
+          signal,
+          toolExposure,
+          modelOperation: agentTurnModelOperation(options),
+        });
+      } catch (error) {
+        if (
+          !(error instanceof CostBudgetAdmissionError) ||
+          costTracking?.maxCostUsd === undefined
+        ) {
+          throw error;
+        }
+        yield {
+          type: "end",
+          usage: state.accounting.totalUsage,
+          turns: completedTurns - 1,
+          stopReason: "cost_budget",
+          cost: buildCostBudgetLimitedReport(state.accounting.totalCostUsd, {
+            ...costTracking,
+            maxCostUsd: costTracking.maxCostUsd,
+          }),
+        };
+        return;
       }
-      yield {
-        type: "end",
-        usage: state.accounting.totalUsage,
-        turns: completedTurns - 1,
-        stopReason: "cost_budget",
-        cost: buildCostBudgetLimitedReport(state.accounting.totalCostUsd, {
-          ...costTracking,
-          maxCostUsd: costTracking.maxCostUsd,
-        }),
-      };
-      return;
+    } finally {
+      mainContinuation?.close();
     }
     state.accounting = addRequestAccounting(
       state.accounting,
@@ -1190,8 +1305,68 @@ export async function* runAgentTurn(
       sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
     let blockedGoalProposalRecordedThisTurn = false;
     let toolCostBudgetAdmission: CostBudgetAdmissionError | null = null;
+    const agentControlResultMaxChars = maxSubagentResultCharsForBatch(
+      turnResult.toolCalls.filter(isAgentControlToolCall).length,
+    );
+    const subagentResultToolCallIds = turnResult.toolCalls
+      .filter(isSubagentResultToolCall)
+      .map((toolCall) => toolCall.id);
+    const agentWaitToolCalls = turnResult.toolCalls.flatMap((toolCall) =>
+      !isMcpToolInvocation(toolCall) &&
+      !isInvalidToolCall(toolCall) &&
+      toolCall.tool === "agent_wait"
+        ? [toolCall]
+        : [],
+    );
+    const isolatedSubagentResultRound =
+      subagentResultToolCallIds.length === turnResult.toolCalls.length;
+    const subagentResultContinuation: {
+      current: SubagentResultContinuationLease | null;
+    } = { current: null };
+    const agentControl = options.agentControl;
+    let agentWaitResultAdmission: Promise<AgentWaitResultAdmission> | null =
+      null;
+    const admitAgentWaitResult =
+      agentControl === undefined
+        ? null
+        : (): Promise<AgentWaitResultAdmission> => {
+            agentWaitResultAdmission ??= (async () => {
+              if (!isolatedSubagentResultRound) {
+                return { kind: "mixed_tool_round" } as const;
+              }
+              await Promise.all(
+                agentWaitToolCalls.map((toolCall) =>
+                  agentControl.waitForSettlement({
+                    id: toolCall.agentId,
+                    signal,
+                  }),
+                ),
+              );
+              subagentResultContinuation.current =
+                options.agentControlResultBudget.lease(
+                  subagentResultToolCallIds,
+                );
+              return subagentResultContinuation.current.kind === "granted"
+                ? {
+                    kind: "granted",
+                    maxResultChars:
+                      subagentResultContinuation.current.maxResultChars,
+                  }
+                : { kind: "budget_rejected" };
+            })();
+            return agentWaitResultAdmission;
+          };
+    const agentControlExecutionContext: AgentControlExecutionContext =
+      agentControl === undefined || admitAgentWaitResult === null
+        ? {}
+        : {
+            agentControl,
+            agentControlResultMaxChars,
+            admitAgentWaitResult,
+          };
     const turnDelegation = delegationForToolRound(
       options.delegation,
+      toolExposure,
       turnResult.toolCalls,
       signal,
     );
@@ -1222,6 +1397,7 @@ export async function* runAgentTurn(
         ...(turnDelegation.executor !== undefined
           ? { delegation: turnDelegation.executor }
           : {}),
+        ...agentControlExecutionContext,
         hiddenWorkspacePaths,
         recordCheckpoints: options.recordCheckpointOperations === undefined,
         readBeforeEdit: readVisibility,
@@ -1474,7 +1650,10 @@ export async function* runAgentTurn(
               "skill_activation",
             );
             if (skillActivation !== undefined) {
-              yield { type: "skill_activated", ...skillActivation.activation };
+              yield {
+                type: "skill_activated",
+                ...skillActivation.activation,
+              };
             }
           }
           const taskProgressEvent = taskProgressEventFromExecution(execution);
@@ -1491,33 +1670,59 @@ export async function* runAgentTurn(
           }
         }
       }
-    } finally {
-      turnDelegation.close();
-    }
-    for (const notice of await settlePendingToolExecutions()) {
-      yield { type: "tool_output_artifact", ...notice };
-    }
-    readVisibility.applyVisibleToolExecutions(
-      completedToolExecutions.map(({ execution }) => execution),
-    );
-    publishVisibleProjectInstructions(
-      projectInstructionVisibility,
-      completedToolExecutions.map(({ execution }) => execution),
-    );
-    if (!blockedGoalProposalRecordedThisTurn) {
-      const sessionGoalEvent = clearPendingBlockedAudit(
-        sessionLedgerMessages(sessionLedger).length,
-      );
-      if (sessionGoalEvent !== null) {
-        yield sessionGoalEvent;
+      for (const notice of await settlePendingToolExecutions()) {
+        yield { type: "tool_output_artifact", ...notice };
       }
-    }
-
-    if (drainInjectedUserMessages !== undefined && !signal.aborted) {
-      appendSessionLedgerMessages(
-        sessionLedger,
-        await drainInjectedUserMessages(),
+      readVisibility.applyVisibleToolExecutions(
+        completedToolExecutions.map(({ execution }) => execution),
       );
+      publishVisibleProjectInstructions(
+        projectInstructionVisibility,
+        completedToolExecutions.map(({ execution }) => execution),
+      );
+      if (!blockedGoalProposalRecordedThisTurn) {
+        const sessionGoalEvent = clearPendingBlockedAudit(
+          sessionLedgerMessages(sessionLedger).length,
+        );
+        if (sessionGoalEvent !== null) {
+          yield sessionGoalEvent;
+        }
+      }
+
+      const carriesMainContinuation =
+        subagentResultContinuation.current?.kind === "granted" ||
+        turnDelegation.continuation !== undefined;
+      if (
+        drainInjectedUserMessages !== undefined &&
+        !signal.aborted &&
+        !carriesMainContinuation
+      ) {
+        appendSessionLedgerMessages(
+          sessionLedger,
+          await drainInjectedUserMessages(),
+        );
+      }
+      if (subagentResultContinuation.current?.kind === "granted") {
+        pendingMainContinuation = {
+          continuation: subagentResultContinuation.current.continuation,
+          close: subagentResultContinuation.current.release,
+        };
+        retainSubagentResultContinuation = true;
+      } else if (turnDelegation.continuation !== undefined) {
+        pendingMainContinuation = {
+          continuation: turnDelegation.continuation,
+          close: turnDelegation.close,
+        };
+        retainTurnDelegation = true;
+      }
+    } finally {
+      if (!retainTurnDelegation) turnDelegation.close();
+      if (
+        !retainSubagentResultContinuation &&
+        subagentResultContinuation.current?.kind === "granted"
+      ) {
+        subagentResultContinuation.current.release();
+      }
     }
   }
 }

@@ -1,6 +1,12 @@
+import {
+  createCostBudgetedProvider,
+  type SharedCostBudgetAccount,
+} from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
+import type { SubagentTreeProviderCoordination } from "../../agent/subagent-tree-provider.ts";
+import { createSubagentTreeProvider } from "../../agent/subagent-tree-provider.ts";
 import type { CostModel } from "../../core/cost.ts";
-import type { Usage } from "../../llm/types.ts";
+import type { LLMProvider, Usage } from "../../llm/types.ts";
 import type { InteractiveSessionArgs } from "./types.ts";
 
 export type InteractiveCompactionCost =
@@ -15,9 +21,52 @@ export type InteractiveCompactionCost =
       readonly kind: "budgeted";
       readonly model: CostModel;
       readonly maxCostUsd: number;
-      readonly remainingCostUsd: number;
+      readonly admission:
+        | {
+            readonly kind: "isolated";
+            readonly remainingCostUsd: number;
+          }
+        | {
+            readonly kind: "shared";
+            readonly account: SharedCostBudgetAccount;
+            readonly providerCoordination: SubagentTreeProviderCoordination;
+          };
       readonly budgetLimitedReport: () => CostReport;
     };
+
+type InteractiveBudgetAdmission = Extract<
+  InteractiveCompactionCost,
+  { readonly kind: "budgeted" }
+>["admission"];
+
+export function createInteractiveCostBudgetedProvider(options: {
+  readonly provider: LLMProvider;
+  readonly model: CostModel;
+  readonly admission: InteractiveBudgetAdmission;
+  readonly modelMaxOutputTokens: number | undefined;
+}): LLMProvider {
+  const budget =
+    options.admission.kind === "shared"
+      ? {
+          provider: createSubagentTreeProvider({
+            provider: options.provider,
+            coordination: options.admission.providerCoordination,
+          }).provider,
+          maxCostUsd: options.admission.account.remainingUsd(),
+          sharedAccount: options.admission.account,
+        }
+      : {
+          provider: options.provider,
+          maxCostUsd: options.admission.remainingCostUsd,
+        };
+  return createCostBudgetedProvider({
+    ...budget,
+    model: options.model,
+    ...(options.modelMaxOutputTokens !== undefined
+      ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
+      : {}),
+  });
+}
 
 export const EMPTY_USAGE: Usage = {
   inputTokens: 0,

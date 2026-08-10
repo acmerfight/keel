@@ -13,9 +13,13 @@ import {
 import type { McpRuntime } from "../mcp/runtime-types.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
 import { WorkflowSkillError } from "../skills/model.ts";
+import type { AgentControlCapability } from "./agent-control.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
-import type { DelegationExecutor } from "./delegation.ts";
+import {
+  type DelegationExecutor,
+  projectDelegationRejection,
+} from "./delegation.ts";
 import { executeEdit } from "./edit.ts";
 import {
   type DelegationToolExecutionEffect,
@@ -120,21 +124,50 @@ type UpdatePlanToolCall = Extract<
   { readonly tool: "update_plan" }
 >;
 type DelegateToolCall = Extract<ValidToolCall, { readonly tool: "delegate" }>;
+type AgentListToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "agent_list" }
+>;
+type AgentWaitToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "agent_wait" }
+>;
+type AgentCancelToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "agent_cancel" }
+>;
 
-interface BuiltinToolExecutionContext extends GoalExecutionContext {
-  readonly builtinToolAuthority?: ModelToolExposure;
-  readonly delegation?: DelegationExecutor;
-  readonly hiddenWorkspacePaths?: readonly string[];
-  readonly skillActivation?: Pick<
-    SkillActivationCapability,
-    "activate" | "search" | "readResource"
-  >;
-  readonly memory?: AgentMemoryToolContext;
-  readonly mcp?: McpRuntime;
-  readonly recordCheckpoints?: boolean;
-  readonly readBeforeEdit?: ReadBeforeEdit;
-  readonly projectInstructions?: ProjectInstructionVisibilityState;
-}
+export type AgentWaitResultAdmission =
+  | { readonly kind: "granted"; readonly maxResultChars: number }
+  | { readonly kind: "mixed_tool_round" | "budget_rejected" };
+
+export type AgentControlExecutionContext =
+  | {
+      readonly agentControl?: never;
+      readonly agentControlResultMaxChars?: never;
+      readonly admitAgentWaitResult?: never;
+    }
+  | {
+      readonly agentControl: AgentControlCapability;
+      readonly agentControlResultMaxChars: number;
+      readonly admitAgentWaitResult: () => Promise<AgentWaitResultAdmission>;
+    };
+
+type BuiltinToolExecutionContext = GoalExecutionContext &
+  AgentControlExecutionContext & {
+    readonly builtinToolAuthority?: ModelToolExposure;
+    readonly delegation?: DelegationExecutor;
+    readonly hiddenWorkspacePaths?: readonly string[];
+    readonly skillActivation?: Pick<
+      SkillActivationCapability,
+      "activate" | "search" | "readResource"
+    >;
+    readonly memory?: AgentMemoryToolContext;
+    readonly mcp?: McpRuntime;
+    readonly recordCheckpoints?: boolean;
+    readonly readBeforeEdit?: ReadBeforeEdit;
+    readonly projectInstructions?: ProjectInstructionVisibilityState;
+  };
 
 async function executeDelegateTool(
   context: BuiltinToolExecutionContext,
@@ -145,6 +178,7 @@ async function executeDelegateTool(
   }
   const result = await context.delegation.delegate({
     toolCallId: toolCall.id,
+    mode: toolCall.mode,
     task: toolCall.task,
     focusPaths: toolCall.focusPaths ?? [],
     signal: context.signal,
@@ -153,6 +187,13 @@ async function executeDelegateTool(
     result.delivery === "fresh"
       ? [{ kind: "delegation", usage: result.usage }]
       : NO_TOOL_EXECUTION_EFFECTS;
+  if (result.delivery === "rejected") {
+    return {
+      content: projectDelegationRejection(result),
+      ok: false,
+      effects,
+    };
+  }
   if (!result.ok) {
     return {
       content: result.content,
@@ -165,6 +206,72 @@ async function executeDelegateTool(
     ok: true,
     effects,
   };
+}
+
+function unavailableAgentControlExecution(): FailedToolExecution {
+  return {
+    content:
+      "Agent control is unavailable outside a saved interactive session with attached background agents enabled.",
+    ok: false,
+    effects: NO_TOOL_EXECUTION_EFFECTS,
+  };
+}
+
+function executeAgentListTool(
+  context: BuiltinToolExecutionContext,
+  _toolCall: AgentListToolCall,
+): ToolExecution {
+  if (context.agentControl === undefined) {
+    return unavailableAgentControlExecution();
+  }
+  const result = context.agentControl.list({
+    maxResultChars: context.agentControlResultMaxChars,
+  });
+  return { ...result, effects: NO_TOOL_EXECUTION_EFFECTS };
+}
+
+async function executeAgentWaitTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: AgentWaitToolCall,
+): Promise<ToolExecution> {
+  if (context.agentControl === undefined) {
+    return unavailableAgentControlExecution();
+  }
+  const admission = await context.admitAgentWaitResult();
+  if (admission.kind !== "granted") {
+    return {
+      content:
+        admission.kind === "mixed_tool_round"
+          ? "Agent result was not fetched because agent_wait must be isolated from non-wait tools so Keel can preserve one complete Main continuation."
+          : "Agent result was not fetched because the remaining session budget cannot preserve a Main continuation.",
+      ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
+    };
+  }
+  const result = await context.agentControl.wait({
+    id: toolCall.agentId,
+    signal: context.signal,
+    maxResultChars: Math.min(
+      context.agentControlResultMaxChars,
+      admission.maxResultChars,
+    ),
+  });
+  return { ...result, effects: NO_TOOL_EXECUTION_EFFECTS };
+}
+
+async function executeAgentCancelTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: AgentCancelToolCall,
+): Promise<ToolExecution> {
+  if (context.agentControl === undefined) {
+    return unavailableAgentControlExecution();
+  }
+  const result = await context.agentControl.cancel({
+    id: toolCall.agentId,
+    signal: context.signal,
+    maxResultChars: context.agentControlResultMaxChars,
+  });
+  return { ...result, effects: NO_TOOL_EXECUTION_EFFECTS };
 }
 
 function unavailableBuiltinToolExecution(tool: ToolName): FailedToolExecution {
@@ -220,9 +327,9 @@ function unavailableBuiltinToolExecution(tool: ToolName): FailedToolExecution {
   };
 }
 
-export interface ExecuteToolCallOptions extends BuiltinToolExecutionContext {
+export type ExecuteToolCallOptions = BuiltinToolExecutionContext & {
   readonly toolCall: ToolCall;
-}
+};
 
 interface RecoverableToolError extends KeelError {
   readonly code: RecoverableToolErrorCode;
@@ -938,6 +1045,12 @@ function executeBuiltinToolCall(
   switch (parsed.data.tool) {
     case "delegate":
       return executeDelegateTool(context, parsed.data);
+    case "agent_list":
+      return executeAgentListTool(context, parsed.data);
+    case "agent_wait":
+      return executeAgentWaitTool(context, parsed.data);
+    case "agent_cancel":
+      return executeAgentCancelTool(context, parsed.data);
     case "update_plan":
       return executeUpdatePlanTool(parsed.data);
     case "update_goal":

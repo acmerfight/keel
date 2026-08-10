@@ -94,7 +94,8 @@ export type ModelToolExposure =
   | {
       readonly kind: "auto";
       readonly profile?: "main" | "read-only-subagent";
-      readonly delegation?: true;
+      readonly delegation?: "foreground" | "background";
+      readonly agentControl?: true;
       readonly bash?: true;
       readonly skill?: true;
       readonly memory?: "direct" | "reviewed";
@@ -107,6 +108,8 @@ export type ResolvedModelToolExposure =
       readonly kind: "auto";
       readonly profile: "main" | "read-only-subagent";
       readonly delegation: boolean;
+      readonly backgroundDelegation: boolean;
+      readonly agentControl: boolean;
       readonly bash: boolean;
       readonly skill: boolean;
       readonly memory: "disabled" | "direct" | "reviewed";
@@ -139,7 +142,8 @@ function builtinToolIsExposed(
     );
   }
   return (
-    (exposure.delegation === true || tool.availability !== "delegation") &&
+    (exposure.delegation !== undefined || tool.availability !== "delegation") &&
+    (exposure.agentControl === true || tool.availability !== "agent-control") &&
     (exposure.bash === true || tool.risk.kind !== "trusted-shell") &&
     (exposure.skill === true || tool.availability !== "skill-catalog") &&
     (exposure.mcp?.catalogAvailable === true ||
@@ -163,6 +167,9 @@ export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;
 
 const recoverableAgentStateToolNames = [
   "delegate",
+  "agent_list",
+  "agent_wait",
+  "agent_cancel",
   "update_plan",
   "update_goal",
   "memory_add",
@@ -212,6 +219,12 @@ const INVALID_UPDATE_PLAN_RECOVERY =
   "Provide the full replacement plan using non-empty step strings, statuses pending, in_progress, or completed, and at most one in_progress task.";
 const INVALID_DELEGATE_RECOVERY =
   "Provide one self-contained read-only investigation task no longer than 4,000 characters. Keep only the scope, expected output, and completion criteria; put workspace-relative focus areas in focusPaths.";
+const INVALID_AGENT_LIST_RECOVERY =
+  "Call agent_list with no arguments to inspect this saved session's subagents.";
+const INVALID_AGENT_WAIT_RECOVERY =
+  "Provide the exact agentId returned by delegate or agent_list.";
+const INVALID_AGENT_CANCEL_RECOVERY =
+  "Provide the exact running agentId returned by delegate or agent_list.";
 const INVALID_UPDATE_GOAL_RECOVERY =
   "Set status to completed only when the active session goal is actually achieved and no required work remains; Runtime will evaluate the assertion evidence or run the configured command verifier. Set status to blocked only with a concise reason after the required blocker audit.";
 const INVALID_MEMORY_ADD_RECOVERY =
@@ -227,6 +240,9 @@ const agentStateRecovery: Readonly<
   Record<RecoverableAgentStateToolName, string>
 > = {
   delegate: INVALID_DELEGATE_RECOVERY,
+  agent_list: INVALID_AGENT_LIST_RECOVERY,
+  agent_wait: INVALID_AGENT_WAIT_RECOVERY,
+  agent_cancel: INVALID_AGENT_CANCEL_RECOVERY,
   update_plan: INVALID_UPDATE_PLAN_RECOVERY,
   update_goal: INVALID_UPDATE_GOAL_RECOVERY,
   memory_add: INVALID_MEMORY_ADD_RECOVERY,
@@ -297,13 +313,19 @@ function invalidAgentStateToolCall(options: {
 
 function toOpenAICompatibleToolDefinition(
   tool: RegisteredBuiltinTool,
+  exposure: Extract<ModelToolExposure, { readonly kind: "auto" }>,
 ): OpenAICompatibleToolDefinition {
+  const argumentsSchema =
+    exposure.delegation === "foreground" &&
+    tool.providerArguments.foregroundDelegation !== undefined
+      ? tool.providerArguments.foregroundDelegation
+      : (tool.providerArguments.default ?? tool.args.schema);
   return {
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: openAICompatibleParametersFromSchema(tool.args.schema),
+      parameters: openAICompatibleParametersFromSchema(argumentsSchema),
     },
   };
 }
@@ -327,7 +349,7 @@ export function openAICompatibleTools(
   if (exposure.kind === "none") return [];
   const builtins = builtinTools
     .filter((tool) => builtinToolIsExposed(exposure, tool))
-    .map(toOpenAICompatibleToolDefinition);
+    .map((tool) => toOpenAICompatibleToolDefinition(tool, exposure));
   const mcpTools =
     exposure.mcp?.catalogAvailable === true
       ? exposure.mcp.tools.map(mcpOpenAICompatibleToolDefinition)
@@ -342,7 +364,9 @@ export function resolveModelToolExposure(
   return {
     kind: "auto",
     profile: exposure?.profile ?? "main",
-    delegation: exposure?.delegation === true,
+    delegation: exposure?.delegation !== undefined,
+    backgroundDelegation: exposure?.delegation === "background",
+    agentControl: exposure?.agentControl === true,
     bash: exposure?.bash === true,
     skill: exposure?.skill === true,
     memory: exposure?.memory ?? "disabled",
@@ -361,6 +385,8 @@ export function modelToolExposuresEqual(
     left.bash === right.bash &&
     left.profile === right.profile &&
     left.delegation === right.delegation &&
+    left.backgroundDelegation === right.backgroundDelegation &&
+    left.agentControl === right.agentControl &&
     left.skill === right.skill &&
     left.memory === right.memory &&
     left.mcpSnapshotId === right.mcpSnapshotId
@@ -569,6 +595,20 @@ export function isMcpToolInvocation(
 
 export function isUntrustedMcpContentToolCall(toolCall: ToolCall): boolean {
   return isMcpToolCall(toolCall) || toolCall.tool === "mcp_search";
+}
+
+export function isAgentControlToolCall(toolCall: ToolCall): boolean {
+  return (
+    !isMcpToolInvocation(toolCall) &&
+    builtinToolForName(toolCall.tool).availability === "agent-control"
+  );
+}
+
+export function isSubagentResultToolCall(toolCall: ToolCall): boolean {
+  return (
+    !isMcpToolInvocation(toolCall) &&
+    builtinToolForName(toolCall.tool).resultAdmission === "subagent"
+  );
 }
 
 export { builtinToolCallSchema };

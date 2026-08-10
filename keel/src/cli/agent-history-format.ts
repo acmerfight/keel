@@ -40,14 +40,14 @@ export function formatAgentHistoryList(history: AgentTreeHistory): string {
   ].join("\n");
 }
 
-export function formatAgentHistoryDetail(
-  entry: AgentHistoryEntry,
-  result: PersistedSubagentCanonicalResult,
-): string {
+export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
+  const result: PersistedSubagentCanonicalResult | null = entry.result;
   const terminalText =
-    result.status === "completed"
-      ? `result: ${result.finalText}`
-      : `error: ${result.error}`;
+    result === null
+      ? "result: pending"
+      : result.status === "completed"
+        ? `result: ${result.finalText}`
+        : `error: ${result.error}`;
   return [
     `Agent ${entry.index}: ${entry.childAgentId}`,
     `status: ${entry.status}`,

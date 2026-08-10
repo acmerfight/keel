@@ -9,7 +9,10 @@ import type {
   DelegationRequest,
   DelegationToolResult,
 } from "../tools/delegation.ts";
-import { createDelegationExecutor } from "../tools/delegation.ts";
+import {
+  createDelegationExecutor,
+  projectDelegationRejection,
+} from "../tools/delegation.ts";
 import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
 import type { ContextCompactionOptions } from "./context-compaction.ts";
 import {
@@ -42,10 +45,13 @@ import {
   createSubagentTreeAdmission,
   type SubagentAdmissionLease,
   type SubagentAdmissionRejection,
+  type SubagentTreeAdmission,
 } from "./subagent-tree-admission.ts";
 import {
   createSubagentTreeBudget,
+  MAX_SUBAGENT_RESULT_CHARS,
   type SubagentChildBudgetLease,
+  type SubagentResultContinuationBudget,
   type SubagentResultOutcome,
   type SubagentTreeBudgetCandidate,
   type SubagentTreeBudgetLeaseResult,
@@ -103,6 +109,7 @@ interface AcceptedDelegation {
   readonly record: SubagentRunRecord;
   readonly run: () => Promise<SubagentCanonicalResult>;
   readonly cancelBeforeStart: () => void;
+  readonly cancel: () => void;
 }
 
 interface SubagentRunRecord {
@@ -141,15 +148,13 @@ interface ChildLifecycle {
   readonly abortController: AbortController;
   readonly settlementAbortController: AbortController;
   readonly deadlineExpired: () => boolean;
+  readonly cancel: (reason: unknown) => void;
   readonly cleanup: () => void;
 }
 
 interface RejectedDelegation {
   readonly kind: "rejected";
-  readonly result: Extract<
-    DelegationToolResult,
-    { readonly delivery: "rejected" }
-  >;
+  readonly rejection: DelegationRejection;
 }
 
 type DelegationReceipt = AcceptedDelegation | RejectedDelegation;
@@ -171,13 +176,28 @@ interface PreparedAcceptedCandidate {
 
 export interface SubagentSupervisor {
   readonly capability: DelegationCapability;
+  readonly resultContinuationBudget: SubagentResultContinuationBudget;
   readonly activeAgentRunCount: () => number;
   readonly activeChildRunCount: () => number;
   readonly totalAcceptedCount: () => number;
   readonly runSnapshots: () => readonly SubagentRunSnapshot[];
 }
 
-interface CreateSubagentSupervisorOptions {
+export interface SubagentBackgroundRun {
+  readonly delegationId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
+  readonly task: string;
+  readonly result: Promise<SubagentCanonicalResult>;
+  readonly cancel: () => void;
+}
+
+export interface SubagentBackgroundRuntime {
+  readonly signal: AbortSignal;
+  readonly register: (run: SubagentBackgroundRun) => void;
+}
+
+interface CreateSubagentSupervisorOptionsBase {
   readonly workspace: string;
   readonly platform: string;
   readonly parentRunId: string;
@@ -186,13 +206,13 @@ interface CreateSubagentSupervisorOptions {
   readonly model: string;
   readonly costModel: CostModel;
   readonly rootBudget: SharedCostBudgetedProvider;
+  readonly admission?: SubagentTreeAdmission;
   readonly projectInstructions?: ProjectInstructions;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly contextCompaction?: ContextCompactionOptions;
   readonly modelMaxOutputTokens?: number;
   readonly modelOperations?: MainModelOperationInstrumentation;
   readonly transcriptStore: AbortableToolOutputArtifactStore;
-  readonly lifecyclePersistence?: SubagentLifecyclePersistence;
   readonly now: () => number;
   readonly onProgress: (event: SubagentProgressEvent) => void;
   readonly deadlineMs?: number;
@@ -203,6 +223,22 @@ interface CreateSubagentSupervisorOptions {
   readonly providerBlocked?: () => boolean;
 }
 
+type CreateSubagentSupervisorOptions = CreateSubagentSupervisorOptionsBase &
+  (
+    | {
+        readonly background?: never;
+        readonly backgroundModelOperations?: never;
+        readonly lifecyclePersistence?: SubagentLifecyclePersistence;
+      }
+    | {
+        readonly background: SubagentBackgroundRuntime;
+        readonly backgroundModelOperations:
+          | MainModelOperationInstrumentation
+          | undefined;
+        readonly lifecyclePersistence: SubagentLifecyclePersistence;
+      }
+  );
+
 function zeroUsage(): Usage {
   return {
     inputTokens: 0,
@@ -212,18 +248,45 @@ function zeroUsage(): Usage {
   };
 }
 
-function rejectedDelegation(
-  content: string,
-): Extract<DelegationToolResult, { readonly delivery: "rejected" }> {
-  return { delivery: "rejected", ok: false, content };
+type RejectedDelegationResult = Extract<
+  DelegationToolResult,
+  { readonly delivery: "rejected" }
+>;
+interface DelegationRejection {
+  readonly reason: string;
+  readonly recovery: string;
 }
 
-function admissionRejectionMessage(reason: SubagentAdmissionRejection): string {
+function rejectedDelegation(
+  rejection: DelegationRejection,
+  maxResultChars: number,
+): RejectedDelegationResult {
+  return {
+    delivery: "rejected",
+    ok: false,
+    ...rejection,
+    maxResultChars,
+  };
+}
+
+function admissionRejection(
+  reason: SubagentAdmissionRejection,
+): DelegationRejection {
   switch (reason) {
     case "active_limit":
-      return "Delegation rejected: the root-inclusive active agent limit is reached.";
+      return {
+        reason:
+          "Delegation rejected: the root-inclusive active agent limit is reached.",
+        recovery:
+          "Wait for or cancel a running child, or continue the investigation in Main before delegating again.",
+      };
     case "total_limit":
-      return "Delegation rejected: the total child limit for this root run is reached.";
+      return {
+        reason:
+          "Delegation rejected: the total child limit for this root run is reached.",
+        recovery:
+          "Continue the investigation in Main because this root run cannot admit another child.",
+      };
   }
 }
 
@@ -288,9 +351,9 @@ function admittedTerminalText(
     : { finalText: null, error: value };
 }
 
-function admittedAgentResult(
+export function projectSubagentResult(
   result: SubagentCanonicalResult,
-  maxResultChars: number,
+  maxResultChars = MAX_SUBAGENT_RESULT_CHARS,
 ): string {
   const rawText =
     result.status === "completed" ? result.finalText : result.error;
@@ -502,18 +565,47 @@ export function createSubagentSupervisor(
   options: CreateSubagentSupervisorOptions,
 ): SubagentSupervisor {
   const receipts = new Map<string, DelegationReceipt>();
-  const admission = createSubagentTreeAdmission({
-    ...(options.maxActiveAgentRuns !== undefined
-      ? { maxActiveAgentRuns: options.maxActiveAgentRuns }
-      : {}),
-    ...(options.maxTotalChildRuns !== undefined
-      ? { maxTotalChildRuns: options.maxTotalChildRuns }
-      : {}),
-  });
+  const admission =
+    options.admission ??
+    createSubagentTreeAdmission({
+      ...(options.maxActiveAgentRuns !== undefined
+        ? { maxActiveAgentRuns: options.maxActiveAgentRuns }
+        : {}),
+      ...(options.maxTotalChildRuns !== undefined
+        ? { maxTotalChildRuns: options.maxTotalChildRuns }
+        : {}),
+    });
   const treeBudget = createSubagentTreeBudget({
     rootBudget: options.rootBudget,
     costModel: options.costModel,
   });
+  const continuationMaxOutputTokens = Math.min(
+    MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
+    options.modelMaxOutputTokens ?? MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
+  );
+  const resultContinuationBudget: SubagentResultContinuationBudget = {
+    lease: (toolCallIds) => {
+      const resultAdmission = treeBudget.planResults(
+        toolCallIds.map((toolCallId) => ({
+          toolCallId,
+          content: { kind: "pending" },
+        })),
+      );
+      const lease = treeBudget.leaseBatch({
+        resultAdmission,
+        children: [],
+        continuationMaxOutputTokens,
+      });
+      return lease.kind === "rejected"
+        ? lease
+        : {
+            kind: "granted",
+            maxResultChars: resultAdmission.maxResultChars,
+            continuation: lease.continuation,
+            release: lease.release,
+          };
+    },
+  };
   const deadlineMs = options.deadlineMs ?? DEFAULT_CHILD_DEADLINE_MS;
   const settlementGraceMs =
     options.settlementGraceMs ?? DEFAULT_SETTLEMENT_GRACE_MS;
@@ -564,6 +656,7 @@ export function createSubagentSupervisor(
       abortController,
       settlementAbortController,
       deadlineExpired: () => expired,
+      cancel: beginCancellation,
       cleanup: () => {
         clearTimeout(executionDeadline);
         if (settlementDeadline !== null) clearTimeout(settlementDeadline);
@@ -573,6 +666,7 @@ export function createSubagentSupervisor(
   };
 
   const executeAccepted = async (input: {
+    readonly mode: "foreground" | "background";
     readonly delegationId: string;
     readonly childAgentId: AgentId;
     readonly childRunId: SubagentRunId;
@@ -639,13 +733,17 @@ export function createSubagentSupervisor(
           ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
           : {}),
       });
+      const childInstrumentation =
+        input.mode === "background"
+          ? options.backgroundModelOperations
+          : options.modelOperations;
       const childModelOperations:
         | SubagentModelOperationInstrumentation
         | undefined =
-        options.modelOperations === undefined
+        childInstrumentation === undefined
           ? undefined
           : {
-              ...options.modelOperations,
+              ...childInstrumentation,
               attribution: {
                 type: "subagent",
                 delegationId: input.delegationId,
@@ -815,7 +913,11 @@ export function createSubagentSupervisor(
       task: input.task,
       state: { kind: "queued" },
     };
-    const lifecycle = createLifecycle(input.signal);
+    const lifecycle = createLifecycle(
+      input.mode === "background" && options.background !== undefined
+        ? options.background.signal
+        : input.signal,
+    );
     const releaseResources = (): void => {
       lifecycle.cleanup();
       admissionLease.release();
@@ -863,6 +965,7 @@ export function createSubagentSupervisor(
       promise ??= Promise.resolve()
         .then(() =>
           executeAccepted({
+            mode: input.mode,
             delegationId,
             childAgentId,
             childRunId,
@@ -886,7 +989,10 @@ export function createSubagentSupervisor(
       promise = Promise.resolve(result);
       publishCancelledBeforeStart(result);
     };
-    return { kind: "accepted", record, run, cancelBeforeStart };
+    const cancel = (): void => {
+      lifecycle.cancel(new Error("background subagent cancelled"));
+    };
+    return { kind: "accepted", record, run, cancelBeforeStart, cancel };
   };
 
   const prepareBatch = (
@@ -905,24 +1011,27 @@ export function createSubagentSupervisor(
     const recordRejection = (
       input: DelegationRequest,
       delegationId: string,
-      content: string,
+      rejection: DelegationRejection,
     ): void => {
-      let durableContent = content;
+      let durableRejection = rejection;
       try {
         options.lifecyclePersistence?.rejected({
           delegationId,
           parentRunId: options.parentRunId,
           parentToolCallId: input.toolCallId,
           task: input.task,
-          reason: content,
+          reason: rejection.reason,
         });
       } catch (caught) {
         if (caught instanceof SubagentPersistenceError) throw caught;
-        durableContent = `${content} Lifecycle receipt could not be stored: ${errorMessage(caught)}`;
+        durableRejection = {
+          ...rejection,
+          reason: `${rejection.reason} Lifecycle receipt could not be stored: ${errorMessage(caught)}`,
+        };
       }
       receipts.set(delegationId, {
         kind: "rejected",
-        result: rejectedDelegation(durableContent),
+        rejection: durableRejection,
       });
     };
     for (const input of inputs) {
@@ -932,19 +1041,30 @@ export function createSubagentSupervisor(
       }
       seenCandidateIds.add(delegationId);
       if (options.providerBlocked?.() === true) {
-        recordRejection(
-          input,
-          delegationId,
-          "Delegation rejected: the root provider auth/quota circuit is open.",
-        );
+        recordRejection(input, delegationId, {
+          reason:
+            "Delegation rejected: the root provider auth/quota circuit is open.",
+          recovery:
+            "Continue in Main without delegating; retry only after provider access is restored.",
+        });
         continue;
       }
       if (options.provider.abortSignalSupport !== true) {
-        recordRejection(
-          input,
-          delegationId,
-          "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
-        );
+        recordRejection(input, delegationId, {
+          reason:
+            "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
+          recovery:
+            "Continue in Main without delegating, or switch to a provider that certifies cancellation settlement.",
+        });
+        continue;
+      }
+      if (input.mode === "background" && options.background === undefined) {
+        recordRejection(input, delegationId, {
+          reason:
+            "Delegation rejected: background mode requires a saved interactive session owner.",
+          recovery:
+            "Use foreground delegation, or start a saved interactive session before requesting background mode.",
+        });
         continue;
       }
       const invalidFocusPath = validateWorkspacePaths(
@@ -952,11 +1072,11 @@ export function createSubagentSupervisor(
         input.focusPaths,
       );
       if (invalidFocusPath !== null) {
-        recordRejection(
-          input,
-          delegationId,
-          `Delegation rejected: invalid focus path. ${invalidFocusPath}`,
-        );
+        recordRejection(input, delegationId, {
+          reason: `Delegation rejected: invalid focus path. ${invalidFocusPath}`,
+          recovery:
+            "Correct or omit the invalid workspace-relative focus path before delegating again.",
+        });
         continue;
       }
       const systemPrompt = buildReadOnlySubagentSystemPrompt({
@@ -983,11 +1103,12 @@ export function createSubagentSupervisor(
         maxOutputTokens: MIN_USEFUL_OUTPUT_TOKENS,
       });
       if (minimumInputTokens === null) {
-        recordRejection(
-          input,
-          delegationId,
-          "Delegation rejected: the child request cost cannot be estimated.",
-        );
+        recordRejection(input, delegationId, {
+          reason:
+            "Delegation rejected: the child request cost cannot be estimated.",
+          recovery:
+            "Continue in Main, or select a provider and model with known token estimation before delegating again.",
+        });
         continue;
       }
       candidates.push({
@@ -1005,14 +1126,10 @@ export function createSubagentSupervisor(
       recordRejection(
         candidate.input,
         candidate.delegationId,
-        admissionRejectionMessage(reason),
+        admissionRejection(reason),
       );
     }
 
-    const continuationMaxOutputTokens = Math.min(
-      MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
-      options.modelMaxOutputTokens ?? MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
-    );
     let acceptedCandidates = capacityCandidates;
     const resultOutcomes = (): readonly SubagentResultOutcome[] =>
       entries.map((entry) => {
@@ -1029,7 +1146,14 @@ export function createSubagentSupervisor(
         if (receipt?.kind === "rejected") {
           return {
             toolCallId: input.toolCallId,
-            content: { kind: "exact", value: receipt.result.content },
+            content: {
+              kind: "projected",
+              value: (maxResultChars: number) =>
+                projectDelegationRejection({
+                  ...receipt.rejection,
+                  maxResultChars,
+                }),
+            },
           };
         }
         if (receipt?.record.state.kind === "terminal") {
@@ -1039,7 +1163,7 @@ export function createSubagentSupervisor(
             content: {
               kind: "projected",
               value: (maxResultChars: number) =>
-                admittedAgentResult(result, maxResultChars),
+                projectSubagentResult(result, maxResultChars),
             },
           };
         }
@@ -1068,11 +1192,12 @@ export function createSubagentSupervisor(
       if (budgetLease.kind === "granted") break;
       const rejectedCandidate = acceptedCandidates.at(-1);
       if (rejectedCandidate === undefined) break;
-      recordRejection(
-        rejectedCandidate.input,
-        rejectedCandidate.delegationId,
-        "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
-      );
+      recordRejection(rejectedCandidate.input, rejectedCandidate.delegationId, {
+        reason:
+          "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
+        recovery:
+          "Do not retry with the same session budget. Continue the investigation in Main, or ask the user to start a new run with a higher --max-cost.",
+      });
       acceptedCandidates = acceptedCandidates.slice(0, -1);
     }
 
@@ -1105,9 +1230,11 @@ export function createSubagentSupervisor(
           if (caught instanceof SubagentPersistenceError) throw caught;
           receipts.set(candidate.delegationId, {
             kind: "rejected",
-            result: rejectedDelegation(
-              `Delegation rejected: lifecycle could not be stored before child admission. ${errorMessage(caught)}`,
-            ),
+            rejection: {
+              reason: `Delegation rejected: lifecycle could not be stored before child admission. ${errorMessage(caught)}`,
+              recovery:
+                "Continue in Main without delegating; retry only after saved-session persistence is healthy.",
+            },
           });
         }
       }
@@ -1142,20 +1269,65 @@ export function createSubagentSupervisor(
         const receipt = receipts.get(delegationId);
         if (!preparedIds.has(delegationId) || receipt === undefined) {
           return rejectedDelegation(
-            "Delegation rejected: the call was not part of the prepared tool batch.",
+            {
+              reason:
+                "Delegation rejected: the call was not part of the prepared tool batch.",
+              recovery:
+                "Delegate in a new isolated tool round, or continue the investigation in Main.",
+            },
+            resultAdmission.maxResultChars,
           );
         }
         if (receipt.kind === "rejected") {
+          return rejectedDelegation(
+            receipt.rejection,
+            resultAdmission.maxResultChars,
+          );
+        }
+        if (input.mode === "background") {
+          const result = receipt.run();
+          if (freshAcceptedIds.delete(delegationId)) {
+            options.background?.register({
+              delegationId: receipt.record.delegationId,
+              childAgentId: receipt.record.childAgentId,
+              childRunId: receipt.record.childRunId,
+              task: receipt.record.task,
+              result,
+              cancel: receipt.cancel,
+            });
+            return {
+              delivery: "background",
+              ok: true,
+              content: admittedText(
+                JSON.stringify({
+                  delegationId: receipt.record.delegationId,
+                  agentId: receipt.record.childAgentId,
+                  runId: receipt.record.childRunId,
+                  status: receipt.record.state.kind,
+                }),
+                resultAdmission.maxResultChars,
+              ).value,
+            };
+          }
           return {
-            ...receipt.result,
+            delivery: "replayed",
+            ok: true,
             content: admittedText(
-              receipt.result.content,
+              JSON.stringify({
+                delegationId: receipt.record.delegationId,
+                agentId: receipt.record.childAgentId,
+                runId: receipt.record.childRunId,
+                status:
+                  receipt.record.state.kind === "terminal"
+                    ? receipt.record.state.result.status
+                    : receipt.record.state.kind,
+              }),
               resultAdmission.maxResultChars,
             ).value,
           };
         }
         const result = await receipt.run();
-        const content = admittedAgentResult(
+        const content = projectSubagentResult(
           result,
           resultAdmission.maxResultChars,
         );
@@ -1173,6 +1345,9 @@ export function createSubagentSupervisor(
           content,
         };
       }),
+      ...(budgetLease.kind === "granted"
+        ? { continuation: budgetLease.continuation }
+        : {}),
       close: () => {
         for (const receipt of ownedAccepted) receipt.cancelBeforeStart();
         if (budgetLease.kind === "granted") budgetLease.release();
@@ -1181,6 +1356,7 @@ export function createSubagentSupervisor(
   };
 
   const capability: DelegationCapability = {
+    mode: options.background === undefined ? "foreground" : "background",
     available: () =>
       admission.available() && options.providerBlocked?.() !== true,
     prepareBatch,
@@ -1196,6 +1372,7 @@ export function createSubagentSupervisor(
 
   return {
     capability,
+    resultContinuationBudget,
     activeAgentRunCount: admission.activeAgentRunCount,
     activeChildRunCount: () => admission.activeAgentRunCount() - 1,
     totalAcceptedCount: admission.totalChildRunCount,

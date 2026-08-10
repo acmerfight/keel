@@ -4,7 +4,10 @@ import {
   type ServerResponse,
 } from "node:http";
 import { afterEach, describe, expect, test } from "vitest";
-import { createSubagentTreeProvider } from "../../src/agent/subagent-tree-provider.ts";
+import {
+  createSubagentTreeProvider,
+  createSubagentTreeProviderCoordination,
+} from "../../src/agent/subagent-tree-provider.ts";
 import { KeelError } from "../../src/core/error.ts";
 import { createDeepseekProvider } from "../../src/llm/providers/deepseek.ts";
 import type { LLMEvent, LLMProvider } from "../../src/llm/types.ts";
@@ -61,6 +64,41 @@ afterEach(async () => {
 });
 
 describe("Subagent tree provider", () => {
+  test(`Given a background child and a later Main turn share saved-session provider coordination,
+    When the child opens the terminal provider circuit,
+    Then the later turn is blocked before another physical provider request`, async () => {
+    let providerCalls = 0;
+    const rawProvider: LLMProvider = {
+      id: "saved-session-circuit",
+      async *stream() {
+        providerCalls++;
+        yield* [];
+        throw new KeelError(
+          "provider_auth_failed",
+          "provider credentials are invalid",
+        );
+      },
+    };
+    const coordination = createSubagentTreeProviderCoordination();
+    const background = createSubagentTreeProvider({
+      provider: rawProvider,
+      coordination,
+    });
+    const laterMainTurn = createSubagentTreeProvider({
+      provider: rawProvider,
+      coordination,
+    });
+
+    await expect(
+      collect(background.provider, "background-child"),
+    ).rejects.toMatchObject({ code: "provider_auth_failed" });
+    await expect(
+      collect(laterMainTurn.provider, "later-main-turn"),
+    ).rejects.toMatchObject({ code: "provider_auth_failed" });
+    expect(laterMainTurn.blocked()).toBe(true);
+    expect(providerCalls).toBe(1);
+  });
+
   test(`Given four child turns are ready while the tree has two provider request slots,
     When one queued child is cancelled and the live pair releases its slots,
     Then only two physical requests run, cancellation stays local, and the remaining child proceeds`, async () => {

@@ -23,23 +23,24 @@ function rootBudgetFixture(): {
     SharedCostBudgetedProvider["leaseContinuation"]
   >[0][] = [];
   let releases = 0;
+  const provider: SharedCostBudgetedProvider["provider"] = {
+    id: "tree-budget-fixture",
+    async *stream() {
+      yield {
+        type: "stop",
+        reason: "stop",
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+        },
+      };
+    },
+  };
   return {
     rootBudget: {
-      provider: {
-        id: "tree-budget-fixture",
-        async *stream() {
-          yield {
-            type: "stop",
-            reason: "stop",
-            usage: {
-              inputTokens: 0,
-              cachedInputTokens: 0,
-              uncachedInputTokens: 0,
-              outputTokens: 0,
-            },
-          };
-        },
-      },
+      provider,
       remainingUsd: () => 0.01,
       observedUsage: () => ({
         inputTokens: 0,
@@ -51,14 +52,23 @@ function rootBudgetFixture(): {
       leaseContinuation: (input) => {
         leaseCalls++;
         leaseInputs.push(input);
+        const release = () => {
+          releases++;
+        };
         return {
           kind: "granted",
           reservedUsd: 0.002,
           additionalRequestBudgetUsd: 0.008,
           estimatedContinuationInputTokens: 1_000,
-          release: () => {
-            releases++;
+          continuation: {
+            provider,
+            requestShape: {
+              systemPrompt: "main",
+              toolExposure: { kind: "auto", delegation: "foreground" },
+            },
+            release,
           },
+          release,
         };
       },
     },

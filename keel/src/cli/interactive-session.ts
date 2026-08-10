@@ -27,6 +27,7 @@ import type {
   UserMessageOrigin,
 } from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
+import { MAX_SUBAGENT_RESULT_CHARS } from "../agent/subagent-tree-budget.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import {
   listUndoCheckpoints,
@@ -174,6 +175,7 @@ import type {
   ReviewedInteractiveActiveSession,
   SavedInteractiveSession,
 } from "./interactive-session/types.ts";
+import { createInteractiveSubagentSession } from "./interactive-subagent-session.ts";
 import { createMcpPermissionPolicy } from "./mcp-approval.ts";
 import {
   formatLiveSessionGoalStatus,
@@ -331,6 +333,9 @@ const RUNTIME_GOAL_STAGNATION_RECOVERY_ORIGIN = {
 const RUNTIME_UNDO_RESTORATION_ORIGIN = {
   type: "runtime_undo_restoration",
 } satisfies UserMessageOrigin;
+const RUNTIME_SUBAGENT_NOTIFICATION_ORIGIN = {
+  type: "runtime_subagent_notification",
+} satisfies UserMessageOrigin;
 
 const GOAL_BUDGET_LIMIT_REASON =
   "Session cost budget could not admit another provider request before the active goal completed.";
@@ -430,6 +435,10 @@ export async function runInteractiveSession(
   const initialState = activeSession.state;
   const savedSession =
     activeSession.kind === "saved" ? activeSession.persistence : null;
+  const backgroundAgentsEnabled =
+    savedSession !== null &&
+    options.delegation !== undefined &&
+    options.agentHistory !== undefined;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const undoProtection =
     options.undoProtection ?? createUndoProtectionTracker();
@@ -497,6 +506,7 @@ export async function runInteractiveSession(
         ? appendDelegationToSystemPrompt(
             systemPrompt,
             options.delegation.policy,
+            { background: backgroundAgentsEnabled },
           )
         : systemPrompt,
       sessionGoal,
@@ -828,7 +838,17 @@ export async function runInteractiveSession(
       kind: "budgeted",
       model,
       maxCostUsd,
-      remainingCostUsd: Math.max(0, maxCostUsd - sessionCostUsd),
+      admission:
+        subagentSession === null
+          ? {
+              kind: "isolated",
+              remainingCostUsd: Math.max(0, maxCostUsd - sessionCostUsd),
+            }
+          : {
+              kind: "shared",
+              account: subagentSession.sharedCostBudget,
+              providerCoordination: subagentSession.providerCoordination,
+            },
       budgetLimitedReport: () => {
         sessionCostBudgetLimited = true;
         return buildSessionCostBudgetLimitedReport(sessionCostUsd, maxCostUsd);
@@ -919,6 +939,28 @@ export async function runInteractiveSession(
     sessionCostUsd += turnCostUsd;
     return currentSessionCostReport();
   };
+  const subagentSession =
+    backgroundAgentsEnabled &&
+    options.delegation !== undefined &&
+    options.agentHistory !== undefined
+      ? createInteractiveSubagentSession({
+          maxCostUsd: options.delegation.maxCostUsd,
+          initialCostUsd: sessionCostUsd,
+          history: options.agentHistory,
+          now,
+          writeStderr: options.writeStderr,
+          onBackgroundSettled: (result) => {
+            sessionUsage = addUsage(sessionUsage, result.usage);
+            sessionCostUsd += result.costUsd;
+            if (
+              options.cliArgs.maxCostUsd !== undefined &&
+              sessionCostUsd >= options.cliArgs.maxCostUsd
+            ) {
+              sessionCostBudgetLimited = true;
+            }
+          },
+        })
+      : null;
   const invocationAccounting = (): InteractiveInvocationAccounting => ({
     usage: sessionUsage,
     agentLoopTurns: sessionAgentLoopTurns,
@@ -1018,6 +1060,10 @@ export async function runInteractiveSession(
     const turnModelOperations = reportModelOperations(resolved, {
       type: "current_agent_run",
     });
+    const backgroundModelOperations =
+      subagentSession === null
+        ? undefined
+        : (reportModelOperations(resolved, { type: "session" }) ?? undefined);
     const exposure = exposeSkillCatalog({
       skills: inactiveImplicitSkills(),
       request: request.userMessage,
@@ -1037,6 +1083,13 @@ export async function runInteractiveSession(
     ) {
       options.writeStderr(diagnostic);
       catalogDiagnosticSignature = diagnosticSignature;
+    }
+    for (const notification of subagentSession?.drainNotifications() ?? []) {
+      ledger.append({
+        role: "user",
+        content: notification,
+        origin: RUNTIME_SUBAGENT_NOTIFICATION_ORIGIN,
+      });
     }
     const messagesBeforeTurn = [...sessionLedgerMessages(ledger)];
     const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
@@ -1165,9 +1218,11 @@ export async function runInteractiveSession(
 
     try {
       const remainingCostUsd =
-        options.delegation === undefined
-          ? remainingMaxCostUsd()
-          : Math.max(0, options.delegation.maxCostUsd - sessionCostUsd);
+        subagentSession === null
+          ? options.delegation === undefined
+            ? remainingMaxCostUsd()
+            : Math.max(0, options.delegation.maxCostUsd - sessionCostUsd)
+          : subagentSession.sharedCostBudget.remainingUsd();
       const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
         resolved.modelMetadata,
       );
@@ -1195,9 +1250,18 @@ export async function runInteractiveSession(
               modelMaxOutputTokens,
               modelOperations: turnModelOperations ?? undefined,
               transcriptStore: options.delegation.transcriptStore,
-              ...(options.agentHistory !== undefined
+              ...(subagentSession !== null
                 ? {
-                    lifecyclePersistence: options.agentHistory.persistence,
+                    attachedSession: {
+                      lifecyclePersistence:
+                        subagentSession.lifecyclePersistence,
+                      costBudget: subagentSession.sharedCostBudget,
+                      admission: subagentSession.sharedAdmission,
+                      providerCoordination:
+                        subagentSession.providerCoordination,
+                      background: subagentSession.background,
+                      modelOperations: backgroundModelOperations,
+                    },
                   }
                 : {}),
               now,
@@ -1217,6 +1281,13 @@ export async function runInteractiveSession(
           bash,
           ...(subagentRuntime !== undefined
             ? { delegation: subagentRuntime.supervisor.capability }
+            : {}),
+          ...(subagentSession !== null && subagentRuntime !== undefined
+            ? {
+                agentControl: subagentSession.control,
+                agentControlResultBudget:
+                  subagentRuntime.supervisor.resultContinuationBudget,
+              }
             : {}),
           ...(subagentRuntime !== undefined
             ? { costBudgetProvider: subagentRuntime.costBudgetProvider }
@@ -1806,16 +1877,42 @@ export async function runInteractiveSession(
           consumeQueuedInputLines([rawInput]);
           continue;
         }
-        assert(
-          entry.result !== null,
-          "foreground subagent history must be terminal before command handling",
-        );
         try {
-          options.writeStdout(
-            interactiveCommand.action === "show"
-              ? formatAgentHistoryDetail(entry, entry.result)
-              : formatAgentTranscript(options.agentHistory, entry),
-          );
+          if (interactiveCommand.action === "show") {
+            options.writeStdout(formatAgentHistoryDetail(entry));
+          } else if (interactiveCommand.action === "transcript") {
+            options.writeStdout(
+              formatAgentTranscript(options.agentHistory, entry),
+            );
+          } else if (subagentSession === null) {
+            options.writeStderr(
+              "Error: live agent wait/cancel requires an attached saved-session owner.\n",
+            );
+          } else {
+            const commandAbortController = new AbortController();
+            activeAbortController = commandAbortController;
+            setComposerMode("queue");
+            try {
+              const result =
+                interactiveCommand.action === "wait"
+                  ? await subagentSession.control.wait({
+                      id: entry.childAgentId,
+                      signal: commandAbortController.signal,
+                      maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
+                    })
+                  : await subagentSession.control.cancel({
+                      id: entry.childAgentId,
+                      signal: commandAbortController.signal,
+                      maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
+                    });
+              (result.ok ? options.writeStdout : options.writeStderr)(
+                `${result.content.trimEnd()}\n`,
+              );
+            } finally {
+              activeAbortController = null;
+              setComposerMode("ready");
+            }
+          }
         } catch (error) {
           options.writeStderr(formatInteractiveCommandFailure(error));
         }
@@ -2138,14 +2235,13 @@ export async function runInteractiveSession(
           }
           let consumedByPersistence = false;
           let modelSwitchCost: CostReport | undefined;
-          if (
-            modelSwitchRequiresCompaction({
-              systemPrompt: currentSystemPrompt(),
-              messages: sessionLedgerMessages(ledger),
-              target: nextResolved,
-              bashToolVisible: bashRuntimeExposesTool(bash),
-            })
-          ) {
+          const modelSwitchCompaction = {
+            systemPrompt: currentSystemPrompt(),
+            messages: sessionLedgerMessages(ledger),
+            target: nextResolved,
+            bashToolVisible: bashRuntimeExposesTool(bash),
+          };
+          if (modelSwitchRequiresCompaction(modelSwitchCompaction)) {
             const currentResolved: InteractiveResolvedProvider =
               previousResolved ?? resolveActiveProvider(userMessage);
             previousResolved = currentResolved;
@@ -2160,7 +2256,7 @@ export async function runInteractiveSession(
               });
               const compaction = await executeModelSwitchCompaction({
                 current: currentResolved,
-                target: nextResolved,
+                target: modelSwitchCompaction.target,
                 workspace: options.workspace,
                 messages: compactionMessages,
                 systemPrompt: currentSystemPrompt(),
@@ -2456,10 +2552,14 @@ export async function runInteractiveSession(
     }
   } finally {
     options.offSigint(abortActiveTurn);
-    await mcpRuntime?.close().catch(() => undefined);
-    lineReader.dispose();
-    if (!preserveInputForSessionSwitch) {
-      input.close();
+    try {
+      await subagentSession?.shutdown();
+    } finally {
+      await mcpRuntime?.close().catch(() => undefined);
+      lineReader.dispose();
+      if (!preserveInputForSessionSwitch) {
+        input.close();
+      }
     }
   }
   const finalGoal =
