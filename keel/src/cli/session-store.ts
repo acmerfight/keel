@@ -22,7 +22,7 @@ export type {
   SessionTaskProgressCheckpoint,
   StoredMessage,
 } from "./session-store/model.ts";
-export { sessionHome } from "./session-store/paths.ts";
+export { sessionFilePath, sessionHome } from "./session-store/paths.ts";
 export {
   repairSessionStore,
   type SessionRepairResult,

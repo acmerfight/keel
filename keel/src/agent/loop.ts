@@ -94,6 +94,7 @@ import {
   appendSessionLedgerMessage,
   appendSessionLedgerMessages,
   type SessionLedger,
+  type SessionLedgerObserver,
   sessionLedgerFromMessages,
   sessionLedgerMessages,
 } from "./session-ledger.ts";
@@ -149,6 +150,7 @@ interface RunAgentOptionsBase {
   readonly costTracking?: CostTrackingOptions;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly transcriptObserver?: SessionLedgerObserver;
   readonly onTranscriptReady?: (messages: readonly SessionMessage[]) => void;
   readonly onAgentLoopAccountingUpdated?: RunAgentTurnOptions["onAgentLoopAccountingUpdated"];
 }
@@ -1523,13 +1525,16 @@ export async function* runAgentTurn(
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
-  const ledger = sessionLedgerFromMessages([
-    {
-      role: "user",
-      content: options.userMessage,
-      origin: options.userMessageOrigin ?? { type: "user_prompt" },
-    },
-  ]);
+  const ledger = sessionLedgerFromMessages(
+    [
+      {
+        role: "user",
+        content: options.userMessage,
+        origin: options.userMessageOrigin ?? { type: "user_prompt" },
+      },
+    ],
+    options.transcriptObserver,
+  );
   const readVisibility = createReadVisibilityState();
   const projectInstructionVisibility = createProjectInstructionVisibilityState(
     options.workspace,

@@ -47,7 +47,7 @@ function formatInteractiveIntro(
     session.resumeAvailable
       ? `Resume later with: keel --resume ${session.sessionId}`
       : `After a completed turn, resume with: keel --resume ${session.sessionId}`,
-    "Commands: /sessions /status /tasks /diff /undo /help",
+    "Commands: /sessions /status /agents /tasks /diff /undo /help",
     "",
   ].join("\n");
 }

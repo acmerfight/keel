@@ -8,6 +8,11 @@ import {
   type SharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
 import {
+  type SubagentLifecyclePersistence,
+  SubagentPersistenceError,
+  type SubagentTerminalSnapshot,
+} from "../../src/agent/subagent-lifecycle.ts";
+import {
   createSubagentSupervisor,
   type SubagentProgressEvent,
   type SubagentSupervisor,
@@ -128,6 +133,7 @@ function supervisorFixture(options: {
   readonly maxActiveAgentRuns?: number;
   readonly maxTotalChildRuns?: number;
   readonly providerBlocked?: () => boolean;
+  readonly lifecyclePersistence?: SubagentLifecyclePersistence;
 }): {
   readonly supervisor: SubagentSupervisor;
   readonly rootBudget: SharedCostBudgetedProvider;
@@ -175,6 +181,9 @@ function supervisorFixture(options: {
       costModel,
       rootBudget,
       transcriptStore: options.transcriptStore ?? artifacts.store,
+      ...(options.lifecyclePersistence !== undefined
+        ? { lifecyclePersistence: options.lifecyclePersistence }
+        : {}),
       now: options.now ?? (() => 0),
       onProgress: options.onProgress ?? (() => {}),
       ...(options.hiddenWorkspacePaths !== undefined
@@ -201,6 +210,140 @@ function supervisorFixture(options: {
 }
 
 describe("Subagent Supervisor", () => {
+  test(`Given a saved-session lifecycle sink is configured,
+    When a child is admitted and completes,
+    Then durable acceptance precedes provider work and the canonical result precedes terminal progress`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const events: string[] = [];
+    const liveFinalText = "durable sk-liveResult123456";
+    const baseProvider = singleFinalProvider(liveFinalText);
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...baseProvider,
+        async *stream(options) {
+          events.push("provider");
+          yield* baseProvider.stream(options);
+        },
+      },
+      lifecyclePersistence: {
+        accepted: () => {
+          events.push("accepted");
+          const transcript = {
+            initialize: () => {
+              events.push("transcript-initialize");
+            },
+            append: () => {},
+            replace: () => {},
+          };
+          const terminal = (snapshot: SubagentTerminalSnapshot) => {
+            events.push("terminal");
+            expect(snapshot.finalText).toBe(liveFinalText);
+          };
+          return {
+            transcriptRef: "agent-transcript:test/agent-1",
+            transcript,
+            running: () => {
+              events.push("running");
+              return {
+                transcriptRef: "agent-transcript:test/agent-1",
+                transcript,
+                accounting: () => {
+                  events.push("accounting");
+                },
+                terminal,
+              };
+            },
+            terminal,
+          };
+        },
+        rejected: () => {},
+      },
+      onProgress: (event) => {
+        events.push(`progress:${event.status}`);
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "durable",
+        task: "Return a durable result.",
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: true });
+      expect(result.content).toContain(liveFinalText);
+      expect(events.indexOf("accepted")).toBeLessThan(
+        events.indexOf("progress:queued"),
+      );
+      expect(events.indexOf("running")).toBeLessThan(
+        events.indexOf("provider"),
+      );
+      expect(events.indexOf("terminal")).toBeLessThan(
+        events.indexOf("progress:completed"),
+      );
+      expect(fixture.artifacts.inputs).toEqual([]);
+      expect(fixture.supervisor.runSnapshots()[0]?.terminal).toMatchObject({
+        status: "completed",
+        transcriptRef: "agent-transcript:test/agent-1",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an accepted child's durable lifecycle writer fails before provider work,
+    When the Supervisor starts that child,
+    Then the persistence failure escapes instead of becoming a normal rejected or failed child result`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      lifecyclePersistence: {
+        accepted: () => ({
+          transcriptRef: "agent-transcript:test/fatal",
+          transcript: {
+            initialize: () => {},
+            append: () => {},
+            replace: () => {},
+          },
+          running: () => {
+            throw new SubagentPersistenceError("durable writer failed");
+          },
+          terminal: () => {},
+        }),
+        rejected: () => {},
+      },
+    });
+
+    try {
+      await expect(
+        fixture.supervisor.capability.delegate({
+          toolCallId: "fatal-persistence",
+          task: "Do not continue after durable storage fails.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow(SubagentPersistenceError);
+      expect(providerCalls).toBe(0);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a root allows two active children and three total children,
     When main prepares an oversized batch and later delegates again,
     Then admission is root-inclusive, atomic, and retains the total limit after slots release`, async () => {
@@ -294,12 +437,13 @@ describe("Subagent Supervisor", () => {
 
   test(`Given a delegate batch reserves one queued child,
     When dispatch receives an unprepared call and then closes before starting the admitted call,
-    Then the foreign call fails closed and the queued child releases without provider work`, async () => {
+    Then the foreign call fails closed and the queued child is durably cancelled without provider work`, async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-subagent-supervisor-"),
     );
     let providerCalls = 0;
     let continuationReleases = 0;
+    const persistedTerminals: SubagentTerminalSnapshot[] = [];
     const baseProvider = singleFinalProvider("unreachable");
     const fixture = supervisorFixture({
       workspace,
@@ -312,6 +456,38 @@ describe("Subagent Supervisor", () => {
       },
       onContinuationReleased: () => {
         continuationReleases++;
+      },
+      lifecyclePersistence: {
+        accepted: (lifecycle) => {
+          const transcript = {
+            initialize: () => {},
+            append: () => {},
+            replace: () => {},
+          };
+          const terminal = (snapshot: SubagentTerminalSnapshot) => {
+            persistedTerminals.push(snapshot);
+            return {
+              delegationId: lifecycle.delegationId,
+              childAgentId: lifecycle.childAgentId,
+              childRunId: lifecycle.childRunId,
+              task: lifecycle.task,
+              transcriptRef: "agent-transcript:test/cancelled-before-start",
+              ...snapshot,
+            };
+          };
+          return {
+            transcriptRef: "agent-transcript:test/cancelled-before-start",
+            transcript,
+            running: () => ({
+              transcriptRef: "agent-transcript:test/cancelled-before-start",
+              transcript,
+              accounting: () => {},
+              terminal,
+            }),
+            terminal,
+          };
+        },
+        rejected: () => {},
       },
     });
     const request = {
@@ -337,11 +513,73 @@ describe("Subagent Supervisor", () => {
       });
       expect(providerCalls).toBe(0);
       expect(continuationReleases).toBe(1);
+      expect(persistedTerminals).toEqual([
+        {
+          status: "cancelled",
+          finalText: null,
+          error: "Child was cancelled before execution started.",
+          usage: {
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 0,
+            outputTokens: 0,
+          },
+          turns: 0,
+          costUsd: 0,
+        },
+      ]);
       expect(fixture.supervisor.activeChildRunCount()).toBe(0);
       expect(fixture.supervisor.runSnapshots()).toMatchObject([
         {
           state: "terminal",
-          terminal: { status: "cancelled" },
+          terminal: {
+            status: "cancelled",
+            transcriptRef: "agent-transcript:test/cancelled-before-start",
+          },
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an ephemeral delegate batch reserves a queued child,
+    When the batch closes before dispatch,
+    Then the in-memory receipt becomes cancelled and releases without provider work`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    let providerCalls = 0;
+    const baseProvider = singleFinalProvider("unreachable");
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...baseProvider,
+        async *stream(options) {
+          providerCalls++;
+          yield* baseProvider.stream(options);
+        },
+      },
+    });
+    const request = {
+      toolCallId: "ephemeral-queued",
+      task: "Do not start this child.",
+      focusPaths: [],
+      signal: new AbortController().signal,
+    };
+
+    try {
+      const batch = fixture.supervisor.capability.prepareBatch([
+        { kind: "request", request },
+      ]);
+      batch.close();
+
+      expect(providerCalls).toBe(0);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+      expect(fixture.supervisor.runSnapshots()).toMatchObject([
+        {
+          state: "terminal",
+          terminal: { status: "cancelled", transcriptRef: null },
         },
       ]);
     } finally {
@@ -497,9 +735,20 @@ describe("Subagent Supervisor", () => {
       join(tmpdir(), "keel-subagent-supervisor-"),
     );
     let providerCalls = 0;
+    let acceptedLifecycleCount = 0;
+    const rejectedTasks: string[] = [];
     const fixture = supervisorFixture({
       workspace,
       providerAbortSignalSupport: false,
+      lifecyclePersistence: {
+        accepted: () => {
+          acceptedLifecycleCount++;
+          throw new Error("unexpected accepted lifecycle");
+        },
+        rejected: (lifecycle) => {
+          rejectedTasks.push(lifecycle.task);
+        },
+      },
       provider: {
         id: "uncertified-provider",
         estimateInputTokens: () => 100,
@@ -526,12 +775,168 @@ describe("Subagent Supervisor", () => {
           "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
       });
       expect(providerCalls).toBe(0);
+      expect(acceptedLifecycleCount).toBe(0);
+      expect(rejectedTasks).toEqual(["Do not start this child."]);
       expect(fixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(fixture.supervisor.runSnapshots()).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given a delegation must be rejected before admission but its durable receipt cannot be written,
+    When main receives the rejection,
+    Then no child starts and the stable receipt reports the storage failure`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      providerAbortSignalSupport: false,
+      lifecyclePersistence: {
+        accepted: () => {
+          throw new Error("accepted lifecycle must not be created");
+        },
+        rejected: () => {
+          throw new Error("receipt disk unavailable");
+        },
+      },
+      provider: {
+        id: "uncertified-provider",
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "unreachable" };
+        },
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "rejection-storage-failure",
+        task: "Reject without starting a child.",
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({
+        delivery: "rejected",
+        ok: false,
+        content: expect.stringContaining(
+          "Lifecycle receipt could not be stored: receipt disk unavailable",
+        ),
+      });
+      expect(providerCalls).toBe(0);
+      expect(fixture.supervisor.totalAcceptedCount()).toBe(0);
+      expect(fixture.supervisor.runSnapshots()).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a hard-rejection receipt may have been partially committed,
+    When persistence reports an indeterminate write,
+    Then delegation fails fatally instead of disguising ledger corruption as a normal rejection`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const failure = new SubagentPersistenceError(
+      "rejection receipt state is indeterminate",
+    );
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("must not run"),
+      providerAbortSignalSupport: false,
+      lifecyclePersistence: {
+        accepted: () => {
+          throw new Error("accepted lifecycle must not be created");
+        },
+        rejected: () => {
+          throw failure;
+        },
+      },
+    });
+
+    try {
+      await expect(
+        fixture.supervisor.capability.delegate({
+          toolCallId: "indeterminate-rejection",
+          task: "Reject without corrupting the durable ledger.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toBe(failure);
+      expect(fixture.supervisor.totalAcceptedCount()).toBe(0);
+      expect(fixture.supervisor.runSnapshots()).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      failure: new Error("acceptance ledger unavailable"),
+      expected:
+        "Delegation rejected: lifecycle could not be stored before child admission.",
+      fatal: false,
+    },
+    {
+      failure: new SubagentPersistenceError(
+        "acceptance state is indeterminate",
+      ),
+      expected: "acceptance state is indeterminate",
+      fatal: true,
+    },
+  ])(
+    `Given durable acceptance fails with $failure,
+    When main tries to admit the child,
+    Then provider work never starts and the failure follows its recoverability contract`,
+    async ({ failure, expected, fatal }) => {
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-subagent-supervisor-"),
+      );
+      let providerCalls = 0;
+      const fixture = supervisorFixture({
+        workspace,
+        lifecyclePersistence: {
+          accepted: () => {
+            throw failure;
+          },
+          rejected: () => {},
+        },
+        provider: {
+          id: "must-not-run-after-acceptance-failure",
+          estimateInputTokens: () => 100,
+          async *stream() {
+            providerCalls++;
+            yield { type: "text", text: "unreachable" };
+          },
+        },
+      });
+
+      try {
+        const pending = fixture.supervisor.capability.delegate({
+          toolCallId: `acceptance-${fatal ? "fatal" : "recoverable"}`,
+          task: "Do not start without durable acceptance.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        });
+        if (fatal) {
+          await expect(pending).rejects.toThrow(expected);
+        } else {
+          await expect(pending).resolves.toMatchObject({
+            delivery: "rejected",
+            content: expect.stringContaining(expected),
+          });
+        }
+        expect(providerCalls).toBe(0);
+        expect(fixture.supervisor.totalAcceptedCount()).toBe(0);
+        expect(fixture.supervisor.runSnapshots()).toEqual([]);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given one delegation completes and its result is replayed alone and beside fresh work,
     When every batch reserves its provider-shaped continuation,

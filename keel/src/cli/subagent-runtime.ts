@@ -2,6 +2,7 @@ import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
 import { createSharedCostBudgetedProvider } from "../agent/cost-budget.ts";
 import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import type { ProjectInstructions } from "../agent/prompt.ts";
+import type { SubagentLifecyclePersistence } from "../agent/subagent-lifecycle.ts";
 import {
   createSubagentSupervisor,
   type SubagentProgressEvent,
@@ -27,6 +28,7 @@ interface CreateCliSubagentRuntimeOptions {
   readonly modelMaxOutputTokens: number | undefined;
   readonly modelOperations: MainModelOperationInstrumentation | undefined;
   readonly transcriptStore: AbortableToolOutputArtifactStore;
+  readonly lifecyclePersistence?: SubagentLifecyclePersistence;
   readonly now: () => number;
   readonly onProgress: (event: SubagentProgressEvent) => void;
 }
@@ -75,6 +77,9 @@ export function createCliSubagentRuntime(
         ? { modelOperations: options.modelOperations }
         : {}),
       transcriptStore: options.transcriptStore,
+      ...(options.lifecyclePersistence !== undefined
+        ? { lifecyclePersistence: options.lifecyclePersistence }
+        : {}),
       now: options.now,
       onProgress: options.onProgress,
       providerBlocked: treeProvider.blocked,

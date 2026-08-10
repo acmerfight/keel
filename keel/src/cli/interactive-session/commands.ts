@@ -72,6 +72,14 @@ interface StatusCommand {
   readonly kind: "status";
 }
 
+type AgentsCommand =
+  | { readonly kind: "agents"; readonly action: "list" }
+  | {
+      readonly kind: "agents";
+      readonly action: "show" | "transcript";
+      readonly selector: string;
+    };
+
 interface SessionsCommand {
   readonly kind: "sessions";
 }
@@ -123,6 +131,7 @@ export type InteractiveCommand =
   | ModelCommand
   | SkillCommand
   | StatusCommand
+  | AgentsCommand
   | SessionsCommand
   | TitleCommand
   | InteractiveGoalCommand
@@ -162,6 +171,11 @@ export function formatInteractiveHelp(): string {
     "  /skill reload <qualified-id>",
     "                     Explicitly replace a snapshot from disk.",
     "  /status            Show session state and recovery commands.",
+    "  /agents            List subagents recorded by this saved session.",
+    "  /agents show <id|index>",
+    "                     Show one subagent's durable terminal facts.",
+    "  /agents transcript <id|index>",
+    "                     Show one subagent's persisted transcript.",
     "  /sessions          Choose another saved session in this workspace.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
@@ -799,6 +813,27 @@ export function parseInteractiveCommand(
       };
     }
     return { kind: "status" };
+  }
+
+  const agentsMatch = /^\/agents(?:\s+(.*))?$/u.exec(trimmed);
+  if (agentsMatch !== null) {
+    const args = agentsMatch[1]?.trim() ?? "";
+    if (args === "") return { kind: "agents", action: "list" };
+    const parts = args.split(/\s+/u);
+    const action = parts[0];
+    const selector = parts[1];
+    if (
+      (action !== "show" && action !== "transcript") ||
+      selector === undefined ||
+      parts.length !== 2
+    ) {
+      return {
+        kind: "invalid",
+        message:
+          "Error: usage is /agents, /agents show <id|index>, or /agents transcript <id|index>.",
+      };
+    }
+    return { kind: "agents", action, selector };
   }
 
   const sessionsMatch = /^\/sessions(?:\s+(.*))?$/u.exec(trimmed);

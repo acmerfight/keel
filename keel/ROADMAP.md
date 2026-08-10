@@ -186,9 +186,14 @@ What a user can do today:
   [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md),
   [Slice 1.6 completion result](evals/experiments/subagent-slice-1-6/RESULTS.md),
   and [stable-policy result](evals/experiments/subagent-slice-2-3/RESULTS.md).
-  #590 remains the governing epic; foreground parallelism does not imply
-  background persistence, write authority, nesting, or default-on autonomous
-  delegation before their own slices and gates.
+  Saved interactive sessions also keep an independent append-only agent tree
+  and incremental child transcripts. `/agents` lists durable runs and inspects
+  terminal facts or transcripts after restart; when a prior exclusive session
+  owner dies, its abandoned queued/running child is recovered once as
+  `interrupted` instead of remaining falsely live. #590 remains the governing
+  epic; durable foreground history does not imply background execution, write
+  authority, nesting, or default-on autonomous delegation before their own
+  slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -229,7 +234,9 @@ Known limits that shape the priorities below:
   a restored user-message point into an independent named session.
   `--resume --pick` and `/sessions` group related sessions into a graph-aware
   numbered tree, while `/fork --pick` provides an interactive fork-point
-  picker. Persistent agent-tree state is still absent.
+  picker. Saved-session foreground subagents now have independent durable tree
+  state and `/agents` inspection; background ownership and control are still
+  absent.
   Forks do not copy bash approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
@@ -304,7 +311,9 @@ Known limits that shape the priorities below:
    and persistent durable Goal status. The startup and `--resume --pick`
    session picker groups independent fork ledgers into a numbered branch tree;
    `/sessions` reuses that graph in a running process and transfers queued input
-   to the selected ledger. Remaining work includes persistent agent-tree state.
+   to the selected ledger. Saved foreground child runs and transcripts persist
+   in an independent agent tree and are inspectable through `/agents`; remaining
+   work includes background ownership and control.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -401,8 +410,10 @@ Codex/Claude Code — or directly moves the eval numbers.
   `/fork [--before-message <id>|--pick]` create independent forks from restored
   history without copying pending queued input. `keel --resume --pick` groups
   those ledgers into a graph-aware numbered tree, and `/sessions` switches the
-  active ledger from the same graph without restarting Keel. Remaining work is
-  persistent agent-tree state.
+  active ledger from the same graph without restarting Keel. Saved foreground
+  child runs and incremental transcripts use a separate append-only agent tree;
+  `/agents` inspects them after resume and stale nonterminal runs recover as
+  interrupted. Remaining work is background agent ownership and control.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports

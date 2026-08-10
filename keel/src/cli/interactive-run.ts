@@ -22,6 +22,10 @@ import type {
 } from "../skills/model.ts";
 import { repositoryWorkflowSkillRootPaths } from "../skills/project.ts";
 import { createAgentProjectMemory } from "./agent-project-memory.ts";
+import {
+  type AgentTreeHistory,
+  createAgentTreeHistory,
+} from "./agent-tree-store.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
 import {
@@ -1237,6 +1241,39 @@ async function runActiveSessionCli(
           scope: toolOutputArtifactScope,
         }),
       };
+      const agentHistory: AgentTreeHistory | undefined =
+        savedSessionOwner === null
+          ? undefined
+          : (() => {
+              const owner = savedSessionOwner;
+              let opened =
+                session === undefined
+                  ? undefined
+                  : createAgentTreeHistory({
+                      sessionId: owner.id,
+                      runtime,
+                    });
+              const requireHistory = (): AgentTreeHistory => {
+                owner.ensure();
+                opened ??= createAgentTreeHistory({
+                  sessionId: owner.id,
+                  runtime,
+                });
+                return opened;
+              };
+              return {
+                sessionId: owner.id,
+                persistence: {
+                  accepted: (lifecycle) =>
+                    requireHistory().persistence.accepted(lifecycle),
+                  rejected: (lifecycle) => {
+                    requireHistory().persistence.rejected(lifecycle);
+                  },
+                },
+                entries: () => requireHistory().entries(),
+                transcript: (entry) => requireHistory().transcript(entry),
+              };
+            })();
       const displaySession =
         activeSessionId === undefined
           ? ({ kind: "ephemeral" } as const)
@@ -1517,6 +1554,7 @@ async function runActiveSessionCli(
             }
           : {}),
         toolOutputArtifacts,
+        ...(agentHistory !== undefined ? { agentHistory } : {}),
         ...(cliArgs.agentPolicy !== "off"
           ? {
               delegation: {

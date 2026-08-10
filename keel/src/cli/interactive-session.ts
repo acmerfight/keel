@@ -96,6 +96,12 @@ import {
 import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { isMcpToolInvocation } from "../tools/tool-call.ts";
+import {
+  formatAgentHistoryDetail,
+  formatAgentHistoryList,
+  formatAgentTranscript,
+  resolveAgentHistoryEntry,
+} from "./agent-history-format.ts";
 import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
   formatInteractiveForkPicker,
@@ -1189,6 +1195,11 @@ export async function runInteractiveSession(
               modelMaxOutputTokens,
               modelOperations: turnModelOperations ?? undefined,
               transcriptStore: options.delegation.transcriptStore,
+              ...(options.agentHistory !== undefined
+                ? {
+                    lifecyclePersistence: options.agentHistory.persistence,
+                  }
+                : {}),
               now,
               onProgress: (event) => {
                 options.writeStderr(formatSubagentProgress(event));
@@ -1768,6 +1779,46 @@ export async function runInteractiveSession(
             recoveryActions: statusRecoveryActions(),
           }),
         );
+        consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (interactiveCommand?.kind === "agents") {
+        if (options.agentHistory === undefined) {
+          options.writeStderr(
+            "Error: /agents requires a saved interactive session.\n",
+          );
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        if (interactiveCommand.action === "list") {
+          options.writeStdout(formatAgentHistoryList(options.agentHistory));
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        const entry = resolveAgentHistoryEntry(
+          options.agentHistory,
+          interactiveCommand.selector,
+        );
+        if (entry === null) {
+          options.writeStderr(
+            `Error: no subagent matches "${interactiveCommand.selector}".\n`,
+          );
+          consumeQueuedInputLines([rawInput]);
+          continue;
+        }
+        assert(
+          entry.result !== null,
+          "foreground subagent history must be terminal before command handling",
+        );
+        try {
+          options.writeStdout(
+            interactiveCommand.action === "show"
+              ? formatAgentHistoryDetail(entry, entry.result)
+              : formatAgentTranscript(options.agentHistory, entry),
+          );
+        } catch (error) {
+          options.writeStderr(formatInteractiveCommandFailure(error));
+        }
         consumeQueuedInputLines([rawInput]);
         continue;
       }

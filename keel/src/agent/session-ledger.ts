@@ -8,20 +8,31 @@ export interface SessionLedger {
   readonly replace: (messages: readonly SessionMessage[]) => void;
 }
 
+export interface SessionLedgerObserver {
+  readonly initialize: (messages: readonly SessionMessage[]) => void;
+  readonly append: (messages: readonly SessionMessage[]) => void;
+  readonly replace: (messages: readonly SessionMessage[]) => void;
+}
+
 export function sessionLedgerFromMessages(
   messages: readonly SessionMessage[],
+  observer?: SessionLedgerObserver,
 ): SessionLedger {
+  observer?.initialize(messages);
   let currentMessages = [...messages];
   return {
     messages: () => currentMessages,
     append: (message) => {
+      observer?.append([message]);
       currentMessages = [...currentMessages, message];
     },
     appendMany: (nextMessages) => {
       if (nextMessages.length === 0) return;
+      observer?.append(nextMessages);
       currentMessages = [...currentMessages, ...nextMessages];
     },
     replace: (nextMessages) => {
+      observer?.replace(nextMessages);
       currentMessages = [...nextMessages];
     },
   };
