@@ -1276,6 +1276,11 @@ async function runActiveSessionCli(
                   },
                 },
                 entries: () => requireHistory().entries(),
+                pendingResultDeliveries: (parentMessages) =>
+                  opened?.pendingResultDeliveries(parentMessages) ?? [],
+                deliveredResult: (delivery) => {
+                  requireHistory().deliveredResult(delivery);
+                },
                 transcript: (entry) => requireHistory().transcript(entry),
               };
             })();

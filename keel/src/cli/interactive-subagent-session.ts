@@ -44,7 +44,7 @@ export interface InteractiveSubagentSession {
   readonly providerCoordination: SubagentTreeProviderCoordination;
   readonly background: SubagentBackgroundRuntime;
   readonly control: AgentControlCapability;
-  readonly drainNotifications: () => readonly string[];
+  readonly assertHealthy: () => void;
   readonly shutdown: () => Promise<void>;
 }
 
@@ -86,7 +86,6 @@ export function createInteractiveSubagentSession(
   const sessionAbortController = new AbortController();
   const runs = new Map<AgentId, SubagentBackgroundRun>();
   const settlements = new Map<AgentId, Promise<void>>();
-  const notifications: string[] = [];
   let health: BackgroundSessionHealth = { kind: "healthy" };
   const maxRemainingCostUsd = Math.max(
     0,
@@ -179,15 +178,6 @@ export function createInteractiveSubagentSession(
       const settlement = run.result
         .then((result) => {
           const notice = `Background subagent ${run.childAgentId} ${result.status}.`;
-          notifications.push(
-            [
-              "<keel_runtime_context>",
-              notice,
-              "Use agent_wait with this stable agent ID when its canonical result is needed.",
-              "This is runtime lifecycle state, not a new user request or evidence that the child conclusion is correct.",
-              "</keel_runtime_context>",
-            ].join("\n"),
-          );
           try {
             options.writeStderr(`${notice}\n`);
           } catch {
@@ -202,7 +192,7 @@ export function createInteractiveSubagentSession(
               `Background subagent ${run.childAgentId} failed to settle: ${errorMessage(caught)}\n`,
             );
           } catch {
-            // Output is observational; drainNotifications/shutdown still propagates the failure.
+            // Output is observational; shutdown still propagates the failure.
           }
         });
       settlements.set(run.childAgentId, settlement);
@@ -260,9 +250,8 @@ export function createInteractiveSubagentSession(
     providerCoordination,
     background,
     control,
-    drainNotifications: () => {
+    assertHealthy: () => {
       if (health.kind === "failed") throw health.error;
-      return notifications.splice(0, notifications.length);
     },
     shutdown: async () => {
       sessionAbortController.abort(new Error("saved session owner exited"));

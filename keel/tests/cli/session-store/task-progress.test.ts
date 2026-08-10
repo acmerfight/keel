@@ -59,7 +59,7 @@ describe("Session Store Task Progress", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerRecords.at(-1)).toEqual({
-        schemaVersion: 5,
+        schemaVersion: 6,
         type: "task_progress",
         timestamp: "1970-01-01T00:00:00.001Z",
         messageOrdinal: 0,
@@ -382,7 +382,7 @@ describe("Session Store Task Progress", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(targetLedgerRecords).toContainEqual({
-        schemaVersion: 5,
+        schemaVersion: 6,
         type: "task_progress",
         timestamp: "1970-01-01T00:00:00.006Z",
         messageOrdinal: 0,

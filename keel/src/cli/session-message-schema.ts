@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { userMessageOriginTypes } from "../agent/session-message.ts";
+import {
+  ordinaryUserMessageOriginTypes,
+  subagentResultDeliveryOriginType,
+} from "../agent/session-message.ts";
+import type { AgentId, SubagentRunId } from "../agent/subagent-lifecycle.ts";
 import { toolCallSchema } from "../tools/tool-call.ts";
 
 const userMessageContextCompactionEvidenceSchema = z
@@ -19,9 +23,23 @@ export const userMessageContextCompactionSchema = z
   })
   .strict();
 
-export const userMessageOriginSchema = z
+const ordinaryUserMessageOriginSchema = z
+  .object({ type: z.enum(ordinaryUserMessageOriginTypes) })
+  .strict();
+
+const subagentResultDeliveryReferenceSchema = z
   .object({
-    type: z.enum(userMessageOriginTypes),
+    sessionId: z.string().min(1),
+    delegationId: z.string().min(1),
+    childAgentId: z.templateLiteral([
+      "agent-",
+      z.string().regex(/^[a-f0-9-]+$/u),
+    ]) satisfies z.ZodType<AgentId>,
+    childRunId: z.templateLiteral([
+      "subagent-",
+      z.string().regex(/^[a-f0-9-]+$/u),
+    ]) satisfies z.ZodType<SubagentRunId>,
+    canonicalResultSha256: z.string().regex(/^[a-f0-9]{64}$/u),
   })
   .strict();
 
@@ -30,6 +48,23 @@ const userMessageShape = {
   content: z.string(),
   contextCompaction: userMessageContextCompactionSchema.optional(),
 };
+
+const ordinaryUserMessageSchema = z
+  .object({
+    ...userMessageShape,
+    origin: ordinaryUserMessageOriginSchema.optional(),
+  })
+  .strict();
+
+const subagentResultDeliveryMessageSchema = z
+  .object({
+    ...userMessageShape,
+    origin: z
+      .object({ type: z.literal(subagentResultDeliveryOriginType) })
+      .strict(),
+    subagentResultDelivery: subagentResultDeliveryReferenceSchema,
+  })
+  .strict();
 
 const openAICompatibleAssistantMetadataSchema = z
   .object({ reasoningContent: z.string() })
@@ -68,24 +103,21 @@ const toolMessageSchema = z
   })
   .strict();
 
-export const sessionMessageSchema = z.discriminatedUnion("role", [
-  z
-    .object({
-      ...userMessageShape,
-      origin: userMessageOriginSchema.optional(),
-    })
-    .strict(),
+export const sessionMessageSchema = z.union([
+  ordinaryUserMessageSchema,
+  subagentResultDeliveryMessageSchema,
   assistantMessageSchema,
   toolMessageSchema,
 ]);
 
-export const persistedSessionMessageSchema = z.discriminatedUnion("role", [
+export const persistedSessionMessageSchema = z.union([
   z
     .object({
       ...userMessageShape,
-      origin: userMessageOriginSchema,
+      origin: ordinaryUserMessageOriginSchema,
     })
     .strict(),
+  subagentResultDeliveryMessageSchema,
   assistantMessageSchema,
   toolMessageSchema,
 ]);

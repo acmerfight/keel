@@ -22,6 +22,7 @@ export class SubagentPersistenceError extends Error {}
 
 export type AgentId = `agent-${string}`;
 export type SubagentRunId = `subagent-${string}`;
+export type SubagentRunMode = "foreground" | "background";
 
 interface SubagentRunIdentity {
   readonly delegationId: string;
@@ -34,6 +35,7 @@ interface SubagentRunIdentity {
 }
 
 export interface SubagentAcceptedLifecycle extends SubagentRunIdentity {
+  readonly mode: SubagentRunMode;
   readonly providerId: string;
   readonly model: string;
   readonly systemPrompt: string;
@@ -88,6 +90,19 @@ export type SubagentCanonicalResult = SubagentCanonicalResultBase &
 export type PersistedSubagentCanonicalResult = SubagentCanonicalResult & {
   readonly transcriptRef: string;
 };
+
+export interface SubagentResultDeliveryReference {
+  readonly sessionId: string;
+  readonly delegationId: string;
+  readonly childAgentId: AgentId;
+  readonly childRunId: SubagentRunId;
+  readonly canonicalResultSha256: string;
+}
+
+export interface SubagentResultDelivery
+  extends SubagentResultDeliveryReference {
+  readonly projection: string;
+}
 
 interface SubagentPersistenceBase {
   readonly transcriptRef: string;

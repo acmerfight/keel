@@ -20,6 +20,8 @@ function emptyHistory(): AgentTreeHistory {
       rejected: () => {},
     },
     entries: () => [],
+    pendingResultDeliveries: () => [],
+    deliveredResult: () => {},
     transcript: () => "",
   };
 }
@@ -48,6 +50,7 @@ function activeEntry(
     parentToolCallId: `tool:${childAgentId}`,
     task: "Inspect one module.",
     focusPaths: [],
+    mode: "background",
     providerId: "deepseek",
     model: "deepseek-chat",
     transcriptRef: `agent-transcript:saved-session/${childAgentId}`,
@@ -235,13 +238,6 @@ describe("Interactive subagent session", () => {
       ok: true,
       content: expect.stringContaining("done"),
     });
-    await Promise.resolve();
-    expect(session.drainNotifications()).toEqual([
-      expect.stringContaining(
-        `Background subagent ${entry.childAgentId} completed.`,
-      ),
-    ]);
-    expect(session.drainNotifications()).toEqual([]);
     await expect(
       session.control.cancel({
         id: entry.childAgentId,
@@ -382,8 +378,6 @@ describe("Interactive subagent session", () => {
     await expect(session.shutdown()).rejects.toThrow(
       "session accounting failed",
     );
-    expect(() => session.drainNotifications()).toThrow(
-      "session accounting failed",
-    );
+    expect(() => session.assertHealthy()).toThrow("session accounting failed");
   });
 });

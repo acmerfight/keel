@@ -5,10 +5,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   type AgentId,
   type SubagentAcceptedLifecycle,
@@ -43,6 +44,7 @@ function acceptedLifecycle(childAgentId: AgentId): SubagentAcceptedLifecycle {
     parentToolCallId: `tool-${childAgentId}`,
     task: "Inspect the crash boundary.",
     focusPaths: ["src/module.ts"],
+    mode: "foreground",
     providerId: "deepseek",
     model: "deepseek-chat",
     systemPrompt: "Read-only child instructions.",
@@ -87,6 +89,187 @@ function testRuntime(
 }
 
 describe("Agent Tree Store Crash Boundaries", () => {
+  test(`Given a background child terminal event is durable but its delivery projection append is interrupted,
+    When the saved history reopens,
+    Then recovery prepares the same pending result and binds it to the unchanged canonical result`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-delivery-pending-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const sessionId = "pending-delivery-recovery";
+    const baseRuntime = testRuntime(keelHome, () => now++);
+    createSessionStore({ sessionId, workspace, runtime: baseRuntime });
+    const lifecycle = {
+      ...acceptedLifecycle("agent-12121212-1212-4212-8212-121212121212"),
+      mode: "background" as const,
+    };
+
+    try {
+      const history = createAgentTreeHistory({
+        sessionId,
+        runtime: testRuntime(
+          keelHome,
+          () => now++,
+          partialAppendRuntime('"type":"agent_result_delivery_pending"'),
+        ),
+      });
+      const run = history.persistence.accepted(lifecycle);
+      run.transcript.initialize([
+        {
+          role: "user",
+          content: "Inspect the crash boundary.",
+          origin: { type: "runtime_subagent_delegation" },
+        },
+      ]);
+      const running = run.running();
+      expect(() =>
+        running.terminal({
+          status: "completed",
+          finalText: "Durable child result.",
+          error: null,
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 10,
+            outputTokens: 5,
+          },
+          turns: 1,
+          costUsd: 0.0001,
+        }),
+      ).toThrow("simulated partial");
+
+      const recovered = createAgentTreeHistory({
+        sessionId,
+        runtime: baseRuntime,
+      });
+      const pending = recovered.pendingResultDeliveries([]);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({
+        sessionId,
+        delegationId: lifecycle.delegationId,
+        childAgentId: lifecycle.childAgentId,
+      });
+
+      const reopened = createAgentTreeHistory({
+        sessionId,
+        runtime: baseRuntime,
+      });
+      expect(reopened.pendingResultDeliveries([])).toEqual(pending);
+      const eventsPath = join(
+        keelHome,
+        "sessions",
+        sessionId,
+        "agents",
+        "events.jsonl",
+      );
+      const events = await readFile(eventsPath, "utf8");
+      expect(events.match(/"type":"agent_result"/gu)).toHaveLength(1);
+      expect(events.match(/"type":"agent_run_terminal"/gu)).toHaveLength(1);
+      expect(
+        events.match(/"type":"agent_result_delivery_pending"/gu),
+      ).toHaveLength(1);
+      const tamperedEvents = events.replace(
+        '"finalText":"Durable child result."',
+        '"finalText":"Tampered child result."',
+      );
+      expect(tamperedEvents).not.toBe(events);
+      await writeFile(eventsPath, tamperedEvents, "utf8");
+      expect(() =>
+        createAgentTreeHistory({ sessionId, runtime: baseRuntime }),
+      ).toThrow("delivery mismatches its canonical result");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the parent ledger contains a background completion but its delivered marker append is interrupted,
+    When the saved history reopens and reconciles that parent message,
+    Then it marks the same projection delivered once and never injects it again`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-delivery-mark-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const sessionId = "delivered-marker-recovery";
+    const baseRuntime = testRuntime(keelHome, () => now++);
+    createSessionStore({ sessionId, workspace, runtime: baseRuntime });
+    const lifecycle = {
+      ...acceptedLifecycle("agent-34343434-3434-4434-8434-343434343434"),
+      mode: "background" as const,
+    };
+
+    try {
+      const history = createAgentTreeHistory({
+        sessionId,
+        runtime: baseRuntime,
+      });
+      const run = history.persistence.accepted(lifecycle);
+      run.transcript.initialize([
+        {
+          role: "user",
+          content: "Inspect the crash boundary.",
+          origin: { type: "runtime_subagent_delegation" },
+        },
+      ]);
+      run.running().terminal({
+        status: "completed",
+        finalText: "Durable child result.",
+        error: null,
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 10,
+          outputTokens: 5,
+        },
+        turns: 1,
+        costUsd: 0.0001,
+      });
+      const delivery = history.pendingResultDeliveries([])[0];
+      if (delivery === undefined) throw new Error("missing pending delivery");
+      const { projection, ...reference } = delivery;
+      const parentMessage: SessionMessage = {
+        role: "user",
+        content: projection,
+        origin: { type: "runtime_subagent_notification" },
+        subagentResultDelivery: reference,
+      };
+      expect(() =>
+        history.pendingResultDeliveries([
+          { ...parentMessage, content: `${projection}\ntampered` },
+        ]),
+      ).toThrow("mismatches the durable projection");
+
+      const failing = createAgentTreeHistory({
+        sessionId,
+        runtime: testRuntime(
+          keelHome,
+          () => now++,
+          partialAppendRuntime('"type":"agent_result_delivery_delivered"'),
+        ),
+      });
+      expect(() => failing.pendingResultDeliveries([parentMessage])).toThrow(
+        "simulated partial",
+      );
+
+      const recovered = createAgentTreeHistory({
+        sessionId,
+        runtime: baseRuntime,
+      });
+      expect(recovered.pendingResultDeliveries([parentMessage])).toEqual([]);
+      const reopened = createAgentTreeHistory({
+        sessionId,
+        runtime: baseRuntime,
+      });
+      expect(reopened.pendingResultDeliveries([parentMessage])).toEqual([]);
+      const events = await readFile(
+        join(keelHome, "sessions", sessionId, "agents", "events.jsonl"),
+        "utf8",
+      );
+      expect(
+        events.match(/"type":"agent_result_delivery_delivered"/gu),
+      ).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given recovery must synthesize an initialization for a running child,
     When that initialization write fails before the interrupted result is committed,
     Then a later recovery can retry without inheriting an impossible started result`, async () => {
@@ -676,27 +859,37 @@ describe("Agent Tree Store Crash Boundaries", () => {
       stage: "running",
       marker: '"type":"agent_run_running"',
       recoveredStatus: "interrupted",
+      mode: "foreground" as const,
     },
     {
       stage: "result",
       marker: '"type":"agent_result"',
       recoveredStatus: "interrupted",
+      mode: "foreground" as const,
     },
     {
       stage: "transcript terminal",
       marker: '"type":"transcript_terminal"',
       recoveredStatus: "completed",
+      mode: "foreground" as const,
     },
     {
       stage: "lifecycle terminal",
       marker: '"type":"agent_run_terminal"',
       recoveredStatus: "completed",
+      mode: "foreground" as const,
+    },
+    {
+      stage: "background lifecycle terminal",
+      marker: '"type":"agent_run_terminal"',
+      recoveredStatus: "completed",
+      mode: "background" as const,
     },
   ])(
     `Given the $stage append writes a partial JSONL record,
     When the saved history is reopened after the owner fails,
     Then rollback and recovery produce exactly one truthful terminal result`,
-    async ({ marker, recoveredStatus }) => {
+    async ({ marker, recoveredStatus, mode }) => {
       const workspace = await mkdtemp(join(tmpdir(), "keel-agent-failpoint-"));
       const keelHome = join(workspace, ".keel-home");
       let now = 1_700_000_000_000;
@@ -706,9 +899,10 @@ describe("Agent Tree Store Crash Boundaries", () => {
         workspace,
         runtime: baseRuntime,
       });
-      const lifecycle = acceptedLifecycle(
-        "agent-33333333-3333-4333-8333-333333333333",
-      );
+      const lifecycle = {
+        ...acceptedLifecycle("agent-33333333-3333-4333-8333-333333333333"),
+        mode,
+      };
 
       try {
         const history = createAgentTreeHistory({

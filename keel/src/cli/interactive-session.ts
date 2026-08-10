@@ -23,6 +23,7 @@ import {
   sessionLedgerMessages,
 } from "../agent/session-ledger.ts";
 import type {
+  OrdinaryUserMessageOrigin,
   SessionMessage,
   UserMessageOrigin,
 } from "../agent/session-message.ts";
@@ -361,7 +362,7 @@ function formatGoalTurnLimitReason(limit: number): string {
 
 interface PromptTurnRequest {
   readonly userMessage: string;
-  readonly userMessageOrigin: UserMessageOrigin;
+  readonly userMessageOrigin: OrdinaryUserMessageOrigin;
   readonly consumedInputLines: readonly QueuedLine[];
   readonly runTrigger: RunReportAgentRunTrigger;
   readonly runtimeOutcome?: SessionGoalRuntimeOutcome;
@@ -369,7 +370,7 @@ interface PromptTurnRequest {
 
 interface PendingGoalDrive {
   readonly message: string;
-  readonly origin: UserMessageOrigin;
+  readonly origin: OrdinaryUserMessageOrigin;
   readonly taskTrigger: Extract<
     RunReportTaskTrigger,
     "goal_activation" | "goal_resume"
@@ -798,7 +799,7 @@ export async function runInteractiveSession(
   };
   const userMessageOriginForPromptInput = (
     lines: readonly QueuedLine[],
-  ): UserMessageOrigin =>
+  ): OrdinaryUserMessageOrigin =>
     queuedInputIds(lines).length === 0
       ? USER_PROMPT_ORIGIN
       : QUEUED_FOLLOWUP_ORIGIN;
@@ -1099,12 +1100,34 @@ export async function runInteractiveSession(
       options.writeStderr(diagnostic);
       catalogDiagnosticSignature = diagnosticSignature;
     }
-    for (const notification of subagentSession?.drainNotifications() ?? []) {
-      ledger.append({
-        role: "user",
-        content: notification,
-        origin: RUNTIME_SUBAGENT_NOTIFICATION_ORIGIN,
-      });
+    subagentSession?.assertHealthy();
+    const agentHistory = options.agentHistory;
+    if (savedSession !== null && agentHistory !== undefined) {
+      for (const delivery of agentHistory.pendingResultDeliveries(
+        sessionLedgerMessages(ledger),
+      )) {
+        const notification: SessionMessage = {
+          role: "user",
+          content: delivery.projection,
+          origin: RUNTIME_SUBAGENT_NOTIFICATION_ORIGIN,
+          subagentResultDelivery: {
+            sessionId: delivery.sessionId,
+            delegationId: delivery.delegationId,
+            childAgentId: delivery.childAgentId,
+            childRunId: delivery.childRunId,
+            canonicalResultSha256: delivery.canonicalResultSha256,
+          },
+        };
+        ledger.append(notification);
+        savedSession.persistMessages({
+          messages: sessionLedgerMessages(ledger),
+          reason: "turn",
+          consumedInputIds: [],
+          skillState: null,
+          reservedMessageIds: [],
+        });
+        agentHistory.deliveredResult(delivery);
+      }
     }
     const messagesBeforeTurn = [...sessionLedgerMessages(ledger)];
     const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
@@ -1633,7 +1656,7 @@ export async function runInteractiveSession(
   const runAutomaticGoalContinuations = async (
     initialContinuationMessage = GOAL_CONTINUATION_MESSAGE,
     initialRunTrigger: RunReportAgentRunTrigger = "goal_continuation",
-    initialContinuationOrigin: UserMessageOrigin = RUNTIME_GOAL_CONTINUATION_ORIGIN,
+    initialContinuationOrigin: OrdinaryUserMessageOrigin = RUNTIME_GOAL_CONTINUATION_ORIGIN,
   ): Promise<boolean> => {
     const automaticContinuationTurnLimit =
       resolveGoalAutomaticContinuationTurnLimit(

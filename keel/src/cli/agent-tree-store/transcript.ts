@@ -73,6 +73,7 @@ function transcriptHeader(
     parentToolCallId: accepted.parentToolCallId,
     task: accepted.task,
     focusPaths: [...accepted.focusPaths],
+    mode: accepted.mode,
     providerId: accepted.providerId,
     model: accepted.model,
     systemPrompt: accepted.systemPrompt,

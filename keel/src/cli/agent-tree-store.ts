@@ -1,12 +1,17 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { SessionMessage } from "../agent/session-message.ts";
 import {
   type AgentId,
   type PersistedSubagentCanonicalResult,
   type SubagentAccountingSnapshot,
   type SubagentLifecyclePersistence,
   SubagentPersistenceError,
+  type SubagentResultDelivery,
+  type SubagentResultDeliveryReference,
   type SubagentRunId,
+  type SubagentRunMode,
   type SubagentRunningPersistence,
   type SubagentRunPersistence,
   type SubagentTerminalSnapshot,
@@ -24,6 +29,8 @@ import {
 import {
   AGENT_TREE_MAX_BYTES,
   AGENT_TREE_SCHEMA_VERSION,
+  type AgentResultDeliveryDeliveredRecord,
+  type AgentResultDeliveryPendingRecord,
   type AgentResultRecord,
   type AgentRunAcceptedRecord,
   type AgentRunAccountingRecord,
@@ -66,16 +73,39 @@ type AgentRunActiveState =
       readonly transcriptInitialization: TranscriptInitializationExpectation;
     };
 
-type AgentRunTerminalState = {
-  readonly kind: "terminal";
-  readonly result: PersistedSubagentCanonicalResult;
-  readonly terminal: AgentRunTerminalRecord;
-};
+type AgentRunDeliveryState =
+  | { readonly kind: "pending"; readonly delivery: SubagentResultDelivery }
+  | { readonly kind: "delivered"; readonly delivery: SubagentResultDelivery };
+
+type AgentRunTerminalState =
+  | {
+      readonly kind: "terminal";
+      readonly mode: "foreground";
+      readonly result: PersistedSubagentCanonicalResult;
+      readonly terminal: AgentRunTerminalRecord;
+    }
+  | {
+      readonly kind: "terminal";
+      readonly mode: "background";
+      readonly result: PersistedSubagentCanonicalResult;
+      readonly terminal: AgentRunTerminalRecord;
+      readonly delivery: AgentRunDeliveryState;
+    };
 
 type AgentRunState = AgentRunActiveState | AgentRunTerminalState;
 
+type ReplayedAgentRunTerminalState =
+  | Extract<AgentRunTerminalState, { readonly mode: "foreground" }>
+  | (Omit<
+      Extract<AgentRunTerminalState, { readonly mode: "background" }>,
+      "delivery"
+    > & {
+      readonly delivery: { readonly kind: "missing" } | AgentRunDeliveryState;
+    });
+
 type ReplayedAgentRunState =
-  | AgentRunState
+  | AgentRunActiveState
+  | ReplayedAgentRunTerminalState
   | {
       readonly kind: "result";
       readonly result: PersistedSubagentCanonicalResult;
@@ -130,6 +160,7 @@ export interface AgentHistoryEntry {
   readonly parentToolCallId: string;
   readonly task: string;
   readonly focusPaths: readonly string[];
+  readonly mode: SubagentRunMode;
   readonly providerId: string;
   readonly model: string;
   readonly transcriptRef: string;
@@ -143,6 +174,10 @@ export interface AgentTreeHistory {
   readonly sessionId: string;
   readonly persistence: SubagentLifecyclePersistence;
   readonly entries: () => readonly AgentHistoryEntry[];
+  readonly pendingResultDeliveries: (
+    parentMessages: readonly SessionMessage[],
+  ) => readonly SubagentResultDelivery[];
+  readonly deliveredResult: (delivery: SubagentResultDeliveryReference) => void;
   readonly transcript: (entry: AgentHistoryEntry) => string;
 }
 
@@ -230,8 +265,115 @@ function assertResultIdentity(
   }
 }
 
+function copyResultDelivery(
+  delivery: SubagentResultDelivery,
+): SubagentResultDelivery {
+  return { ...delivery };
+}
+
+function copyDeliveryState(
+  state: AgentRunDeliveryState,
+): AgentRunDeliveryState {
+  return { kind: state.kind, delivery: copyResultDelivery(state.delivery) };
+}
+
+function canonicalResultSha256(
+  result: PersistedSubagentCanonicalResult,
+): string {
+  const commonResult = {
+    delegationId: result.delegationId,
+    childAgentId: result.childAgentId,
+    childRunId: result.childRunId,
+    task: result.task,
+    transcriptRef: result.transcriptRef,
+    usage: {
+      inputTokens: result.usage.inputTokens,
+      cachedInputTokens: result.usage.cachedInputTokens,
+      uncachedInputTokens: result.usage.uncachedInputTokens,
+      outputTokens: result.usage.outputTokens,
+    },
+    turns: result.turns,
+    costUsd: result.costUsd,
+  } satisfies Omit<
+    PersistedSubagentCanonicalResult,
+    "status" | "finalText" | "error"
+  >;
+  const canonicalResult: PersistedSubagentCanonicalResult =
+    result.status === "completed"
+      ? {
+          ...commonResult,
+          status: result.status,
+          finalText: result.finalText,
+          error: result.error,
+        }
+      : {
+          ...commonResult,
+          status: result.status,
+          finalText: result.finalText,
+          error: result.error,
+        };
+  const serialized = JSON.stringify(canonicalResult);
+  return createHash("sha256").update(serialized).digest("hex");
+}
+
+function resultDeliveryProjection(
+  result: PersistedSubagentCanonicalResult,
+): string {
+  const notice = `Background subagent ${result.childAgentId} ${result.status}.`;
+  return [
+    "<keel_runtime_context>",
+    notice,
+    "Use agent_wait with this stable agent ID when its canonical result is needed.",
+    "This is runtime lifecycle state, not a new user request or evidence that the child conclusion is correct.",
+    "</keel_runtime_context>",
+  ].join("\n");
+}
+
+function createResultDelivery(
+  sessionId: string,
+  result: PersistedSubagentCanonicalResult,
+): SubagentResultDelivery {
+  return {
+    sessionId,
+    delegationId: result.delegationId,
+    childAgentId: result.childAgentId,
+    childRunId: result.childRunId,
+    canonicalResultSha256: canonicalResultSha256(result),
+    projection: resultDeliveryProjection(result),
+  };
+}
+
+function sameResultDeliveryReference(
+  left: SubagentResultDeliveryReference,
+  right: SubagentResultDeliveryReference,
+): boolean {
+  return (
+    left.sessionId === right.sessionId &&
+    left.delegationId === right.delegationId &&
+    left.childAgentId === right.childAgentId &&
+    left.childRunId === right.childRunId &&
+    left.canonicalResultSha256 === right.canonicalResultSha256
+  );
+}
+
+function assertDeliveryIdentity(
+  run: ReplayedAgentRun | MutableAgentRun,
+  reference: SubagentResultDeliveryReference,
+): void {
+  if (
+    reference.delegationId !== run.accepted.delegationId ||
+    reference.childAgentId !== run.accepted.childAgentId ||
+    reference.childRunId !== run.accepted.childRunId
+  ) {
+    agentTreeError(
+      `agent ${run.accepted.childAgentId} delivery identity mismatches acceptance`,
+    );
+  }
+}
+
 function replayAgentRuns(
   mutations: readonly AgentTreeMutationRecord[],
+  sessionId: string,
 ): Map<AgentId, ReplayedAgentRun> {
   const runs = new Map<AgentId, ReplayedAgentRun>();
   for (const mutation of mutations) {
@@ -330,10 +472,80 @@ function replayAgentRuns(
             `agent ${mutation.childAgentId} terminal status mismatches result`,
           );
         }
+        run.state =
+          run.accepted.mode === "foreground"
+            ? {
+                kind: "terminal",
+                mode: "foreground",
+                result: run.state.result,
+                terminal: mutation,
+              }
+            : {
+                kind: "terminal",
+                mode: "background",
+                result: run.state.result,
+                terminal: mutation,
+                delivery: { kind: "missing" },
+              };
+        break;
+      }
+      case "agent_result_delivery_pending": {
+        const run = requireRun(
+          runs,
+          mutation.delivery.childAgentId,
+          mutation.delivery.childRunId,
+        );
+        assertDeliveryIdentity(run, mutation.delivery);
+        if (
+          run.state.kind !== "terminal" ||
+          run.state.mode !== "background" ||
+          run.state.delivery.kind !== "missing"
+        ) {
+          agentTreeError(
+            `agent ${mutation.delivery.childAgentId} recorded delivery outside one terminal background lifecycle`,
+          );
+        }
+        const expected = createResultDelivery(sessionId, run.state.result);
+        if (
+          !sameResultDeliveryReference(expected, mutation.delivery) ||
+          expected.projection !== mutation.delivery.projection
+        ) {
+          agentTreeError(
+            `agent ${mutation.delivery.childAgentId} delivery mismatches its canonical result`,
+          );
+        }
         run.state = {
-          kind: "terminal",
-          result: run.state.result,
-          terminal: mutation,
+          ...run.state,
+          delivery: {
+            kind: "pending",
+            delivery: copyResultDelivery(mutation.delivery),
+          },
+        };
+        break;
+      }
+      case "agent_result_delivery_delivered": {
+        const run = requireRun(
+          runs,
+          mutation.childAgentId,
+          mutation.childRunId,
+        );
+        assertDeliveryIdentity(run, mutation);
+        if (
+          run.state.kind !== "terminal" ||
+          run.state.mode !== "background" ||
+          run.state.delivery.kind !== "pending" ||
+          !sameResultDeliveryReference(run.state.delivery.delivery, mutation)
+        ) {
+          agentTreeError(
+            `agent ${mutation.childAgentId} delivery completed without one matching pending projection`,
+          );
+        }
+        run.state = {
+          ...run.state,
+          delivery: {
+            kind: "delivered",
+            delivery: copyResultDelivery(run.state.delivery.delivery),
+          },
         };
         break;
       }
@@ -389,7 +601,78 @@ function appendTerminalEvent(input: {
   return terminalRecord;
 }
 
+function appendPendingResultDelivery(input: {
+  readonly sessionId: string;
+  readonly filePath: string;
+  readonly runtime: SessionStoreRuntime;
+  readonly result: PersistedSubagentCanonicalResult;
+  readonly writer: DurableJsonlWriter;
+}): SubagentResultDelivery {
+  const delivery = createResultDelivery(input.sessionId, input.result);
+  const record: AgentResultDeliveryPendingRecord = {
+    schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+    type: "agent_result_delivery_pending",
+    timestamp: timestamp(input.runtime),
+    delivery: copyResultDelivery(delivery),
+  };
+  input.writer.append(input.filePath, record, "agent tree");
+  return delivery;
+}
+
+function appendDeliveredResult(input: {
+  readonly filePath: string;
+  readonly runtime: SessionStoreRuntime;
+  readonly run: MutableAgentRun;
+  readonly writer: DurableJsonlWriter;
+  readonly reference: SubagentResultDeliveryReference;
+}): void {
+  assertDeliveryIdentity(input.run, input.reference);
+  const state = input.run.state;
+  if (state.kind !== "terminal" || state.mode !== "background") {
+    agentTreeError(
+      `child agent ${input.run.accepted.childAgentId} has no result delivery lifecycle`,
+    );
+  }
+  if (state.delivery.kind === "delivered") {
+    if (
+      !sameResultDeliveryReference(state.delivery.delivery, input.reference)
+    ) {
+      agentTreeError(
+        `child agent ${input.run.accepted.childAgentId} delivery confirmation mismatches the delivered result`,
+      );
+    }
+    return;
+  }
+  if (
+    state.delivery.kind !== "pending" ||
+    !sameResultDeliveryReference(state.delivery.delivery, input.reference)
+  ) {
+    agentTreeError(
+      `child agent ${input.run.accepted.childAgentId} has no matching pending result delivery`,
+    );
+  }
+  const record: AgentResultDeliveryDeliveredRecord = {
+    schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+    type: "agent_result_delivery_delivered",
+    timestamp: timestamp(input.runtime),
+    sessionId: input.reference.sessionId,
+    delegationId: input.reference.delegationId,
+    childAgentId: input.reference.childAgentId,
+    childRunId: input.reference.childRunId,
+    canonicalResultSha256: input.reference.canonicalResultSha256,
+  };
+  input.writer.append(input.filePath, record, "agent tree");
+  input.run.state = {
+    ...state,
+    delivery: {
+      kind: "delivered",
+      delivery: copyResultDelivery(state.delivery.delivery),
+    },
+  };
+}
+
 function appendCanonicalTerminal(input: {
+  readonly sessionId: string;
   readonly filePath: string;
   readonly transcriptPath: string;
   readonly runtime: SessionStoreRuntime;
@@ -419,15 +702,35 @@ function appendCanonicalTerminal(input: {
     writer: input.writer,
     result,
   });
-  input.run.state = {
-    kind: "terminal",
-    result: copyCanonicalResult(result),
-    terminal,
-  };
+  input.run.state =
+    input.run.accepted.mode === "foreground"
+      ? {
+          kind: "terminal",
+          mode: "foreground",
+          result: copyCanonicalResult(result),
+          terminal,
+        }
+      : {
+          kind: "terminal",
+          mode: "background",
+          result: copyCanonicalResult(result),
+          terminal,
+          delivery: {
+            kind: "pending",
+            delivery: appendPendingResultDelivery({
+              sessionId: input.sessionId,
+              filePath: input.filePath,
+              runtime: input.runtime,
+              result,
+              writer: input.writer,
+            }),
+          },
+        };
   return copyCanonicalResult(result);
 }
 
 function repairInterruptedRuns(input: {
+  readonly sessionId: string;
   readonly filePath: string;
   readonly transcriptsDirectory: string;
   readonly runtime: SessionStoreRuntime;
@@ -448,14 +751,40 @@ function repairInterruptedRuns(input: {
         run.state.result.status,
         { kind: "required" },
       );
-      repairedRuns.set(run.accepted.childAgentId, {
-        accepted: run.accepted,
-        state: {
-          kind: "terminal",
-          result: copyCanonicalResult(run.state.result),
-          terminal: run.state.terminal,
-        },
-      });
+      const repairedRun: MutableAgentRun =
+        run.state.mode === "foreground"
+          ? {
+              accepted: run.accepted,
+              state: {
+                kind: "terminal",
+                mode: "foreground",
+                result: copyCanonicalResult(run.state.result),
+                terminal: run.state.terminal,
+              },
+            }
+          : {
+              accepted: run.accepted,
+              state: {
+                kind: "terminal",
+                mode: "background",
+                result: copyCanonicalResult(run.state.result),
+                terminal: run.state.terminal,
+                delivery:
+                  run.state.delivery.kind === "missing"
+                    ? {
+                        kind: "pending",
+                        delivery: appendPendingResultDelivery({
+                          sessionId: input.sessionId,
+                          filePath: input.filePath,
+                          runtime: input.runtime,
+                          result: run.state.result,
+                          writer: input.writer,
+                        }),
+                      }
+                    : copyDeliveryState(run.state.delivery),
+              },
+            };
+      repairedRuns.set(run.accepted.childAgentId, repairedRun);
       continue;
     }
     if (run.state.kind === "result") {
@@ -472,14 +801,34 @@ function repairInterruptedRuns(input: {
         writer: input.writer,
         result: run.state.result,
       });
-      repairedRuns.set(run.accepted.childAgentId, {
+      const repairedRun: MutableAgentRun = {
         accepted: run.accepted,
-        state: {
-          kind: "terminal",
-          result: copyCanonicalResult(run.state.result),
-          terminal,
-        },
-      });
+        state:
+          run.accepted.mode === "foreground"
+            ? {
+                kind: "terminal",
+                mode: "foreground",
+                result: copyCanonicalResult(run.state.result),
+                terminal,
+              }
+            : {
+                kind: "terminal",
+                mode: "background",
+                result: copyCanonicalResult(run.state.result),
+                terminal,
+                delivery: {
+                  kind: "pending",
+                  delivery: appendPendingResultDelivery({
+                    sessionId: input.sessionId,
+                    filePath: input.filePath,
+                    runtime: input.runtime,
+                    result: run.state.result,
+                    writer: input.writer,
+                  }),
+                },
+              },
+      };
+      repairedRuns.set(run.accepted.childAgentId, repairedRun);
       continue;
     }
     const accounting = copyAccounting(run.state.accounting);
@@ -505,6 +854,7 @@ function repairInterruptedRuns(input: {
       transcriptInitialization,
     );
     appendCanonicalTerminal({
+      sessionId: input.sessionId,
       filePath: input.filePath,
       transcriptPath,
       runtime: input.runtime,
@@ -570,6 +920,7 @@ function historyEntries(
     parentToolCallId: run.accepted.parentToolCallId,
     task: run.accepted.task,
     focusPaths: [...run.accepted.focusPaths],
+    mode: run.accepted.mode,
     providerId: run.accepted.providerId,
     model: run.accepted.model,
     transcriptRef: run.accepted.transcriptRef,
@@ -614,13 +965,14 @@ export function createAgentTreeHistory(options: {
       `agent tree session ${records.header.sessionId} does not match ${options.sessionId}`,
     );
   }
-  const replayedRuns = replayAgentRuns(records.mutations);
+  const replayedRuns = replayAgentRuns(records.mutations, options.sessionId);
   reconcileUnacceptedTranscripts(
     transcriptsDirectory,
     new Set(replayedRuns.keys()),
     writer.syncDirectory,
   );
   const runs = repairInterruptedRuns({
+    sessionId: options.sessionId,
     filePath,
     transcriptsDirectory,
     runtime: options.runtime,
@@ -687,6 +1039,7 @@ export function createAgentTreeHistory(options: {
           state.kind === "queued" ? { kind: "optional" } : { kind: "required" };
         persist(() =>
           appendCanonicalTerminal({
+            sessionId: options.sessionId,
             filePath,
             transcriptPath,
             runtime: options.runtime,
@@ -777,10 +1130,72 @@ export function createAgentTreeHistory(options: {
     },
   };
 
+  const deliveredResult = (delivery: SubagentResultDeliveryReference): void => {
+    if (delivery.sessionId !== options.sessionId) {
+      agentTreeError(
+        `subagent result delivery belongs to session ${delivery.sessionId}, not ${options.sessionId}`,
+      );
+    }
+    const run = requireRun(runs, delivery.childAgentId, delivery.childRunId);
+    persist(() =>
+      appendDeliveredResult({
+        filePath,
+        runtime: options.runtime,
+        run,
+        writer,
+        reference: delivery,
+      }),
+    );
+  };
+
+  const pendingResultDeliveries = (
+    parentMessages: readonly SessionMessage[],
+  ): readonly SubagentResultDelivery[] => {
+    const observedDelegations = new Set<string>();
+    for (const message of parentMessages) {
+      if (
+        message.role !== "user" ||
+        message.subagentResultDelivery === undefined ||
+        message.subagentResultDelivery.sessionId !== options.sessionId
+      ) {
+        continue;
+      }
+      const observed = message.subagentResultDelivery;
+      if (observedDelegations.has(observed.delegationId)) {
+        agentTreeError(
+          `parent ledger contains duplicate subagent result delivery ${observed.delegationId}`,
+        );
+      }
+      observedDelegations.add(observed.delegationId);
+      const run = requireRun(runs, observed.childAgentId, observed.childRunId);
+      assertDeliveryIdentity(run, observed);
+      if (
+        run.state.kind !== "terminal" ||
+        run.state.mode !== "background" ||
+        !sameResultDeliveryReference(run.state.delivery.delivery, observed) ||
+        run.state.delivery.delivery.projection !== message.content
+      ) {
+        agentTreeError(
+          `parent delivery for child agent ${observed.childAgentId} mismatches the durable projection`,
+        );
+      }
+      deliveredResult(observed);
+    }
+    return [...runs.values()].flatMap((run) =>
+      run.state.kind === "terminal" &&
+      run.state.mode === "background" &&
+      run.state.delivery.kind === "pending"
+        ? [copyResultDelivery(run.state.delivery.delivery)]
+        : [],
+    );
+  };
+
   return {
     sessionId: options.sessionId,
     persistence,
     entries: () => historyEntries(runs),
+    pendingResultDeliveries,
+    deliveredResult,
     transcript: (entry) => {
       const run = requireRun(runs, entry.childAgentId, entry.childRunId);
       return readAgentTranscript(

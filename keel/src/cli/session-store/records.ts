@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type {
+  OrdinaryUserMessageOrigin,
   PersistedSessionMessage,
   SessionMessage,
   UserMessageContextCompactionMetadata,
-  UserMessageOrigin,
 } from "../../agent/session-message.ts";
 import { providerIds } from "../../core/provider-id.ts";
 import { copyReadResourceObservation } from "../../core/resource-observation.ts";
@@ -48,7 +48,6 @@ import {
 import {
   persistedSessionMessageSchema as messageSchema,
   type userMessageContextCompactionSchema,
-  type userMessageOriginSchema,
 } from "../session-message-schema.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
@@ -412,11 +411,14 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
 ]);
 
 type RawMessage = z.infer<typeof messageSchema>;
+type RawSubagentResultDeliveryMessage = Extract<
+  RawMessage,
+  { readonly subagentResultDelivery: object }
+>;
 type RawStoredMessage = z.infer<typeof storedMessageSchema>;
 type RawUserMessageContextCompactionMetadata = z.infer<
   typeof userMessageContextCompactionSchema
 >;
-type RawUserMessageOrigin = z.infer<typeof userMessageOriginSchema>;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
 type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
@@ -431,6 +433,12 @@ type RawSessionSkillStateCheckpoint = z.infer<
 >;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
+
+function isRawSubagentResultDeliveryMessage(
+  message: RawMessage,
+): message is RawSubagentResultDeliveryMessage {
+  return message.role === "user" && "subagentResultDelivery" in message;
+}
 
 function copyUserContextCompactionMetadata(
   metadata: UserMessageContextCompactionMetadata,
@@ -451,11 +459,15 @@ function copyUserContextCompactionMetadata(
   };
 }
 
-function copyUserMessageOrigin(origin: UserMessageOrigin): UserMessageOrigin {
+function copyUserMessageOrigin(
+  origin: OrdinaryUserMessageOrigin,
+): OrdinaryUserMessageOrigin {
   return { type: origin.type };
 }
 
-function toUserMessageOrigin(origin: RawUserMessageOrigin): UserMessageOrigin {
+function toUserMessageOrigin(
+  origin: OrdinaryUserMessageOrigin,
+): OrdinaryUserMessageOrigin {
   return { type: origin.type };
 }
 
@@ -488,19 +500,31 @@ function toUserContextCompactionMetadata(
 
 function toMessage(message: RawMessage): PersistedSessionMessage {
   switch (message.role) {
-    case "user":
-      return {
-        role: "user",
-        content: message.content,
-        origin: toUserMessageOrigin(message.origin),
-        ...(message.contextCompaction === undefined
+    case "user": {
+      const contextCompaction =
+        message.contextCompaction === undefined
           ? {}
           : {
               contextCompaction: toUserContextCompactionMetadata(
                 message.contextCompaction,
               ),
-            }),
+            };
+      if (isRawSubagentResultDeliveryMessage(message)) {
+        return {
+          role: "user",
+          content: message.content,
+          origin: { type: "runtime_subagent_notification" },
+          subagentResultDelivery: { ...message.subagentResultDelivery },
+          ...contextCompaction,
+        };
+      }
+      return {
+        role: "user",
+        content: message.content,
+        origin: toUserMessageOrigin(message.origin),
+        ...contextCompaction,
       };
+    }
     case "assistant":
       return {
         role: "assistant",
@@ -536,19 +560,31 @@ function copyMessage(
   message: PersistedSessionMessage,
 ): PersistedSessionMessage {
   switch (message.role) {
-    case "user":
-      return {
-        role: "user",
-        content: message.content,
-        origin: copyUserMessageOrigin(message.origin),
-        ...(message.contextCompaction === undefined
+    case "user": {
+      const contextCompaction =
+        message.contextCompaction === undefined
           ? {}
           : {
               contextCompaction: copyUserContextCompactionMetadata(
                 message.contextCompaction,
               ),
-            }),
+            };
+      if (message.subagentResultDelivery !== undefined) {
+        return {
+          role: "user",
+          content: message.content,
+          origin: { type: "runtime_subagent_notification" },
+          subagentResultDelivery: { ...message.subagentResultDelivery },
+          ...contextCompaction,
+        };
+      }
+      return {
+        role: "user",
+        content: message.content,
+        origin: copyUserMessageOrigin(message.origin),
+        ...contextCompaction,
       };
+    }
     case "assistant":
       return {
         role: "assistant",
@@ -1566,6 +1602,7 @@ function validateCompletedTranscript(
 ): void {
   const errorPrefix = `Error: cannot ${action} session "${sessionId}":`;
   const pendingToolCallIds = new Set<string>();
+  const subagentDeliveryIds = new Set<string>();
   for (const message of messages) {
     if (pendingToolCallIds.size > 0 && message.role !== "tool") {
       sessionStoreError(
@@ -1575,6 +1612,15 @@ function validateCompletedTranscript(
 
     switch (message.role) {
       case "user":
+        if (message.subagentResultDelivery !== undefined) {
+          const deliveryId = message.subagentResultDelivery.delegationId;
+          if (subagentDeliveryIds.has(deliveryId)) {
+            sessionStoreError(
+              `${errorPrefix} ledger contains duplicate subagent result delivery ${JSON.stringify(deliveryId)}.`,
+            );
+          }
+          subagentDeliveryIds.add(deliveryId);
+        }
         break;
       case "assistant":
         for (const toolCall of message.toolCalls) {

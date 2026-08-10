@@ -1,8 +1,9 @@
 import type { ReadResourceObservation } from "../core/resource-observation.ts";
 import type { AssistantProviderMetadata } from "../llm/types.ts";
 import type { ToolCall } from "../tools/tool-call.ts";
+import type { SubagentResultDeliveryReference } from "./subagent-lifecycle.ts";
 
-export const userMessageOriginTypes = [
+export const ordinaryUserMessageOriginTypes = [
   "user_prompt",
   "steer",
   "queued_followup",
@@ -11,17 +12,22 @@ export const userMessageOriginTypes = [
   "runtime_goal_resumption",
   "runtime_goal_stagnation_recovery",
   "runtime_subagent_delegation",
-  "runtime_subagent_notification",
   "runtime_turn_limit_summary",
   "runtime_undo_restoration",
   "compaction_checkpoint",
 ] as const;
+export const subagentResultDeliveryOriginType =
+  "runtime_subagent_notification" as const;
+type OrdinaryUserMessageOriginType =
+  (typeof ordinaryUserMessageOriginTypes)[number];
 
-type UserMessageOriginType = (typeof userMessageOriginTypes)[number];
-
-export interface UserMessageOrigin {
-  readonly type: UserMessageOriginType;
+export interface OrdinaryUserMessageOrigin {
+  readonly type: OrdinaryUserMessageOriginType;
 }
+
+export type UserMessageOrigin =
+  | OrdinaryUserMessageOrigin
+  | { readonly type: typeof subagentResultDeliveryOriginType };
 
 export interface UserMessageContextCompactionEvidence {
   readonly handle: string;
@@ -40,12 +46,25 @@ interface SessionMessageAudience {
   readonly _messageAudience?: "session";
 }
 
-interface SessionUserMessage extends SessionMessageAudience {
+interface SessionUserMessageBase extends SessionMessageAudience {
   readonly role: "user";
   readonly content: string;
-  readonly origin?: UserMessageOrigin;
   readonly contextCompaction?: UserMessageContextCompactionMetadata;
 }
+
+interface OrdinarySessionUserMessage extends SessionUserMessageBase {
+  readonly origin?: OrdinaryUserMessageOrigin;
+  readonly subagentResultDelivery?: never;
+}
+
+interface SubagentResultDeliverySessionMessage extends SessionUserMessageBase {
+  readonly origin: { readonly type: "runtime_subagent_notification" };
+  readonly subagentResultDelivery: SubagentResultDeliveryReference;
+}
+
+type SessionUserMessage =
+  | OrdinarySessionUserMessage
+  | SubagentResultDeliverySessionMessage;
 
 interface SessionAssistantMessage extends SessionMessageAudience {
   readonly role: "assistant";
@@ -69,6 +88,9 @@ export type SessionMessage =
   | SessionToolMessage;
 
 export type PersistedSessionMessage =
-  | (SessionUserMessage & { readonly origin: UserMessageOrigin })
+  | (OrdinarySessionUserMessage & {
+      readonly origin: OrdinaryUserMessageOrigin;
+    })
+  | SubagentResultDeliverySessionMessage
   | SessionAssistantMessage
   | SessionToolMessage;
