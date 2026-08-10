@@ -12,6 +12,7 @@ export const ordinaryUserMessageOriginTypes = [
   "runtime_goal_resumption",
   "runtime_goal_stagnation_recovery",
   "runtime_subagent_delegation",
+  "runtime_subagent_input",
   "runtime_turn_limit_summary",
   "runtime_undo_restoration",
   "compaction_checkpoint",
@@ -34,12 +35,12 @@ export interface UserMessageContextCompactionEvidence {
   readonly label: string;
   readonly source: string;
   readonly why: string;
-  readonly inspectCommand?: string;
+  readonly inspectCommand?: string | undefined;
 }
 
 export interface UserMessageContextCompactionMetadata {
   readonly evidence: readonly UserMessageContextCompactionEvidence[];
-  readonly untrustedMcpContent?: true;
+  readonly untrustedMcpContent?: true | undefined;
 }
 
 interface SessionMessageAudience {
@@ -49,11 +50,11 @@ interface SessionMessageAudience {
 interface SessionUserMessageBase extends SessionMessageAudience {
   readonly role: "user";
   readonly content: string;
-  readonly contextCompaction?: UserMessageContextCompactionMetadata;
+  readonly contextCompaction?: UserMessageContextCompactionMetadata | undefined;
 }
 
 interface OrdinarySessionUserMessage extends SessionUserMessageBase {
-  readonly origin?: OrdinaryUserMessageOrigin;
+  readonly origin?: OrdinaryUserMessageOrigin | undefined;
   readonly subagentResultDelivery?: never;
 }
 
@@ -70,16 +71,16 @@ interface SessionAssistantMessage extends SessionMessageAudience {
   readonly role: "assistant";
   readonly content: string;
   readonly toolCalls: readonly ToolCall[];
-  readonly providerMetadata?: AssistantProviderMetadata;
+  readonly providerMetadata?: AssistantProviderMetadata | undefined;
 }
 
 interface SessionToolMessage extends SessionMessageAudience {
   readonly role: "tool";
   readonly toolCallId: string;
   readonly content: string;
-  readonly sourceTruncated?: boolean;
-  readonly evidenceShortened?: true;
-  readonly resourceObservation?: ReadResourceObservation;
+  readonly sourceTruncated?: boolean | undefined;
+  readonly evidenceShortened?: true | undefined;
+  readonly resourceObservation?: ReadResourceObservation | undefined;
 }
 
 export type SessionMessage =

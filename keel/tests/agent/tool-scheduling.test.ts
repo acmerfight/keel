@@ -24,6 +24,11 @@ import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger
 import type { AgentControlCapability } from "../../src/tools/agent-control.ts";
 import type { DelegationCapability } from "../../src/tools/delegation.ts";
 
+const unusedAgentMutationControl = {
+  input: () => ({ ok: false, content: "unused" }),
+  resume: async () => ({ ok: false, content: "unused" }),
+} satisfies Pick<AgentControlCapability, "input" | "resume">;
+
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
   cachedInputTokens: 0,
@@ -117,6 +122,7 @@ describe("Tool Scheduling", () => {
       },
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => ({ ok: true, content: "unused" }),
       waitForSettlement: async () => {
         order.push("settle");
@@ -219,6 +225,7 @@ describe("Tool Scheduling", () => {
       },
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => ({ ok: true, content: "unused" }),
       waitForSettlement: async () => {},
       wait: async () => {
@@ -290,6 +297,7 @@ describe("Tool Scheduling", () => {
       },
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => ({ ok: true, content: "unused" }),
       waitForSettlement: async () => {},
       wait: async () => {
@@ -370,6 +378,7 @@ describe("Tool Scheduling", () => {
       },
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => ({ ok: true, content: "unused" }),
       waitForSettlement: async () => {
         settlementWaitCalls++;
@@ -480,6 +489,7 @@ describe("Tool Scheduling", () => {
       },
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => {
         return { ok: true, content: "unused" };
       },
@@ -579,6 +589,7 @@ describe("Tool Scheduling", () => {
       },
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => ({ ok: true, content: "unused" }),
       waitForSettlement: async () => {},
       wait: async () => ({ ok: true, content: "canonical child result" }),
@@ -691,6 +702,7 @@ describe("Tool Scheduling", () => {
       close: async () => {},
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => ({ ok: true, content: "unused" }),
       waitForSettlement: async () => {},
       wait: async () => ({ ok: true, content: "canonical child result" }),
@@ -778,6 +790,7 @@ describe("Tool Scheduling", () => {
       },
     };
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: () => ({ ok: true, content: "unused" }),
       waitForSettlement: async () => {},
       wait: async () => {

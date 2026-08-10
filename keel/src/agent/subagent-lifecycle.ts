@@ -1,5 +1,6 @@
 import type { Usage } from "../llm/types.ts";
 import type { SessionLedgerObserver } from "./session-ledger.ts";
+import type { SessionMessage } from "./session-message.ts";
 
 export const subagentNonCompletedStatuses = [
   "failed",
@@ -24,6 +25,13 @@ export type AgentId = `agent-${string}`;
 export type SubagentRunId = `subagent-${string}`;
 export type SubagentRunMode = "foreground" | "background";
 
+export type SubagentRunLineage =
+  | { readonly kind: "root" }
+  | {
+      readonly kind: "continuation";
+      readonly previousRunId: SubagentRunId;
+    };
+
 interface SubagentRunIdentity {
   readonly delegationId: string;
   readonly childAgentId: AgentId;
@@ -35,6 +43,7 @@ interface SubagentRunIdentity {
 }
 
 export interface SubagentAcceptedLifecycle extends SubagentRunIdentity {
+  readonly lineage: SubagentRunLineage;
   readonly mode: SubagentRunMode;
   readonly providerId: string;
   readonly model: string;
@@ -55,6 +64,10 @@ export interface SubagentAccountingSnapshot {
   readonly costUsd: number;
 }
 
+interface SubagentTerminalInputSnapshot {
+  readonly pendingInputCount: number;
+}
+
 export type SubagentTerminalOutcome =
   | {
       readonly status: "completed";
@@ -68,13 +81,15 @@ export type SubagentTerminalOutcome =
     };
 
 export type SubagentTerminalSnapshot = SubagentAccountingSnapshot &
+  SubagentTerminalInputSnapshot &
   SubagentTerminalOutcome;
 
-type SubagentQueuedTerminalSnapshot = SubagentAccountingSnapshot & {
-  readonly status: "cancelled";
-  readonly finalText: null;
-  readonly error: string;
-};
+type SubagentQueuedTerminalSnapshot = SubagentAccountingSnapshot &
+  SubagentTerminalInputSnapshot & {
+    readonly status: "cancelled";
+    readonly finalText: null;
+    readonly error: string;
+  };
 
 interface SubagentCanonicalResultBase extends SubagentAccountingSnapshot {
   readonly delegationId: string;
@@ -82,6 +97,7 @@ interface SubagentCanonicalResultBase extends SubagentAccountingSnapshot {
   readonly childRunId: SubagentRunId;
   readonly task: string;
   readonly transcriptRef: string | null;
+  readonly pendingInputCount: number;
 }
 
 export type SubagentCanonicalResult = SubagentCanonicalResultBase &
@@ -107,6 +123,9 @@ export interface SubagentResultDelivery
 interface SubagentPersistenceBase {
   readonly transcriptRef: string;
   readonly transcript: SessionLedgerObserver;
+  readonly pendingInput: (
+    messages: readonly Extract<SessionMessage, { readonly role: "user" }>[],
+  ) => void;
 }
 
 export interface SubagentRunningPersistence extends SubagentPersistenceBase {

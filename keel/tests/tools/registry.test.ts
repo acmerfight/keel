@@ -559,6 +559,18 @@ describe("tool registry", () => {
         agentId: "agent-a1",
       }),
     ).toBe("agent_cancel agent-a1");
+    expect(
+      builtinToolRegistry.agent_input.display.formatLabel({
+        agentId: "agent-a1",
+        message: "Inspect callers.",
+      }),
+    ).toBe("agent_input agent-a1");
+    expect(
+      builtinToolRegistry.agent_resume.display.formatLabel({
+        agentId: "agent-a1",
+        message: "Verify the fix.",
+      }),
+    ).toBe("agent_resume agent-a1");
     expect(bashTool.permission.kind).toBe("approval");
     if (bashTool.permission.kind === "approval") {
       expect(bashTool.permission.renderPrompt({ command: "pnpm test" })).toBe(
@@ -577,6 +589,8 @@ describe("tool registry", () => {
       "agent_list",
       "agent_wait",
       "agent_cancel",
+      "agent_input",
+      "agent_resume",
       "update_plan",
       "update_goal",
       "memory_add",
@@ -638,6 +652,20 @@ describe("tool registry", () => {
       },
       {
         name: "agent_cancel",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "agent_input",
+        permission: "none",
+        output: "text",
+        risk: { kind: "agent-state" },
+        hasFormatLabel: true,
+      },
+      {
+        name: "agent_resume",
         permission: "none",
         output: "text",
         risk: { kind: "agent-state" },
@@ -990,6 +1018,14 @@ describe("tool registry", () => {
       agent_list: { fields: [], required: [] },
       agent_wait: { fields: ["agentId"], required: ["agentId"] },
       agent_cancel: { fields: ["agentId"], required: ["agentId"] },
+      agent_input: {
+        fields: ["agentId", "message"],
+        required: ["agentId", "message"],
+      },
+      agent_resume: {
+        fields: ["agentId", "message"],
+        required: ["agentId", "message"],
+      },
       update_plan: { fields: ["plan"], required: ["plan"] },
       update_goal: { fields: ["status", "reason"], required: ["status"] },
       memory_add: {
@@ -1072,7 +1108,10 @@ describe("tool registry", () => {
       const completeArgs =
         tool.name === "update_goal"
           ? { ...completeArgsFromMetadata, status: "blocked" }
-          : tool.name === "agent_wait" || tool.name === "agent_cancel"
+          : tool.name === "agent_wait" ||
+              tool.name === "agent_cancel" ||
+              tool.name === "agent_input" ||
+              tool.name === "agent_resume"
             ? { ...completeArgsFromMetadata, agentId: "agent-a1" }
             : completeArgsFromMetadata;
 

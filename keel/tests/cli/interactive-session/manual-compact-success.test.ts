@@ -818,11 +818,13 @@ describe("Interactive Session - Manual Compact Success", () => {
         rejected: () => {},
       },
       entries: () => [],
+      runs: () => [],
       pendingResultDeliveries: () => [],
       deliveredResult: () => {},
       transcript: () => {
         throw new Error("manual compaction must not read a child transcript");
       },
+      messages: () => [],
     };
     const input = new PassThrough();
     const reports: CostReport[] = [];

@@ -91,6 +91,8 @@ function sourceHandleForToolCall(toolCall: ToolCall): string | null {
     case "agent_list":
     case "agent_wait":
     case "agent_cancel":
+    case "agent_input":
+    case "agent_resume":
     case "update_goal":
     case "memory_add":
     case "memory_forget":

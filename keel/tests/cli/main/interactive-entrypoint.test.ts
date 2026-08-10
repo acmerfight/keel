@@ -17,6 +17,7 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { createAgentTreeHistory } from "../../../src/cli/agent-tree-store.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
 import {
   acquireSessionLock,
@@ -248,6 +249,129 @@ describe("CLI Main - Interactive Entrypoint", () => {
       expect(fixture.stderr()).toBe("");
       expect(await sessionDirectoryNames(home)).toEqual([]);
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the CLI restores a saved session with one terminal child thread,
+    When the user resumes that child and waits through /agents,
+    Then the entrypoint reconstructs its durable context and records a second Run under the same Agent ID`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-agent-resume-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-agent-home-"));
+    const sessionId = "agent-resume-entrypoint";
+    let now = 1_700_000_000_000;
+    const persistenceRuntime = {
+      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+      now: () => now++,
+    };
+    await writeSessionLedger({
+      home,
+      id: sessionId,
+      workspace: ledgerWorkspace,
+      createdAt: "2026-08-10T00:00:00.000Z",
+      records: [],
+    });
+    const history = createAgentTreeHistory({
+      sessionId,
+      runtime: persistenceRuntime,
+    });
+    const childAgentId = "agent-aaaaaaaa";
+    const firstRunId = "subagent-aaaaaaaa";
+    const first = history.persistence.accepted({
+      delegationId: "parent:first",
+      childAgentId,
+      childRunId: firstRunId,
+      parentRunId: "parent",
+      parentToolCallId: "first",
+      task: "Inspect the boundary.",
+      focusPaths: [],
+      mode: "background",
+      providerId: "fake",
+      model: "fake",
+      systemPrompt: "Read-only child instructions.",
+      lineage: { kind: "root" },
+    });
+    first.transcript.initialize([
+      {
+        role: "user",
+        content: "Inspect the boundary.",
+        origin: { type: "runtime_subagent_delegation" },
+      },
+    ]);
+    first.transcript.append([
+      {
+        role: "assistant",
+        content: "The boundary is sound.",
+        toolCalls: [],
+      },
+    ]);
+    first.running().terminal({
+      status: "completed",
+      finalText: "The boundary is sound.",
+      error: null,
+      pendingInputCount: 0,
+      usage: {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      },
+      turns: 1,
+      costUsd: 0,
+    });
+    const originalResult = history.runs(childAgentId)[0]?.result;
+    const input = new PassThrough();
+    input.end(
+      `/agents resume 1 Now inspect callers.\n/agents wait 1\n/agents show ${firstRunId}\n`,
+    );
+    const fixture = createRuntime(
+      [
+        "--resume",
+        sessionId,
+        "--provider=fake",
+        "--agent-policy=explicit",
+        "--max-cost=1",
+        "--bash-policy=deny",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+          KEEL_PROVIDER: "fake",
+        },
+        input,
+        now: () => now++,
+      },
+    );
+
+    try {
+      expect(await runCliMain(fixture.runtime)).toBe(0);
+      expect(fixture.stdout(), fixture.stderr()).toContain(
+        `"agentId":"${childAgentId}"`,
+      );
+      expect(fixture.stdout()).toContain("Remembered: Now inspect callers.");
+      expect(fixture.stdout()).toContain(`run: ${firstRunId}`);
+      const reopened = createAgentTreeHistory({
+        sessionId,
+        runtime: persistenceRuntime,
+      });
+      expect(reopened.runs(childAgentId)).toHaveLength(2);
+      expect(reopened.runs(childAgentId)[0]?.result).toEqual(originalResult);
+      expect(reopened.entries()).toMatchObject([
+        { childAgentId, status: "completed" },
+      ]);
+      const latest = reopened.entries()[0];
+      if (latest === undefined) throw new Error("missing resumed child thread");
+      expect(reopened.messages(latest)).toMatchObject([
+        { role: "user", content: "Inspect the boundary." },
+        { role: "assistant", content: "The boundary is sound." },
+        { role: "user", content: "Now inspect callers." },
+        { role: "assistant", content: "Remembered: Now inspect callers." },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
   });

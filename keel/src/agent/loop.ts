@@ -183,12 +183,9 @@ interface MainRunAgentOptions {
   readonly modelOperations?: MainModelOperationInstrumentation;
 }
 
-interface SubagentRunAgentOptions {
+interface SubagentRunAgentOptionsBase {
   readonly memory?: never;
   readonly mcp?: never;
-  readonly userMessageOrigin: {
-    readonly type: "runtime_subagent_delegation";
-  };
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "read-only-subagent";
   readonly delegation?: never;
@@ -198,12 +195,37 @@ interface SubagentRunAgentOptions {
   readonly skillActivation?: never;
   readonly taskProgress?: never;
   readonly modelOperations?: SubagentModelOperationInstrumentation;
+  readonly injectedUserMessages: AgentInjectedUserMessageQueue;
 }
+
+type SubagentRunAgentOptions = SubagentRunAgentOptionsBase &
+  (
+    | {
+        readonly userMessageOrigin: {
+          readonly type: "runtime_subagent_delegation";
+        };
+        readonly priorMessages?: never;
+      }
+    | {
+        readonly userMessageOrigin: { readonly type: "runtime_subagent_input" };
+        readonly priorMessages: readonly SessionMessage[];
+      }
+  );
 
 export type RunAgentOptions = RunAgentOptionsBase &
   (MainRunAgentOptions | SubagentRunAgentOptions);
 
 type InjectedUserMessage = Extract<SessionMessage, { readonly role: "user" }>;
+
+export interface AgentInjectedUserMessageQueue {
+  readonly drain: () => readonly InjectedUserMessage[];
+  readonly closeAtTerminalBoundary: () =>
+    | {
+        readonly kind: "continue";
+        readonly messages: readonly InjectedUserMessage[];
+      }
+    | { readonly kind: "closed" };
+}
 
 interface RunAgentTurnOptionsBase {
   readonly workspace: string;
@@ -267,7 +289,8 @@ interface SubagentRunAgentTurnOptions {
   readonly skillActivation?: never;
   readonly taskProgress?: never;
   readonly sessionGoal?: never;
-  readonly drainInjectedUserMessages?: never;
+  readonly drainInjectedUserMessages: AgentInjectedUserMessageQueue["drain"];
+  readonly closeInjectedUserMessagesAtTerminalBoundary: AgentInjectedUserMessageQueue["closeAtTerminalBoundary"];
   readonly modelOperations?: SubagentModelOperationInstrumentation;
 }
 
@@ -282,6 +305,9 @@ function agentTurnExecutionOptions(
       bash: options.bash,
       toolProfile: options.toolProfile,
       costBudgetProvider: options.costBudgetProvider,
+      drainInjectedUserMessages: options.injectedUserMessages.drain,
+      closeInjectedUserMessagesAtTerminalBoundary:
+        options.injectedUserMessages.closeAtTerminalBoundary,
       ...(options.modelOperations !== undefined
         ? { modelOperations: options.modelOperations }
         : {}),
@@ -876,6 +902,10 @@ export async function* runAgentTurn(
     stopPolicy,
     drainInjectedUserMessages,
   } = options;
+  const closeInjectedUserMessagesAtTerminalBoundary =
+    options.toolProfile === "read-only-subagent"
+      ? options.closeInjectedUserMessagesAtTerminalBoundary
+      : undefined;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
   const assertionGoalModelOperations =
@@ -1283,6 +1313,11 @@ export async function* runAgentTurn(
       );
       if (reply !== null) {
         appendSessionLedgerMessage(sessionLedger, reply);
+      }
+      const inputBoundary = closeInjectedUserMessagesAtTerminalBoundary?.();
+      if (inputBoundary?.kind === "continue") {
+        appendSessionLedgerMessages(sessionLedger, inputBoundary.messages);
+        continue;
       }
       if (priorToolCalls.length === 0) {
         const sessionGoalEvent = clearPendingBlockedAudit(
@@ -1733,15 +1768,30 @@ export async function* runAgentTurn(
 export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent> {
+  const userMessage: InjectedUserMessage = {
+    role: "user",
+    content: options.userMessage,
+    origin: options.userMessageOrigin ?? { type: "user_prompt" },
+  };
+  const transcriptObserver =
+    options.toolProfile === "read-only-subagent" &&
+    options.priorMessages !== undefined &&
+    options.transcriptObserver !== undefined
+      ? {
+          initialize: () =>
+            options.transcriptObserver?.initialize([userMessage]),
+          append: options.transcriptObserver.append,
+          replace: options.transcriptObserver.replace,
+        }
+      : options.transcriptObserver;
   const ledger = sessionLedgerFromMessages(
     [
-      {
-        role: "user",
-        content: options.userMessage,
-        origin: options.userMessageOrigin ?? { type: "user_prompt" },
-      },
+      ...(options.toolProfile === "read-only-subagent"
+        ? (options.priorMessages ?? [])
+        : []),
+      userMessage,
     ],
-    options.transcriptObserver,
+    transcriptObserver,
   );
   const readVisibility = createReadVisibilityState();
   const projectInstructionVisibility = createProjectInstructionVisibilityState(

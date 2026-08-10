@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type {
@@ -9,7 +12,9 @@ import type {
   AgentHistoryEntry,
   AgentTreeHistory,
 } from "../../../src/cli/agent-tree-store.ts";
+import { createAgentTreeHistory } from "../../../src/cli/agent-tree-store.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
+import { createSessionStore } from "../../../src/cli/session-store.ts";
 import {
   EPHEMERAL_INTERACTIVE_SESSION,
   ForcedExit,
@@ -45,8 +50,10 @@ function entry(options: {
     mode: "foreground",
     providerId: "deepseek",
     model: "deepseek-chat",
+    systemPrompt: "Read-only child instructions.",
     transcriptRef: `agent-transcript:test/${options.childAgentId}`,
     acceptedAt: "2023-11-14T22:13:20.000Z",
+    lineage: { kind: "root" },
     status: "failed",
     accounting,
     result: {
@@ -58,6 +65,7 @@ function entry(options: {
       status: "failed",
       finalText: null,
       error: "Provider failed.",
+      pendingInputCount: 1,
       ...accounting,
     },
   };
@@ -77,9 +85,11 @@ function history(
       rejected: () => {},
     },
     entries: () => entries,
+    runs: (id) => entries.filter((entry) => entry.childAgentId === id),
     pendingResultDeliveries: () => [],
     deliveredResult: () => {},
     transcript,
+    messages: () => [],
   };
 }
 
@@ -93,6 +103,158 @@ const unusedTranscriptStore: AbortableToolOutputArtifactStore = {
 };
 
 describe("Interactive /agents command", () => {
+  test(`Given a saved terminal child has durable context,
+    When the user resumes it and waits through /agents,
+    Then the same Agent ID completes a new Run with the prior context and follow-up`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agents-resume-"));
+    const keelHome = join(workspace, ".keel-home");
+    const sessionId = "agents-resume";
+    const childAgentId = "agent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const firstRunId = "subagent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const agentHistory = createAgentTreeHistory({ sessionId, runtime });
+      const first = agentHistory.persistence.accepted({
+        delegationId: "parent:first",
+        childAgentId,
+        childRunId: firstRunId,
+        parentRunId: "parent",
+        parentToolCallId: "first",
+        task: "Inspect the boundary.",
+        focusPaths: [],
+        mode: "foreground",
+        providerId: "fake",
+        model: "fake-model",
+        systemPrompt: "Read-only child instructions.",
+        lineage: { kind: "root" },
+      });
+      first.transcript.initialize([
+        {
+          role: "user",
+          content: "Inspect the boundary.",
+          origin: { type: "runtime_subagent_delegation" },
+        },
+      ]);
+      first.transcript.append([
+        {
+          role: "assistant",
+          content: "The boundary is sound.",
+          toolCalls: [],
+        },
+      ]);
+      first.running().terminal({
+        status: "completed",
+        finalText: "The boundary is sound.",
+        error: null,
+        pendingInputCount: 0,
+        usage: {
+          inputTokens: 1,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 1,
+          outputTokens: 1,
+        },
+        turns: 1,
+        costUsd: 0,
+      });
+      const originalResult = agentHistory.runs(childAgentId)[0]?.result;
+      const provider = {
+        id: "fake",
+        abortSignalSupport: true as const,
+        estimateInputTokens: () => 1,
+        async *stream(
+          options: Parameters<
+            import("../../../src/llm/types.ts").LLMProvider["stream"]
+          >[0],
+        ) {
+          expect(options.messages).toMatchObject([
+            { role: "user", content: "Inspect the boundary." },
+            { role: "assistant", content: "The boundary is sound." },
+            { role: "user", content: "Now inspect its callers." },
+          ]);
+          const usage = {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 1,
+            outputTokens: 1,
+          };
+          yield { type: "text" as const, text: "The callers are sound too." };
+          options.providerRequestAttempts
+            ?.begin()
+            .finish({ outcome: "completed", usage });
+          yield { type: "stop" as const, reason: "stop" as const, usage };
+        },
+      };
+      const input = new PassThrough();
+      let stdout = "";
+      let stderr = "";
+      const pending = runInteractiveSession({
+        cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+        workspace,
+        platform: process.platform,
+        session: savedInteractiveSession({ id: sessionId }),
+        agentHistory,
+        delegation: {
+          policy: "explicit",
+          transcriptStore: unusedTranscriptStore,
+          maxCostUsd: 1,
+        },
+        input,
+        writeStdout: (text) => {
+          stdout += text;
+        },
+        writeStderr: (text) => {
+          stderr += text;
+        },
+        onSigint: () => {},
+        offSigint: () => {},
+        setExitCode: () => {},
+        forceExit: (code) => {
+          throw new ForcedExit(code);
+        },
+        resolveProvider: () => ({
+          provider,
+          providerId: "fake",
+          model: "fake-model",
+          costModel: ZERO_COST_MODEL,
+        }),
+        requireKnownCostModel: () => ZERO_COST_MODEL,
+        printAgentEvents: async () => {
+          throw new Error("agent commands must not start a Main turn");
+        },
+        formatCostReport: () => "",
+      });
+
+      input.end(
+        "/agents resume 1 Now inspect its callers.\n/agents wait 1\n/agents show 1\n",
+      );
+      await pending;
+
+      expect(stderr).toContain("Background subagent");
+      expect(stdout).toContain(`"agentId":"${childAgentId}"`);
+      expect(stdout).toContain("The callers are sound too.");
+      expect(stdout).toContain(`continuation of: ${firstRunId}`);
+      expect(agentHistory.entries()).toMatchObject([
+        { childAgentId, status: "completed" },
+      ]);
+      expect(agentHistory.runs(childAgentId)).toHaveLength(2);
+      expect(agentHistory.runs(childAgentId)[0]?.result).toEqual(
+        originalResult,
+      );
+      expect(agentHistory.runs(childAgentId)[1]).toMatchObject({
+        childAgentId,
+        status: "completed",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given supported agent-history command forms,
     When they are parsed,
     Then the command union preserves the requested action and selector`, () => {
@@ -120,6 +282,20 @@ describe("Interactive /agents command", () => {
       action: "cancel",
       selector: "2",
     });
+    expect(
+      parseInteractiveCommand("/agents input agent-123 Inspect the callers"),
+    ).toEqual({
+      kind: "agents",
+      action: "input",
+      selector: "agent-123",
+      message: "Inspect the callers",
+    });
+    expect(parseInteractiveCommand("/agents resume 2 Verify the fix")).toEqual({
+      kind: "agents",
+      action: "resume",
+      selector: "2",
+      message: "Verify the fix",
+    });
   });
 
   test(`Given an incomplete or over-specified agent-history command,
@@ -129,12 +305,14 @@ describe("Interactive /agents command", () => {
       "/agents show",
       "/agents transcript",
       "/agents show 1 extra",
+      "/agents input 1",
+      "/agents resume 1",
       "/agents unknown 1",
     ]) {
       expect(parseInteractiveCommand(input)).toEqual({
         kind: "invalid",
         message:
-          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, or /agents cancel <id|index>.",
+          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> <message>.",
       });
     }
   });
@@ -175,21 +353,23 @@ describe("Interactive /agents command", () => {
           "/agents transcript parent:delegate-2",
           "/agents wait 2",
           "/agents cancel 2",
+          "/agents input 2 Inspect callers.",
           "",
         ].join("\n"),
         session: savedInteractiveSession({ id: "saved-session" }),
         agentHistory: attachedHistory,
         attached: true,
         expected:
-          'Error: no subagent matches "99".\nError: no subagent matches "missing".\ncorrupt child transcript\ncorrupt child transcript\nSubagent agent-3333 is not owned by this live session.\nSubagent agent-3333 is not owned by this live session.\n',
-        stdoutIncludes: "Agent 1: agent-2222",
+          'Error: no subagent matches "99".\nError: no subagent matches "missing".\ncorrupt child transcript\ncorrupt child transcript\nSubagent agent-3333 is not owned by this live session.\nSubagent agent-3333 is not owned by this live session.\nSubagent agent-3333 is not owned by this live session.\n',
+        stdoutIncludes:
+          "pending input: 1 queued message(s) will be available to the next Run",
       },
       {
         inputText: "/agents wait 1\n",
         session: savedInteractiveSession({ id: "saved-session" }),
         agentHistory: history([failed]),
         expected:
-          "Error: live agent wait/cancel requires an attached saved-session owner.\n",
+          "Error: live agent control requires an attached saved-session owner.\n",
       },
     ];
 

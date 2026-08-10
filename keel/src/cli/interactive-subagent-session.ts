@@ -10,6 +10,7 @@ import type {
 import type {
   SubagentBackgroundRun,
   SubagentBackgroundRuntime,
+  SubagentContinuationCapability,
 } from "../agent/subagent-supervisor.ts";
 import { projectSubagentResult } from "../agent/subagent-supervisor.ts";
 import {
@@ -44,6 +45,9 @@ export interface InteractiveSubagentSession {
   readonly providerCoordination: SubagentTreeProviderCoordination;
   readonly background: SubagentBackgroundRuntime;
   readonly control: AgentControlCapability;
+  readonly continuation: {
+    readonly attach: (capability: SubagentContinuationCapability) => () => void;
+  };
   readonly assertHealthy: () => void;
   readonly shutdown: () => Promise<void>;
 }
@@ -85,8 +89,10 @@ export function createInteractiveSubagentSession(
 ): InteractiveSubagentSession {
   const sessionAbortController = new AbortController();
   const runs = new Map<AgentId, SubagentBackgroundRun>();
-  const settlements = new Map<AgentId, Promise<void>>();
+  const settlements = new Map<string, Promise<void>>();
+  let continuationCapability: SubagentContinuationCapability | null = null;
   let health: BackgroundSessionHealth = { kind: "healthy" };
+  let acceptingBackgroundRuns = true;
   const maxRemainingCostUsd = Math.max(
     0,
     options.maxCostUsd - options.initialCostUsd,
@@ -161,7 +167,7 @@ export function createInteractiveSubagentSession(
   ): Promise<void> => {
     const entry = resolveAgentHistoryEntry(options.history, id);
     if (entry === null || entry.result !== null) return;
-    const settlement = settlements.get(entry.childAgentId);
+    const settlement = settlements.get(entry.childRunId);
     if (settlement === undefined) return;
     await awaitWithSignal(settlement, signal);
   };
@@ -169,9 +175,28 @@ export function createInteractiveSubagentSession(
   const background: SubagentBackgroundRuntime = {
     signal: sessionAbortController.signal,
     register: (run) => {
-      if (runs.has(run.childAgentId)) {
+      if (!acceptingBackgroundRuns) {
         throw new Error(
-          `background subagent ${run.childAgentId} is already registered`,
+          "saved session owner no longer accepts background Runs",
+        );
+      }
+      const existing = runs.get(run.childAgentId);
+      if (existing?.childRunId === run.childRunId) {
+        throw new Error(
+          `background subagent Run ${run.childRunId} is already registered`,
+        );
+      }
+      if (
+        existing !== undefined &&
+        options.history
+          .runs(run.childAgentId)
+          .some(
+            (entry) =>
+              entry.childRunId === existing.childRunId && entry.result === null,
+          )
+      ) {
+        throw new Error(
+          `background subagent ${run.childAgentId} already has a live Run`,
         );
       }
       runs.set(run.childAgentId, run);
@@ -194,8 +219,13 @@ export function createInteractiveSubagentSession(
           } catch {
             // Output is observational; shutdown still propagates the failure.
           }
+        })
+        .finally(() => {
+          if (runs.get(run.childAgentId)?.childRunId === run.childRunId) {
+            runs.delete(run.childAgentId);
+          }
         });
-      settlements.set(run.childAgentId, settlement);
+      settlements.set(run.childRunId, settlement);
     },
   };
   const control: AgentControlCapability = {
@@ -241,6 +271,75 @@ export function createInteractiveSubagentSession(
         };
       }
     },
+    input: (request) => {
+      const entry = resolveAgentHistoryEntry(options.history, request.id);
+      if (entry === null) return unknownAgent(request.id);
+      if (entry.result !== null) {
+        return {
+          ok: false,
+          content: `Subagent ${entry.childAgentId} is terminal; use agent_resume to continue it as a new Run.`,
+        };
+      }
+      const run = runs.get(entry.childAgentId);
+      if (run === undefined || run.childRunId !== entry.childRunId) {
+        return {
+          ok: false,
+          content: `Subagent ${entry.childAgentId} is not owned by this live session.`,
+        };
+      }
+      const result = run.input(request.message);
+      if (result.kind === "accepted") {
+        return {
+          ok: true,
+          content: boundedControlText(
+            JSON.stringify({
+              agentId: entry.childAgentId,
+              runId: entry.childRunId,
+              status: "input_queued",
+            }),
+            request.maxResultChars,
+          ),
+        };
+      }
+      return {
+        ok: false,
+        content:
+          result.kind === "closed"
+            ? `Subagent ${entry.childAgentId} stopped accepting input at its terminal boundary; use agent_resume.`
+            : `Subagent ${entry.childAgentId} input queue is full.`,
+      };
+    },
+    resume: async (request) => {
+      const entry = resolveAgentHistoryEntry(options.history, request.id);
+      if (entry === null) return unknownAgent(request.id);
+      if (entry.result === null) {
+        return {
+          ok: false,
+          content: `Subagent ${entry.childAgentId} is still active; use agent_input instead.`,
+        };
+      }
+      if (continuationCapability === null) {
+        return {
+          ok: false,
+          content:
+            "Agent resume is unavailable outside an admitted model runtime.",
+        };
+      }
+      const result = await continuationCapability.resume({
+        childAgentId: entry.childAgentId,
+        previousRunId: entry.childRunId,
+        toolCallId: request.requestId,
+        message: request.message,
+        focusPaths: entry.focusPaths,
+        systemPrompt: entry.systemPrompt,
+        priorMessages: options.history.messages(entry),
+        signal: request.signal,
+      });
+      return {
+        ok: result.ok,
+        content: boundedControlText(result.content, request.maxResultChars),
+      };
+    },
   };
 
   return {
@@ -250,10 +349,21 @@ export function createInteractiveSubagentSession(
     providerCoordination,
     background,
     control,
+    continuation: {
+      attach: (capability) => {
+        continuationCapability = capability;
+        return () => {
+          if (continuationCapability === capability) {
+            continuationCapability = null;
+          }
+        };
+      },
+    },
     assertHealthy: () => {
       if (health.kind === "failed") throw health.error;
     },
     shutdown: async () => {
+      acceptingBackgroundRuns = false;
       sessionAbortController.abort(new Error("saved session owner exited"));
       await Promise.all(settlements.values());
       if (health.kind === "failed") throw health.error;

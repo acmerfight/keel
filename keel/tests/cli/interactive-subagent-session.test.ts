@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type {
   AgentId,
+  PersistedSubagentCanonicalResult,
   SubagentCanonicalResult,
   SubagentRunId,
 } from "../../src/agent/subagent-lifecycle.ts";
@@ -20,9 +21,11 @@ function emptyHistory(): AgentTreeHistory {
       rejected: () => {},
     },
     entries: () => [],
+    runs: () => [],
     pendingResultDeliveries: () => [],
     deliveredResult: () => {},
     transcript: () => "",
+    messages: () => [],
   };
 }
 
@@ -53,8 +56,10 @@ function activeEntry(
     mode: "background",
     providerId: "deepseek",
     model: "deepseek-chat",
+    systemPrompt: "Read-only child instructions.",
     transcriptRef: `agent-transcript:saved-session/${childAgentId}`,
     acceptedAt: "2026-08-10T00:00:00.000Z",
+    lineage: { kind: "root" },
     status: "running",
     accounting,
     result: null,
@@ -64,13 +69,14 @@ function activeEntry(
 function canonicalResult(
   entry: AgentHistoryEntry,
   status: "completed" | "cancelled" = "completed",
-): SubagentCanonicalResult {
+): PersistedSubagentCanonicalResult {
   const base = {
     delegationId: entry.delegationId,
     childAgentId: entry.childAgentId,
     childRunId: entry.childRunId,
     task: entry.task,
     transcriptRef: entry.transcriptRef,
+    pendingInputCount: 0,
     ...accounting,
   };
   return status === "completed"
@@ -78,14 +84,264 @@ function canonicalResult(
     : { ...base, status, finalText: null, error: "cancelled" };
 }
 
-function mutableHistory(entries: AgentHistoryEntry[]): AgentTreeHistory {
+function mutableHistory(
+  entries: AgentHistoryEntry[],
+  messages: AgentTreeHistory["messages"] = () => [],
+  runs: AgentHistoryEntry[] = entries,
+): AgentTreeHistory {
   return {
     ...emptyHistory(),
     entries: () => entries,
+    runs: (id) => runs.filter((entry) => entry.childAgentId === id),
+    messages,
   };
 }
 
 describe("Interactive subagent session", () => {
+  test(`Given saved-session shutdown has closed background admission,
+    When a Run attempts to register after the settlement barrier snapshot,
+    Then registration fails before the owner can miss that Run`, async () => {
+    const session = createInteractiveSubagentSession({
+      maxCostUsd: 1,
+      initialCostUsd: 0,
+      history: emptyHistory(),
+      now: () => 0,
+      writeStderr: () => {},
+      onBackgroundSettled: () => {},
+    });
+    const shutdown = session.shutdown();
+
+    expect(() =>
+      session.background.register({
+        delegationId: "delegation-closed",
+        childAgentId: "agent-closed",
+        childRunId: "subagent-closed",
+        task: "Must not start after shutdown.",
+        result: Promise.resolve({
+          delegationId: "delegation-closed",
+          childAgentId: "agent-closed",
+          childRunId: "subagent-closed",
+          task: "Must not start after shutdown.",
+          transcriptRef: "agent-transcript:test/subagent-closed",
+          status: "cancelled",
+          finalText: null,
+          error: "owner closed",
+          usage: {
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 0,
+            outputTokens: 0,
+          },
+          turns: 0,
+          costUsd: 0,
+          pendingInputCount: 0,
+        }),
+        cancel: () => {},
+        input: () => ({ kind: "closed" }),
+      }),
+    ).toThrow("no longer accepts background Runs");
+    await shutdown;
+  });
+
+  test(`Given active, terminal, unknown, and detached child threads,
+    When the user sends live input,
+    Then the owner routes only to the matching live Run and reports every queue boundary`, async () => {
+    const active = activeEntry("agent-active", "subagent-active");
+    const terminalBase = activeEntry("agent-terminal", "subagent-terminal");
+    const terminal: AgentHistoryEntry = {
+      ...terminalBase,
+      status: "completed",
+      result: canonicalResult(terminalBase),
+    };
+    const entries = [active, terminal];
+    const durableRuns = [...entries];
+    const completion = Promise.withResolvers<SubagentCanonicalResult>();
+    const inputResults = [
+      { kind: "accepted" as const },
+      { kind: "closed" as const },
+      { kind: "full" as const },
+    ];
+    const session = createInteractiveSubagentSession({
+      maxCostUsd: 1,
+      initialCostUsd: 0,
+      history: mutableHistory(entries, () => [], durableRuns),
+      now: () => 0,
+      writeStderr: () => {},
+      onBackgroundSettled: () => {},
+    });
+    const request = (id: AgentId, message = "Inspect callers.") => ({
+      id,
+      message,
+      signal: new AbortController().signal,
+      maxResultChars: 6_000,
+    });
+
+    expect(session.control.input(request("agent-unknown"))).toMatchObject({
+      ok: false,
+      content: expect.stringContaining("No subagent"),
+    });
+    expect(session.control.input(request(terminal.childAgentId))).toMatchObject(
+      {
+        ok: false,
+        content: expect.stringContaining("use agent_resume"),
+      },
+    );
+    expect(session.control.input(request(active.childAgentId))).toMatchObject({
+      ok: false,
+      content: expect.stringContaining("not owned"),
+    });
+
+    const run = {
+      delegationId: active.delegationId,
+      childAgentId: active.childAgentId,
+      childRunId: active.childRunId,
+      task: active.task,
+      result: completion.promise,
+      cancel: () => {},
+      input: () => inputResults.shift() ?? { kind: "full" as const },
+    };
+    session.background.register(run);
+    expect(() =>
+      session.background.register({
+        ...run,
+        childRunId: "subagent-new",
+      }),
+    ).toThrow("already has a live Run");
+    expect(session.control.input(request(active.childAgentId))).toMatchObject({
+      ok: true,
+      content: expect.stringContaining('"status":"input_queued"'),
+    });
+    expect(session.control.input(request(active.childAgentId))).toMatchObject({
+      ok: false,
+      content: expect.stringContaining("terminal boundary"),
+    });
+    expect(session.control.input(request(active.childAgentId))).toMatchObject({
+      ok: false,
+      content: expect.stringContaining("queue is full"),
+    });
+
+    const result = canonicalResult(active);
+    const completedActive: AgentHistoryEntry = {
+      ...active,
+      status: "completed",
+      result,
+    };
+    const next = activeEntry(active.childAgentId, "subagent-next");
+    const nextCompletion = Promise.withResolvers<SubagentCanonicalResult>();
+    entries[0] = next;
+    durableRuns[0] = completedActive;
+    durableRuns.push(next);
+    completion.resolve(result);
+    session.background.register({
+      delegationId: next.delegationId,
+      childAgentId: next.childAgentId,
+      childRunId: next.childRunId,
+      task: next.task,
+      result: nextCompletion.promise,
+      cancel: () => {},
+      input: () => ({ kind: "accepted" }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(session.control.input(request(next.childAgentId))).toMatchObject({
+      ok: true,
+      content: expect.stringContaining('"runId":"subagent-next"'),
+    });
+    const nextResult = canonicalResult(next);
+    entries[0] = { ...next, status: "completed", result: nextResult };
+    durableRuns[1] = entries[0];
+    nextCompletion.resolve(nextResult);
+    await session.shutdown();
+  });
+
+  test(`Given a terminal child has durable prior context and an active child is still running,
+    When continuation runtimes attach, detach, and resume by stable Agent ID,
+    Then only the current runtime receives the terminal thread and active work is never restarted`, async () => {
+    const terminalBase = activeEntry("agent-terminal", "subagent-terminal");
+    const terminal: AgentHistoryEntry = {
+      ...terminalBase,
+      status: "completed",
+      result: canonicalResult(terminalBase),
+    };
+    const active = activeEntry("agent-active", "subagent-active");
+    const priorMessages = [
+      {
+        role: "user" as const,
+        content: "Inspect the boundary.",
+        origin: { type: "runtime_subagent_delegation" as const },
+      },
+    ];
+    const session = createInteractiveSubagentSession({
+      maxCostUsd: 1,
+      initialCostUsd: 0,
+      history: mutableHistory([terminal, active], () => priorMessages),
+      now: () => 0,
+      writeStderr: () => {},
+      onBackgroundSettled: () => {},
+    });
+    const request = (id: AgentId) => ({
+      id,
+      requestId: "resume-request",
+      message: "Now inspect callers.",
+      signal: new AbortController().signal,
+      maxResultChars: 6_000,
+    });
+
+    await expect(
+      session.control.resume(request("agent-unknown")),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("No subagent"),
+    });
+    await expect(
+      session.control.resume(request(active.childAgentId)),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("agent_input"),
+    });
+    await expect(
+      session.control.resume(request(terminal.childAgentId)),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("unavailable"),
+    });
+
+    const detachStale = session.continuation.attach({
+      resume: async () => {
+        throw new Error("stale continuation runtime was called");
+      },
+    });
+    const observed = Promise.withResolvers<void>();
+    const detachCurrent = session.continuation.attach({
+      resume: async (continuation) => {
+        expect(continuation).toMatchObject({
+          childAgentId: terminal.childAgentId,
+          previousRunId: terminal.childRunId,
+          message: "Now inspect callers.",
+          systemPrompt: terminal.systemPrompt,
+          priorMessages,
+        });
+        observed.resolve();
+        return { ok: true, content: "resumed" };
+      },
+    });
+    detachStale();
+    await expect(
+      session.control.resume(request(terminal.childAgentId)),
+    ).resolves.toEqual({
+      ok: true,
+      content: "resumed",
+    });
+    await observed.promise;
+    detachCurrent();
+    await expect(
+      session.control.resume(request(terminal.childAgentId)),
+    ).resolves.toMatchObject({
+      ok: false,
+      content: expect.stringContaining("unavailable"),
+    });
+    await session.shutdown();
+  });
+
   test(`Given durable, unknown, and non-owned child records,
     When live controls inspect them under a small output budget,
     Then results stay bounded and ownership errors do not invent live state`, async () => {
@@ -199,6 +455,7 @@ describe("Interactive subagent session", () => {
       cancel: () => {
         cancellations++;
       },
+      input: () => ({ kind: "accepted" as const }),
     };
     session.background.register(run);
     expect(() => session.background.register(run)).toThrow(
@@ -269,6 +526,7 @@ describe("Interactive subagent session", () => {
       task: entry.task,
       result: completion.promise,
       cancel: () => {},
+      input: () => ({ kind: "accepted" as const }),
     });
     const waiting = session.control.wait({
       id: entry.childAgentId,
@@ -310,6 +568,7 @@ describe("Interactive subagent session", () => {
       task: rejectedEntry.task,
       result: rejected.promise,
       cancel: () => {},
+      input: () => ({ kind: "accepted" as const }),
     });
     const failedWait = failed.control.wait({
       id: rejectedEntry.childAgentId,
@@ -355,6 +614,7 @@ describe("Interactive subagent session", () => {
       },
       turns: 1,
       costUsd: 0.0001,
+      pendingInputCount: 0,
     };
     const session = createInteractiveSubagentSession({
       maxCostUsd: 1,
@@ -373,6 +633,7 @@ describe("Interactive subagent session", () => {
       task: result.task,
       result: Promise.resolve(result),
       cancel: () => {},
+      input: () => ({ kind: "accepted" as const }),
     });
 
     await expect(session.shutdown()).rejects.toThrow(

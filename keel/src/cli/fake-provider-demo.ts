@@ -33,6 +33,7 @@ function createObservedFakeProvider(
 ): LLMProvider {
   return {
     id: "fake",
+    abortSignalSupport: true,
     stream(options) {
       return observeFakeProviderRequest(options, stream(options));
     },

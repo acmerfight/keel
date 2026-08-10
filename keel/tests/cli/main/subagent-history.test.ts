@@ -426,7 +426,7 @@ describe("CLI Main - Durable Subagent History", () => {
         "error: Child was interrupted when its foreground session owner exited.",
       );
       expect(resumed.stdout()).toContain(
-        '"type":"transcript_terminal","status":"interrupted","complete":false',
+        '"type":"transcript_terminal","status":"interrupted","pendingInputCount":0,"complete":false',
       );
       const events = await readFile(
         join(keelHome, "sessions", sessionId, "agents", "events.jsonl"),

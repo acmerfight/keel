@@ -48,6 +48,7 @@ function acceptedLifecycle(childAgentId: AgentId): SubagentAcceptedLifecycle {
     providerId: "deepseek",
     model: "deepseek-chat",
     systemPrompt: "Read-only child instructions.",
+    lineage: { kind: "root" },
   };
 }
 
@@ -89,6 +90,85 @@ function testRuntime(
 }
 
 describe("Agent Tree Store Crash Boundaries", () => {
+  test(`Given one pending child input is durable but the canonical result append is interrupted,
+    When the saved history reopens,
+    Then recovery preserves the input and reports its pending count on the interrupted Run`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-pending-input-recovery-"),
+    );
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const sessionId = "pending-input-recovery";
+    const baseRuntime = testRuntime(keelHome, () => now++);
+    const lifecycle = acceptedLifecycle(
+      "agent-10101010-1010-4010-8010-101010101010",
+    );
+    createSessionStore({ sessionId, workspace, runtime: baseRuntime });
+
+    try {
+      const history = createAgentTreeHistory({
+        sessionId,
+        runtime: testRuntime(
+          keelHome,
+          () => now++,
+          partialAppendRuntime('"type":"agent_result"'),
+        ),
+      });
+      const run = history.persistence.accepted(lifecycle);
+      run.transcript.initialize([
+        {
+          role: "user",
+          content: "Inspect the crash boundary.",
+          origin: { type: "runtime_subagent_delegation" },
+        },
+      ]);
+      const running = run.running();
+      running.pendingInput([
+        {
+          role: "user",
+          content: "Also inspect the caller boundary.",
+          origin: { type: "runtime_subagent_input" },
+        },
+      ]);
+      expect(() =>
+        running.terminal({
+          status: "failed",
+          finalText: null,
+          error: "provider failed before consuming the queued input",
+          pendingInputCount: 1,
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 0,
+            uncachedInputTokens: 10,
+            outputTokens: 0,
+          },
+          turns: 1,
+          costUsd: 0.0001,
+        }),
+      ).toThrow("simulated partial");
+
+      const recovered = createAgentTreeHistory({
+        sessionId,
+        runtime: baseRuntime,
+      });
+      const entry = recovered.entries()[0];
+      expect(entry).toMatchObject({
+        status: "interrupted",
+        result: { status: "interrupted", pendingInputCount: 1 },
+      });
+      if (entry === undefined) throw new Error("missing recovered child Run");
+      expect(recovered.messages(entry).at(-1)).toMatchObject({
+        role: "user",
+        content: "Also inspect the caller boundary.",
+      });
+      expect(recovered.transcript(entry)).toContain(
+        '"type":"transcript_terminal","status":"interrupted","pendingInputCount":1',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a background child terminal event is durable but its delivery projection append is interrupted,
     When the saved history reopens,
     Then recovery prepares the same pending result and binds it to the unchanged canonical result`, async () => {
@@ -126,6 +206,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
           status: "completed",
           finalText: "Durable child result.",
           error: null,
+          pendingInputCount: 0,
           usage: {
             inputTokens: 10,
             cachedInputTokens: 0,
@@ -212,6 +293,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
         status: "completed",
         finalText: "Durable child result.",
         error: null,
+        pendingInputCount: 0,
         usage: {
           inputTokens: 10,
           cachedInputTokens: 0,
@@ -343,7 +425,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
         "agents",
         "transcripts",
       );
-      const orphanPath = join(transcriptsDirectory, "agent-deadbeef.jsonl");
+      const orphanPath = join(transcriptsDirectory, "subagent-deadbeef.jsonl");
       writeFileSync(orphanPath, "orphan", "utf8");
 
       createAgentTreeHistory({ sessionId, runtime });
@@ -690,7 +772,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
             "indeterminate-acceptance",
             "agents",
             "transcripts",
-            `${lifecycle.childAgentId}.jsonl`,
+            `${lifecycle.childRunId}.jsonl`,
           ),
           "utf8",
         ),
@@ -811,7 +893,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
       "cleanup-failure",
       "agents",
       "transcripts",
-      `${lifecycle.childAgentId}.jsonl`,
+      `${lifecycle.childRunId}.jsonl`,
     );
     const runtime = testRuntime(keelHome, () => now++, {
       create: (filePath, content) => {
@@ -930,6 +1012,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
               status: "completed",
               finalText: "Complete before the simulated crash.",
               error: null,
+              pendingInputCount: 0,
               usage: {
                 inputTokens: 10,
                 cachedInputTokens: 0,
@@ -1008,7 +1091,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
         "acceptance-rollback",
         "agents",
         "transcripts",
-        `${lifecycle.childAgentId}.jsonl`,
+        `${lifecycle.childRunId}.jsonl`,
       );
       await expect(readFile(transcriptPath, "utf8")).rejects.toMatchObject({
         code: "ENOENT",
