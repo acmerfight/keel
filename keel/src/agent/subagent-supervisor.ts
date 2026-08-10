@@ -232,7 +232,9 @@ type CreateSubagentSupervisorOptions = CreateSubagentSupervisorOptionsBase &
       }
     | {
         readonly background: SubagentBackgroundRuntime;
-        readonly backgroundModelOperations?: MainModelOperationInstrumentation;
+        readonly backgroundModelOperations:
+          | MainModelOperationInstrumentation
+          | undefined;
         readonly lifecyclePersistence: SubagentLifecyclePersistence;
       }
   );

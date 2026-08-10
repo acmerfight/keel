@@ -309,7 +309,7 @@ export function createSharedCostBudgetedProvider(
     readonly shared: SharedCostBudgetReservation | null;
   } | null = null;
   let nextContinuationReservationId = 0;
-  let requestedContinuationReservationId: number | null = null;
+  const continuationReservationIds = new WeakMap<StreamOptions, number>();
   const localRemainingUsd = (): number =>
     Math.max(
       0,
@@ -339,8 +339,9 @@ export function createSharedCostBudgetedProvider(
       ? { estimateInputTokens: options.provider.estimateInputTokens }
       : {}),
     async *stream(streamOptions) {
-      const requestedReservationId = requestedContinuationReservationId;
-      requestedContinuationReservationId = null;
+      const requestedReservationId =
+        continuationReservationIds.get(streamOptions) ?? null;
+      continuationReservationIds.delete(streamOptions);
       let continuationReservation =
         requestedReservationId !== null &&
         activeContinuationReservation?.id === requestedReservationId
@@ -557,34 +558,23 @@ export function createSharedCostBudgetedProvider(
       const continuationProvider: LLMProvider = {
         ...provider,
         async *stream(streamOptions) {
-          if (requestedContinuationReservationId !== null) {
-            throw new CostBudgetAdmissionError({
-              remainingUsd: remainingUsd(),
-              estimatedInputTokens: null,
-            });
-          }
-          requestedContinuationReservationId = reservationId;
-          try {
-            const {
-              requestSystemPrompt: _unpricedRequestSystemPrompt,
-              systemPrompt: _unpricedSystemPrompt,
-              toolExposure: _unpricedToolExposure,
-              ...currentRequest
-            } = streamOptions;
-            yield* provider.stream({
-              ...currentRequest,
-              systemPrompt: continuationRequestShape.systemPrompt,
-              toolExposure: continuationRequestShape.toolExposure,
-              maxOutputTokens: effectiveMaxOutputTokens(
-                streamOptions,
-                input.maxOutputTokens,
-              ),
-            });
-          } finally {
-            if (requestedContinuationReservationId === reservationId) {
-              requestedContinuationReservationId = null;
-            }
-          }
+          const {
+            requestSystemPrompt: _unpricedRequestSystemPrompt,
+            systemPrompt: _unpricedSystemPrompt,
+            toolExposure: _unpricedToolExposure,
+            ...currentRequest
+          } = streamOptions;
+          const continuationOptions: StreamOptions = {
+            ...currentRequest,
+            systemPrompt: continuationRequestShape.systemPrompt,
+            toolExposure: continuationRequestShape.toolExposure,
+            maxOutputTokens: effectiveMaxOutputTokens(
+              streamOptions,
+              input.maxOutputTokens,
+            ),
+          };
+          continuationReservationIds.set(continuationOptions, reservationId);
+          yield* provider.stream(continuationOptions);
         },
       };
       const release = (): void => {

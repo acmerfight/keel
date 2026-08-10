@@ -66,6 +66,31 @@ const tieredBudgetModel: CostModel = {
 };
 
 describe("Cost Budget", () => {
+  test(`Given the saved-session budget receives invalid, oversized, or repeated reservation operations,
+    When callers reserve, release, and settle,
+    Then invalid work is rejected and every valid reservation changes the balance at most once`, () => {
+    const account = createSharedCostBudgetAccount(1);
+
+    expect(account.reserve(Number.NaN)).toBeNull();
+    expect(account.reserve(-1)).toBeNull();
+    expect(account.reserve(2)).toBeNull();
+    const released = account.reserve(0.4);
+    expect(released).not.toBeNull();
+    released?.release();
+    released?.release();
+    released?.settle(0.4);
+    expect(account.remainingUsd()).toBe(1);
+    expect(account.observedSpendUsd()).toBe(0);
+
+    const settled = account.reserve(0.5);
+    expect(settled).not.toBeNull();
+    settled?.settle(0.25);
+    settled?.settle(0.25);
+    settled?.release();
+    expect(account.remainingUsd()).toBe(0.75);
+    expect(account.observedSpendUsd()).toBe(0.25);
+  });
+
   test(`Given separate Main turns price requests against one saved-session budget concurrently,
     When both reach atomic provider-attempt admission with room for only one,
     Then exactly one starts and the other is rejected without overselling the session`, async () => {
@@ -562,9 +587,9 @@ describe("Cost Budget", () => {
       })(),
     ).rejects.toBeInstanceOf(CostBudgetAdmissionError);
 
-    await expect(
-      (async () => {
-        for await (const _event of lease.continuation.provider.stream({
+    const invokeLeasedContinuation = () =>
+      collect(
+        lease.continuation.provider.stream({
           ...continuationOptions,
           systemPrompt: "unpriced dynamic system prompt",
           requestSystemPrompt: () => "unpriced request-time prompt",
@@ -574,13 +599,23 @@ describe("Cost Budget", () => {
             agentControl: true,
           },
           maxOutputTokens: 10_000,
-        })) {
-          // Main atomically transfers its held reservation into this request.
-        }
-      })(),
-    ).resolves.toBeUndefined();
+        }),
+      );
+    const concurrentClaims = await Promise.allSettled([
+      invokeLeasedContinuation(),
+      invokeLeasedContinuation(),
+    ]);
+    expect(
+      concurrentClaims.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      concurrentClaims.filter((outcome) => outcome.status === "rejected"),
+    ).toHaveLength(1);
+    await expect(invokeLeasedContinuation()).rejects.toBeInstanceOf(
+      CostBudgetAdmissionError,
+    );
     lease.release();
-    expect(providerCalls).toBe(3);
+    expect(providerCalls).toBe(4);
     expect(observedRequests[2]).toMatchObject({
       systemPrompt: "main",
       toolExposure: { kind: "auto", delegation: "foreground" },
@@ -638,6 +673,40 @@ describe("Cost Budget", () => {
       model: budgetModel,
       maxCostUsd: 0.01,
     });
+    let sharedReserveCalls = 0;
+    const sharedReservationRoot = createSharedCostBudgetedProvider({
+      provider: underlying,
+      model: budgetModel,
+      maxCostUsd: 1,
+      sharedAccount: {
+        remainingUsd: () => 1,
+        observedSpendUsd: () => 0,
+        reserve: () => {
+          sharedReserveCalls++;
+          return sharedReserveCalls === 1
+            ? { settle: () => {}, release: () => {} }
+            : null;
+        },
+      },
+    });
+    let rejectedSharedTransportCalls = 0;
+    const rejectedSharedRequestRoot = createSharedCostBudgetedProvider({
+      provider: {
+        ...underlying,
+        async *stream(options) {
+          options.providerRequestAttempts?.begin();
+          rejectedSharedTransportCalls++;
+          yield { type: "text", text: "unexpected transport" };
+        },
+      },
+      model: budgetModel,
+      maxCostUsd: 1,
+      sharedAccount: {
+        remainingUsd: () => 1,
+        observedSpendUsd: () => 0,
+        reserve: () => null,
+      },
+    });
     const request = {
       additionalMessages: [
         { role: "tool", toolCallId: "delegate-call", content: "result" },
@@ -666,6 +735,28 @@ describe("Cost Budget", () => {
       kind: "rejected",
       reason: "invalid_estimate",
     });
+    for await (const _event of sharedReservationRoot.provider.stream({
+      systemPrompt: "shared baseline",
+      messages: [],
+      signal: freshSignal(),
+      toolExposure: { kind: "auto" },
+    })) {
+      // Establish a baseline before the atomic shared reserve loses its race.
+    }
+    expect(sharedReservationRoot.leaseContinuation(request)).toEqual({
+      kind: "rejected",
+      reason: "insufficient_budget",
+    });
+    await expect(
+      collect(
+        rejectedSharedRequestRoot.provider.stream({
+          systemPrompt: "shared budget was consumed concurrently",
+          messages: [],
+          signal: freshSignal(),
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CostBudgetAdmissionError);
+    expect(rejectedSharedTransportCalls).toBe(0);
     await expect(
       (async () => {
         for await (const _event of invalidFinalShapeRoot.provider.stream({

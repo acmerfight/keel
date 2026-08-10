@@ -166,17 +166,7 @@ interface RunAgentOptionsBase {
   readonly onAgentLoopAccountingUpdated?: RunAgentTurnOptions["onAgentLoopAccountingUpdated"];
 }
 
-type MainAgentControlOptions =
-  | {
-      readonly agentControl?: never;
-      readonly agentControlResultBudget?: never;
-    }
-  | {
-      readonly agentControl: AgentControlCapability;
-      readonly agentControlResultBudget: SubagentResultContinuationBudget;
-    };
-
-type MainRunAgentOptions = MainAgentControlOptions & {
+interface MainRunAgentOptions {
   readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
   readonly mcp?: AgentMcpRuntime;
   readonly userMessageOrigin?: UserMessageOrigin;
@@ -187,7 +177,7 @@ type MainRunAgentOptions = MainAgentControlOptions & {
   readonly skillActivation?: SkillActivationCapability;
   readonly taskProgress?: SessionTaskProgress;
   readonly modelOperations?: MainModelOperationInstrumentation;
-};
+}
 
 interface SubagentRunAgentOptions {
   readonly memory?: never;
@@ -234,6 +224,16 @@ interface RunAgentTurnOptionsBase {
     >,
   ) => void;
 }
+
+type MainAgentControlOptions =
+  | {
+      readonly agentControl?: never;
+      readonly agentControlResultBudget?: never;
+    }
+  | {
+      readonly agentControl: AgentControlCapability;
+      readonly agentControlResultBudget: SubagentResultContinuationBudget;
+    };
 
 type MainRunAgentTurnOptions = MainAgentControlOptions & {
   readonly memory?: AgentMemoryRuntime;
@@ -292,12 +292,6 @@ function agentTurnExecutionOptions(
       : {}),
     ...(options.delegation !== undefined
       ? { delegation: options.delegation }
-      : {}),
-    ...(options.agentControl !== undefined
-      ? {
-          agentControl: options.agentControl,
-          agentControlResultBudget: options.agentControlResultBudget,
-        }
       : {}),
     ...(options.costBudgetProvider !== undefined
       ? { costBudgetProvider: options.costBudgetProvider }

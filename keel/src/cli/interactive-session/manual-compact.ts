@@ -2,16 +2,12 @@ import {
   compactMessages,
   contextCompactionStatsForCurrentMessages,
 } from "../../agent/context-compaction.ts";
-import {
-  CostBudgetAdmissionError,
-  createCostBudgetedProvider,
-} from "../../agent/cost-budget.ts";
+import { CostBudgetAdmissionError } from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
 import type { MainModelOperationInstrumentation } from "../../agent/model-operations.ts";
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
-import { createSubagentTreeProvider } from "../../agent/subagent-tree-provider.ts";
 import type { CostModel } from "../../core/cost.ts";
 import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
@@ -25,7 +21,10 @@ import {
   formatManualCompactionFailure,
   type ManualCompactCommand,
 } from "./commands.ts";
-import type { InteractiveCompactionCost } from "./cost.ts";
+import {
+  createInteractiveCostBudgetedProvider,
+  type InteractiveCompactionCost,
+} from "./cost.ts";
 import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
@@ -86,25 +85,11 @@ export async function executeManualCompaction(
   const provider =
     compactionCost.kind !== "budgeted"
       ? resolved.provider
-      : createCostBudgetedProvider({
-          provider:
-            compactionCost.admission.kind === "shared"
-              ? createSubagentTreeProvider({
-                  provider: resolved.provider,
-                  coordination: compactionCost.admission.providerCoordination,
-                }).provider
-              : resolved.provider,
+      : createInteractiveCostBudgetedProvider({
+          provider: resolved.provider,
           model: compactionCost.model,
-          maxCostUsd:
-            compactionCost.admission.kind === "shared"
-              ? compactionCost.admission.account.remainingUsd()
-              : compactionCost.admission.remainingCostUsd,
-          ...(compactionCost.admission.kind === "shared"
-            ? { sharedAccount: compactionCost.admission.account }
-            : {}),
-          ...(modelMaxOutputTokens !== undefined
-            ? { modelMaxOutputTokens }
-            : {}),
+          admission: compactionCost.admission,
+          modelMaxOutputTokens,
         });
 
   try {

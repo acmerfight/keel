@@ -546,6 +546,19 @@ describe("tool registry", () => {
     expect(updateGoalTool.display.formatLabel({ status: "completed" })).toBe(
       "update_goal",
     );
+    expect(builtinToolRegistry.agent_list.display.formatLabel({})).toBe(
+      "agent_list",
+    );
+    expect(
+      builtinToolRegistry.agent_wait.display.formatLabel({
+        agentId: "agent-a1",
+      }),
+    ).toBe("agent_wait agent-a1");
+    expect(
+      builtinToolRegistry.agent_cancel.display.formatLabel({
+        agentId: "agent-a1",
+      }),
+    ).toBe("agent_cancel agent-a1");
     expect(bashTool.permission.kind).toBe("approval");
     if (bashTool.permission.kind === "approval") {
       expect(bashTool.permission.renderPrompt({ command: "pnpm test" })).toBe(
@@ -839,7 +852,20 @@ describe("tool registry", () => {
       command: "printf ok",
       timeoutMs: null,
     } as const;
+    const providerDelegateCall = {
+      id: "call_delegate",
+      tool: "delegate",
+      mode: null,
+      task: "Inspect one module.",
+    } as const;
     const callWithNullOptional = normalizeProviderToolCall(providerCall);
+    const delegateWithNullMode =
+      normalizeProviderToolCall(providerDelegateCall);
+
+    expect(delegateWithNullMode).toMatchObject({
+      tool: "delegate",
+      mode: "foreground",
+    });
 
     await expect(
       executeToolCall({

@@ -211,7 +211,7 @@ describe("CLI Main - Attached Background Subagents", () => {
         5_000,
         "main did not accept a later task while the child was running",
       );
-      input.write("/agents\n");
+      input.write("/agents\n/agents show 1\n");
       await withTimeout(
         runningList.promise,
         5_000,
@@ -235,6 +235,7 @@ describe("CLI Main - Attached Background Subagents", () => {
       // Then
       expect(exitCode, fixture.stderr()).toBe(0);
       expect(stdout).toContain("[running]");
+      expect(stdout).toContain("result: pending");
       expect(stdout).toContain('"status":"completed"');
       expect(stdout).toContain(
         '"finalText":"module.ts:1 exports answer = 42."',
@@ -362,6 +363,116 @@ describe("CLI Main - Attached Background Subagents", () => {
       expect(childRequests).toBe(1);
     } finally {
       for (const response of heldChildResponses) response.end();
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an attached background child reports spend beyond the saved-session limit,
+    When its canonical result settles while Main remains active,
+    Then the owner records the child spend and stops without admitting another provider request`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-background-budget-"));
+    const keelHome = join(workspace, ".keel-home");
+    const mainAnswered = Promise.withResolvers<void>();
+    const childSettled = Promise.withResolvers<void>();
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const parsed: unknown = JSON.parse(body);
+        requests.push(parsed);
+        const text = requestText(parsed);
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (text.includes("Delegation ID:")) {
+          response.end(
+            sseTextReplyWithUsage("The expensive inspection completed.", {
+              prompt_tokens: 100_000_000,
+              completion_tokens: 1,
+            }),
+          );
+          return;
+        }
+        if (text.includes("delegate_expensive_background")) {
+          response.end(sseTextReplyWithUsage("Main accepted the child."));
+          return;
+        }
+        response.end(
+          [
+            sseToolCall("delegate_expensive_background", "delegate", {
+              mode: "background",
+              task: "Inspect the workspace with a bounded child.",
+            }),
+            sseToolFinish(),
+            "data: [DONE]\n\n",
+          ].join(""),
+        );
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    let stderr = "";
+    const fixture = createRuntime(
+      [
+        "--session",
+        "background-budget",
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "--no-skills",
+      ],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: keelHome,
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+        onStdout: (text) => {
+          if (text.includes("Main accepted the child.")) {
+            mainAnswered.resolve();
+          }
+        },
+        onStderr: (text) => {
+          stderr += text;
+          if (/Background subagent agent-[^ ]+ completed\./u.test(stderr)) {
+            childSettled.resolve();
+          }
+        },
+      },
+    );
+
+    try {
+      const run = runCliMain(fixture.runtime);
+      input.write("Start an expensive background subagent.\n");
+      await withTimeout(
+        Promise.all([mainAnswered.promise, childSettled.promise]),
+        5_000,
+        "background spend was not settled into the saved session",
+      );
+      input.end("Do not admit this follow-up after the budget is spent.\n");
+
+      expect(await run, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(3);
+      expect(
+        requests.some((request) =>
+          requestText(request).includes("Do not admit this follow-up"),
+        ),
+      ).toBe(false);
+      expect(stderr).toContain("Background subagent");
+      expect(stderr).toContain(
+        "best-effort budget $0.0500 exceeded by $13.9500",
+      );
+    } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
     }

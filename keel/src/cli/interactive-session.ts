@@ -1062,8 +1062,8 @@ export async function runInteractiveSession(
     });
     const backgroundModelOperations =
       subagentSession === null
-        ? null
-        : reportModelOperations(resolved, { type: "session" });
+        ? undefined
+        : (reportModelOperations(resolved, { type: "session" }) ?? undefined);
     const exposure = exposeSkillCatalog({
       skills: inactiveImplicitSkills(),
       request: request.userMessage,
@@ -1260,9 +1260,7 @@ export async function runInteractiveSession(
                       providerCoordination:
                         subagentSession.providerCoordination,
                       background: subagentSession.background,
-                      ...(backgroundModelOperations !== null
-                        ? { modelOperations: backgroundModelOperations }
-                        : {}),
+                      modelOperations: backgroundModelOperations,
                     },
                   }
                 : {}),
@@ -2237,14 +2235,13 @@ export async function runInteractiveSession(
           }
           let consumedByPersistence = false;
           let modelSwitchCost: CostReport | undefined;
-          if (
-            modelSwitchRequiresCompaction({
-              systemPrompt: currentSystemPrompt(),
-              messages: sessionLedgerMessages(ledger),
-              target: nextResolved,
-              bashToolVisible: bashRuntimeExposesTool(bash),
-            })
-          ) {
+          const modelSwitchCompaction = {
+            systemPrompt: currentSystemPrompt(),
+            messages: sessionLedgerMessages(ledger),
+            target: nextResolved,
+            bashToolVisible: bashRuntimeExposesTool(bash),
+          };
+          if (modelSwitchRequiresCompaction(modelSwitchCompaction)) {
             const currentResolved: InteractiveResolvedProvider =
               previousResolved ?? resolveActiveProvider(userMessage);
             previousResolved = currentResolved;
@@ -2259,7 +2256,7 @@ export async function runInteractiveSession(
               });
               const compaction = await executeModelSwitchCompaction({
                 current: currentResolved,
-                target: nextResolved,
+                target: modelSwitchCompaction.target,
                 workspace: options.workspace,
                 messages: compactionMessages,
                 systemPrompt: currentSystemPrompt(),

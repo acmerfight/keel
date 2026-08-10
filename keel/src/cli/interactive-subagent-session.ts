@@ -76,6 +76,7 @@ function awaitWithSignal<T>(
 function boundedControlText(text: string, maxResultChars: number): string {
   if (text.length <= maxResultChars) return text;
   const suffix = "\n[truncated]";
+  if (maxResultChars <= suffix.length) return suffix.slice(0, maxResultChars);
   return `${text.slice(0, Math.max(0, maxResultChars - suffix.length))}${suffix}`;
 }
 
@@ -84,6 +85,7 @@ export function createInteractiveSubagentSession(
 ): InteractiveSubagentSession {
   const sessionAbortController = new AbortController();
   const runs = new Map<AgentId, SubagentBackgroundRun>();
+  const settlements = new Map<AgentId, Promise<void>>();
   const notifications: string[] = [];
   let health: BackgroundSessionHealth = { kind: "healthy" };
   const maxRemainingCostUsd = Math.max(
@@ -164,7 +166,7 @@ export function createInteractiveSubagentSession(
         );
       }
       runs.set(run.childAgentId, run);
-      void run.result
+      const settlement = run.result
         .then((result) => {
           const notice = `Background subagent ${run.childAgentId} ${result.status}.`;
           notifications.push(
@@ -193,6 +195,7 @@ export function createInteractiveSubagentSession(
             // Output is observational; drainNotifications/shutdown still propagates the failure.
           }
         });
+      settlements.set(run.childAgentId, settlement);
     },
   };
   const control: AgentControlCapability = {
@@ -251,13 +254,7 @@ export function createInteractiveSubagentSession(
     },
     shutdown: async () => {
       sessionAbortController.abort(new Error("saved session owner exited"));
-      const settlements = await Promise.allSettled(
-        [...runs.values()].map((run) => run.result),
-      );
-      const rejected = settlements.find(
-        (settlement) => settlement.status === "rejected",
-      );
-      if (rejected?.status === "rejected") throw rejected.reason;
+      await Promise.all(settlements.values());
       if (health.kind === "failed") throw health.error;
     },
   };

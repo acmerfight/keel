@@ -477,6 +477,42 @@ describe("Tool Execution", () => {
     ]);
   });
 
+  test(`Given agent-control calls reach dispatch without a live saved-session capability,
+    When list, wait, or cancel is attempted,
+    Then each call fails closed without fabricating lifecycle state`, async () => {
+    const base = {
+      workspace: process.cwd(),
+      signal: new AbortController().signal,
+      bash: { kind: "disabled" } as const,
+    };
+    const results = await Promise.all([
+      executeToolCall({
+        ...base,
+        toolCall: { id: "list", tool: "agent_list" },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: { id: "wait", tool: "agent_wait", agentId: "agent-a1" },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "cancel",
+          tool: "agent_cancel",
+          agentId: "agent-a1",
+        },
+      }),
+    ]);
+
+    for (const result of results) {
+      expect(result).toEqual({
+        ok: false,
+        content: expect.stringContaining("Agent control is unavailable"),
+        effects: [],
+      });
+    }
+  });
+
   test(`Given delegation authority and a host capability are installed,
     When main delegates once,
     Then the fresh child usage is attributed exactly once`, async () => {

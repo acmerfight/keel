@@ -44,14 +44,13 @@ interface AttachedSubagentSession {
   readonly admission: SubagentTreeAdmission;
   readonly providerCoordination: SubagentTreeProviderCoordination;
   readonly background: SubagentBackgroundRuntime;
-  readonly modelOperations?: MainModelOperationInstrumentation;
+  readonly modelOperations: MainModelOperationInstrumentation | undefined;
 }
 
 type CreateCliSubagentRuntimeOptions = CreateCliSubagentRuntimeOptionsBase &
   (
     | {
         readonly attachedSession?: never;
-        readonly lifecyclePersistence?: SubagentLifecyclePersistence;
       }
     | {
         readonly attachedSession: AttachedSubagentSession;
@@ -86,18 +85,11 @@ export function createCliSubagentRuntime(
   });
   const lifecycleOwnership =
     options.attachedSession === undefined
-      ? options.lifecyclePersistence === undefined
-        ? {}
-        : { lifecyclePersistence: options.lifecyclePersistence }
+      ? {}
       : {
           background: options.attachedSession.background,
           lifecyclePersistence: options.attachedSession.lifecyclePersistence,
-          ...(options.attachedSession.modelOperations !== undefined
-            ? {
-                backgroundModelOperations:
-                  options.attachedSession.modelOperations,
-              }
-            : {}),
+          backgroundModelOperations: options.attachedSession.modelOperations,
         };
   return {
     costBudgetProvider: rootBudget.provider,

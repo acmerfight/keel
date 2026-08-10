@@ -220,6 +220,7 @@ function supervisorFixture(
         : { lifecyclePersistence: options.lifecyclePersistence }
       : {
           background: options.background,
+          backgroundModelOperations: undefined,
           lifecyclePersistence: options.lifecyclePersistence,
         };
   return {
@@ -262,6 +263,27 @@ function supervisorFixture(
 }
 
 describe("Subagent Supervisor", () => {
+  test(`Given the root budget cannot reserve an isolated agent result continuation,
+    When Main asks to wait for the result,
+    Then result admission rejects before exposing an unbudgeted continuation`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-result-budget-"),
+    );
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("unused"),
+      rootMaxCostUsd: 0,
+    });
+
+    try {
+      expect(
+        fixture.supervisor.resultContinuationBudget.lease(["agent-wait"]),
+      ).toEqual({ kind: "rejected" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a background child is attached to a saved-session owner,
     When the Main turn that created it is cancelled,
     Then the child keeps running until its own completion because turn cancellation is not its owner`, async () => {
@@ -307,6 +329,20 @@ describe("Subagent Supervisor", () => {
         signal: mainTurn.signal,
       });
       await childEntered.promise;
+      await expect(
+        fixture.supervisor.capability.delegate({
+          toolCallId: "background-turn",
+          mode: "background",
+          task: "Replay while the background child is still live.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toMatchObject({
+        delivery: "replayed",
+        ok: true,
+        content: expect.stringContaining('"status":"running"'),
+      });
+      expect(registeredRuns).toHaveLength(1);
       mainTurn.abort(new Error("Main turn cancelled"));
       await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -324,6 +360,20 @@ describe("Subagent Supervisor", () => {
         status: "completed",
         finalText: "background completed",
       });
+      await expect(
+        fixture.supervisor.capability.delegate({
+          toolCallId: "background-turn",
+          mode: "background",
+          task: "Changed replay text must not create another background run.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toMatchObject({
+        delivery: "replayed",
+        ok: true,
+        content: expect.stringContaining('"status":"completed"'),
+      });
+      expect(registeredRuns).toHaveLength(1);
     } finally {
       sessionOwner.abort();
       releaseChild.resolve();

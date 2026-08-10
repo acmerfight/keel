@@ -17,6 +17,8 @@ import type {
   ProviderMessage,
   Usage,
 } from "../../src/llm/types.ts";
+import { mcpProviderSchemaTarget } from "../../src/mcp/provider-schema.ts";
+import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
 import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
 import type { AgentControlCapability } from "../../src/tools/agent-control.ts";
@@ -246,6 +248,85 @@ describe("Tool Scheduling", () => {
     }
   });
 
+  test(`Given agent_wait has reserved a Main continuation,
+    When the running Main turn is aborted while fetching the child result,
+    Then the result lease is released and no continuation request starts`, async () => {
+    const workspace = await createWorkspace();
+    const controller = new AbortController();
+    let releases = 0;
+    let continuationCalls = 0;
+    const provider: LLMProvider = {
+      id: "aborted-agent-wait",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "wait-result",
+          tool: "agent_wait",
+          agentId: "agent-a1",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const continuationProvider: LLMProvider = {
+      id: "unused-aborted-continuation",
+      async *stream() {
+        continuationCalls++;
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => ({ ok: true, content: "unused" }),
+      wait: async () => {
+        const failure = new Error("Main turn aborted during wait");
+        controller.abort(failure);
+        throw failure;
+      },
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const release = () => {
+      releases++;
+    };
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => ({
+        kind: "granted",
+        maxResultChars: 6_000,
+        continuation: {
+          provider: continuationProvider,
+          requestShape: {
+            systemPrompt: "main",
+            toolExposure: { kind: "auto", agentControl: true },
+          },
+          release,
+        },
+        release,
+      }),
+    };
+
+    try {
+      await expect(
+        collect(
+          runAgentTurn({
+            workspace,
+            provider,
+            ledger: sessionLedgerMirroringMessages([
+              { role: "user", content: "Wait for the child." },
+            ]),
+            systemPrompt: "main",
+            signal: controller.signal,
+            bash: { kind: "disabled" },
+            stopPolicy: defaultStopPolicy(),
+            agentControl,
+            agentControlResultBudget: resultBudget,
+          }),
+        ),
+      ).rejects.toThrow("Main turn aborted during wait");
+      expect(releases).toBe(1);
+      expect(continuationCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a leased continuation pins a narrower tool surface than the next host snapshot,
     When the leased model emits an unexposed delegate call,
     Then pinned authority rejects it before delegation admission can create lifecycle state`, async () => {
@@ -444,6 +525,102 @@ describe("Tool Scheduling", () => {
       expect(availabilityCalls).toBe(2);
       expect(leasedProviderCalls).toBe(0);
       expect(releases).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given agent_wait carries a Main continuation into an MCP-enabled turn,
+    When MCP preparation fails before the leased provider starts,
+    Then Keel releases the continuation instead of leaking session budget`, async () => {
+    const workspace = await createWorkspace();
+    let preparationCalls = 0;
+    let releases = 0;
+    let continuationCalls = 0;
+    const provider: LLMProvider = {
+      id: "main-before-mcp-preparation-failure",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "wait-result",
+          tool: "agent_wait",
+          agentId: "agent-a1",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const continuationProvider: LLMProvider = {
+      id: "unused-after-mcp-preparation-failure",
+      async *stream() {
+        continuationCalls++;
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const mcp: McpRuntime = {
+      prepareTurn: async () => {
+        preparationCalls++;
+        if (preparationCalls === 2) throw new Error("MCP preparation failed");
+      },
+      exposureSnapshot: async () => ({
+        snapshotId: "empty",
+        catalogAvailable: true,
+        tools: [],
+      }),
+      search: async () => ({ ok: false, content: "unused" }),
+      execute: async () => {
+        throw new Error("unused");
+      },
+      close: async () => {},
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => ({ ok: true, content: "unused" }),
+      wait: async () => ({ ok: true, content: "canonical child result" }),
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const release = () => {
+      releases++;
+    };
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => ({
+        kind: "granted",
+        maxResultChars: 6_000,
+        continuation: {
+          provider: continuationProvider,
+          requestShape: {
+            systemPrompt: "main",
+            toolExposure: { kind: "auto", agentControl: true },
+          },
+          release,
+        },
+        release,
+      }),
+    };
+
+    try {
+      await expect(
+        collect(
+          runAgentTurn({
+            workspace,
+            provider,
+            ledger: sessionLedgerMirroringMessages([
+              { role: "user", content: "Wait for the child." },
+            ]),
+            systemPrompt: "main",
+            signal: freshSignal(),
+            bash: { kind: "disabled" },
+            stopPolicy: defaultStopPolicy(),
+            agentControl,
+            agentControlResultBudget: resultBudget,
+            mcp: {
+              runtime: mcp,
+              schemaTarget: mcpProviderSchemaTarget("fake", "fake"),
+            },
+          }),
+        ),
+      ).rejects.toThrow("MCP preparation failed");
+      expect(preparationCalls).toBe(2);
+      expect(releases).toBe(1);
+      expect(continuationCalls).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

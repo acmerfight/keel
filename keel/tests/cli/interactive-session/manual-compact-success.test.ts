@@ -6,12 +6,14 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import type { AgentEvent } from "../../../src/agent/events.ts";
+import type { AgentEvent, CostReport } from "../../../src/agent/events.ts";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import type {
+  AbortableToolOutputArtifactStore,
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
+import type { AgentTreeHistory } from "../../../src/cli/agent-tree-store.ts";
 import type { CostModel } from "../../../src/core/cost.ts";
 import { createDeepseekProvider } from "../../../src/llm/providers/deepseek.ts";
 import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
@@ -764,6 +766,120 @@ describe("Interactive Session - Manual Compact Success", () => {
     expect(persisted[0]?.reason).toBe("compaction");
     expect(persisted[0]?.consumedInputIds).toEqual([]);
     expect(sigintHandlers.size).toBe(0);
+  });
+
+  test(`Given a saved session owns the attached-agent budget and has prior history,
+    When manual compaction overspends that shared session budget,
+    Then the checkpoint commits but the queued model turn is not admitted`, async () => {
+    const usage = {
+      inputTokens: 100_000_000,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 100_000_000,
+      outputTokens: 1,
+    } as const;
+    const costModel: CostModel = {
+      type: "fixed",
+      uncachedInputPerMillionTokens: 1,
+      cachedInputPerMillionTokens: 0.5,
+      outputPerMillionTokens: 2,
+    };
+    let summaryRequests = 0;
+    let modelRequests = 0;
+    const provider: LLMProvider = {
+      id: "attached-manual-compaction",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        if (options.toolExposure?.kind !== "none") {
+          modelRequests++;
+          yield { type: "text", text: "unexpected model turn" };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        summaryRequests++;
+        options.providerRequestAttempts
+          ?.begin()
+          .finish({ outcome: "completed", usage });
+        yield { type: "text", text: "Attached session checkpoint." };
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const transcriptStore: AbortableToolOutputArtifactStore = {
+      abortSignalSupport: true,
+      verifyReusable: async () => ({ status: "not_reusable" }),
+      save: async () => ({ status: "failed", reason: "unused" }),
+      discard: async () => {},
+    };
+    const agentHistory: AgentTreeHistory = {
+      sessionId: "attached-manual-compaction",
+      persistence: {
+        accepted: () => {
+          throw new Error("manual compaction must not accept a child");
+        },
+        rejected: () => {},
+      },
+      entries: () => [],
+      transcript: () => {
+        throw new Error("manual compaction must not read a child transcript");
+      },
+    };
+    const input = new PassThrough();
+    const reports: CostReport[] = [];
+    let stderr = "";
+    const session = runInteractiveSession({
+      cliArgs: { bashMode: "disabled", maxCostUsd: 0.05 },
+      workspace: process.cwd(),
+      platform: process.platform,
+      session: savedInteractiveSession({
+        id: "attached-manual-compaction",
+      }),
+      initialMessages: [
+        { role: "user", content: "Remember the attached session." },
+        { role: "assistant", content: "Remembered.", toolCalls: [] },
+      ],
+      agentHistory,
+      delegation: {
+        policy: "explicit",
+        transcriptStore,
+        maxCostUsd: 0.05,
+      },
+      input,
+      writeStdout: () => {},
+      writeStderr: (text) => {
+        stderr += text;
+      },
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel,
+        contextCompaction: { keepRecentTokens: 1 },
+      }),
+      requireKnownCostModel: () => costModel,
+      printAgentEvents: async () => {
+        throw new Error("overspent compaction must block the queued turn");
+      },
+      formatCostReport: (report) => {
+        reports.push(report);
+        return "";
+      },
+    });
+
+    input.end("/compact\nDo not run this queued prompt.\n");
+    await session;
+
+    expect(summaryRequests).toBe(1);
+    expect(modelRequests).toBe(0);
+    expect(stderr).toContain("Context compacted: manual");
+    expect(reports.at(-1)).toMatchObject({
+      spentUsd: 100.000002,
+      budget: { kind: "budget_limited", maxUsd: 0.05 },
+    });
   });
 
   test(`Given an interactive session has read a file before manual compaction,
