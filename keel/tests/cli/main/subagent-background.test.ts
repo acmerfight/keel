@@ -40,10 +40,21 @@ function requestText(request: unknown): string {
   return JSON.stringify(requestWithMessagesSchema.parse(request));
 }
 
+function delegatedAgentId(request: unknown): string | undefined {
+  const receipt = requestWithMessagesSchema
+    .parse(request)
+    .messages?.find(
+      (message) =>
+        message.role === "tool" &&
+        message.tool_call_id === "delegate_background",
+    );
+  return receipt?.content?.match(/"agentId":"(agent-[a-f0-9-]+)"/u)?.[1];
+}
+
 describe("CLI Main - Attached Background Subagents", () => {
   test(`Given a saved interactive session starts a read-only child in the background,
-    When the user continues working, inspects it live, and waits after completion,
-    Then main stays responsive and the same durable result is notified and returned without rerunning the child`, async () => {
+    When the user continues working, inspects it live, and waits while it is still running,
+    Then main stays responsive and returns the durable result after the child settles without requiring another prompt`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-background-agent-"));
     const keelHome = join(workspace, ".keel-home");
@@ -57,6 +68,7 @@ describe("CLI Main - Attached Background Subagents", () => {
     const firstMainAnswer = Promise.withResolvers<void>();
     const followupAnswer = Promise.withResolvers<void>();
     const resultUsed = Promise.withResolvers<void>();
+    const completionAcknowledged = Promise.withResolvers<void>();
     const runningList = Promise.withResolvers<void>();
     const completionNotification = Promise.withResolvers<void>();
     let releaseBackground: () => void = () => {
@@ -99,12 +111,16 @@ describe("CLI Main - Attached Background Subagents", () => {
           return;
         }
 
-        if (text.includes("Use the completed background result now.")) {
+        if (text.includes("Acknowledge the recorded completion.")) {
+          response.end(sseTextReplyWithUsage("Completion acknowledged."));
+          return;
+        }
+        if (text.includes("Use the running background result now.")) {
           if (text.includes("agent_wait_use_result")) {
             response.end(sseTextReplyWithUsage("Used the child result: 42."));
             return;
           }
-          const agentId = /agent-[a-f0-9-]+/u.exec(text)?.[0];
+          const agentId = delegatedAgentId(parsed);
           if (agentId === undefined) {
             response.writeHead(500);
             response.end("stable agent ID missing from parent context");
@@ -117,6 +133,7 @@ describe("CLI Main - Attached Background Subagents", () => {
               "data: [DONE]\n\n",
             ].join(""),
           );
+          setTimeout(releaseBackground, 100);
           return;
         }
         if (text.includes("Continue with another task while it runs.")) {
@@ -155,7 +172,7 @@ describe("CLI Main - Attached Background Subagents", () => {
         "--agent-policy",
         "explicit",
         "--max-cost",
-        "0.05",
+        "1",
         "--no-skills",
       ],
       {
@@ -177,6 +194,9 @@ describe("CLI Main - Attached Background Subagents", () => {
           }
           if (stdout.includes("Used the child result: 42.")) {
             resultUsed.resolve();
+          }
+          if (stdout.includes("Completion acknowledged.")) {
+            completionAcknowledged.resolve();
           }
           if (/\[running\].*Read module\.ts/u.test(stdout)) {
             runningList.resolve();
@@ -217,17 +237,22 @@ describe("CLI Main - Attached Background Subagents", () => {
         5_000,
         "/agents did not show the live child",
       );
-      releaseBackground();
+      input.write("Use the running background result now.\n");
       await withTimeout(
         completionNotification.promise,
         5_000,
         "background completion was not notified",
       );
-      input.write("Use the completed background result now.\n");
       await withTimeout(
         resultUsed.promise,
         5_000,
         "main could not wait for and use the background result",
+      );
+      input.write("Acknowledge the recorded completion.\n");
+      await withTimeout(
+        completionAcknowledged.promise,
+        5_000,
+        "main did not accept the turn after background completion",
       );
       input.end("/agents wait 1\n");
       const exitCode = await run;
@@ -248,6 +273,20 @@ describe("CLI Main - Attached Background Subagents", () => {
           requestText(request).includes("Delegation ID:"),
         ),
       ).toHaveLength(2);
+      expect(
+        requests.some((request) => {
+          const text = requestText(request);
+          return (
+            text.includes("agent_wait_use_result") &&
+            text.includes("module.ts:1 exports answer = 42.")
+          );
+        }),
+        requests
+          .map((request) =>
+            JSON.stringify(requestWithMessagesSchema.parse(request).messages),
+          )
+          .join("\n\n"),
+      ).toBe(true);
       const parentLedger = await readFile(
         join(keelHome, "sessions", "background-agent", "ledger.jsonl"),
         "utf8",

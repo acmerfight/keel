@@ -82,9 +82,9 @@ async function createWorkspace(): Promise<string> {
 }
 
 describe("Tool Scheduling", () => {
-  test(`Given agent_wait reserves a Main continuation,
-    When the durable child result enters the ledger,
-    Then the next Main turn consumes that exact leased provider before releasing it`, async () => {
+  test(`Given a running background child temporarily holds shared budget,
+    When the model calls agent_wait,
+    Then Keel waits for settlement before reserving and consuming the exact Main continuation`, async () => {
     const workspace = await createWorkspace();
     const messages: SessionMessage[] = [
       { role: "user", content: "Use the background result." },
@@ -93,6 +93,8 @@ describe("Tool Scheduling", () => {
     let leasedProviderCalls = 0;
     let releases = 0;
     let drainCalls = 0;
+    let settled = false;
+    const order: string[] = [];
     const provider: LLMProvider = {
       id: "ordinary-main-provider",
       async *stream() {
@@ -116,26 +118,37 @@ describe("Tool Scheduling", () => {
     };
     const agentControl: AgentControlCapability = {
       list: () => ({ ok: true, content: "unused" }),
-      wait: async () => ({ ok: true, content: "canonical child result" }),
+      waitForSettlement: async () => {
+        order.push("settle");
+        settled = true;
+      },
+      wait: async () => {
+        order.push("result");
+        return { ok: true, content: "canonical child result" };
+      },
       cancel: async () => ({ ok: true, content: "unused" }),
     };
     const release = () => {
       releases++;
     };
     const resultBudget: SubagentResultContinuationBudget = {
-      lease: () => ({
-        kind: "granted",
-        maxResultChars: 6_000,
-        continuation: {
-          provider: continuationProvider,
-          requestShape: {
-            systemPrompt: "You are a helpful assistant.",
-            toolExposure: { kind: "auto", agentControl: true },
+      lease: () => {
+        order.push("lease");
+        if (!settled) return { kind: "rejected" };
+        return {
+          kind: "granted",
+          maxResultChars: 6_000,
+          continuation: {
+            provider: continuationProvider,
+            requestShape: {
+              systemPrompt: "You are a helpful assistant.",
+              toolExposure: { kind: "auto", agentControl: true },
+            },
+            release,
           },
           release,
-        },
-        release,
-      }),
+        };
+      },
     };
 
     try {
@@ -161,6 +174,7 @@ describe("Tool Scheduling", () => {
       expect(leasedProviderCalls).toBe(1);
       expect(releases).toBe(1);
       expect(drainCalls).toBe(0);
+      expect(order).toEqual(["settle", "lease", "result"]);
       expect(messages).not.toContainEqual({
         role: "user",
         content: "unpriced steering",
@@ -206,6 +220,7 @@ describe("Tool Scheduling", () => {
     };
     const agentControl: AgentControlCapability = {
       list: () => ({ ok: true, content: "unused" }),
+      waitForSettlement: async () => {},
       wait: async () => {
         waitCalls++;
         return { ok: true, content: "must not enter Main context" };
@@ -276,6 +291,7 @@ describe("Tool Scheduling", () => {
     };
     const agentControl: AgentControlCapability = {
       list: () => ({ ok: true, content: "unused" }),
+      waitForSettlement: async () => {},
       wait: async () => {
         const failure = new Error("Main turn aborted during wait");
         controller.abort(failure);
@@ -327,6 +343,102 @@ describe("Tool Scheduling", () => {
     }
   });
 
+  test(`Given agent_wait has published its tool start but has not begun execution,
+    When the session owner closes Main before the child settles,
+    Then later settlement cannot acquire an orphaned continuation lease`, async () => {
+    const workspace = await createWorkspace();
+    const settlement = Promise.withResolvers<void>();
+    let settlementWaitCalls = 0;
+    let leaseCalls = 0;
+    let releases = 0;
+    const provider: LLMProvider = {
+      id: "closed-before-agent-wait",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "wait-result",
+          tool: "agent_wait",
+          agentId: "agent-a1",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const continuationProvider: LLMProvider = {
+      id: "orphaned-continuation",
+      async *stream() {
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => ({ ok: true, content: "unused" }),
+      waitForSettlement: async () => {
+        settlementWaitCalls++;
+        await settlement.promise;
+      },
+      wait: async () => ({ ok: true, content: "unused" }),
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const release = () => {
+      releases++;
+    };
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => {
+        leaseCalls++;
+        return {
+          kind: "granted",
+          maxResultChars: 6_000,
+          continuation: {
+            provider: continuationProvider,
+            requestShape: {
+              systemPrompt: "You are a helpful assistant.",
+              toolExposure: { kind: "auto", agentControl: true },
+            },
+            release,
+          },
+          release,
+        };
+      },
+    };
+
+    try {
+      const events = runAgentTurn({
+        workspace,
+        provider,
+        ledger: sessionLedgerMirroringMessages([
+          { role: "user", content: "Wait for the child." },
+        ]),
+        systemPrompt: "You are a helpful assistant.",
+        signal: freshSignal(),
+        bash: { kind: "disabled" },
+        stopPolicy: defaultStopPolicy(),
+        agentControl,
+        agentControlResultBudget: resultBudget,
+      });
+
+      expect(await events.next()).toEqual({
+        done: false,
+        value: {
+          type: "tool_start",
+          toolCall: {
+            id: "wait-result",
+            tool: "agent_wait",
+            agentId: "agent-a1",
+          },
+        },
+      });
+      await events.return(undefined);
+      settlement.resolve();
+      await settlement.promise;
+      await Promise.resolve();
+
+      expect(settlementWaitCalls).toBe(0);
+      expect(leaseCalls).toBe(0);
+      expect(releases).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a leased continuation pins a narrower tool surface than the next host snapshot,
     When the leased model emits an unexposed delegate call,
     Then pinned authority rejects it before delegation admission can create lifecycle state`, async () => {
@@ -371,6 +483,7 @@ describe("Tool Scheduling", () => {
       list: () => {
         return { ok: true, content: "unused" };
       },
+      waitForSettlement: async () => {},
       wait: async () => ({ ok: true, content: "canonical child result" }),
       cancel: async () => ({ ok: true, content: "unused" }),
     };
@@ -465,6 +578,7 @@ describe("Tool Scheduling", () => {
     };
     const agentControl: AgentControlCapability = {
       list: () => ({ ok: true, content: "unused" }),
+      waitForSettlement: async () => {},
       wait: async () => ({ ok: true, content: "canonical child result" }),
       cancel: async () => ({ ok: true, content: "unused" }),
     };
@@ -574,6 +688,7 @@ describe("Tool Scheduling", () => {
     };
     const agentControl: AgentControlCapability = {
       list: () => ({ ok: true, content: "unused" }),
+      waitForSettlement: async () => {},
       wait: async () => ({ ok: true, content: "canonical child result" }),
       cancel: async () => ({ ok: true, content: "unused" }),
     };
@@ -660,6 +775,7 @@ describe("Tool Scheduling", () => {
     };
     const agentControl: AgentControlCapability = {
       list: () => ({ ok: true, content: "unused" }),
+      waitForSettlement: async () => {},
       wait: async () => {
         waitCalls++;
         return { ok: true, content: "must remain hidden" };

@@ -109,6 +109,22 @@ describe("Interactive subagent session", () => {
       20,
     );
     await expect(
+      Promise.all([
+        session.control.waitForSettlement({
+          id: completed.childAgentId,
+          signal: new AbortController().signal,
+        }),
+        session.control.waitForSettlement({
+          id: "agent-unknown",
+          signal: new AbortController().signal,
+        }),
+        session.control.waitForSettlement({
+          id: active.childAgentId,
+          signal: new AbortController().signal,
+        }),
+      ]),
+    ).resolves.toEqual([undefined, undefined, undefined]);
+    await expect(
       session.control.wait({
         id: completed.childAgentId,
         signal: new AbortController().signal,
@@ -204,12 +220,17 @@ describe("Interactive subagent session", () => {
       signal: new AbortController().signal,
       maxResultChars: 6_000,
     });
+    const settling = session.control.waitForSettlement({
+      id: entry.childAgentId,
+      signal: new AbortController().signal,
+    });
     entries[0] = {
       ...entry,
       status: "completed",
       result: { ...result, transcriptRef: entry.transcriptRef },
     };
     completion.resolve(result);
+    await expect(settling).resolves.toBeUndefined();
     await expect(waiting).resolves.toMatchObject({
       ok: true,
       content: expect.stringContaining("done"),

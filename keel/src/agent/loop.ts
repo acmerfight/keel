@@ -37,6 +37,7 @@ import type {
 import { createDelegationExecutor } from "../tools/delegation.ts";
 import {
   type AgentControlExecutionContext,
+  type AgentWaitResultAdmission,
   executeToolCall,
   invalidToolCallFailureMessage,
   type ToolExecution,
@@ -1307,43 +1308,58 @@ export async function* runAgentTurn(
     const subagentResultToolCallIds = turnResult.toolCalls
       .filter(isSubagentResultToolCall)
       .map((toolCall) => toolCall.id);
+    const agentWaitToolCalls = turnResult.toolCalls.flatMap((toolCall) =>
+      !isMcpToolInvocation(toolCall) &&
+      !isInvalidToolCall(toolCall) &&
+      toolCall.tool === "agent_wait"
+        ? [toolCall]
+        : [],
+    );
     const isolatedSubagentResultRound =
       subagentResultToolCallIds.length === turnResult.toolCalls.length;
-    let subagentResultContinuation: SubagentResultContinuationLease | null =
+    const subagentResultContinuation: {
+      current: SubagentResultContinuationLease | null;
+    } = { current: null };
+    const agentControl = options.agentControl;
+    let agentWaitResultAdmission: Promise<AgentWaitResultAdmission> | null =
       null;
-    if (
-      options.agentControl !== undefined &&
-      subagentResultToolCallIds.length > 0 &&
-      isolatedSubagentResultRound
-    ) {
-      subagentResultContinuation = options.agentControlResultBudget.lease(
-        subagentResultToolCallIds,
-      );
-    }
-    const agentWaitResultAdmission:
-      | "granted"
-      | "mixed_tool_round"
-      | "budget_rejected" =
-      subagentResultToolCallIds.length === 0 ||
-      subagentResultContinuation?.kind === "granted"
-        ? "granted"
-        : isolatedSubagentResultRound
-          ? "budget_rejected"
-          : "mixed_tool_round";
-    const admittedAgentControlResultMaxChars =
-      subagentResultContinuation?.kind === "granted"
-        ? Math.min(
-            agentControlResultMaxChars,
-            subagentResultContinuation.maxResultChars,
-          )
-        : agentControlResultMaxChars;
+    const admitAgentWaitResult =
+      agentControl === undefined
+        ? null
+        : (): Promise<AgentWaitResultAdmission> => {
+            agentWaitResultAdmission ??= (async () => {
+              if (!isolatedSubagentResultRound) {
+                return { kind: "mixed_tool_round" } as const;
+              }
+              await Promise.all(
+                agentWaitToolCalls.map((toolCall) =>
+                  agentControl.waitForSettlement({
+                    id: toolCall.agentId,
+                    signal,
+                  }),
+                ),
+              );
+              subagentResultContinuation.current =
+                options.agentControlResultBudget.lease(
+                  subagentResultToolCallIds,
+                );
+              return subagentResultContinuation.current.kind === "granted"
+                ? {
+                    kind: "granted",
+                    maxResultChars:
+                      subagentResultContinuation.current.maxResultChars,
+                  }
+                : { kind: "budget_rejected" };
+            })();
+            return agentWaitResultAdmission;
+          };
     const agentControlExecutionContext: AgentControlExecutionContext =
-      options.agentControl === undefined
+      agentControl === undefined || admitAgentWaitResult === null
         ? {}
         : {
-            agentControl: options.agentControl,
-            agentControlResultMaxChars: admittedAgentControlResultMaxChars,
-            agentWaitResultAdmission,
+            agentControl,
+            agentControlResultMaxChars,
+            admitAgentWaitResult,
           };
     const turnDelegation = delegationForToolRound(
       options.delegation,
@@ -1671,7 +1687,7 @@ export async function* runAgentTurn(
       }
 
       const carriesMainContinuation =
-        subagentResultContinuation?.kind === "granted" ||
+        subagentResultContinuation.current?.kind === "granted" ||
         turnDelegation.continuation !== undefined;
       if (
         drainInjectedUserMessages !== undefined &&
@@ -1683,10 +1699,10 @@ export async function* runAgentTurn(
           await drainInjectedUserMessages(),
         );
       }
-      if (subagentResultContinuation?.kind === "granted") {
+      if (subagentResultContinuation.current?.kind === "granted") {
         pendingMainContinuation = {
-          continuation: subagentResultContinuation.continuation,
-          close: subagentResultContinuation.release,
+          continuation: subagentResultContinuation.current.continuation,
+          close: subagentResultContinuation.current.release,
         };
         retainSubagentResultContinuation = true;
       } else if (turnDelegation.continuation !== undefined) {
@@ -1700,9 +1716,9 @@ export async function* runAgentTurn(
       if (!retainTurnDelegation) turnDelegation.close();
       if (
         !retainSubagentResultContinuation &&
-        subagentResultContinuation?.kind === "granted"
+        subagentResultContinuation.current?.kind === "granted"
       ) {
-        subagentResultContinuation.release();
+        subagentResultContinuation.current.release();
       }
     }
   }

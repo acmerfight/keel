@@ -156,6 +156,16 @@ export function createInteractiveSubagentSession(
       };
     }
   };
+  const waitForSettlement = async (
+    id: AgentId,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const entry = resolveAgentHistoryEntry(options.history, id);
+    if (entry === null || entry.result !== null) return;
+    const settlement = settlements.get(entry.childAgentId);
+    if (settlement === undefined) return;
+    await awaitWithSignal(settlement, signal);
+  };
 
   const background: SubagentBackgroundRuntime = {
     signal: sessionAbortController.signal,
@@ -206,6 +216,8 @@ export function createInteractiveSubagentSession(
         request.maxResultChars,
       ),
     }),
+    waitForSettlement: (request) =>
+      waitForSettlement(request.id, request.signal),
     wait: (request) => wait(request.id, request.signal, request.maxResultChars),
     cancel: async (request) => {
       const durable = terminalStatusContent(request.id, request.maxResultChars);

@@ -421,6 +421,7 @@ describe("Tool Execution", () => {
         observed.push(`list:${request.maxResultChars}`);
         return { ok: true, content: "agent-a1 running" };
       },
+      waitForSettlement: async () => {},
       wait: async (request) => {
         observed.push(`wait:${request.id}:${request.maxResultChars}`);
         expect(request.signal).toBe(signal);
@@ -443,7 +444,11 @@ describe("Tool Execution", () => {
       } as const,
       agentControl,
       agentControlResultMaxChars: 1_234,
-      agentWaitResultAdmission: "granted" as const,
+      admitAgentWaitResult: async () =>
+        ({
+          kind: "granted",
+          maxResultChars: 1_234,
+        }) as const,
     };
 
     const [listed, waited, cancelled] = await Promise.all([
@@ -470,11 +475,14 @@ describe("Tool Execution", () => {
       { ok: true, content: "agent-a1 completed", effects: [] },
       { ok: true, content: "agent-a1 cancelled", effects: [] },
     ]);
-    expect(observed).toEqual([
-      "list:1234",
-      "wait:agent-a1:1234",
-      "cancel:agent-a1:1234",
-    ]);
+    expect(observed).toHaveLength(3);
+    expect(observed).toEqual(
+      expect.arrayContaining([
+        "list:1234",
+        "wait:agent-a1:1234",
+        "cancel:agent-a1:1234",
+      ]),
+    );
   });
 
   test(`Given agent-control calls reach dispatch without a live saved-session capability,

@@ -134,19 +134,20 @@ type AgentCancelToolCall = Extract<
   { readonly tool: "agent_cancel" }
 >;
 
+export type AgentWaitResultAdmission =
+  | { readonly kind: "granted"; readonly maxResultChars: number }
+  | { readonly kind: "mixed_tool_round" | "budget_rejected" };
+
 export type AgentControlExecutionContext =
   | {
       readonly agentControl?: never;
       readonly agentControlResultMaxChars?: never;
-      readonly agentWaitResultAdmission?: never;
+      readonly admitAgentWaitResult?: never;
     }
   | {
       readonly agentControl: AgentControlCapability;
       readonly agentControlResultMaxChars: number;
-      readonly agentWaitResultAdmission:
-        | "granted"
-        | "mixed_tool_round"
-        | "budget_rejected";
+      readonly admitAgentWaitResult: () => Promise<AgentWaitResultAdmission>;
     };
 
 type BuiltinToolExecutionContext = GoalExecutionContext &
@@ -226,10 +227,11 @@ async function executeAgentWaitTool(
   if (context.agentControl === undefined) {
     return unavailableAgentControlExecution();
   }
-  if (context.agentWaitResultAdmission !== "granted") {
+  const admission = await context.admitAgentWaitResult();
+  if (admission.kind !== "granted") {
     return {
       content:
-        context.agentWaitResultAdmission === "mixed_tool_round"
+        admission.kind === "mixed_tool_round"
           ? "Agent result was not fetched because agent_wait must be isolated from non-wait tools so Keel can preserve one complete Main continuation."
           : "Agent result was not fetched because the remaining session budget cannot preserve a Main continuation.",
       ok: false,
@@ -239,7 +241,10 @@ async function executeAgentWaitTool(
   const result = await context.agentControl.wait({
     id: toolCall.agentId,
     signal: context.signal,
-    maxResultChars: context.agentControlResultMaxChars,
+    maxResultChars: Math.min(
+      context.agentControlResultMaxChars,
+      admission.maxResultChars,
+    ),
   });
   return { ...result, effects: NO_TOOL_EXECUTION_EFFECTS };
 }
