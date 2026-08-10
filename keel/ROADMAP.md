@@ -202,7 +202,9 @@ What a user can do today:
   turns, human interventions attributed to the active Task and Agent Run,
   retry and context-recovery attribution, stop reason, token usage, duration,
   provider/model, cost when tracked, and whether changed files received an undo
-  checkpoint.
+  checkpoint. Terminal runtime failures best-effort finalize the active Task and
+  Agent Run and add bounded redacted failure evidence; report-write failure does
+  not replace the original runtime error.
 - `keel --transcript <file>` — write provider-visible one-shot messages as
   schema-versioned JSONL.
 - `keel eval [--check] [--trials <n>]` — run a repeatable harness eval suite

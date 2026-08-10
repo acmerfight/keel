@@ -201,6 +201,11 @@ Each standard trial appends one JSON line:
   harness carries `taskOutcome`, which is `verified` or `verify_failed`.
   `pass` is true exactly for a completed, verified trial. The schema rejects
   impossible combinations instead of asking consumers to repair them.
+- A non-zero agent exit remains `harnessOutcome: "crashed"`, but when the agent
+  successfully wrote a current-schema failure report the eval result preserves
+  it. Such a report uses `stopReason: "failed"`, closes the active Task and
+  Agent Run as failed, and adds a bounded redacted `failure` object. The report
+  is diagnostic evidence; it never changes the failed verdict into success.
 - `condition` is `standard`, `memory_disabled`, `memory_enabled`,
   `delegation_control`, or `delegation_treatment`. `requiredToPass` is false
   for the observational `memory_disabled` and `delegation_control` conditions

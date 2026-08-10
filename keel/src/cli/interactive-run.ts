@@ -87,13 +87,17 @@ import {
   type RunReportMemoryEntry,
   reportActiveSkills,
   writeRunReport,
+  writeRunReportBestEffort,
 } from "./report.ts";
 import {
   type AgentEventReportRecorder,
   createAgentEventReportRecorder,
 } from "./report-events.ts";
 import type { CliRuntime } from "./runtime.ts";
-import { formatCliRuntimeError } from "./runtime-error.ts";
+import {
+  createCliRuntimeErrorReporter,
+  formatCliRuntimeError,
+} from "./runtime-error.ts";
 import {
   buildSessionPickerView,
   formatSessionCatalogWarnings,
@@ -627,6 +631,7 @@ async function runActiveSessionCli(
   const sourceHandoff = transition?.sourceHandoff;
   let handoffSourceLock = sourceHandoff?.lock;
   let sourceSessionLock: SessionLock | undefined;
+  let writeFailureReport: ((error: unknown) => void) | undefined;
   try {
     const workspace = runtime.cwd();
     const skillPolicy = resolveSkillRuntimePolicy(
@@ -1651,10 +1656,51 @@ async function runActiveSessionCli(
         },
         formatCostReport,
       };
+      const failureReportFile = cliArgs.reportFile;
+      if (failureReportFile !== undefined) {
+        writeFailureReport = (error) => {
+          writeRunReportBestEffort(
+            failureReportFile,
+            {
+              tasks: reportRecorder.tasks(),
+              modelOperations: reportRecorder.modelOperations(),
+              outcome: {
+                status: "failed",
+                error,
+                ...(cliArgs.maxCostUsd !== undefined
+                  ? { maxCostUsd: cliArgs.maxCostUsd }
+                  : {}),
+                ...(activeSessionId !== undefined
+                  ? { sessionId: activeSessionId }
+                  : {}),
+              },
+              durationMs: runtime.now() - startedAt,
+              contextCompactions: reportRecorder.contextCompactions(),
+              skillActivations: [
+                ...(invocation?.state.explicitSkillActivations ?? []),
+                ...initialSkillActivationRecords,
+                ...reportRecorder.skillActivations(),
+              ],
+              activeSkills: reportActiveSkills(
+                skillActivation?.activeStatuses() ?? [],
+              ),
+              skillCatalog: reportRecorder.skillCatalog(),
+              skillPolicy: skillPolicyReport(
+                skillPolicy,
+                cliArgs.skillsEnabled,
+              ),
+              undoProtection: reportRecorder.undoProtection(),
+              memory: memoryReport(),
+            },
+            createCliRuntimeErrorReporter(runtime.writeStderr),
+          );
+        };
+      }
       const interactiveResult = await runInteractiveSessionWithTerminalDisplay(
         interactiveSessionOptions,
         interactiveTerminalDisplay,
       );
+      writeFailureReport = undefined;
       if (interactiveResult.switchSession !== undefined) {
         const switchRequest = interactiveResult.switchSession;
         let nextSessionId = switchRequest.targetSessionId;
@@ -1763,13 +1809,16 @@ async function runActiveSessionCli(
         writeRunReport(cliArgs.reportFile, {
           tasks: interactiveResult.report.tasks,
           modelOperations: interactiveResult.report.modelOperations,
-          end:
-            headlessStopReason === undefined
-              ? interactiveResult.report.end
-              : {
-                  ...interactiveResult.report.end,
-                  stopReason: headlessStopReason,
-                },
+          outcome: {
+            status: "completed",
+            end:
+              headlessStopReason === undefined
+                ? interactiveResult.report.end
+                : {
+                    ...interactiveResult.report.end,
+                    stopReason: headlessStopReason,
+                  },
+          },
           durationMs: runtime.now() - startedAt,
           contextCompactions: reportRecorder.contextCompactions(),
           skillActivations: [
@@ -1797,6 +1846,9 @@ async function runActiveSessionCli(
       handoffSourceLock?.release();
     }
   } catch (error) {
+    if (!isAbortThrow(error)) {
+      writeFailureReport?.(error);
+    }
     if (error instanceof ProviderConfigError) {
       runtime.writeStderr(`${error.message}\n`);
       return activeSessionCliExit(mode, 1);

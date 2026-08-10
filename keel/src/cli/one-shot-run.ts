@@ -78,10 +78,14 @@ import {
   type RunReportMemoryEntry,
   reportActiveSkills,
   writeRunReport,
+  writeRunReportBestEffort,
 } from "./report.ts";
 import { createAgentEventReportRecorder } from "./report-events.ts";
 import type { CliRuntime } from "./runtime.ts";
-import { formatCliRuntimeError } from "./runtime-error.ts";
+import {
+  createCliRuntimeErrorReporter,
+  formatCliRuntimeError,
+} from "./runtime-error.ts";
 import {
   resolveSkillRuntimePolicy,
   SkillUserConfigError,
@@ -389,6 +393,13 @@ export async function runOneShotCli(
           ? requireKnownCostModel(resolved)
           : undefined;
     const reportRecorder = createAgentEventReportRecorder();
+    reportRecorder.recordSkillCatalog({
+      exposed: catalogExposure.skills.length,
+      omitted: catalogExposure.omitted,
+      total: catalogExposure.total,
+      budgetChars: catalogExposure.budgetChars,
+      usedChars: catalogExposure.usedChars,
+    });
     reportRecorder.beginTask("user_prompt");
     reportRecorder.beginAgentRun("user_prompt");
     const modelOperations: MainModelOperationInstrumentation | undefined =
@@ -501,6 +512,41 @@ export async function runOneShotCli(
         runtime.writeStdout("\n");
         writeUndoProtectionWarning();
       }
+      if (
+        !isAbortThrow(error, abortController.signal) &&
+        cliArgs.reportFile !== undefined
+      ) {
+        reportRecorder.failAgentRun();
+        reportRecorder.endTask("failed");
+        writeRunReportBestEffort(
+          cliArgs.reportFile,
+          {
+            tasks: reportRecorder.tasks(),
+            modelOperations: reportRecorder.modelOperations(),
+            outcome: {
+              status: "failed",
+              error,
+              ...(cliArgs.maxCostUsd !== undefined
+                ? { maxCostUsd: cliArgs.maxCostUsd }
+                : {}),
+            },
+            durationMs: runtime.now() - startedAt,
+            contextCompactions: reportRecorder.contextCompactions(),
+            skillActivations: [
+              ...workflowSkills.map(explicitSkillActivationRecord),
+              ...reportRecorder.skillActivations(),
+            ],
+            activeSkills: reportActiveSkills(
+              skillActivation?.activeStatuses() ?? [],
+            ),
+            skillCatalog: reportRecorder.skillCatalog(),
+            skillPolicy: skillPolicyReport(skillPolicy, cliArgs.skillsEnabled),
+            undoProtection: reportRecorder.undoProtection(),
+            memory: memoryReport(),
+          },
+          createCliRuntimeErrorReporter(runtime.writeStderr),
+        );
+      }
       throw error;
     }
     /* v8 ignore next -- a normally completed runAgent() always emits one terminal end event. */
@@ -519,7 +565,7 @@ export async function runOneShotCli(
       writeRunReport(cliArgs.reportFile, {
         tasks: reportRecorder.tasks(),
         modelOperations: reportRecorder.modelOperations(),
-        end: finalEnd,
+        outcome: { status: "completed", end: finalEnd },
         durationMs: runtime.now() - startedAt,
         contextCompactions: reportRecorder.contextCompactions(),
         skillActivations: [

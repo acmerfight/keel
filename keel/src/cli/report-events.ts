@@ -82,6 +82,14 @@ export interface RunReportTask {
   readonly outcome: string;
 }
 
+interface RunReportSkillCatalog {
+  readonly exposed: number;
+  readonly omitted: number;
+  readonly total: number;
+  readonly budgetChars: number;
+  readonly usedChars: number;
+}
+
 export interface AgentEventReportRecorder {
   readonly beginModelOperation: ModelOperationRecorder["beginModelOperation"];
   readonly beginTask: (trigger: RunReportTaskTrigger) => void;
@@ -93,11 +101,15 @@ export interface AgentEventReportRecorder {
     stopReason: string,
   ) => void;
   readonly abortAgentRun: (agentLoopTurns: number) => void;
+  readonly failAgentRun: () => void;
+  readonly hasActiveAgentRun: () => boolean;
   readonly endTask: (outcome?: string) => void;
   readonly tasks: () => readonly RunReportTask[];
   readonly modelOperations: () => readonly RunReportModelOperation[];
   readonly contextCompactions: () => readonly RunReportContextCompaction[];
   readonly skillActivations: () => readonly SkillActivationRecord[];
+  readonly recordSkillCatalog: (catalog: RunReportSkillCatalog) => void;
+  readonly skillCatalog: () => RunReportSkillCatalog;
   readonly undoProtection: () => UndoProtectionSummary;
 }
 
@@ -110,6 +122,7 @@ interface ActiveRunReportTask {
 interface ActiveRunReportAgentRun {
   readonly ordinal: number;
   readonly trigger: RunReportAgentRunTrigger;
+  readonly modelOperationStartIndex: number;
   readonly providerRetries: RunReportProviderRetry[];
   readonly contextCompactions: RunReportContextCompaction[];
 }
@@ -183,6 +196,13 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
   let activeTask: ActiveRunReportTask | null = null;
   let activeAgentRun: ActiveRunReportAgentRun | null = null;
   let activeAgentRunHumanInterventionCount = 0;
+  let skillCatalog: RunReportSkillCatalog = {
+    exposed: 0,
+    omitted: 0,
+    total: 0,
+    budgetChars: 0,
+    usedChars: 0,
+  };
   const modelOperationLedger = createModelOperationReportLedger(() =>
     activeTask === null || activeAgentRun === null
       ? null
@@ -232,6 +252,7 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
       activeAgentRun = {
         ordinal: activeTask.agentRuns.length + 1,
         trigger,
+        modelOperationStartIndex: modelOperationLedger.operationCount(),
         providerRetries: [],
         contextCompactions: [],
       };
@@ -267,6 +288,16 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
     abortAgentRun: (agentLoopTurns) => {
       finishAgentRun(agentLoopTurns, "aborted");
     },
+    failAgentRun: () => {
+      if (activeTask === null || activeAgentRun === null) {
+        throw new Error("internal: no report Agent Run is active");
+      }
+      const agentLoopTurns = modelOperationLedger.completedAgentTurnsSince(
+        activeAgentRun.modelOperationStartIndex,
+      );
+      finishAgentRun(agentLoopTurns, "failed");
+    },
+    hasActiveAgentRun: () => activeAgentRun !== null,
     endTask: (outcome) => {
       if (activeTask === null) {
         throw new Error("internal: no report Task is active");
@@ -302,6 +333,10 @@ export function createAgentEventReportRecorder(): AgentEventReportRecorder {
     modelOperations: modelOperationLedger.modelOperations,
     contextCompactions: () => [...contextCompactions],
     skillActivations: () => [...skillActivations],
+    recordSkillCatalog: (catalog) => {
+      skillCatalog = { ...catalog };
+    },
+    skillCatalog: () => ({ ...skillCatalog }),
     undoProtection: undoProtection.summary,
   };
 }

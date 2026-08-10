@@ -110,6 +110,8 @@ export interface CurrentAgentRunReportOwner {
 }
 
 export interface ModelOperationReportLedger extends ModelOperationRecorder {
+  readonly operationCount: () => number;
+  readonly completedAgentTurnsSince: (startIndex: number) => number;
   readonly modelOperations: () => readonly RunReportModelOperation[];
 }
 
@@ -512,6 +514,18 @@ export function createModelOperationReportLedger(
         currentAgentRun(),
         options,
       ),
+    operationCount: () => operations.length,
+    completedAgentTurnsSince: (startIndex) =>
+      operations.slice(startIndex).reduce((count, operation) => {
+        if (
+          operation.result.state !== "finished" ||
+          operation.context.purpose !== "agent_turn" ||
+          operation.result.outcome !== "completed"
+        ) {
+          return count;
+        }
+        return count + 1;
+      }, 0),
     modelOperations: () => operations.map(modelOperationReport),
   };
 }
