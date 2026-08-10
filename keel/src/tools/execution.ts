@@ -16,7 +16,10 @@ import { WorkflowSkillError } from "../skills/model.ts";
 import type { AgentControlCapability } from "./agent-control.ts";
 import { executeApplyPatch } from "./apply-patch.ts";
 import { executeBash } from "./bash.ts";
-import type { DelegationExecutor } from "./delegation.ts";
+import {
+  type DelegationExecutor,
+  projectDelegationRejection,
+} from "./delegation.ts";
 import { executeEdit } from "./edit.ts";
 import {
   type DelegationToolExecutionEffect,
@@ -184,6 +187,13 @@ async function executeDelegateTool(
     result.delivery === "fresh"
       ? [{ kind: "delegation", usage: result.usage }]
       : NO_TOOL_EXECUTION_EFFECTS;
+  if (result.delivery === "rejected") {
+    return {
+      content: projectDelegationRejection(result),
+      ok: false,
+      effects,
+    };
+  }
   if (!result.ok) {
     return {
       content: result.content,

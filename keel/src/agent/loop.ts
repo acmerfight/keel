@@ -557,7 +557,10 @@ function delegationForToolRound(
     executor: createDelegationExecutor(async () => ({
       delivery: "rejected",
       ok: false,
-      content: NON_ISOLATED_DELEGATION_RESULT,
+      reason: NON_ISOLATED_DELEGATION_RESULT,
+      recovery:
+        "Delegate in a new isolated tool round, or continue the investigation in Main.",
+      maxResultChars: maxSubagentResultCharsForBatch(1),
     })),
     continuation: undefined,
     close: () => {},

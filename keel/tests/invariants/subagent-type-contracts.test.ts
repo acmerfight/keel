@@ -60,17 +60,33 @@ describe("subagent static type contracts", () => {
     >();
   });
 
-  test(`Given delegation accounting distinguishes first delivery from replay,
+  test(`Given delegation accounting distinguishes first delivery from replay and rejected calls require recovery,
     When capability result types are compared,
-    Then a result without an accounting disposition is not assignable`, () => {
+    Then a result without an accounting disposition or recovery action is not assignable`, () => {
     type MissingAccountingDisposition = {
       readonly ok: true;
+      readonly content: string;
+    };
+    type RejectionWithoutRecovery = {
+      readonly delivery: "rejected";
+      readonly ok: false;
+      readonly reason: string;
+      readonly maxResultChars: number;
+    };
+    type RejectionWithRenderedContent = {
+      readonly delivery: "rejected";
+      readonly ok: false;
+      readonly reason: string;
+      readonly recovery: string;
+      readonly maxResultChars: number;
       readonly content: string;
     };
     type SuccessfulRejection = {
       readonly delivery: "rejected";
       readonly ok: true;
-      readonly content: string;
+      readonly reason: string;
+      readonly recovery: string;
+      readonly maxResultChars: number;
     };
 
     expectTypeOf<
@@ -78,6 +94,12 @@ describe("subagent static type contracts", () => {
     >().toEqualTypeOf<false>();
     expectTypeOf<
       Extends<SuccessfulRejection, DelegationToolResult>
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Extends<RejectionWithoutRecovery, DelegationToolResult>
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Extends<RejectionWithRenderedContent, DelegationToolResult>
     >().toEqualTypeOf<false>();
     expectTypeOf<
       Extract<DelegationToolResult, { readonly delivery: "fresh" }>["usage"]

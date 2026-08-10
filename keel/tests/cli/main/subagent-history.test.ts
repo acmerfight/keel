@@ -105,6 +105,15 @@ describe("CLI Main - Durable Subagent History", () => {
     try {
       expect(await runCliMain(fixture.runtime), fixture.stderr()).toBe(0);
       expect(requests).toHaveLength(2);
+      const recoveryRequest = requestWithMessagesSchema.parse(requests[1]);
+      expect(recoveryRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          content: expect.stringMatching(
+            /Tool failed:.*invalid focus path[\s\S]*Recovery:.*Correct or omit/u,
+          ),
+        }),
+      );
       expect(fixture.stdout()).toContain("The unsafe delegation was rejected.");
       const agentsDirectory = join(keelHome, "sessions", sessionId, "agents");
       const events = await readFile(

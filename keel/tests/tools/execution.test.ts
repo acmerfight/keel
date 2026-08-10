@@ -306,7 +306,7 @@ describe("Tool Execution", () => {
 
   test(`Given an enabled delegation is rejected, replayed, or settles fresh after root cancellation,
     When dispatcher receives each Supervisor result,
-    Then failures stay tool failures, empty usage stays unattributed, and cancelled usage remains observable`, async () => {
+    Then rejection gives Main an actionable recovery, empty usage stays unattributed, and cancelled usage remains observable`, async () => {
     const authority: ModelToolExposure = {
       kind: "auto",
       delegation: "foreground",
@@ -331,7 +331,9 @@ describe("Tool Execution", () => {
       delegation: createDelegationExecutor(async () => ({
         delivery: "rejected",
         ok: false,
-        content: "child failed",
+        reason: "child failed",
+        recovery: "Continue in Main without delegating.",
+        maxResultChars: 6_000,
       })),
     });
     const noUsage = await executeToolCall({
@@ -364,7 +366,12 @@ describe("Tool Execution", () => {
       }),
     });
 
-    expect(failed).toEqual({ ok: false, content: "child failed", effects: [] });
+    expect(failed).toEqual({
+      ok: false,
+      content:
+        "Tool failed: child failed\nRecovery: Continue in Main without delegating.",
+      effects: [],
+    });
     expect(noUsage).toEqual({
       ok: true,
       content: "child completed",

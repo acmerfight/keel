@@ -492,8 +492,10 @@ describe("Tool Scheduling", () => {
       available: () => true,
       delegate: async () => ({
         ok: false,
-        content: "unused",
+        reason: "unused",
         delivery: "rejected",
+        recovery: "Continue in Main.",
+        maxResultChars: 6_000,
       }),
       prepareBatch: () => {
         delegationPrepareCalls++;
@@ -610,8 +612,10 @@ describe("Tool Scheduling", () => {
       },
       delegate: async () => ({
         ok: false,
-        content: "unused",
+        reason: "unused",
         delivery: "rejected",
+        recovery: "Continue in Main.",
+        maxResultChars: 6_000,
       }),
       prepareBatch: () => {
         throw new Error("unused");

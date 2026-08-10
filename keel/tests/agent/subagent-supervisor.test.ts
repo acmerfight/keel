@@ -26,6 +26,8 @@ import type {
 import type { CostModel } from "../../src/core/cost.ts";
 import { KeelError } from "../../src/core/error.ts";
 import type { LLMProvider, Usage } from "../../src/llm/types.ts";
+import type { DelegationToolResult } from "../../src/tools/delegation.ts";
+import { executeToolCall } from "../../src/tools/execution.ts";
 import { openAICompatibleTools } from "../../src/tools/registry.ts";
 
 const costModel: CostModel = {
@@ -41,6 +43,22 @@ const requestUsage: Usage = {
   uncachedInputTokens: 100,
   outputTokens: 10,
 };
+
+function deliveredContent(result: DelegationToolResult): string {
+  if (result.delivery === "rejected") {
+    throw new Error(
+      `expected delivered result, got rejection: ${result.reason}`,
+    );
+  }
+  return result.content;
+}
+
+function rejectionReason(result: DelegationToolResult): string {
+  if (result.delivery !== "rejected") {
+    throw new Error(`expected rejection, got ${result.delivery}`);
+  }
+  return result.reason;
+}
 
 interface ArtifactCapture {
   readonly inputs: ToolOutputArtifactSaveInput[];
@@ -575,7 +593,7 @@ describe("Subagent Supervisor", () => {
       const third = await firstPair[2];
       expect(third).toMatchObject({
         delivery: "rejected",
-        content: expect.stringContaining("active agent limit"),
+        reason: expect.stringContaining("active agent limit"),
       });
       releaseFirstPair.resolve();
       const [first, second] = await Promise.all(firstPair.slice(0, 2));
@@ -601,7 +619,7 @@ describe("Subagent Supervisor", () => {
       expect(lastAccepted).toMatchObject({ delivery: "fresh", ok: true });
       expect(overTotal).toMatchObject({
         delivery: "rejected",
-        content: expect.stringContaining("total child limit"),
+        reason: expect.stringContaining("total child limit"),
       });
       expect(fixture.supervisor.totalAcceptedCount()).toBe(3);
       expect(fixture.supervisor.runSnapshots()).toHaveLength(3);
@@ -686,7 +704,7 @@ describe("Subagent Supervisor", () => {
 
       expect(foreign).toMatchObject({
         delivery: "rejected",
-        content: expect.stringContaining("not part of the prepared tool batch"),
+        reason: expect.stringContaining("not part of the prepared tool batch"),
       });
       expect(providerCalls).toBe(0);
       expect(continuationReleases).toBe(1);
@@ -816,7 +834,7 @@ describe("Subagent Supervisor", () => {
       batch.close();
 
       expect(
-        settled.map((result) => JSON.parse(result.content).status),
+        settled.map((result) => JSON.parse(deliveredContent(result)).status),
       ).toEqual(["cancelled", "cancelled"]);
       expect(activeProviderCalls).toBe(0);
       expect(fixture.supervisor.activeChildRunCount()).toBe(0);
@@ -895,13 +913,19 @@ describe("Subagent Supervisor", () => {
       expect(
         settled.map((result) => ({
           ok: result.ok,
-          status: JSON.parse(result.content).status,
+          status: JSON.parse(deliveredContent(result)).status,
         })),
       ).toEqual([
         { ok: false, status: "failed" },
         { ok: true, status: "completed" },
       ]);
-      expect(settled[1]?.content).toContain("independent sibling completed");
+      const completedSibling = settled[1];
+      if (completedSibling === undefined) {
+        throw new Error("completed sibling result was not returned");
+      }
+      expect(deliveredContent(completedSibling)).toContain(
+        "independent sibling completed",
+      );
       expect(fixture.supervisor.activeChildRunCount()).toBe(0);
       expect(providerCalls).toBe(2);
     } finally {
@@ -953,8 +977,11 @@ describe("Subagent Supervisor", () => {
       expect(result).toEqual({
         delivery: "rejected",
         ok: false,
-        content:
+        reason:
           "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
+        recovery:
+          "Continue in Main without delegating, or switch to a provider that certifies cancellation settlement.",
+        maxResultChars: 6_000,
       });
       expect(providerCalls).toBe(0);
       expect(acceptedLifecycleCount).toBe(0);
@@ -1005,7 +1032,7 @@ describe("Subagent Supervisor", () => {
       expect(result).toMatchObject({
         delivery: "rejected",
         ok: false,
-        content: expect.stringContaining(
+        reason: expect.stringContaining(
           "Lifecycle receipt could not be stored: receipt disk unavailable",
         ),
       });
@@ -1111,7 +1138,7 @@ describe("Subagent Supervisor", () => {
         } else {
           await expect(pending).resolves.toMatchObject({
             delivery: "rejected",
-            content: expect.stringContaining(expected),
+            reason: expect.stringContaining(expected),
           });
         }
         expect(providerCalls).toBe(0);
@@ -1303,16 +1330,94 @@ describe("Subagent Supervisor", () => {
       expect(replays.every((result) => result.delivery === "replayed")).toBe(
         true,
       );
-      expect(replays.every((result) => result.content.length <= 600)).toBe(
+      const replayContents = replays.map(deliveredContent);
+      expect(replayContents.every((content) => content.length <= 600)).toBe(
         true,
       );
       expect(
-        replays.reduce((total, result) => total + result.content.length, 0),
+        replayContents.reduce((total, content) => total + content.length, 0),
       ).toBeLessThanOrEqual(24_000);
       expect(
         continuationMessages.at(-1)?.map((message) => message.content),
-      ).toEqual(replays.map((result) => result.content));
+      ).toEqual(replayContents);
       expect(fixture.supervisor.totalAcceptedCount()).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a large delegate batch is rejected with long path diagnostics,
+    When Main receives the rejected tool results,
+    Then priced continuation messages exactly match delivery and retain each recovery action`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-supervisor-"),
+    );
+    const continuationMessages: (readonly { readonly content: string }[])[] =
+      [];
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("unused"),
+      onContinuationLease: (input) => {
+        continuationMessages.push(input.additionalMessages);
+      },
+    });
+    const signal = new AbortController().signal;
+    const entries = Array.from({ length: 40 }, (_, index) => {
+      const task = `Inspect rejected path ${index}.`;
+      const focusPaths = [`../${"x".repeat(480)}-${index}`];
+      return {
+        kind: "request" as const,
+        request: {
+          toolCallId: `rejected-${index}`,
+          mode: "foreground" as const,
+          task,
+          focusPaths,
+          signal,
+        },
+        toolCall: {
+          id: `rejected-${index}`,
+          tool: "delegate" as const,
+          mode: "foreground" as const,
+          task,
+          focusPaths,
+        },
+      };
+    });
+
+    try {
+      const batch = fixture.supervisor.capability.prepareBatch(entries);
+      const deliveries = await Promise.all(
+        entries.map((entry) =>
+          executeToolCall({
+            workspace,
+            signal,
+            bash: { kind: "disabled" },
+            builtinToolAuthority: {
+              kind: "auto",
+              delegation: "foreground",
+            },
+            toolCall: entry.toolCall,
+            delegation: batch.executor,
+          }),
+        ),
+      );
+      batch.close();
+
+      const pricedContents = continuationMessages
+        .at(-1)
+        ?.map((message) => message.content);
+      const deliveredContents = deliveries.map((delivery) => delivery.content);
+      expect(pricedContents).toEqual(deliveredContents);
+      expect(
+        deliveredContents.every((content) =>
+          content.includes(
+            "Recovery: Correct or omit the invalid workspace-relative focus path before delegating again.",
+          ),
+        ),
+      ).toBe(true);
+      expect(deliveredContents.every((content) => content.length <= 600)).toBe(
+        true,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1523,25 +1628,36 @@ describe("Subagent Supervisor", () => {
       expect(unattached).toEqual({
         delivery: "rejected",
         ok: false,
-        content:
+        reason:
           "Delegation rejected: background mode requires a saved interactive session owner.",
+        recovery:
+          "Use foreground delegation, or start a saved interactive session before requesting background mode.",
+        maxResultChars: 6_000,
       });
       expect(invalid.ok).toBe(false);
-      expect(invalid.content).toContain("invalid focus path");
+      expect(rejectionReason(invalid)).toContain("invalid focus path");
       expect(invalidReplay).toEqual(invalid);
       expect(noBudget).toEqual({
         delivery: "rejected",
         ok: false,
-        content:
+        reason:
           "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
+        recovery:
+          "Do not retry with the same session budget. Continue the investigation in Main, or ask the user to start a new run with a higher --max-cost.",
+        maxResultChars: 6_000,
       });
       expect(invalidEstimate).toEqual({
         delivery: "rejected",
         ok: false,
-        content:
+        reason:
           "Delegation rejected: the child request cost cannot be estimated.",
+        recovery:
+          "Continue in Main, or select a provider and model with known token estimation before delegating again.",
+        maxResultChars: 6_000,
       });
-      expect(providerBlocked.content).toContain("auth/quota circuit is open");
+      expect(rejectionReason(providerBlocked)).toContain(
+        "auth/quota circuit is open",
+      );
       expect(unattachedFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(invalidFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(budgetFixture.supervisor.totalAcceptedCount()).toBe(0);
@@ -1629,8 +1745,11 @@ describe("Subagent Supervisor", () => {
       expect(result).toEqual({
         delivery: "rejected",
         ok: false,
-        content:
+        reason:
           "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
+        recovery:
+          "Do not retry with the same session budget. Continue the investigation in Main, or ask the user to start a new run with a higher --max-cost.",
+        maxResultChars: 6_000,
       });
       expect(supervisor.totalAcceptedCount()).toBe(0);
       expect(supervisor.runSnapshots()).toEqual([]);
@@ -1668,7 +1787,7 @@ describe("Subagent Supervisor", () => {
           transcriptRef: z.string().nullable(),
         })
         .passthrough()
-        .parse(JSON.parse(result.content));
+        .parse(JSON.parse(deliveredContent(result)));
 
       expect(result.ok).toBe(true);
       expect(admitted.finalText).toHaveLength(4_000);
@@ -1707,10 +1826,10 @@ describe("Subagent Supervisor", () => {
           finalText: z.string(),
         })
         .passthrough()
-        .parse(JSON.parse(result.content));
+        .parse(JSON.parse(deliveredContent(result)));
 
       expect(result.ok).toBe(true);
-      expect(result.content.length).toBeLessThanOrEqual(24_000);
+      expect(deliveredContent(result).length).toBeLessThanOrEqual(24_000);
       expect(admitted.finalText.length).toBeGreaterThan(800);
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -1874,10 +1993,10 @@ describe("Subagent Supervisor", () => {
           error: z.string(),
         })
         .passthrough()
-        .parse(JSON.parse(result.content));
+        .parse(JSON.parse(deliveredContent(result)));
 
       expect(result.ok).toBe(false);
-      expect(result.content.length).toBeLessThan(4_000);
+      expect(deliveredContent(result).length).toBeLessThan(4_000);
       expect(admitted.error).toHaveLength(2_000);
       expect(admitted.error.endsWith("...")).toBe(true);
     } finally {
