@@ -42,6 +42,7 @@ function entry(options: {
     parentToolCallId: "delegate-call",
     task: "Inspect the saved child.",
     focusPaths: [],
+    mode: "foreground",
     providerId: "deepseek",
     model: "deepseek-chat",
     transcriptRef: `agent-transcript:test/${options.childAgentId}`,
@@ -76,6 +77,8 @@ function history(
       rejected: () => {},
     },
     entries: () => entries,
+    pendingResultDeliveries: () => [],
+    deliveredResult: () => {},
     transcript,
   };
 }

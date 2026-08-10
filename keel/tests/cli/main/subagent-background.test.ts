@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { runReportSchema } from "../../../src/eval/report-schema.ts";
+import { runCliProcess } from "../../../src/testing/cli-harness.ts";
 import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -308,6 +309,153 @@ describe("CLI Main - Attached Background Subagents", () => {
         ),
       ).toHaveLength(2);
     } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an attached background child completes before its notification reaches the parent ledger,
+    When the real saved-session process is killed and the user resumes it,
+    Then Main receives the same completion once without rerunning the child`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-background-delivery-"),
+    );
+    const keelHome = join(workspace, ".keel-home");
+    const sessionId = "background-delivery-recovery";
+    const mainAnswered = Promise.withResolvers<void>();
+    const childSettled = Promise.withResolvers<void>();
+    const requests: unknown[] = [];
+    let resumedRequest = "";
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const parsed: unknown = JSON.parse(body);
+        requests.push(parsed);
+        const text = requestText(parsed);
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (text.includes("Delegation ID:")) {
+          response.end(
+            sseTextReplyWithUsage("Recovered child conclusion: answer = 42."),
+          );
+          return;
+        }
+        if (text.includes("Acknowledge the recovered child completion.")) {
+          resumedRequest = text;
+          response.end(sseTextReplyWithUsage("Recovered completion observed."));
+          return;
+        }
+        if (text.includes("delegate_crash_delivery")) {
+          response.end(sseTextReplyWithUsage("Main remains available."));
+          return;
+        }
+        response.end(
+          [
+            sseToolCall("delegate_crash_delivery", "delegate", {
+              mode: "background",
+              task: "Return the fixed recovery conclusion.",
+            }),
+            sseToolFinish(),
+            "data: [DONE]\n\n",
+          ].join(""),
+        );
+      });
+    });
+    await listen(server);
+    const first = runCliProcess(
+      [
+        "--session",
+        sessionId,
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "1",
+        "--no-skills",
+      ],
+      {
+        cwd: workspace,
+        stdin: "pipe",
+        env: {
+          KEEL_HOME: keelHome,
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+    first.child.stdout?.on("data", (chunk: Buffer) => {
+      if (chunk.toString("utf8").includes("Main remains available.")) {
+        mainAnswered.resolve();
+      }
+    });
+    first.child.stderr?.on("data", (chunk: Buffer) => {
+      if (
+        /Background subagent agent-[^ ]+ completed\./u.test(chunk.toString())
+      ) {
+        childSettled.resolve();
+      }
+    });
+
+    try {
+      first.child.stdin?.write("Start one background subagent.\n");
+      await withTimeout(
+        Promise.all([mainAnswered.promise, childSettled.promise]),
+        5_000,
+        "background child did not settle after Main became available",
+      );
+
+      // When
+      first.child.kill("SIGKILL");
+      const killed = await withTimeout(
+        first.result,
+        5_000,
+        "saved-session process did not exit",
+      );
+      expect(killed.signal).toBe("SIGKILL");
+      const resumedInput = new PassThrough();
+      resumedInput.end("Acknowledge the recovered child completion.\n");
+      const resumed = createRuntime(
+        ["--resume", sessionId, "--max-cost", "1", "--no-skills"],
+        {
+          cwd: workspace,
+          input: resumedInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+      const exitCode = await runCliMain(resumed.runtime);
+
+      // Then
+      expect(exitCode, resumed.stderr()).toBe(0);
+      expect(resumed.stdout()).toContain("Recovered completion observed.");
+      expect(
+        resumedRequest.match(/Background subagent agent-[^ ]+ completed\./gu),
+      ).toHaveLength(1);
+      expect(
+        requests.filter((providerRequest) =>
+          requestText(providerRequest).includes("Delegation ID:"),
+        ),
+      ).toHaveLength(1);
+      const parentLedger = await readFile(
+        join(keelHome, "sessions", sessionId, "ledger.jsonl"),
+        "utf8",
+      );
+      expect(
+        parentLedger.match(/Background subagent agent-[^ ]+ completed\./gu),
+      ).toHaveLength(1);
+    } finally {
+      first.child.kill("SIGKILL");
       await close(server);
       await rm(workspace, { recursive: true, force: true });
     }

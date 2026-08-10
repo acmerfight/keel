@@ -11,7 +11,7 @@ import type {
   SkillLifecycleState,
 } from "../../skills/model.ts";
 
-export const SESSION_SCHEMA_VERSION = 5;
+export const SESSION_SCHEMA_VERSION = 6;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 export const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -72,7 +72,7 @@ export interface SessionGraphRecord {
 }
 
 export interface SessionHeaderRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "session";
   readonly id: string;
   readonly createdAt: string;
@@ -93,7 +93,7 @@ export interface SessionModelSwitch {
 }
 
 export interface AppendSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "append";
   readonly timestamp: string;
   readonly reason: "turn";
@@ -103,7 +103,7 @@ export interface AppendSessionRecord {
 }
 
 export interface ReplaceSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "replace";
   readonly timestamp: string;
   readonly reason: "turn" | "compaction";
@@ -113,7 +113,7 @@ export interface ReplaceSessionRecord {
 }
 
 export interface ModelSwitchSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "model_switch";
   readonly timestamp: string;
   readonly from: SessionModelSelection | null;
@@ -122,7 +122,7 @@ export interface ModelSwitchSessionRecord {
 }
 
 export interface SessionTitleSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "session_title";
   readonly timestamp: string;
   readonly title: string;
@@ -130,7 +130,7 @@ export interface SessionTitleSessionRecord {
 }
 
 export interface SessionGoalSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "session_goal";
   readonly timestamp: string;
   readonly goal: SessionGoal | null;
@@ -138,7 +138,7 @@ export interface SessionGoalSessionRecord {
 }
 
 interface TaskProgressSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "task_progress";
   readonly timestamp: string;
   readonly messageOrdinal: number;
@@ -151,7 +151,7 @@ export interface SessionTaskProgressCheckpoint {
 }
 
 interface InputAdmittedSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "input_admitted";
   readonly timestamp: string;
   readonly id: string;
@@ -160,21 +160,21 @@ interface InputAdmittedSessionRecord {
 }
 
 interface InputConsumedSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "input_consumed";
   readonly timestamp: string;
   readonly inputIds: readonly string[];
 }
 
 interface BashApprovalGrantedSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "bash_approval_granted";
   readonly timestamp: string;
   readonly grant: BashApprovalGrant;
 }
 
 interface BashApprovalRevokedSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "bash_approval_revoked";
   readonly timestamp: string;
   readonly grant: BashApprovalGrant;
@@ -182,14 +182,14 @@ interface BashApprovalRevokedSessionRecord {
 }
 
 interface BashApprovalsClearedSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "bash_approvals_cleared";
   readonly timestamp: string;
   readonly consumedInputIds?: readonly string[];
 }
 
 export interface SnapshotSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "snapshot";
   readonly timestamp: string;
   readonly reason: "size_threshold";
@@ -205,7 +205,7 @@ export interface SnapshotSessionRecord {
 }
 
 export interface SkillStateSessionRecord {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "skill_state";
   readonly timestamp: string;
   readonly messageOrdinal: number;

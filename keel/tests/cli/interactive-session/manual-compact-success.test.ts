@@ -818,6 +818,8 @@ describe("Interactive Session - Manual Compact Success", () => {
         rejected: () => {},
       },
       entries: () => [],
+      pendingResultDeliveries: () => [],
+      deliveredResult: () => {},
       transcript: () => {
         throw new Error("manual compaction must not read a child transcript");
       },

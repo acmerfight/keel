@@ -1216,6 +1216,7 @@ export function createSubagentSupervisor(
             parentToolCallId: candidate.input.toolCallId,
             task: candidate.input.task,
             focusPaths: candidate.input.focusPaths,
+            mode: candidate.input.mode,
             providerId: options.providerId,
             model: options.model,
             systemPrompt: candidate.systemPrompt,

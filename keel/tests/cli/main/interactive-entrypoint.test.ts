@@ -2576,7 +2576,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
           },
         ]),
         JSON.stringify({
-          schemaVersion: 5,
+          schemaVersion: 6,
           type: "model_switch",
           timestamp: "2026-01-03T00:00:05.000Z",
           from: null,

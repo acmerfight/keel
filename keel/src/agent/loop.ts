@@ -105,7 +105,10 @@ import {
   sessionLedgerFromMessages,
   sessionLedgerMessages,
 } from "./session-ledger.ts";
-import type { SessionMessage, UserMessageOrigin } from "./session-message.ts";
+import type {
+  OrdinaryUserMessageOrigin,
+  SessionMessage,
+} from "./session-message.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
 import {
   maxSubagentResultCharsForBatch,
@@ -170,7 +173,7 @@ interface RunAgentOptionsBase {
 interface MainRunAgentOptions {
   readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
   readonly mcp?: AgentMcpRuntime;
-  readonly userMessageOrigin?: UserMessageOrigin;
+  readonly userMessageOrigin?: OrdinaryUserMessageOrigin;
   readonly bash: BashRuntime;
   readonly toolProfile?: "main";
   readonly delegation?: DelegationCapability;

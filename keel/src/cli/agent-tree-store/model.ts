@@ -4,6 +4,8 @@ import type {
   PersistedSubagentCanonicalResult,
   SubagentAcceptedLifecycle,
   SubagentAccountingSnapshot,
+  SubagentResultDelivery,
+  SubagentResultDeliveryReference,
   SubagentRunId,
   SubagentTerminalStatus,
 } from "../../agent/subagent-lifecycle.ts";
@@ -14,7 +16,7 @@ import {
 import type { Usage } from "../../llm/types.ts";
 import { sessionMessageSchema } from "../session-message-schema.ts";
 
-export const AGENT_TREE_SCHEMA_VERSION = 1;
+export const AGENT_TREE_SCHEMA_VERSION = 2;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -30,21 +32,21 @@ const childRunIdSchema: z.ZodType<SubagentRunId> = z
   );
 
 export interface AgentTreeHeaderRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "agent_tree";
   readonly sessionId: string;
   readonly createdAt: string;
 }
 
 export interface AgentRunAcceptedRecord extends SubagentAcceptedLifecycle {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "agent_run_accepted";
   readonly timestamp: string;
   readonly transcriptRef: string;
 }
 
 export interface AgentRunRunningRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "agent_run_running";
   readonly timestamp: string;
   readonly childAgentId: AgentId;
@@ -52,7 +54,7 @@ export interface AgentRunRunningRecord {
 }
 
 export interface AgentRunAccountingRecord extends SubagentAccountingSnapshot {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "agent_run_accounting";
   readonly timestamp: string;
   readonly childAgentId: AgentId;
@@ -60,14 +62,14 @@ export interface AgentRunAccountingRecord extends SubagentAccountingSnapshot {
 }
 
 export interface AgentResultRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "agent_result";
   readonly timestamp: string;
   readonly result: PersistedSubagentCanonicalResult;
 }
 
 export interface AgentRunTerminalRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "agent_run_terminal";
   readonly timestamp: string;
   readonly childAgentId: AgentId;
@@ -75,8 +77,22 @@ export interface AgentRunTerminalRecord {
   readonly status: SubagentTerminalStatus;
 }
 
+export interface AgentResultDeliveryPendingRecord {
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
+  readonly type: "agent_result_delivery_pending";
+  readonly timestamp: string;
+  readonly delivery: SubagentResultDelivery;
+}
+
+export interface AgentResultDeliveryDeliveredRecord
+  extends SubagentResultDeliveryReference {
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
+  readonly type: "agent_result_delivery_delivered";
+  readonly timestamp: string;
+}
+
 interface DelegationRejectedRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "delegation_rejected";
   readonly timestamp: string;
   readonly delegationId: string;
@@ -92,10 +108,12 @@ export type AgentTreeMutationRecord =
   | AgentRunAccountingRecord
   | AgentResultRecord
   | AgentRunTerminalRecord
+  | AgentResultDeliveryPendingRecord
+  | AgentResultDeliveryDeliveredRecord
   | DelegationRejectedRecord;
 
 export interface AgentTranscriptHeaderRecord extends SubagentAcceptedLifecycle {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "transcript";
   readonly kind: "subagent";
   readonly createdAt: string;
@@ -103,7 +121,7 @@ export interface AgentTranscriptHeaderRecord extends SubagentAcceptedLifecycle {
 }
 
 export interface AgentTranscriptTerminalRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "transcript_terminal";
   readonly status: SubagentTerminalStatus;
   readonly complete: boolean;
@@ -154,6 +172,7 @@ const lifecycleIdentitySchema = z
     parentToolCallId: z.string().min(1),
     task: z.string().min(1),
     focusPaths: z.array(z.string()),
+    mode: z.enum(["foreground", "background"]),
     providerId: z.string().min(1),
     model: z.string().min(1),
     systemPrompt: z.string(),
@@ -173,6 +192,14 @@ const runIdentitySchema = z
     childRunId: childRunIdSchema,
   })
   .strict();
+
+const resultDeliveryReferenceShape = {
+  sessionId: z.string().min(1),
+  delegationId: z.string().min(1),
+  childAgentId: agentIdSchema,
+  childRunId: childRunIdSchema,
+  canonicalResultSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+};
 
 export const mutationRecordSchema: z.ZodType<AgentTreeMutationRecord> =
   z.discriminatedUnion("type", [
@@ -204,6 +231,27 @@ export const mutationRecordSchema: z.ZodType<AgentTreeMutationRecord> =
       timestamp: z.string(),
       status: z.enum(subagentTerminalStatuses),
     }),
+    z
+      .object({
+        schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
+        type: z.literal("agent_result_delivery_pending"),
+        timestamp: z.string(),
+        delivery: z
+          .object({
+            ...resultDeliveryReferenceShape,
+            projection: z.string().min(1),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
+        type: z.literal("agent_result_delivery_delivered"),
+        timestamp: z.string(),
+        ...resultDeliveryReferenceShape,
+      })
+      .strict(),
     z
       .object({
         schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),

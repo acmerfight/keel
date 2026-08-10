@@ -1,8 +1,8 @@
 import type {
+  OrdinaryUserMessageOrigin,
   PersistedSessionMessage,
   SessionMessage,
   UserMessageContextCompactionMetadata,
-  UserMessageOrigin,
 } from "../agent/session-message.ts";
 import { copyReadResourceObservation } from "../core/resource-observation.ts";
 import {
@@ -130,7 +130,9 @@ function redactUserContextCompactionMetadataForPersistence(
   };
 }
 
-function copyUserMessageOrigin(origin: UserMessageOrigin): UserMessageOrigin {
+function copyUserMessageOrigin(
+  origin: OrdinaryUserMessageOrigin,
+): OrdinaryUserMessageOrigin {
   return { type: origin.type };
 }
 
@@ -144,22 +146,34 @@ export function redactMessageForPersistence(
   message: SessionMessage,
 ): SessionMessage {
   switch (message.role) {
-    case "user":
-      return {
-        role: "user",
-        content: redactTextForPersistence(message.content),
-        ...(message.origin === undefined
-          ? {}
-          : { origin: copyUserMessageOrigin(message.origin) }),
-        ...(message.contextCompaction === undefined
+    case "user": {
+      const contextCompaction =
+        message.contextCompaction === undefined
           ? {}
           : {
               contextCompaction:
                 redactUserContextCompactionMetadataForPersistence(
                   message.contextCompaction,
                 ),
-            }),
+            };
+      if (message.subagentResultDelivery !== undefined) {
+        return {
+          role: "user",
+          content: redactTextForPersistence(message.content),
+          origin: { type: "runtime_subagent_notification" },
+          subagentResultDelivery: { ...message.subagentResultDelivery },
+          ...contextCompaction,
+        };
+      }
+      return {
+        role: "user",
+        content: redactTextForPersistence(message.content),
+        ...(message.origin === undefined
+          ? {}
+          : { origin: copyUserMessageOrigin(message.origin) }),
+        ...contextCompaction,
       };
+    }
     case "assistant":
       return {
         role: "assistant",
