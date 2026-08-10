@@ -1,4 +1,6 @@
+import type { SharedCostBudgetAccount } from "../../agent/cost-budget.ts";
 import type { CostReport } from "../../agent/events.ts";
+import type { SubagentTreeProviderCoordination } from "../../agent/subagent-tree-provider.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { Usage } from "../../llm/types.ts";
 import type { InteractiveSessionArgs } from "./types.ts";
@@ -15,7 +17,16 @@ export type InteractiveCompactionCost =
       readonly kind: "budgeted";
       readonly model: CostModel;
       readonly maxCostUsd: number;
-      readonly remainingCostUsd: number;
+      readonly admission:
+        | {
+            readonly kind: "isolated";
+            readonly remainingCostUsd: number;
+          }
+        | {
+            readonly kind: "shared";
+            readonly account: SharedCostBudgetAccount;
+            readonly providerCoordination: SubagentTreeProviderCoordination;
+          };
       readonly budgetLimitedReport: () => CostReport;
     };
 

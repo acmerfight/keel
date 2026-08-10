@@ -97,6 +97,16 @@ describe("Interactive /agents command", () => {
       action: "transcript",
       selector: "agent-123",
     });
+    expect(parseInteractiveCommand("/agents wait agent-123")).toEqual({
+      kind: "agents",
+      action: "wait",
+      selector: "agent-123",
+    });
+    expect(parseInteractiveCommand("/agents cancel 2")).toEqual({
+      kind: "agents",
+      action: "cancel",
+      selector: "2",
+    });
   });
 
   test(`Given an incomplete or over-specified agent-history command,
@@ -111,7 +121,7 @@ describe("Interactive /agents command", () => {
       expect(parseInteractiveCommand(input)).toEqual({
         kind: "invalid",
         message:
-          "Error: usage is /agents, /agents show <id|index>, or /agents transcript <id|index>.",
+          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, or /agents cancel <id|index>.",
       });
     }
   });

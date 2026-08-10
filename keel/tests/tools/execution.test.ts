@@ -13,6 +13,7 @@ import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { SubagentPersistenceError } from "../../src/agent/subagent-lifecycle.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
+import type { AgentControlCapability } from "../../src/tools/agent-control.ts";
 import { createDelegationExecutor } from "../../src/tools/delegation.ts";
 import {
   type ExecuteToolCallOptions,
@@ -165,6 +166,7 @@ describe("Tool Execution", () => {
         toolCall: {
           id: "forged_delegate",
           tool: "delegate",
+          mode: "foreground",
           task: "Inspect the workspace.",
         },
         signal: new AbortController().signal,
@@ -294,6 +296,7 @@ describe("Tool Execution", () => {
       toolCall: {
         id: "missing_delegate_capability",
         tool: "delegate",
+        mode: "foreground",
         task: "Inspect the workspace.",
       },
     });
@@ -304,7 +307,10 @@ describe("Tool Execution", () => {
   test(`Given an enabled delegation is rejected, replayed, or settles fresh after root cancellation,
     When dispatcher receives each Supervisor result,
     Then failures stay tool failures, empty usage stays unattributed, and cancelled usage remains observable`, async () => {
-    const authority: ModelToolExposure = { kind: "auto", delegation: true };
+    const authority: ModelToolExposure = {
+      kind: "auto",
+      delegation: "foreground",
+    };
     const base: Pick<
       ExecuteToolCallOptions,
       "workspace" | "bash" | "builtinToolAuthority" | "toolCall"
@@ -315,6 +321,7 @@ describe("Tool Execution", () => {
       toolCall: {
         id: "delegate_result",
         tool: "delegate",
+        mode: "foreground",
         task: "Inspect the workspace.",
       },
     };
@@ -390,10 +397,11 @@ describe("Tool Execution", () => {
         workspace: process.cwd(),
         signal: new AbortController().signal,
         bash: { kind: "disabled" },
-        builtinToolAuthority: { kind: "auto", delegation: true },
+        builtinToolAuthority: { kind: "auto", delegation: "foreground" },
         toolCall: {
           id: "delegate_persistence_failure",
           tool: "delegate",
+          mode: "foreground",
           task: "Inspect the workspace.",
         },
         delegation: createDelegationExecutor(async () => {
@@ -401,6 +409,72 @@ describe("Tool Execution", () => {
         }),
       }),
     ).rejects.toBe(failure);
+  });
+
+  test(`Given a saved-session agent control capability is exposed,
+    When the model lists, waits for, and cancels an attached child,
+    Then dispatcher passes the typed stable ID and returns lifecycle facts without usage effects`, async () => {
+    const observed: string[] = [];
+    const signal = new AbortController().signal;
+    const agentControl: AgentControlCapability = {
+      list: (request) => {
+        observed.push(`list:${request.maxResultChars}`);
+        return { ok: true, content: "agent-a1 running" };
+      },
+      wait: async (request) => {
+        observed.push(`wait:${request.id}:${request.maxResultChars}`);
+        expect(request.signal).toBe(signal);
+        return { ok: true, content: "agent-a1 completed" };
+      },
+      cancel: async (request) => {
+        observed.push(`cancel:${request.id}:${request.maxResultChars}`);
+        expect(request.signal).toBe(signal);
+        return { ok: true, content: "agent-a1 cancelled" };
+      },
+    };
+    const base = {
+      workspace: process.cwd(),
+      signal,
+      bash: { kind: "disabled" } as const,
+      builtinToolAuthority: {
+        kind: "auto",
+        delegation: "background",
+        agentControl: true,
+      } as const,
+      agentControl,
+      agentControlResultMaxChars: 1_234,
+      agentWaitResultAdmission: "granted" as const,
+    };
+
+    const [listed, waited, cancelled] = await Promise.all([
+      executeToolCall({
+        ...base,
+        toolCall: { id: "list", tool: "agent_list" },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: { id: "wait", tool: "agent_wait", agentId: "agent-a1" },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "cancel",
+          tool: "agent_cancel",
+          agentId: "agent-a1",
+        },
+      }),
+    ]);
+
+    expect([listed, waited, cancelled]).toEqual([
+      { ok: true, content: "agent-a1 running", effects: [] },
+      { ok: true, content: "agent-a1 completed", effects: [] },
+      { ok: true, content: "agent-a1 cancelled", effects: [] },
+    ]);
+    expect(observed).toEqual([
+      "list:1234",
+      "wait:agent-a1:1234",
+      "cancel:agent-a1:1234",
+    ]);
   });
 
   test(`Given delegation authority and a host capability are installed,
@@ -412,12 +486,13 @@ describe("Tool Execution", () => {
       toolCall: {
         id: "delegate_once",
         tool: "delegate",
+        mode: "foreground",
         task: "Inspect src/tools/delegation.ts.",
         focusPaths: ["src/tools/delegation.ts"],
       },
       signal,
       bash: { kind: "disabled" },
-      builtinToolAuthority: { kind: "auto", delegation: true },
+      builtinToolAuthority: { kind: "auto", delegation: "foreground" },
       delegation: createDelegationExecutor(async (input) => ({
         delivery: "fresh",
         ok: true,

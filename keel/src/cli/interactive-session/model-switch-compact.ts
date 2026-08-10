@@ -12,6 +12,7 @@ import type { MainModelOperationInstrumentation } from "../../agent/model-operat
 import { restorePostCompactionReads } from "../../agent/post-compaction-restore.ts";
 import type { ReadVisibilityState } from "../../agent/read-visibility.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
+import { createSubagentTreeProvider } from "../../agent/subagent-tree-provider.ts";
 import type { CostModel } from "../../core/cost.ts";
 import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
@@ -187,9 +188,21 @@ export async function executeModelSwitchCompaction(
     compactionCost.kind !== "budgeted"
       ? current.provider
       : createCostBudgetedProvider({
-          provider: current.provider,
+          provider:
+            compactionCost.admission.kind === "shared"
+              ? createSubagentTreeProvider({
+                  provider: current.provider,
+                  coordination: compactionCost.admission.providerCoordination,
+                }).provider
+              : current.provider,
           model: compactionCost.model,
-          maxCostUsd: compactionCost.remainingCostUsd,
+          maxCostUsd:
+            compactionCost.admission.kind === "shared"
+              ? compactionCost.admission.account.remainingUsd()
+              : compactionCost.admission.remainingCostUsd,
+          ...(compactionCost.admission.kind === "shared"
+            ? { sharedAccount: compactionCost.admission.account }
+            : {}),
           ...(modelMaxOutputTokens !== undefined
             ? { modelMaxOutputTokens }
             : {}),

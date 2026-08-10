@@ -2,14 +2,17 @@ import {
   type CostModel,
   calculateConservativeRequestCostUsd,
 } from "../core/cost.ts";
-import type { ProviderMessage } from "../llm/types.ts";
+import type {
+  ProviderContinuationLease,
+  ProviderMessage,
+} from "../llm/types.ts";
 import {
   MIN_USEFUL_OUTPUT_TOKENS,
   type SharedCostBudgetedProvider,
 } from "./cost-budget.ts";
 
 const DEFAULT_MAX_AGGREGATE_RESULT_CHARS = 24_000;
-const MAX_CHILD_RESULT_CHARS = 6_000;
+export const MAX_SUBAGENT_RESULT_CHARS = 6_000;
 const resultAdmissionPlan = Symbol("subagentResultAdmissionPlan");
 
 function maximumUtf8ToolResult(maxCodeUnits: number): string {
@@ -50,11 +53,27 @@ export type SubagentTreeBudgetLeaseResult<Value> =
   | {
       readonly kind: "granted";
       readonly children: readonly SubagentChildBudgetLease<Value>[];
+      readonly continuation: ProviderContinuationLease;
       readonly release: () => void;
     }
   | {
       readonly kind: "rejected";
     };
+
+export type SubagentResultContinuationLease =
+  | {
+      readonly kind: "granted";
+      readonly maxResultChars: number;
+      readonly continuation: ProviderContinuationLease;
+      readonly release: () => void;
+    }
+  | { readonly kind: "rejected" };
+
+export interface SubagentResultContinuationBudget {
+  readonly lease: (
+    toolCallIds: readonly string[],
+  ) => SubagentResultContinuationLease;
+}
 
 interface CreateSubagentTreeBudgetOptions {
   readonly rootBudget: SharedCostBudgetedProvider;
@@ -72,6 +91,13 @@ export interface SubagentTreeBudget {
   }) => SubagentTreeBudgetLeaseResult<Value>;
 }
 
+export function maxSubagentResultCharsForBatch(resultCount: number): number {
+  return Math.min(
+    MAX_SUBAGENT_RESULT_CHARS,
+    Math.floor(DEFAULT_MAX_AGGREGATE_RESULT_CHARS / Math.max(1, resultCount)),
+  );
+}
+
 function admittedResultContent(
   content: string,
   maxResultChars: number,
@@ -86,12 +112,7 @@ export function createSubagentTreeBudget(
 ): SubagentTreeBudget {
   return {
     planResults: (outcomes) => {
-      const maxResultChars = Math.min(
-        MAX_CHILD_RESULT_CHARS,
-        Math.floor(
-          DEFAULT_MAX_AGGREGATE_RESULT_CHARS / Math.max(1, outcomes.length),
-        ),
-      );
+      const maxResultChars = maxSubagentResultCharsForBatch(outcomes.length);
       const additionalMessages: ProviderMessage[] = outcomes.map((outcome) => {
         let content: string;
         switch (outcome.content.kind) {
@@ -163,6 +184,7 @@ export function createSubagentTreeBudget(
       return {
         kind: "granted",
         children,
+        continuation: continuation.continuation,
         release: () => {
           if (released) return;
           released = true;

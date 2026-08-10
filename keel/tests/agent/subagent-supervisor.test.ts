@@ -14,6 +14,8 @@ import {
 } from "../../src/agent/subagent-lifecycle.ts";
 import {
   createSubagentSupervisor,
+  type SubagentBackgroundRun,
+  type SubagentBackgroundRuntime,
   type SubagentProgressEvent,
   type SubagentSupervisor,
 } from "../../src/agent/subagent-supervisor.ts";
@@ -62,6 +64,30 @@ function createArtifactCapture(): ArtifactCapture {
       },
       discard: async () => {},
     },
+  };
+}
+
+function durableLifecycleSink(): SubagentLifecyclePersistence {
+  return {
+    accepted: () => {
+      const transcript = {
+        initialize: () => {},
+        append: () => {},
+        replace: () => {},
+      };
+      return {
+        transcriptRef: "agent-transcript:test/background",
+        transcript,
+        running: () => ({
+          transcriptRef: "agent-transcript:test/background",
+          transcript,
+          accounting: () => {},
+          terminal: () => {},
+        }),
+        terminal: () => {},
+      };
+    },
+    rejected: () => {},
   };
 }
 
@@ -114,27 +140,37 @@ function singleFinalProvider(finalText: string): LLMProvider {
   };
 }
 
-function supervisorFixture(options: {
-  readonly workspace: string;
-  readonly provider: LLMProvider;
-  readonly deadlineMs?: number;
-  readonly settlementGraceMs?: number;
-  readonly maxTurns?: number;
-  readonly rootMaxCostUsd?: number;
-  readonly transcriptStore?: AbortableToolOutputArtifactStore;
-  readonly now?: () => number;
-  readonly onProgress?: (event: SubagentProgressEvent) => void;
-  readonly providerAbortSignalSupport?: boolean;
-  readonly hiddenWorkspacePaths?: readonly string[];
-  readonly onContinuationLease?: (
-    input: Parameters<SharedCostBudgetedProvider["leaseContinuation"]>[0],
-  ) => void;
-  readonly onContinuationReleased?: () => void;
-  readonly maxActiveAgentRuns?: number;
-  readonly maxTotalChildRuns?: number;
-  readonly providerBlocked?: () => boolean;
-  readonly lifecyclePersistence?: SubagentLifecyclePersistence;
-}): {
+function supervisorFixture(
+  options: {
+    readonly workspace: string;
+    readonly provider: LLMProvider;
+    readonly deadlineMs?: number;
+    readonly settlementGraceMs?: number;
+    readonly maxTurns?: number;
+    readonly rootMaxCostUsd?: number;
+    readonly transcriptStore?: AbortableToolOutputArtifactStore;
+    readonly now?: () => number;
+    readonly onProgress?: (event: SubagentProgressEvent) => void;
+    readonly providerAbortSignalSupport?: boolean;
+    readonly hiddenWorkspacePaths?: readonly string[];
+    readonly onContinuationLease?: (
+      input: Parameters<SharedCostBudgetedProvider["leaseContinuation"]>[0],
+    ) => void;
+    readonly onContinuationReleased?: () => void;
+    readonly maxActiveAgentRuns?: number;
+    readonly maxTotalChildRuns?: number;
+    readonly providerBlocked?: () => boolean;
+  } & (
+    | {
+        readonly lifecyclePersistence?: SubagentLifecyclePersistence;
+        readonly background?: never;
+      }
+    | {
+        readonly lifecyclePersistence: SubagentLifecyclePersistence;
+        readonly background: SubagentBackgroundRuntime;
+      }
+  ),
+): {
   readonly supervisor: SubagentSupervisor;
   readonly rootBudget: SharedCostBudgetedProvider;
   readonly artifacts: ArtifactCapture;
@@ -156,18 +192,36 @@ function supervisorFixture(options: {
       const reservedUsd = rootMaxCostUsd * 0.25;
       const additionalRequestBudgetUsd =
         sharedRootBudget.remainingUsd() - reservedUsd;
+      const release = () => options.onContinuationReleased?.();
       return additionalRequestBudgetUsd > 0
         ? {
             kind: "granted",
             reservedUsd,
             additionalRequestBudgetUsd,
             estimatedContinuationInputTokens: 1_000,
-            release: () => options.onContinuationReleased?.(),
+            continuation: {
+              provider: sharedRootBudget.provider,
+              requestShape: {
+                systemPrompt: "main",
+                toolExposure: { kind: "auto", delegation: "background" },
+              },
+              release,
+            },
+            release,
           }
         : { kind: "rejected", reason: "insufficient_budget" };
     },
   };
   const artifacts = createArtifactCapture();
+  const lifecycleOwnership =
+    options.background === undefined
+      ? options.lifecyclePersistence === undefined
+        ? {}
+        : { lifecyclePersistence: options.lifecyclePersistence }
+      : {
+          background: options.background,
+          lifecyclePersistence: options.lifecyclePersistence,
+        };
   return {
     rootBudget,
     artifacts,
@@ -181,9 +235,7 @@ function supervisorFixture(options: {
       costModel,
       rootBudget,
       transcriptStore: options.transcriptStore ?? artifacts.store,
-      ...(options.lifecyclePersistence !== undefined
-        ? { lifecyclePersistence: options.lifecyclePersistence }
-        : {}),
+      ...lifecycleOwnership,
       now: options.now ?? (() => 0),
       onProgress: options.onProgress ?? (() => {}),
       ...(options.hiddenWorkspacePaths !== undefined
@@ -210,6 +262,75 @@ function supervisorFixture(options: {
 }
 
 describe("Subagent Supervisor", () => {
+  test(`Given a background child is attached to a saved-session owner,
+    When the Main turn that created it is cancelled,
+    Then the child keeps running until its own completion because turn cancellation is not its owner`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-background-turn-cancel-"),
+    );
+    const childEntered = Promise.withResolvers<void>();
+    const releaseChild = Promise.withResolvers<void>();
+    const sessionOwner = new AbortController();
+    const childSignals: AbortSignal[] = [];
+    const registeredRuns: SubagentBackgroundRun[] = [];
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        id: "background-turn-cancel",
+        abortSignalSupport: true,
+        estimateInputTokens: () => 100,
+        async *stream(options) {
+          childSignals.push(options.signal);
+          childEntered.resolve();
+          await releaseChild.promise;
+          yield { type: "text", text: "background completed" };
+          completeAttempt(options, requestUsage);
+          yield { type: "stop", reason: "stop", usage: requestUsage };
+        },
+      },
+      background: {
+        signal: sessionOwner.signal,
+        register: (run) => {
+          registeredRuns.push(run);
+        },
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+    });
+    const mainTurn = new AbortController();
+
+    try {
+      const acknowledgement = await fixture.supervisor.capability.delegate({
+        toolCallId: "background-turn",
+        mode: "background",
+        task: "Finish independently of the Main turn.",
+        focusPaths: [],
+        signal: mainTurn.signal,
+      });
+      await childEntered.promise;
+      mainTurn.abort(new Error("Main turn cancelled"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(acknowledgement).toMatchObject({
+        delivery: "background",
+        ok: true,
+      });
+      expect(childSignals[0]?.aborted).toBe(false);
+      releaseChild.resolve();
+      const backgroundRun = registeredRuns[0];
+      if (backgroundRun === undefined) {
+        throw new Error("background run was not registered");
+      }
+      await expect(backgroundRun.result).resolves.toMatchObject({
+        status: "completed",
+        finalText: "background completed",
+      });
+    } finally {
+      sessionOwner.abort();
+      releaseChild.resolve();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a saved-session lifecycle sink is configured,
     When a child is admitted and completes,
     Then durable acceptance precedes provider work and the canonical result precedes terminal progress`, async () => {
@@ -269,6 +390,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "durable",
+        mode: "foreground" as const,
         task: "Return a durable result.",
         focusPaths: [],
         signal: new AbortController().signal,
@@ -332,6 +454,7 @@ describe("Subagent Supervisor", () => {
       await expect(
         fixture.supervisor.capability.delegate({
           toolCallId: "fatal-persistence",
+          mode: "foreground" as const,
           task: "Do not continue after durable storage fails.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -381,6 +504,7 @@ describe("Subagent Supervisor", () => {
     const signal = new AbortController().signal;
     const requests = ["one", "two", "three"].map((toolCallId) => ({
       toolCallId,
+      mode: "foreground" as const,
       task: `Inspect ${toolCallId}.`,
       focusPaths: [],
       signal,
@@ -412,12 +536,14 @@ describe("Subagent Supervisor", () => {
 
       const lastAccepted = await fixture.supervisor.capability.delegate({
         toolCallId: "four",
+        mode: "foreground" as const,
         task: "Inspect four.",
         focusPaths: [],
         signal,
       });
       const overTotal = await fixture.supervisor.capability.delegate({
         toolCallId: "five",
+        mode: "foreground" as const,
         task: "Inspect five.",
         focusPaths: [],
         signal,
@@ -492,6 +618,7 @@ describe("Subagent Supervisor", () => {
     });
     const request = {
       toolCallId: "prepared",
+      mode: "foreground" as const,
       task: "Do not start this child.",
       focusPaths: [],
       signal: new AbortController().signal,
@@ -563,6 +690,7 @@ describe("Subagent Supervisor", () => {
     });
     const request = {
       toolCallId: "ephemeral-queued",
+      mode: "foreground" as const,
       task: "Do not start this child.",
       focusPaths: [],
       signal: new AbortController().signal,
@@ -619,6 +747,7 @@ describe("Subagent Supervisor", () => {
     const parent = new AbortController();
     const requests = ["one", "two"].map((toolCallId) => ({
       toolCallId,
+      mode: "foreground" as const,
       task: `Wait in ${toolCallId}.`,
       focusPaths: [],
       signal: parent.signal,
@@ -690,12 +819,14 @@ describe("Subagent Supervisor", () => {
     const requests = [
       {
         toolCallId: "failed",
+        mode: "foreground" as const,
         task: "Fail independently.",
         focusPaths: [],
         signal,
       },
       {
         toolCallId: "successful",
+        mode: "foreground" as const,
         task: "Complete independently.",
         focusPaths: [],
         signal,
@@ -763,6 +894,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "uncertified",
+        mode: "foreground" as const,
         task: "Do not start this child.",
         focusPaths: [],
         signal: new AbortController().signal,
@@ -814,6 +946,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "rejection-storage-failure",
+        mode: "foreground" as const,
         task: "Reject without starting a child.",
         focusPaths: [],
         signal: new AbortController().signal,
@@ -861,6 +994,7 @@ describe("Subagent Supervisor", () => {
       await expect(
         fixture.supervisor.capability.delegate({
           toolCallId: "indeterminate-rejection",
+          mode: "foreground" as const,
           task: "Reject without corrupting the durable ledger.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -917,6 +1051,7 @@ describe("Subagent Supervisor", () => {
       try {
         const pending = fixture.supervisor.capability.delegate({
           toolCallId: `acceptance-${fatal ? "fatal" : "recoverable"}`,
+          mode: "foreground" as const,
           task: "Do not start without durable acceptance.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -971,24 +1106,28 @@ describe("Subagent Supervisor", () => {
       // When
       const first = await fixture.supervisor.capability.delegate({
         toolCallId: "delegate-1",
+        mode: "foreground" as const,
         task: "Inspect module.ts.",
         focusPaths: ["module.ts"],
         signal,
       });
       const replayOnly = await fixture.supervisor.capability.delegate({
         toolCallId: "delegate-1",
+        mode: "foreground" as const,
         task: "Changed replay text must not create a new run.",
         focusPaths: [],
         signal,
       });
       const replayRequest = {
         toolCallId: "delegate-1",
+        mode: "foreground" as const,
         task: "Replay beside one fresh child.",
         focusPaths: [],
         signal,
       };
       const secondRequest = {
         toolCallId: "delegate-2",
+        mode: "foreground" as const,
         task: "Inspect it again.",
         focusPaths: [],
         signal,
@@ -1091,6 +1230,7 @@ describe("Subagent Supervisor", () => {
     });
     const request = {
       toolCallId,
+      mode: "foreground" as const,
       task: "Return one stable result.",
       focusPaths: [],
       signal: new AbortController().signal,
@@ -1149,6 +1289,7 @@ describe("Subagent Supervisor", () => {
           queuedSnapshot = supervisor.runSnapshots()[0];
           replay = supervisor.capability.delegate({
             toolCallId: "reentrant",
+            mode: "foreground" as const,
             task: "A replay must join the registered run.",
             focusPaths: [],
             signal: new AbortController().signal,
@@ -1162,6 +1303,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await supervisor.capability.delegate({
         toolCallId: "reentrant",
+        mode: "foreground" as const,
         task: "Inspect module.ts.",
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
@@ -1218,6 +1360,7 @@ describe("Subagent Supervisor", () => {
       try {
         const result = await fixture.supervisor.capability.delegate({
           toolCallId: "throwing-clock",
+          mode: "foreground" as const,
           task: "Complete despite observation failure.",
           focusPaths: ["module.ts"],
           signal: new AbortController().signal,
@@ -1243,7 +1386,7 @@ describe("Subagent Supervisor", () => {
     },
   );
 
-  test(`Given delegation requests have an invalid focus path or cannot preserve main synthesis budget,
+  test(`Given delegation requests lack a background owner, have an invalid focus path, or cannot preserve main synthesis budget,
     When Supervisor performs admission and the rejected call is replayed,
     Then no child starts and each stable receipt returns the original rejection`, async () => {
     const workspace = await mkdtemp(
@@ -1259,9 +1402,20 @@ describe("Subagent Supervisor", () => {
     };
 
     try {
+      const unattachedFixture = supervisorFixture({ workspace, provider });
+      const unattached = await unattachedFixture.supervisor.capability.delegate(
+        {
+          toolCallId: "unattached-background",
+          mode: "background",
+          task: "Do not detach from this ephemeral owner.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        },
+      );
       const invalidFixture = supervisorFixture({ workspace, provider });
       const invalid = await invalidFixture.supervisor.capability.delegate({
         toolCallId: "invalid-focus",
+        mode: "foreground" as const,
         task: "Inspect an invalid path.",
         focusPaths: ["../outside"],
         signal: new AbortController().signal,
@@ -1269,6 +1423,7 @@ describe("Subagent Supervisor", () => {
       const invalidReplay = await invalidFixture.supervisor.capability.delegate(
         {
           toolCallId: "invalid-focus",
+          mode: "foreground" as const,
           task: "A replay cannot change admission.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -1281,6 +1436,7 @@ describe("Subagent Supervisor", () => {
       });
       const noBudget = await budgetFixture.supervisor.capability.delegate({
         toolCallId: "no-budget",
+        mode: "foreground" as const,
         task: "Inspect without a child budget.",
         focusPaths: [],
         signal: new AbortController().signal,
@@ -1295,6 +1451,7 @@ describe("Subagent Supervisor", () => {
       const invalidEstimate =
         await invalidEstimateFixture.supervisor.capability.delegate({
           toolCallId: "invalid-input-estimate",
+          mode: "foreground" as const,
           task: "Reject before running with an invalid provider estimate.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -1307,11 +1464,18 @@ describe("Subagent Supervisor", () => {
       const providerBlocked =
         await blockedFixture.supervisor.capability.delegate({
           toolCallId: "provider-blocked",
+          mode: "foreground" as const,
           task: "Do not start after the provider circuit opens.",
           focusPaths: [],
           signal: new AbortController().signal,
         });
 
+      expect(unattached).toEqual({
+        delivery: "rejected",
+        ok: false,
+        content:
+          "Delegation rejected: background mode requires a saved interactive session owner.",
+      });
       expect(invalid.ok).toBe(false);
       expect(invalid.content).toContain("invalid focus path");
       expect(invalidReplay).toEqual(invalid);
@@ -1328,6 +1492,7 @@ describe("Subagent Supervisor", () => {
           "Delegation rejected: the child request cost cannot be estimated.",
       });
       expect(providerBlocked.content).toContain("auth/quota circuit is open");
+      expect(unattachedFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(invalidFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(budgetFixture.supervisor.totalAcceptedCount()).toBe(0);
       expect(invalidEstimateFixture.supervisor.totalAcceptedCount()).toBe(0);
@@ -1363,6 +1528,7 @@ describe("Subagent Supervisor", () => {
             type: "tool_call",
             id: "delegate-call",
             tool: "delegate",
+            mode: "foreground",
             task: "Inspect the workspace.",
           };
         } else {
@@ -1397,13 +1563,14 @@ describe("Subagent Supervisor", () => {
         systemPrompt: "main",
         messages: [{ role: "user", content: "Use a subagent." }],
         signal: new AbortController().signal,
-        toolExposure: { kind: "auto", delegation: true },
+        toolExposure: { kind: "auto", delegation: "foreground" },
       })) {
         // Establish the completed main request used by the continuation lease.
       }
 
       const result = await supervisor.capability.delegate({
         toolCallId: "delegate-call",
+        mode: "foreground" as const,
         task: "Inspect the workspace.",
         focusPaths: [],
         signal: new AbortController().signal,
@@ -1439,6 +1606,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "bounded",
+        mode: "foreground" as const,
         task: "Return a deliberately large result.",
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
@@ -1476,6 +1644,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "aggregate-bound",
+        mode: "foreground" as const,
         task: "Return JSON-expanding bounded fields.",
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
@@ -1557,6 +1726,7 @@ describe("Subagent Supervisor", () => {
       try {
         const result = await fixture.supervisor.capability.delegate({
           toolCallId: "failure",
+          mode: "foreground" as const,
           task: "Encounter the provider failure.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -1607,6 +1777,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "partially-billed",
+        mode: "foreground" as const,
         task: "Read once before provider failure.",
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
@@ -1640,6 +1811,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "large-failure",
+        mode: "foreground" as const,
         task: "Encounter a large provider failure.",
         focusPaths: [],
         signal: new AbortController().signal,
@@ -1720,6 +1892,7 @@ describe("Subagent Supervisor", () => {
       const provenance = await provenanceFixture.supervisor.capability.delegate(
         {
           toolCallId: "resource-provenance",
+          mode: "foreground" as const,
           task: "Report only observed resources.",
           focusPaths: ["module.ts"],
           signal: new AbortController().signal,
@@ -1728,6 +1901,7 @@ describe("Subagent Supervisor", () => {
       const storageFailed = await storageFixture.supervisor.capability.delegate(
         {
           toolCallId: "storage-failed",
+          mode: "foreground" as const,
           task: "Fail transcript storage.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -1814,6 +1988,7 @@ describe("Subagent Supervisor", () => {
       try {
         const result = await fixture.supervisor.capability.delegate({
           toolCallId: `terminal-${scenario}`,
+          mode: "foreground" as const,
           task: "Reach the requested terminal state.",
           focusPaths: [],
           signal: new AbortController().signal,
@@ -1851,6 +2026,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "child-budget-limited",
+        mode: "foreground" as const,
         task: "Reach the child budget guard.",
         focusPaths: [],
         signal: new AbortController().signal,
@@ -1907,6 +2083,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "storage-deadline",
+        mode: "foreground" as const,
         task: "Complete before slow storage settles.",
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
@@ -1962,6 +2139,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "cancel-then-deadline",
+        mode: "foreground" as const,
         task: "Settle the already-cancelled child.",
         focusPaths: [],
         signal: controller.signal,
@@ -2016,6 +2194,7 @@ describe("Subagent Supervisor", () => {
     try {
       const pending = fixture.supervisor.capability.delegate({
         toolCallId: "persistence-cancel",
+        mode: "foreground" as const,
         task: "Complete before parent cancellation.",
         focusPaths: ["module.ts"],
         signal: controller.signal,
@@ -2097,6 +2276,7 @@ describe("Subagent Supervisor", () => {
         // When
         const pending = fixture.supervisor.capability.delegate({
           toolCallId: "delegate-abort",
+          mode: "foreground" as const,
           task: "Wait for cancellation.",
           focusPaths: [],
           signal: controller.signal,

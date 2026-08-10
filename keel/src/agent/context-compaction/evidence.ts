@@ -88,6 +88,9 @@ function sourceHandleForToolCall(toolCall: ToolCall): string | null {
     }
     case "update_plan":
     case "delegate":
+    case "agent_list":
+    case "agent_wait":
+    case "agent_cancel":
     case "update_goal":
     case "memory_add":
     case "memory_forget":

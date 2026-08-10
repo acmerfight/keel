@@ -1,4 +1,4 @@
-import type { Usage } from "../llm/types.ts";
+import type { ProviderContinuationLease, Usage } from "../llm/types.ts";
 
 interface DelegationToolResultBase {
   readonly ok: boolean;
@@ -9,6 +9,11 @@ export type DelegationToolResult =
   | (DelegationToolResultBase & {
       readonly delivery: "fresh";
       readonly usage: Usage;
+    })
+  | (DelegationToolResultBase & {
+      readonly delivery: "background";
+      readonly ok: true;
+      readonly usage?: never;
     })
   | (DelegationToolResultBase & {
       readonly delivery: "replayed";
@@ -22,6 +27,7 @@ export type DelegationToolResult =
 
 export interface DelegationRequest {
   readonly toolCallId: string;
+  readonly mode: "foreground" | "background";
   readonly task: string;
   readonly focusPaths: readonly string[];
   readonly signal: AbortSignal;
@@ -55,10 +61,12 @@ export function createDelegationExecutor(
 
 export interface DelegationBatch {
   readonly executor: DelegationExecutor;
+  readonly continuation?: ProviderContinuationLease;
   readonly close: () => void;
 }
 
 export interface DelegationCapability {
+  readonly mode: "foreground" | "background";
   readonly available: () => boolean;
   readonly delegate: (
     input: DelegationRequest,

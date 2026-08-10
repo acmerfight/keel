@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import {
   CostBudgetAdmissionError,
   createCostBudgetedProvider,
+  createSharedCostBudgetAccount,
   createSharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
@@ -65,6 +66,74 @@ const tieredBudgetModel: CostModel = {
 };
 
 describe("Cost Budget", () => {
+  test(`Given separate Main turns price requests against one saved-session budget concurrently,
+    When both reach atomic provider-attempt admission with room for only one,
+    Then exactly one starts and the other is rejected without overselling the session`, async () => {
+    const bothPriced = Promise.withResolvers<void>();
+    let entered = 0;
+    let started = 0;
+    const usage = {
+      inputTokens: 100,
+      cachedInputTokens: 0,
+      uncachedInputTokens: 100,
+      outputTokens: 10,
+    } as const;
+    const underlying: LLMProvider = {
+      id: "session-shared-budget",
+      estimateInputTokens: () => 100,
+      async *stream(options) {
+        entered++;
+        if (entered === 2) bothPriced.resolve();
+        await bothPriced.promise;
+        const attempt = options.providerRequestAttempts?.begin();
+        started++;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        attempt?.finish({ outcome: "completed", usage });
+        yield { type: "stop", reason: "stop", usage };
+      },
+    };
+    const maxCostUsd = calculateConservativeRequestCostUsd(
+      100,
+      256,
+      budgetModel,
+    );
+    const account = createSharedCostBudgetAccount(maxCostUsd);
+    const turnProviders = [0, 1].map(() =>
+      createSharedCostBudgetedProvider({
+        provider: underlying,
+        model: budgetModel,
+        maxCostUsd,
+        sharedAccount: account,
+      }),
+    );
+
+    const outcomes = await Promise.allSettled(
+      turnProviders.map((turn) =>
+        collect(
+          turn.provider.stream({
+            systemPrompt: "main",
+            messages: [],
+            signal: freshSignal(),
+            maxOutputTokens: 256,
+          }),
+        ),
+      ),
+    );
+
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "rejected"),
+    ).toHaveLength(1);
+    expect(
+      outcomes.find((outcome) => outcome.status === "rejected"),
+    ).toMatchObject({ reason: expect.any(CostBudgetAdmissionError) });
+    expect(started).toBe(1);
+    expect(account.observedSpendUsd()).toBeCloseTo(0.00012, 10);
+    expect(account.remainingUsd()).toBeCloseTo(maxCostUsd - 0.00012, 10);
+  });
+
   test(`Given two child provider attempts reserve the shared root budget concurrently,
     When they complete out of order,
     Then each attempt releases only its own reservation without leaking or overselling budget`, async () => {
@@ -146,6 +215,7 @@ describe("Cost Budget", () => {
             type: "tool_call",
             id: "delegate-call",
             tool: "delegate",
+            mode: "foreground",
             task: "Inspect the note independently.",
           };
           yield {
@@ -181,6 +251,7 @@ describe("Cost Budget", () => {
           bash: { kind: "disabled" },
           stopPolicy: defaultStopPolicy(),
           delegation: {
+            mode: "foreground",
             available: () => true,
             prepareBatch: () => ({
               close: () => {},
@@ -323,11 +394,13 @@ describe("Cost Budget", () => {
 
   test(`Given a completed main request and a bounded non-ASCII tool result,
     When host leases the continuation before running a child,
-    Then the provider estimator prices the assistant and tool envelopes so the next main request is admitted`, async () => {
+    Then only the leased provider can atomically spend the held Main reservation`, async () => {
     let providerCalls = 0;
+    const observedRequests: StreamOptions[] = [];
     const toolCall: Extract<ToolCall, { readonly tool: "delegate" }> = {
       id: "delegate-call",
       tool: "delegate",
+      mode: "foreground",
       task: "Inspect the workspace.",
     };
     const reasoningContent = "我会委派这个调查。";
@@ -358,6 +431,7 @@ describe("Cost Budget", () => {
       estimateInputTokens: inputEstimate,
       async *stream(options) {
         providerCalls++;
+        observedRequests.push(options);
         if (providerCalls === 1) {
           yield { type: "reasoning", text: reasoningContent };
           yield { type: "tool_call", ...toolCall };
@@ -381,7 +455,7 @@ describe("Cost Budget", () => {
       systemPrompt: "main",
       messages: initialMessages,
       signal: freshSignal(),
-      toolExposure: { kind: "auto", delegation: true } as const,
+      toolExposure: { kind: "auto", delegation: "foreground" } as const,
     };
     const childOptions: StreamOptions = {
       systemPrompt: "child",
@@ -479,17 +553,40 @@ describe("Cost Budget", () => {
       // Child uses the residual budget only.
     }
     expect(root.remainingUsd()).toBeGreaterThanOrEqual(0);
-    lease.release();
-    expect(root.remainingUsd()).toBeGreaterThanOrEqual(lease.reservedUsd);
 
     await expect(
       (async () => {
         for await (const _event of root.provider.stream(continuationOptions)) {
-          // The leased main continuation is now admitted on the root provider.
+          // An ordinary tree request cannot borrow Main's held reservation.
+        }
+      })(),
+    ).rejects.toBeInstanceOf(CostBudgetAdmissionError);
+
+    await expect(
+      (async () => {
+        for await (const _event of lease.continuation.provider.stream({
+          ...continuationOptions,
+          systemPrompt: "unpriced dynamic system prompt",
+          requestSystemPrompt: () => "unpriced request-time prompt",
+          toolExposure: {
+            kind: "auto",
+            delegation: "background",
+            agentControl: true,
+          },
+          maxOutputTokens: 10_000,
+        })) {
+          // Main atomically transfers its held reservation into this request.
         }
       })(),
     ).resolves.toBeUndefined();
+    lease.release();
     expect(providerCalls).toBe(3);
+    expect(observedRequests[2]).toMatchObject({
+      systemPrompt: "main",
+      toolExposure: { kind: "auto", delegation: "foreground" },
+      maxOutputTokens: 256,
+    });
+    expect(observedRequests[2]?.requestSystemPrompt).toBeUndefined();
   });
 
   test(`Given no baseline, an invalid continuation estimate, or insufficient remaining budget,
@@ -561,6 +658,7 @@ describe("Cost Budget", () => {
       systemPrompt: "valid baseline",
       messages: [],
       signal: freshSignal(),
+      toolExposure: { kind: "auto" },
     })) {
       // Establish a valid baseline before the provider rejects the full shape.
     }
@@ -574,6 +672,7 @@ describe("Cost Budget", () => {
           systemPrompt: "initial estimate is valid",
           messages: [],
           signal: freshSignal(),
+          toolExposure: { kind: "auto" },
         })) {
           // The final provider shape must be rejected before transport starts.
         }
@@ -584,6 +683,7 @@ describe("Cost Budget", () => {
       systemPrompt: "spend baseline",
       messages: [],
       signal: freshSignal(),
+      toolExposure: { kind: "auto" },
     })) {
       // Leave too little capacity for both leases.
     }

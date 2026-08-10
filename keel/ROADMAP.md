@@ -188,12 +188,15 @@ What a user can do today:
   and [stable-policy result](evals/experiments/subagent-slice-2-3/RESULTS.md).
   Saved interactive sessions also keep an independent append-only agent tree
   and incremental child transcripts. `/agents` lists durable runs and inspects
-  terminal facts or transcripts after restart; when a prior exclusive session
-  owner dies, its abandoned queued/running child is recovered once as
-  `interrupted` instead of remaining falsely live. #590 remains the governing
-  epic; durable foreground history does not imply background execution, write
-  authority, nesting, or default-on autonomous delegation before their own
-  slices and gates.
+  live or durable facts and transcripts. A saved-session owner can keep an
+  attached read-only child running across Main turns, then list, wait for, or
+  cancel it; completion emits one bounded live notification, and owner exit
+  cancels and settles every attached child before releasing the session. When
+  a prior owner dies abnormally, its abandoned queued/running child is recovered
+  once as `interrupted` instead of remaining falsely live. #590 remains the
+  governing epic; attached background does not imply crash-safe parent result
+  delivery, multi-Run child threads, write authority, nesting, or default-on
+  autonomous delegation before their own slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -234,9 +237,10 @@ Known limits that shape the priorities below:
   a restored user-message point into an independent named session.
   `--resume --pick` and `/sessions` group related sessions into a graph-aware
   numbered tree, while `/fork --pick` provides an interactive fork-point
-  picker. Saved-session foreground subagents now have independent durable tree
-  state and `/agents` inspection; background ownership and control are still
-  absent.
+  picker. Saved-session subagents have independent durable tree state and
+  `/agents` inspection; attached background children support live list, wait,
+  and cancel while the current owner remains alive. Crash-safe parent delivery
+  and follow-up input/resume remain absent.
   Forks do not copy bash approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
@@ -311,9 +315,11 @@ Known limits that shape the priorities below:
    and persistent durable Goal status. The startup and `--resume --pick`
    session picker groups independent fork ledgers into a numbered branch tree;
    `/sessions` reuses that graph in a running process and transfers queued input
-   to the selected ledger. Saved foreground child runs and transcripts persist
-   in an independent agent tree and are inspectable through `/agents`; remaining
-   work includes background ownership and control.
+   to the selected ledger. Saved child runs and transcripts persist in an
+   independent agent tree; attached background children remain owned across
+   Main turns and are inspectable, waitable, and cancellable through `/agents`.
+   Remaining work includes crash-safe parent delivery and multi-Run child
+   input/resume.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -410,10 +416,11 @@ Codex/Claude Code — or directly moves the eval numbers.
   `/fork [--before-message <id>|--pick]` create independent forks from restored
   history without copying pending queued input. `keel --resume --pick` groups
   those ledgers into a graph-aware numbered tree, and `/sessions` switches the
-  active ledger from the same graph without restarting Keel. Saved foreground
-  child runs and incremental transcripts use a separate append-only agent tree;
-  `/agents` inspects them after resume and stale nonterminal runs recover as
-  interrupted. Remaining work is background agent ownership and control.
+  active ledger from the same graph without restarting Keel. Saved child runs
+  and incremental transcripts use a separate append-only agent tree; attached
+  background runs remain live only under the current owner, `/agents` can list,
+  wait, or cancel them, and stale nonterminal runs recover as interrupted.
+  Remaining work is crash-safe parent delivery and multi-Run child input/resume.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
@@ -460,8 +467,9 @@ Codex/Claude Code — or directly moves the eval numbers.
 
 Not needed to switch; revisit once P0/P1 are done.
 
-- Sub-agents — #590 Slice 2.3 provides stable default-off `off|explicit|auto`
-  policy over foreground read-only parallelism. Persistent/background control,
+- Sub-agents — #590 provides stable default-off `off|explicit|auto` policy,
+  foreground read-only parallelism, durable history, and saved-session attached
+  background list/wait/cancel. Crash-safe delivery, multi-Run child threads,
   governed profiles, isolated writes, bounded nesting, and any default-on
   decision remain gated by their later epic slices and same-budget value
   evidence.

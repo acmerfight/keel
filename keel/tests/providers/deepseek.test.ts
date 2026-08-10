@@ -3966,7 +3966,7 @@ describe("DeepSeek Provider", () => {
         systemPrompt: "You are helpful.",
         messages: [{ role: "user", content: "invalid-delegate-task" }],
         signal: freshSignal(),
-        toolExposure: { kind: "auto", delegation: true },
+        toolExposure: { kind: "auto", delegation: "foreground" },
       }),
     );
 

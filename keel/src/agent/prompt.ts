@@ -96,11 +96,18 @@ export function appendProjectMemoryToSystemPrompt(
 export function appendDelegationToSystemPrompt(
   systemPrompt: string,
   policy: DelegatingAgentPolicy,
+  options: { readonly background: boolean } = { background: false },
 ): string {
   const policyInstruction =
     policy === "explicit"
       ? "- Policy is explicit: call delegate only when the current user explicitly asks to use a subagent or delegate work. Interpret the request semantically; no exact phrase is required."
       : "- Policy is auto: you may call delegate without an explicit user request when the task meets the delegation criteria below.";
+  const backgroundInstructions = options.background
+    ? `
+- Set mode to background only for independent work that does not block your next useful action. Background delegation returns a stable agent ID immediately.
+- Do not poll background children. Continue useful work or answer the user; use agent_list for an explicit status request, agent_wait when a result becomes necessary, and agent_cancel when the work is no longer wanted.
+- Background completion produces one bounded status notification. The full canonical result remains behind agent_wait.`
+    : "";
   return `${systemPrompt}
 
 Stable read-only delegation:
@@ -112,7 +119,7 @@ ${policyInstruction}
 - When delegating structured work, preserve the user's original field meanings, units, and output contract in each child task. During final synthesis, reconcile child conclusions against the original user request rather than only your rewritten child tasks.
 - The host waits for every admitted sibling, preserves tool-call source order even when children finish out of order, and returns bounded final answers plus terminal metadata. One sibling failure does not erase unrelated results.
 - Treat child answers as delegated input: synthesize them, decide whether and how to verify them from the task's risk and uncertainty, and avoid repeating work without a reason.
-- The root run admits at most four active foreground children at once and eight children in total. After their results, continue the task yourself.`;
+- The root run admits at most four active children at once and eight children in total. After foreground results, continue the task yourself.${backgroundInstructions}`;
 }
 
 export function buildReadOnlySubagentSystemPrompt(

@@ -275,6 +275,9 @@ export function toolCallAccesses(
   switch (toolCall.tool) {
     case "delegate":
       return ToolAccesses.readTree(workspace);
+    case "agent_list":
+    case "agent_wait":
+    case "agent_cancel":
     case "update_plan":
     case "update_goal":
     case "memory_add":

@@ -76,7 +76,7 @@ type AgentsCommand =
   | { readonly kind: "agents"; readonly action: "list" }
   | {
       readonly kind: "agents";
-      readonly action: "show" | "transcript";
+      readonly action: "show" | "transcript" | "wait" | "cancel";
       readonly selector: string;
     };
 
@@ -176,6 +176,10 @@ export function formatInteractiveHelp(): string {
     "                     Show one subagent's durable terminal facts.",
     "  /agents transcript <id|index>",
     "                     Show one subagent's persisted transcript.",
+    "  /agents wait <id|index>",
+    "                     Wait for one attached background subagent.",
+    "  /agents cancel <id|index>",
+    "                     Cancel and settle one attached background subagent.",
     "  /sessions          Choose another saved session in this workspace.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
@@ -823,14 +827,17 @@ export function parseInteractiveCommand(
     const action = parts[0];
     const selector = parts[1];
     if (
-      (action !== "show" && action !== "transcript") ||
+      (action !== "show" &&
+        action !== "transcript" &&
+        action !== "wait" &&
+        action !== "cancel") ||
       selector === undefined ||
       parts.length !== 2
     ) {
       return {
         kind: "invalid",
         message:
-          "Error: usage is /agents, /agents show <id|index>, or /agents transcript <id|index>.",
+          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, or /agents cancel <id|index>.",
       };
     }
     return { kind: "agents", action, selector };

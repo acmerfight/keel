@@ -6,6 +6,8 @@ import {
 } from "../core/cost.ts";
 import type {
   LLMProvider,
+  ModelToolExposure,
+  ProviderContinuationLease,
   ProviderMessage,
   ProviderRequestAttemptHandle,
   ProviderRequestAttemptObserver,
@@ -179,6 +181,50 @@ interface CostBudgetedProviderOptions {
   readonly model: CostModel;
   readonly maxCostUsd: number;
   readonly modelMaxOutputTokens?: number;
+  readonly sharedAccount?: SharedCostBudgetAccount;
+}
+
+interface SharedCostBudgetReservation {
+  readonly settle: (spentUsd: number) => void;
+  readonly release: () => void;
+}
+
+export interface SharedCostBudgetAccount {
+  readonly remainingUsd: () => number;
+  readonly observedSpendUsd: () => number;
+  readonly reserve: (amountUsd: number) => SharedCostBudgetReservation | null;
+}
+
+export function createSharedCostBudgetAccount(
+  maxCostUsd: number,
+): SharedCostBudgetAccount {
+  let observedSpendUsd = 0;
+  let reservedUsd = 0;
+  const remainingUsd = (): number =>
+    Math.max(0, maxCostUsd - observedSpendUsd - reservedUsd);
+  return {
+    remainingUsd,
+    observedSpendUsd: () => observedSpendUsd,
+    reserve: (amountUsd) => {
+      if (!Number.isFinite(amountUsd) || amountUsd < 0) return null;
+      if (amountUsd > remainingUsd()) return null;
+      reservedUsd += amountUsd;
+      let active = true;
+      const release = (): void => {
+        if (!active) return;
+        active = false;
+        reservedUsd -= amountUsd;
+      };
+      return {
+        settle: (spentUsd) => {
+          if (!active) return;
+          release();
+          observedSpendUsd += spentUsd;
+        },
+        release,
+      };
+    },
+  };
 }
 
 export interface SharedCostBudgetedProvider {
@@ -199,6 +245,7 @@ type ContinuationBudgetLease =
       readonly reservedUsd: number;
       readonly additionalRequestBudgetUsd: number;
       readonly estimatedContinuationInputTokens: number;
+      readonly continuation: ProviderContinuationLease;
       readonly release: () => void;
     }
   | {
@@ -212,7 +259,9 @@ type ContinuationBudgetLease =
     };
 
 interface ContinuationBaseline {
-  readonly streamOptions: StreamOptions;
+  readonly streamOptions: StreamOptions & {
+    readonly toolExposure: ModelToolExposure;
+  };
   readonly assistantMessage: Extract<
     ProviderMessage,
     { readonly role: "assistant" }
@@ -257,15 +306,29 @@ export function createSharedCostBudgetedProvider(
   let activeContinuationReservation: {
     readonly id: number;
     readonly reservedUsd: number;
+    readonly shared: SharedCostBudgetReservation | null;
   } | null = null;
   let nextContinuationReservationId = 0;
-  const remainingUsd = (): number =>
+  let requestedContinuationReservationId: number | null = null;
+  const localRemainingUsd = (): number =>
     Math.max(
       0,
       maxCostUsd -
         observedSpendUsd -
         reservedAttemptSpendUsd -
         (activeContinuationReservation?.reservedUsd ?? 0),
+    );
+  const remainingUsd = (): number =>
+    Math.min(
+      localRemainingUsd(),
+      options.sharedAccount?.remainingUsd() ?? Number.POSITIVE_INFINITY,
+    );
+  const continuationRemainingUsd = (reservedUsd: number): number =>
+    Math.min(
+      localRemainingUsd() + reservedUsd,
+      options.sharedAccount === undefined
+        ? Number.POSITIVE_INFINITY
+        : options.sharedAccount.remainingUsd() + reservedUsd,
     );
   const provider: LLMProvider = {
     id: options.provider.id,
@@ -276,10 +339,27 @@ export function createSharedCostBudgetedProvider(
       ? { estimateInputTokens: options.provider.estimateInputTokens }
       : {}),
     async *stream(streamOptions) {
+      const requestedReservationId = requestedContinuationReservationId;
+      requestedContinuationReservationId = null;
+      let continuationReservation =
+        requestedReservationId !== null &&
+        activeContinuationReservation?.id === requestedReservationId
+          ? activeContinuationReservation
+          : null;
+      if (requestedReservationId !== null && continuationReservation === null) {
+        throw new CostBudgetAdmissionError({
+          remainingUsd: remainingUsd(),
+          estimatedInputTokens: null,
+        });
+      }
+      const availableUsd =
+        continuationReservation === null
+          ? remainingUsd()
+          : continuationRemainingUsd(continuationReservation.reservedUsd);
       const pricing = priceFinalProviderRequest({
         provider: options.provider,
         streamOptions,
-        remainingUsd: remainingUsd(),
+        remainingUsd: availableUsd,
         model: options.model,
         ...(options.modelMaxOutputTokens !== undefined
           ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
@@ -287,7 +367,7 @@ export function createSharedCostBudgetedProvider(
       });
       if (pricing.kind === "rejected") {
         throw new CostBudgetAdmissionError({
-          remainingUsd: remainingUsd(),
+          remainingUsd: availableUsd,
           estimatedInputTokens: pricing.estimatedInputTokens,
         });
       }
@@ -298,25 +378,44 @@ export function createSharedCostBudgetedProvider(
       const assistantReasoning: string[] = [];
       const assistantToolCalls: ToolCall[] = [];
       const requestReservationUsd = pricing.reservationUsd;
-      const reserveAttempt = (): void => {
-        const remainingUsd = Math.max(
-          0,
-          maxCostUsd -
-            observedSpendUsd -
-            reservedAttemptSpendUsd -
-            (activeContinuationReservation?.reservedUsd ?? 0),
-        );
-        if (requestReservationUsd > remainingUsd) {
+      const reserveAttempt = (): SharedCostBudgetReservation | null => {
+        if (continuationReservation !== null) {
+          const reservation = continuationReservation;
+          continuationReservation = null;
+          if (
+            activeContinuationReservation?.id !== reservation.id ||
+            requestReservationUsd > reservation.reservedUsd
+          ) {
+            throw new CostBudgetAdmissionError({
+              remainingUsd: continuationRemainingUsd(reservation.reservedUsd),
+              estimatedInputTokens,
+            });
+          }
+          activeContinuationReservation = null;
+          reservedAttemptSpendUsd += requestReservationUsd;
+          return reservation.shared;
+        }
+        const availableUsd = remainingUsd();
+        if (requestReservationUsd > availableUsd) {
           throw new CostBudgetAdmissionError({
-            remainingUsd,
+            remainingUsd: availableUsd,
+            estimatedInputTokens,
+          });
+        }
+        const sharedReservation =
+          options.sharedAccount?.reserve(requestReservationUsd) ?? null;
+        if (options.sharedAccount !== undefined && sharedReservation === null) {
+          throw new CostBudgetAdmissionError({
+            remainingUsd: options.sharedAccount.remainingUsd(),
             estimatedInputTokens,
           });
         }
         reservedAttemptSpendUsd += requestReservationUsd;
+        return sharedReservation;
       };
       const providerRequestAttempts: ProviderRequestAttemptObserver = {
         begin: (): ProviderRequestAttemptHandle => {
-          reserveAttempt();
+          const sharedReservation = reserveAttempt();
           const attempt =
             streamOptions.providerRequestAttempts?.begin() ?? null;
           return {
@@ -335,10 +434,12 @@ export function createSharedCostBudgetedProvider(
                   outputTokens:
                     observedUsage.outputTokens + result.usage.outputTokens,
                 };
-                observedSpendUsd += calculateRequestCostBatchUsd(
+                const requestCostUsd = calculateRequestCostBatchUsd(
                   { requests: [{ usage: result.usage }] },
                   options.model,
                 );
+                observedSpendUsd += requestCostUsd;
+                sharedReservation?.settle(requestCostUsd);
               }
               attempt?.finish(result);
             },
@@ -366,17 +467,21 @@ export function createSharedCostBudgetedProvider(
             break;
           }
           case "stop":
-            continuationBaseline = {
-              streamOptions: {
-                ...streamOptions,
-                messages: [...streamOptions.messages],
-              },
-              assistantMessage: assistantMessageFromStream({
-                text: assistantText,
-                reasoning: assistantReasoning,
-                toolCalls: assistantToolCalls,
-              }),
-            };
+            continuationBaseline =
+              streamOptions.toolExposure === undefined
+                ? null
+                : {
+                    streamOptions: {
+                      ...streamOptions,
+                      messages: [...streamOptions.messages],
+                      toolExposure: streamOptions.toolExposure,
+                    },
+                    assistantMessage: assistantMessageFromStream({
+                      text: assistantText,
+                      reasoning: assistantReasoning,
+                      toolCalls: assistantToolCalls,
+                    }),
+                  };
             break;
           /* v8 ignore next 2 -- retry notifications carry no assistant payload, so preserving them requires no budget-baseline state change. */
           case "provider_retry":
@@ -401,12 +506,23 @@ export function createSharedCostBudgetedProvider(
       ) {
         return { kind: "rejected", reason: "missing_baseline" };
       }
+      const {
+        requestSystemPrompt: baselineRequestSystemPrompt,
+        ...baselineStreamOptions
+      } = continuationBaseline.streamOptions;
+      const continuationRequestShape: StreamOptions & {
+        readonly toolExposure: ModelToolExposure;
+      } = {
+        ...baselineStreamOptions,
+        systemPrompt:
+          baselineRequestSystemPrompt?.() ?? baselineStreamOptions.systemPrompt,
+      };
       const estimatedContinuationInputTokens = estimateProviderInputTokens(
         options.provider,
         {
-          ...continuationBaseline.streamOptions,
+          ...continuationRequestShape,
           messages: [
-            ...continuationBaseline.streamOptions.messages,
+            ...continuationRequestShape.messages,
             continuationBaseline.assistantMessage,
             ...input.additionalMessages,
           ],
@@ -429,18 +545,68 @@ export function createSharedCostBudgetedProvider(
         return { kind: "rejected", reason: "insufficient_budget" };
       }
       const reservationId = nextContinuationReservationId++;
-      activeContinuationReservation = { id: reservationId, reservedUsd };
+      const shared = options.sharedAccount?.reserve(reservedUsd) ?? null;
+      if (options.sharedAccount !== undefined && shared === null) {
+        return { kind: "rejected", reason: "insufficient_budget" };
+      }
+      activeContinuationReservation = {
+        id: reservationId,
+        reservedUsd,
+        shared,
+      };
+      const continuationProvider: LLMProvider = {
+        ...provider,
+        async *stream(streamOptions) {
+          if (requestedContinuationReservationId !== null) {
+            throw new CostBudgetAdmissionError({
+              remainingUsd: remainingUsd(),
+              estimatedInputTokens: null,
+            });
+          }
+          requestedContinuationReservationId = reservationId;
+          try {
+            const {
+              requestSystemPrompt: _unpricedRequestSystemPrompt,
+              systemPrompt: _unpricedSystemPrompt,
+              toolExposure: _unpricedToolExposure,
+              ...currentRequest
+            } = streamOptions;
+            yield* provider.stream({
+              ...currentRequest,
+              systemPrompt: continuationRequestShape.systemPrompt,
+              toolExposure: continuationRequestShape.toolExposure,
+              maxOutputTokens: effectiveMaxOutputTokens(
+                streamOptions,
+                input.maxOutputTokens,
+              ),
+            });
+          } finally {
+            if (requestedContinuationReservationId === reservationId) {
+              requestedContinuationReservationId = null;
+            }
+          }
+        },
+      };
+      const release = (): void => {
+        if (activeContinuationReservation?.id === reservationId) {
+          activeContinuationReservation.shared?.release();
+          activeContinuationReservation = null;
+        }
+      };
       return {
         kind: "granted",
         reservedUsd,
         additionalRequestBudgetUsd,
         estimatedContinuationInputTokens,
-        release: () => {
-          /* v8 ignore else -- the single accepted child owns one finally release; retain the generation guard so a stale duplicate release cannot clear a future lease. */
-          if (activeContinuationReservation?.id === reservationId) {
-            activeContinuationReservation = null;
-          }
+        continuation: {
+          provider: continuationProvider,
+          requestShape: {
+            systemPrompt: continuationRequestShape.systemPrompt,
+            toolExposure: continuationRequestShape.toolExposure,
+          },
+          release,
         },
+        release,
       };
     },
   };

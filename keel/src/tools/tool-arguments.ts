@@ -1,4 +1,6 @@
 import { z } from "zod";
+
+import type { AgentId } from "../agent/subagent-lifecycle.ts";
 import {
   DEFAULT_COMMAND_TIMEOUT_MS,
   MAX_COMMAND_TIMEOUT_MS,
@@ -7,8 +9,14 @@ import { SESSION_GOAL_STATUS_REASON_MAX_LENGTH } from "../core/session-goal.ts";
 import { sessionTaskPlanSchema } from "../core/task-progress.ts";
 import { optionalToolArgument } from "./tool-schema.ts";
 
-export const delegateToolArgumentsSchema = z
+const delegationModeDescription =
+  "Run in the foreground by default, or as an attached background child in a saved interactive session.";
+
+export const delegateProviderArgumentsSchema = z
   .object({
+    mode: optionalToolArgument(
+      z.enum(["foreground", "background"]).describe(delegationModeDescription),
+    ),
     task: z
       .string()
       .trim()
@@ -25,6 +33,49 @@ export const delegateToolArgumentsSchema = z
         .describe(
           "Optional workspace-relative files or directories that should receive most of the child agent's attention.",
         ),
+    ),
+  })
+  .strict();
+
+export const delegateToolArgumentsSchema =
+  delegateProviderArgumentsSchema.extend({
+    mode: z.preprocess(
+      (value) => (value === null ? undefined : value),
+      z
+        .enum(["foreground", "background"])
+        .default("foreground")
+        .describe(delegationModeDescription),
+    ),
+  });
+
+export const foregroundDelegateProviderArgumentsSchema =
+  delegateProviderArgumentsSchema.extend({
+    mode: optionalToolArgument(
+      z
+        .enum(["foreground"])
+        .describe("Run as a foreground child and return its result here."),
+    ),
+  });
+
+export const agentListToolArgumentsSchema = z.object({}).strict();
+
+const agentIdToolArgumentSchema: z.ZodType<AgentId> = z.templateLiteral([
+  "agent-",
+  z.string().regex(/^[a-f0-9-]+$/u),
+]);
+
+export const agentWaitToolArgumentsSchema = z
+  .object({
+    agentId: agentIdToolArgumentSchema.describe(
+      "Stable agent ID returned by a background delegate call.",
+    ),
+  })
+  .strict();
+
+export const agentCancelToolArgumentsSchema = z
+  .object({
+    agentId: agentIdToolArgumentSchema.describe(
+      "Stable agent ID returned by a background delegate call.",
     ),
   })
   .strict();

@@ -6,6 +6,7 @@ import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import type { SubagentResultContinuationBudget } from "../../src/agent/subagent-tree-budget.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
@@ -18,6 +19,8 @@ import type {
 } from "../../src/llm/types.ts";
 import { createGitWorkspace } from "../../src/testing/cli-harness.ts";
 import { sessionLedgerMirroringMessages } from "../../src/testing/session-ledger-fixtures.ts";
+import type { AgentControlCapability } from "../../src/tools/agent-control.ts";
+import type { DelegationCapability } from "../../src/tools/delegation.ts";
 
 const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -77,6 +80,451 @@ async function createWorkspace(): Promise<string> {
 }
 
 describe("Tool Scheduling", () => {
+  test(`Given agent_wait reserves a Main continuation,
+    When the durable child result enters the ledger,
+    Then the next Main turn consumes that exact leased provider before releasing it`, async () => {
+    const workspace = await createWorkspace();
+    const messages: SessionMessage[] = [
+      { role: "user", content: "Use the background result." },
+    ];
+    let ordinaryProviderCalls = 0;
+    let leasedProviderCalls = 0;
+    let releases = 0;
+    let drainCalls = 0;
+    const provider: LLMProvider = {
+      id: "ordinary-main-provider",
+      async *stream() {
+        ordinaryProviderCalls++;
+        yield {
+          type: "tool_call",
+          id: "wait-result",
+          tool: "agent_wait",
+          agentId: "agent-a1",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const continuationProvider: LLMProvider = {
+      id: "leased-main-provider",
+      async *stream() {
+        leasedProviderCalls++;
+        yield { type: "text", text: "Used the durable child result." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => ({ ok: true, content: "unused" }),
+      wait: async () => ({ ok: true, content: "canonical child result" }),
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const release = () => {
+      releases++;
+    };
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => ({
+        kind: "granted",
+        maxResultChars: 6_000,
+        continuation: {
+          provider: continuationProvider,
+          requestShape: {
+            systemPrompt: "You are a helpful assistant.",
+            toolExposure: { kind: "auto", agentControl: true },
+          },
+          release,
+        },
+        release,
+      }),
+    };
+
+    try {
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          ledger: sessionLedgerMirroringMessages(messages),
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          agentControl,
+          agentControlResultBudget: resultBudget,
+          drainInjectedUserMessages: () => {
+            drainCalls++;
+            return [{ role: "user", content: "unpriced steering" }];
+          },
+        }),
+      );
+
+      expect(ordinaryProviderCalls).toBe(1);
+      expect(leasedProviderCalls).toBe(1);
+      expect(releases).toBe(1);
+      expect(drainCalls).toBe(0);
+      expect(messages).not.toContainEqual({
+        role: "user",
+        content: "unpriced steering",
+      });
+      expect(messages).toContainEqual({
+        role: "tool",
+        toolCallId: "wait-result",
+        content: "canonical child result",
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Used the durable child result.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a completed background result but no budget for Main's continuation,
+    When the model calls agent_wait,
+    Then Keel does not fetch the result and returns an admission failure for synthesis`, async () => {
+    const workspace = await createWorkspace();
+    const messages: SessionMessage[] = [
+      { role: "user", content: "Use the background result." },
+    ];
+    let providerTurn = 0;
+    let waitCalls = 0;
+    const provider: LLMProvider = {
+      id: "agent-wait-result-admission",
+      async *stream() {
+        if (providerTurn++ === 0) {
+          yield {
+            type: "tool_call",
+            id: "wait-result",
+            tool: "agent_wait",
+            agentId: "agent-a1",
+          };
+        } else {
+          yield { type: "text", text: "Result was not admitted." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => ({ ok: true, content: "unused" }),
+      wait: async () => {
+        waitCalls++;
+        return { ok: true, content: "must not enter Main context" };
+      },
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => ({ kind: "rejected" }),
+    };
+
+    try {
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          ledger: sessionLedgerMirroringMessages(messages),
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          agentControl,
+          agentControlResultBudget: resultBudget,
+        }),
+      );
+
+      expect(waitCalls).toBe(0);
+      expect(messages).toContainEqual({
+        role: "tool",
+        toolCallId: "wait-result",
+        content: expect.stringContaining(
+          "remaining session budget cannot preserve a Main continuation",
+        ),
+      });
+      expect(events).toContainEqual({
+        type: "text",
+        text: "Result was not admitted.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a leased continuation pins a narrower tool surface than the next host snapshot,
+    When the leased model emits an unexposed delegate call,
+    Then pinned authority rejects it before delegation admission can create lifecycle state`, async () => {
+    const workspace = await createWorkspace();
+    const messages: SessionMessage[] = [
+      { role: "user", content: "Use the background result." },
+    ];
+    let ordinaryProviderCalls = 0;
+    let delegationPrepareCalls = 0;
+    let leasedToolExposure: unknown;
+    const provider: LLMProvider = {
+      id: "fresh-main-tool-surface",
+      async *stream() {
+        if (ordinaryProviderCalls++ === 0) {
+          yield {
+            type: "tool_call",
+            id: "wait-result",
+            tool: "agent_wait",
+            agentId: "agent-a1",
+          };
+        } else {
+          yield { type: "text", text: "Recovered after the rejected call." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const continuationProvider: LLMProvider = {
+      id: "pinned-main-tool-surface",
+      async *stream(options) {
+        leasedToolExposure = options.toolExposure;
+        yield {
+          type: "tool_call",
+          id: "unexposed-delegate",
+          tool: "delegate",
+          mode: "background",
+          task: "Must not be admitted.",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => {
+        return { ok: true, content: "unused" };
+      },
+      wait: async () => ({ ok: true, content: "canonical child result" }),
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const delegation: DelegationCapability = {
+      mode: "background",
+      available: () => true,
+      delegate: async () => ({
+        ok: false,
+        content: "unused",
+        delivery: "rejected",
+      }),
+      prepareBatch: () => {
+        delegationPrepareCalls++;
+        throw new Error("unexposed delegation must not be prepared");
+      },
+    };
+    const release = () => {};
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => ({
+        kind: "granted",
+        maxResultChars: 6_000,
+        continuation: {
+          provider: continuationProvider,
+          requestShape: {
+            systemPrompt: "Pinned system prompt.",
+            toolExposure: { kind: "none" },
+          },
+          release,
+        },
+        release,
+      }),
+    };
+
+    try {
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          ledger: sessionLedgerMirroringMessages(messages),
+          systemPrompt: "Fresh system prompt.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          agentControl,
+          agentControlResultBudget: resultBudget,
+          delegation,
+        }),
+      );
+
+      expect(leasedToolExposure).toEqual({ kind: "none" });
+      expect(delegationPrepareCalls).toBe(0);
+      expect(messages).toContainEqual({
+        role: "tool",
+        toolCallId: "unexposed-delegate",
+        content: expect.stringContaining(
+          "delegate is unavailable in the current tool authority context",
+        ),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given agent_wait holds a Main continuation lease,
+    When preparing the next turn fails before the leased provider starts,
+    Then Keel releases the held continuation`, async () => {
+    const workspace = await createWorkspace();
+    const messages: SessionMessage[] = [
+      { role: "user", content: "Use the background result." },
+    ];
+    let availabilityCalls = 0;
+    let leasedProviderCalls = 0;
+    let releases = 0;
+    const provider: LLMProvider = {
+      id: "main-provider-before-preparation-failure",
+      async *stream() {
+        yield {
+          type: "tool_call",
+          id: "wait-result",
+          tool: "agent_wait",
+          agentId: "agent-a1",
+        };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const continuationProvider: LLMProvider = {
+      id: "unused-leased-provider",
+      async *stream() {
+        leasedProviderCalls++;
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => ({ ok: true, content: "unused" }),
+      wait: async () => ({ ok: true, content: "canonical child result" }),
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => ({
+        kind: "granted",
+        maxResultChars: 6_000,
+        continuation: {
+          provider: continuationProvider,
+          requestShape: {
+            systemPrompt: "You are a helpful assistant.",
+            toolExposure: { kind: "auto", agentControl: true },
+          },
+          release: () => {
+            releases++;
+          },
+        },
+        release: () => {
+          releases++;
+        },
+      }),
+    };
+    const delegation: DelegationCapability = {
+      mode: "background",
+      available: () => {
+        availabilityCalls++;
+        if (availabilityCalls === 2) throw new Error("capability failed");
+        return false;
+      },
+      delegate: async () => ({
+        ok: false,
+        content: "unused",
+        delivery: "rejected",
+      }),
+      prepareBatch: () => {
+        throw new Error("unused");
+      },
+    };
+
+    try {
+      await expect(
+        collect(
+          runAgentTurn({
+            workspace,
+            provider,
+            ledger: sessionLedgerMirroringMessages(messages),
+            systemPrompt: "You are a helpful assistant.",
+            signal: freshSignal(),
+            bash: { kind: "disabled" },
+            stopPolicy: defaultStopPolicy(),
+            agentControl,
+            agentControlResultBudget: resultBudget,
+            delegation,
+          }),
+        ),
+      ).rejects.toThrow("capability failed");
+
+      expect(availabilityCalls).toBe(2);
+      expect(leasedProviderCalls).toBe(0);
+      expect(releases).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given agent_wait is mixed with an unrelated tool call,
+    When the round cannot be priced as one bounded child-result continuation,
+    Then Keel leaves the child result behind agent_wait and tells Main to retry it alone`, async () => {
+    const workspace = await createWorkspace();
+    const messages: SessionMessage[] = [
+      { role: "user", content: "Wait and inspect a file." },
+    ];
+    let providerTurn = 0;
+    let waitCalls = 0;
+    let leaseCalls = 0;
+    const provider: LLMProvider = {
+      id: "mixed-agent-wait-round",
+      async *stream() {
+        if (providerTurn++ === 0) {
+          yield {
+            type: "tool_call",
+            id: "wait-result",
+            tool: "agent_wait",
+            agentId: "agent-a1",
+          };
+          yield {
+            type: "tool_call",
+            id: "read-file",
+            tool: "read",
+            path: "missing.txt",
+          };
+        } else {
+          yield { type: "text", text: "I will retry agent_wait alone." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const agentControl: AgentControlCapability = {
+      list: () => ({ ok: true, content: "unused" }),
+      wait: async () => {
+        waitCalls++;
+        return { ok: true, content: "must remain hidden" };
+      },
+      cancel: async () => ({ ok: true, content: "unused" }),
+    };
+    const resultBudget: SubagentResultContinuationBudget = {
+      lease: () => {
+        leaseCalls++;
+        return { kind: "rejected" };
+      },
+    };
+
+    try {
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          ledger: sessionLedgerMirroringMessages(messages),
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          agentControl,
+          agentControlResultBudget: resultBudget,
+        }),
+      );
+
+      expect(waitCalls).toBe(0);
+      expect(leaseCalls).toBe(0);
+      expect(messages).toContainEqual({
+        role: "tool",
+        toolCallId: "wait-result",
+        content: expect.stringContaining(
+          "agent_wait must be isolated from non-wait tools",
+        ),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant inspects independent files in one turn,
     When every requested tool is read-only,
     Then the user sees both reads start before either result and the model receives ordered results`, async () => {

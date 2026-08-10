@@ -2,10 +2,15 @@ import { z } from "zod";
 import { MAX_COMMAND_TIMEOUT_MS } from "../core/command-timeout.ts";
 import { MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN } from "../skills/model.ts";
 import {
+  agentCancelToolArgumentsSchema,
+  agentListToolArgumentsSchema,
+  agentWaitToolArgumentsSchema,
   applyPatchToolArgumentsSchema,
   bashToolArgumentsSchema,
+  delegateProviderArgumentsSchema,
   delegateToolArgumentsSchema,
   editToolArgumentsSchema,
+  foregroundDelegateProviderArgumentsSchema,
   gitDiffToolArgumentsSchema,
   gitStatusToolArgumentsSchema,
   globToolArgumentsSchema,
@@ -51,6 +56,11 @@ interface ToolDisplay<Args> {
   readonly formatLabel: (args: Args) => string;
 }
 
+interface ToolProviderArguments {
+  readonly default?: ToolArgsSchema<ToolArgShape>;
+  readonly foregroundDelegation?: ToolArgsSchema<ToolArgShape>;
+}
+
 type ToolRisk =
   | { readonly kind: "workspace-read" }
   | { readonly kind: "workspace-write"; readonly destructive: boolean }
@@ -74,6 +84,7 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly name: Name;
   readonly availability?:
     | "delegation"
+    | "agent-control"
     | "mcp-catalog"
     | "memory"
     | "memory-proposal"
@@ -82,6 +93,8 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly args: {
     readonly schema: ToolArgsSchema<Shape>;
   };
+  readonly providerArguments?: ToolProviderArguments;
+  readonly resultAdmission?: "subagent";
   readonly permission: ToolPermission<z.infer<ToolArgsSchema<Shape>>>;
   readonly output: ToolOutput;
   readonly display: ToolDisplay<z.infer<ToolArgsSchema<Shape>>>;
@@ -184,6 +197,7 @@ function defineTool<
   }
 
   return Object.assign({}, tool, {
+    providerArguments: tool.providerArguments ?? {},
     toolCallSchema,
     argumentsFromCall,
     canonicalArgumentsFromCall,
@@ -564,13 +578,17 @@ const delegateTool = defineTool({
   name: "delegate",
   availability: "delegation",
   description: [
-    "Delegate one independent, read-only workspace investigation to a fresh foreground child agent. Use multiple delegate calls in the same assistant turn when the investigations are independent and should run in parallel.",
+    "Delegate one independent, read-only workspace investigation to a fresh child agent. Foreground is the default. In a saved interactive session, background returns a stable agent ID immediately so independent work can continue.",
     "Use when the task is context-heavy and can be investigated independently before you synthesize the final answer.",
     "The task must be self-contained, no longer than 4,000 characters, and state only the scope, expected output, and completion criteria. focusPaths are advisory workspace-relative areas, not extra authority.",
     "Do not use for small tasks, sequential critical-path work, writes, approval-requiring work, or tasks that need the parent transcript, Goal, memory, Skills, queued input, MCP, or web access.",
-    "A pure delegate batch can admit up to four concurrent children, subject to the shared root budget and total child limit. Results return in tool-call source order after every admitted sibling settles. Inspect their evidence and remain the sole author of the final answer.",
+    "Use background only for genuinely independent work. Do not poll it: continue useful work, then use agent_wait when its result is needed. A pure delegate batch can admit up to four concurrent children, subject to the shared root budget and total child limit. Foreground results return in tool-call source order after every admitted sibling settles. Inspect child evidence and remain the sole author of the final answer.",
   ].join("\n"),
   args: toolArgs(delegateToolArgumentsSchema),
+  providerArguments: {
+    default: delegateProviderArgumentsSchema,
+    foregroundDelegation: foregroundDelegateProviderArgumentsSchema,
+  },
   permission: { kind: "none" },
   output: { kind: "text" },
   display: {
@@ -579,8 +597,48 @@ const delegateTool = defineTool({
   risk: { kind: "agent-state" },
 });
 
+const agentListTool = defineTool({
+  name: "agent_list",
+  availability: "agent-control",
+  description:
+    "List subagents in the current saved interactive session with their stable IDs and live or terminal status. Use this only when current state is needed; do not poll.",
+  args: toolArgs(agentListToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: { formatLabel: () => "agent_list" },
+  risk: { kind: "agent-state" },
+});
+
+const agentWaitTool = defineTool({
+  name: "agent_wait",
+  availability: "agent-control",
+  description:
+    "Wait for one attached background subagent by stable agent ID and return its canonical bounded result without rerunning it. Use when the result is now required, in a tool round containing only agent_wait calls so Keel can preserve the complete Main continuation.",
+  args: toolArgs(agentWaitToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  resultAdmission: "subagent",
+  display: { formatLabel: (args) => `agent_wait ${args.agentId}` },
+  risk: { kind: "agent-state" },
+});
+
+const agentCancelTool = defineTool({
+  name: "agent_cancel",
+  availability: "agent-control",
+  description:
+    "Cancel one live attached background subagent by stable agent ID, wait for lifecycle settlement, and return its terminal status.",
+  args: toolArgs(agentCancelToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: { formatLabel: (args) => `agent_cancel ${args.agentId}` },
+  risk: { kind: "agent-state" },
+});
+
 export const builtinToolRegistry = {
   delegate: delegateTool,
+  agent_list: agentListTool,
+  agent_wait: agentWaitTool,
+  agent_cancel: agentCancelTool,
   update_plan: updatePlanTool,
   update_goal: updateGoalTool,
   memory_add: memoryAddTool,
