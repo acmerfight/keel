@@ -291,6 +291,7 @@ async function runTrialInWorkspace(
     return {
       harnessOutcome: "crashed",
       wallMs,
+      ...(report === null ? {} : { report }),
       ...readableTranscriptResult(transcriptPath),
     };
   }

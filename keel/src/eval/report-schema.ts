@@ -323,7 +323,7 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
   }),
 ]);
 
-export const runReportSchema = z.object({
+const runReportBaseSchema = z.object({
   schemaVersion: z.literal(20),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
@@ -407,7 +407,33 @@ export const runReportSchema = z.object({
       .nullable(),
   }),
   memory: runReportMemorySchema,
+  failure: z
+    .object({
+      category: z.enum([...keelErrorCodes, "unexpected_error"]),
+      message: z.string().max(2_000),
+      sessionId: z.string().optional(),
+    })
+    .optional(),
   goalOutcome: runReportGoalOutcomeSchema.optional(),
 });
+
+export const runReportSchema = runReportBaseSchema.superRefine(
+  (report, context) => {
+    if (report.stopReason === "failed" && report.failure === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["failure"],
+        message: "failed report requires failure evidence",
+      });
+    }
+    if (report.stopReason !== "failed" && report.failure !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["failure"],
+        message: "failure evidence requires stopReason failed",
+      });
+    }
+  },
+);
 
 export type RunReport = z.infer<typeof runReportSchema>;

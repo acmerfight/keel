@@ -75,6 +75,128 @@ describe("CLI Run Report Recorder", () => {
     ]);
   });
 
+  test(`Given an attached child operation remains pending across Tasks,
+    When the next foreground Run fails after interleaved child and main operations,
+    Then report lifecycle accounting does not materialize the pending child`, () => {
+    // Given
+    const recorder = createAgentEventReportRecorder();
+    recorder.beginTask("user_prompt");
+    recorder.beginAgentRun("user_prompt");
+    const pendingChild = recorder.beginModelOperation({
+      recorder,
+      owner: { type: "session" },
+      provider: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+      purpose: "subagent_turn",
+      attribution: {
+        type: "subagent",
+        delegationId: "main:delegate-pending",
+        childRunId: "subagent-pending",
+      },
+      recoveryFor: null,
+    });
+    const pendingChildAttempt = pendingChild.providerRequestAttempts.begin();
+    recorder.completeAgentRun(1, "completed");
+    recorder.endTask();
+
+    recorder.beginTask("user_prompt");
+    recorder.beginAgentRun("user_prompt");
+    const interleavedPendingChild = recorder.beginModelOperation({
+      recorder,
+      owner: { type: "session" },
+      provider: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+      purpose: "subagent_turn",
+      attribution: {
+        type: "subagent",
+        delegationId: "main:delegate-interleaved",
+        childRunId: "subagent-interleaved",
+      },
+      recoveryFor: null,
+    });
+    const interleavedPendingAttempt =
+      interleavedPendingChild.providerRequestAttempts.begin();
+    const completedChild = recorder.beginModelOperation({
+      recorder,
+      owner: { type: "session" },
+      provider: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+      purpose: "subagent_turn",
+      attribution: {
+        type: "subagent",
+        delegationId: "main:delegate-completed",
+        childRunId: "subagent-completed",
+      },
+      recoveryFor: null,
+    });
+    completedChild.providerRequestAttempts.begin().finish({
+      outcome: "completed",
+      usage: {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+      },
+    });
+    completedChild.finish({ outcome: "completed" });
+    const completedMain = recorder.beginModelOperation({
+      recorder,
+      owner: { type: "current_agent_run" },
+      provider: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+      purpose: "agent_turn",
+      recoveryFor: null,
+    });
+    completedMain.providerRequestAttempts.begin().finish({
+      outcome: "completed",
+      usage: {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+      },
+    });
+    completedMain.finish({ outcome: "completed" });
+    const failedMain = recorder.beginModelOperation({
+      recorder,
+      owner: { type: "current_agent_run" },
+      provider: "fake",
+      model: "fake",
+      costModel: ZERO_COST_MODEL,
+      purpose: "agent_turn",
+      recoveryFor: null,
+    });
+    failedMain.providerRequestAttempts.begin().finish({
+      outcome: "terminal_error",
+      errorCode: "provider_network_error",
+    });
+    failedMain.finish({ outcome: "terminal_error" });
+
+    // When
+    recorder.failAgentRun();
+    recorder.endTask("failed");
+
+    // Then
+    expect(recorder.tasks().at(-1)).toMatchObject({
+      outcome: "failed",
+      agentRuns: [{ agentLoopTurns: 1, stopReason: "failed" }],
+    });
+    interleavedPendingAttempt.finish({
+      outcome: "terminal_error",
+      errorCode: "provider_network_error",
+    });
+    interleavedPendingChild.finish({ outcome: "terminal_error" });
+    pendingChildAttempt.finish({
+      outcome: "terminal_error",
+      errorCode: "provider_network_error",
+    });
+    pendingChild.finish({ outcome: "terminal_error" });
+  });
+
   test(`Given no Task owns an Agent Run,
     When the recorder starts or completes that Run,
     Then it rejects the invalid lifecycle transition`, () => {
@@ -87,6 +209,9 @@ describe("CLI Run Report Recorder", () => {
     );
     expect(() => recorder.completeAgentRun(1, "completed")).toThrow(
       "internal: report Agent Run requires an active Task",
+    );
+    expect(() => recorder.failAgentRun()).toThrow(
+      "internal: no report Agent Run is active",
     );
     expect(() => recorder.recordHumanIntervention()).toThrow(
       "internal: report human intervention requires an active Agent Run",
@@ -102,6 +227,9 @@ describe("CLI Run Report Recorder", () => {
 
     // When / Then
     expect(() => recorder.completeAgentRun(1, "completed")).toThrow(
+      "internal: no report Agent Run is active",
+    );
+    expect(() => recorder.failAgentRun()).toThrow(
       "internal: no report Agent Run is active",
     );
     expect(() => recorder.endTask()).toThrow(

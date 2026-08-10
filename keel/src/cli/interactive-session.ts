@@ -29,6 +29,7 @@ import type {
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { MAX_SUBAGENT_RESULT_CHARS } from "../agent/subagent-tree-budget.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
+import { isAbortThrow } from "../core/error.ts";
 import {
   listUndoCheckpoints,
   type RecordLastBatchCheckpointOperation,
@@ -495,6 +496,13 @@ export async function runInteractiveSession(
   let pendingGoalDrive: PendingGoalDrive | null = null;
   const reportRecorder =
     options.reportRecorder ?? createAgentEventReportRecorder();
+  reportRecorder.recordSkillCatalog({
+    exposed: latestCatalogExposure.skills.length,
+    omitted: latestCatalogExposure.omitted,
+    total: latestCatalogExposure.total,
+    budgetChars: latestCatalogExposure.budgetChars,
+    usedChars: latestCatalogExposure.usedChars,
+  });
   const inputDisposition = createInteractiveInputDispositionTracker();
   const setComposerMode = (mode: InteractiveComposerMode): void => {
     inputDisposition.setComposerMode(mode);
@@ -1072,6 +1080,13 @@ export async function runInteractiveSession(
         : {}),
     });
     latestCatalogExposure = exposure;
+    reportRecorder.recordSkillCatalog({
+      exposed: exposure.skills.length,
+      omitted: exposure.omitted,
+      total: exposure.total,
+      budgetChars: exposure.budgetChars,
+      usedChars: exposure.usedChars,
+    });
     managedSkills?.activation.expose(exposure.skills);
     visibleSkillCatalog = exposure.skills;
     systemPrompt = rebuildSystemPrompt();
@@ -1396,9 +1411,18 @@ export async function runInteractiveSession(
           sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
         },
       );
-      const finalEnd = await options.printAgentEvents(
-        recordAgentEventStream(stream, reportRecorder),
-      );
+      let finalEnd: EndEvent | undefined;
+      try {
+        finalEnd = await options.printAgentEvents(
+          recordAgentEventStream(stream, reportRecorder),
+        );
+      } catch (error) {
+        if (!isAbortThrow(error, turnAbortController.signal)) {
+          reportRecorder.failAgentRun();
+          restoreInterruptedTurnState();
+        }
+        throw error;
+      }
       if (turnAbortController.signal.aborted) {
         abortReportedAgentRun(finalEnd);
         restoreInterruptedTurnState();
@@ -1718,6 +1742,12 @@ export async function runInteractiveSession(
         return undefined;
     }
   };
+  const failCurrentReportTask = (): void => {
+    if (reportRecorder.hasActiveAgentRun()) {
+      reportRecorder.failAgentRun();
+    }
+    reportRecorder.endTask("failed");
+  };
 
   options.onSigint(abortActiveTurn);
   let preserveInputForSessionSwitch = false;
@@ -1731,14 +1761,19 @@ export async function runInteractiveSession(
           const drive = pendingGoalDrive;
           pendingGoalDrive = null;
           reportRecorder.beginTask(drive.taskTrigger);
-          const shouldStop = await runAutomaticGoalContinuations(
-            drive.message,
-            drive.runTrigger,
-            drive.origin,
-          );
-          reportRecorder.endTask(taskOutcomeForGoal(true));
-          if (shouldStop) {
-            break;
+          try {
+            const shouldStop = await runAutomaticGoalContinuations(
+              drive.message,
+              drive.runTrigger,
+              drive.origin,
+            );
+            reportRecorder.endTask(taskOutcomeForGoal(true));
+            if (shouldStop) {
+              break;
+            }
+          } catch (error) {
+            failCurrentReportTask();
+            throw error;
           }
         }
       }
@@ -2530,24 +2565,29 @@ export async function runInteractiveSession(
       pendingGoalDrive = null;
       const taskStartedWithActiveGoal = sessionGoal?.status === "active";
       reportRecorder.beginTask("user_prompt");
-      const turnResult = await runPromptTurn({
-        userMessage,
-        userMessageOrigin: userMessageOriginForPromptInput([rawInput]),
-        consumedInputLines: [rawInput],
-        runTrigger: "user_prompt",
-      });
-      if (turnResult.kind === "aborted") {
-        reportRecorder.endTask("aborted");
-        continue;
-      }
-      if (turnResult.kind === "cost_budget") {
+      try {
+        const turnResult = await runPromptTurn({
+          userMessage,
+          userMessageOrigin: userMessageOriginForPromptInput([rawInput]),
+          consumedInputLines: [rawInput],
+          runTrigger: "user_prompt",
+        });
+        if (turnResult.kind === "aborted") {
+          reportRecorder.endTask("aborted");
+          continue;
+        }
+        if (turnResult.kind === "cost_budget") {
+          reportRecorder.endTask(taskOutcomeForGoal(taskStartedWithActiveGoal));
+          break;
+        }
+        const shouldStop = await runAutomaticGoalContinuations();
         reportRecorder.endTask(taskOutcomeForGoal(taskStartedWithActiveGoal));
-        break;
-      }
-      const shouldStop = await runAutomaticGoalContinuations();
-      reportRecorder.endTask(taskOutcomeForGoal(taskStartedWithActiveGoal));
-      if (shouldStop) {
-        break;
+        if (shouldStop) {
+          break;
+        }
+      } catch (error) {
+        failCurrentReportTask();
+        throw error;
       }
     }
   } finally {

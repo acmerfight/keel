@@ -834,6 +834,63 @@ writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPOR
     }
   });
 
+  test(`Given the agent exits non-zero after writing a valid failure report,
+    When the eval runner records the crashed trial,
+    Then it preserves the report for failure diagnosis`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    await createTask(suiteDir, "reported-provider-crash", FIX_NOTE_TASK);
+    const failureReport = {
+      ...VALID_REPORT,
+      stopReason: "failed",
+      failure: {
+        category: "provider_network_error",
+        message: "DeepSeek stream failed",
+      },
+    };
+    const cliEntry = join(root, "reported-provider-crash.mjs");
+    await writeFile(
+      cliEntry,
+      `import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const reportIndex = args.indexOf("--report");
+writeFileSync(args[reportIndex + 1], ${JSON.stringify(JSON.stringify(failureReport))});
+process.exitCode = 1;
+`,
+      "utf8",
+    );
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          taskId: "reported-provider-crash",
+          pass: false,
+          harnessOutcome: "crashed",
+          report: {
+            stopReason: "failed",
+            failure: {
+              category: "provider_network_error",
+              message: "DeepSeek stream failed",
+            },
+          },
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a task enables bash and a max cost budget,
     When the eval runner executes the task,
     Then it passes those task options into the CLI run`, async () => {

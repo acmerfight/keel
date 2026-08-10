@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
+import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -58,6 +59,7 @@ describe("CLI Main - Attached Background Subagents", () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-background-agent-"));
     const keelHome = join(workspace, ".keel-home");
+    const reportPath = join(workspace, "report.json");
     await writeFile(
       join(workspace, "module.ts"),
       "export const answer = 42;\n",
@@ -173,6 +175,8 @@ describe("CLI Main - Attached Background Subagents", () => {
         "explicit",
         "--max-cost",
         "1",
+        "--report",
+        reportPath,
         "--no-skills",
       ],
       {
@@ -294,6 +298,15 @@ describe("CLI Main - Attached Background Subagents", () => {
       expect(parentLedger.match(/Background subagent agent-/gu)).toHaveLength(
         1,
       );
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.tasks).toHaveLength(4);
+      expect(
+        report.modelOperations.filter(
+          (operation) => operation.purpose === "subagent_turn",
+        ),
+      ).toHaveLength(2);
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });

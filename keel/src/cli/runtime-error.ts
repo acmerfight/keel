@@ -20,3 +20,11 @@ export function formatCliRuntimeError(error: unknown): string {
   if (error instanceof RunReportWriteError) return `${error.message}\n`;
   return `Error: unexpected runtime failure: ${firstErrorLine(error)}\n`;
 }
+
+export function createCliRuntimeErrorReporter(
+  writeStderr: (text: string) => void,
+): (error: unknown) => void {
+  return (error) => {
+    writeStderr(formatCliRuntimeError(error));
+  };
+}

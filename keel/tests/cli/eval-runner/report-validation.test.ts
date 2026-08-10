@@ -50,6 +50,23 @@ describe("Eval Runner", () => {
       }),
     },
     {
+      name: "failed report without failure evidence",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        stopReason: "failed",
+      }),
+    },
+    {
+      name: "completed report with failure evidence",
+      reportContent: JSON.stringify({
+        ...VALID_REPORT,
+        failure: {
+          category: "provider_network_error",
+          message: "unexpected failure evidence",
+        },
+      }),
+    },
+    {
       name: "completed Goal without completion evidence",
       reportContent: JSON.stringify({
         ...VALID_REPORT,

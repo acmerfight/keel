@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { KeelError } from "../../../src/core/error.ts";
+import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
@@ -277,6 +278,337 @@ describe("CLI Main - Runtime Errors", () => {
       expectNoCrashOutput(fixture.stderr());
     } finally {
       await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a one-shot provider failure contains secret-like text,
+    When the user requested a report,
+    Then the CLI exits non-zero and writes a redacted failure report`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-failure-report-"));
+    const reportPath = join(workspace, "report.json");
+    const secret = "sk-provider-report-secret";
+    const providerMessage = `${secret} ${"x".repeat(2_200)}`;
+    const server = createServer((req, res) => {
+      req.resume();
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: providerMessage } }));
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--max-cost", "0.01", "--report", reportPath, "hello"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stderr()).toContain("DeepSeek API error (400)");
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.failure?.category).toBe("provider_http_error");
+      expect(report.failure?.message).toContain("[REDACTED_SECRET]");
+      expect(report.failure?.message).toHaveLength(2_000);
+      expect(report.failure?.message.endsWith("...")).toBe(true);
+      expect(report.stopReason).toBe("failed");
+      expect(report.costBudgetUsd).toBe(0.01);
+      expect(report.tasks).toMatchObject([
+        {
+          outcome: "failed",
+          agentRuns: [{ stopReason: "failed" }],
+        },
+      ]);
+      expect(report.modelOperations).toMatchObject([
+        {
+          outcome: "terminal_error",
+          providerRequestAttempts: [
+            { outcome: "terminal_error", errorCode: "provider_http_error" },
+          ],
+        },
+      ]);
+      expect(JSON.stringify(report)).not.toContain(secret);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given failure-report writing also fails,
+    When the provider request has already failed,
+    Then the report diagnostic does not replace the original provider error`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-double-failure-"));
+    const reportPath = join(workspace, "missing", "report.json");
+    const server = createServer((req, res) => {
+      req.resume();
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ error: { message: "original provider failure" } }),
+      );
+    });
+    await listen(server);
+    const fixture = createRuntime(["--report", reportPath, "hello"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stderr()).toContain(
+        `Error: cannot write report to ${reportPath}`,
+      );
+      expect(fixture.stderr()).toContain(
+        'Error: DeepSeek API error (400): {"error":{"message":"original provider failure"}}\n',
+      );
+      expectNoCrashOutput(fixture.stderr());
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      sessionKind: "saved",
+      sessionArgs: ["--session", "failure-report"],
+      expectedFailure: {
+        category: "provider_network_error",
+        message: "DeepSeek stream failed",
+        sessionId: "failure-report",
+      },
+    },
+    {
+      sessionKind: "ephemeral",
+      sessionArgs: ["--ephemeral"],
+      expectedFailure: {
+        category: "provider_network_error",
+        message: "DeepSeek stream failed",
+      },
+    },
+  ] as const)(
+    `Given a $sessionKind interactive stream fails after visible output,
+    When the user requested a report,
+    Then Keel does not replay the request and preserves the failed run report`,
+    async ({ sessionArgs, expectedFailure }) => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-cli-stream-report-"),
+      );
+      const home = await mkdtemp(join(tmpdir(), "keel-cli-stream-home-"));
+      const reportPath = join(workspace, "report.json");
+      let requests = 0;
+      const server = createServer((req, res) => {
+        requests++;
+        req.resume();
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(
+          `data: ${JSON.stringify({
+            choices: [{ delta: { content: "partial answer" } }],
+          })}\n\n`,
+        );
+        setImmediate(() => res.destroy());
+      });
+      await listen(server);
+      const input = new PassThrough();
+      input.end("hello\n");
+      const fixture = createRuntime(
+        [
+          ...sessionArgs,
+          "--max-cost",
+          "0.01",
+          "--report",
+          reportPath,
+          "--no-skills",
+          "--no-memory",
+        ],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+          input,
+        },
+      );
+
+      try {
+        // When
+        const exitCode = await runCliMain(fixture.runtime);
+
+        // Then
+        expect(exitCode).toBe(1);
+        expect(requests).toBe(1);
+        expect(fixture.stdout()).toContain("partial answer");
+        expect(fixture.stderr()).toBe("Error: DeepSeek stream failed\n");
+        const report = runReportSchema.parse(
+          JSON.parse(await readFile(reportPath, "utf8")),
+        );
+        expect(report.failure).toEqual(expectedFailure);
+        expect(report.costBudgetUsd).toBe(0.01);
+        expect(report.providerRequestAttemptCount).toBe(1);
+        expect(report.tasks).toMatchObject([
+          {
+            outcome: "failed",
+            agentRuns: [{ stopReason: "failed" }],
+          },
+        ]);
+      } finally {
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(`Given saved interactive report pricing is unknown before a request,
+    When the user requested a report,
+    Then Keel records the unexpected failure and closes the attempted run`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-config-report-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-config-home-"));
+    const reportPath = join(workspace, "report.json");
+    const input = new PassThrough();
+    input.end("hello\n");
+    const fixture = createRuntime(
+      [
+        "--session",
+        "config-failure-report",
+        "--provider",
+        "deepseek",
+        "--model",
+        "unpriced-model",
+        "--report",
+        reportPath,
+        "--no-skills",
+        "--no-memory",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_FORCE_INTERACTIVE: "1",
+          KEEL_HOME: home,
+          DEEPSEEK_API_KEY: "test-key",
+        },
+        input,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stderr()).toContain(
+        'cost tracking is only supported for known DeepSeek model pricing; configured --model="unpriced-model".',
+      );
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.failure).toEqual({
+        category: "unexpected_error",
+        message: expect.stringContaining('configured --model="unpriced-model"'),
+        sessionId: "config-failure-report",
+      });
+      expect(report.tasks).toMatchObject([
+        {
+          outcome: "failed",
+          agentRuns: [{ agentLoopTurns: 0, stopReason: "failed" }],
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a headless Goal provider fails during activation,
+    When the user requested a report,
+    Then Keel preserves a failed Goal Task instead of losing the report`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-goal-report-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-goal-home-"));
+    const reportPath = join(workspace, "report.json");
+    const server = createServer((req, res) => {
+      req.resume();
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "goal provider failure" } }));
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "goal",
+        "--objective",
+        "Record an interrupted Goal",
+        "--verify",
+        "true",
+        "--session",
+        "goal-failure-report",
+        "--bash-policy",
+        "trusted",
+        "--provider",
+        "deepseek",
+        "--report",
+        reportPath,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          KEEL_HOME: home,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      const report = runReportSchema.parse(
+        JSON.parse(await readFile(reportPath, "utf8")),
+      );
+      expect(report.failure).toEqual({
+        category: "provider_http_error",
+        message: expect.stringContaining("goal provider failure"),
+        sessionId: "goal-failure-report",
+      });
+      expect(report.tasks).toMatchObject([
+        {
+          trigger: "goal_activation",
+          outcome: "failed",
+          agentRuns: [{ trigger: "goal_activation", stopReason: "failed" }],
+        },
+      ]);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   });
 

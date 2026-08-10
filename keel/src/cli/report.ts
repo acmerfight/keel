@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
-import { errorMessage } from "../core/error.ts";
+import { errorMessage, KeelError, type KeelErrorCode } from "../core/error.ts";
 import type { UndoProtectionSummary } from "../core/undo-protection.ts";
 import type {
   ActiveSkillStatus,
@@ -8,6 +8,7 @@ import type {
 } from "../skills/model.ts";
 import type { AgentMemoryOperation } from "../tools/memory.ts";
 import type { EndEvent } from "./output.ts";
+import { redactTextForPersistence } from "./persistence-redaction.ts";
 import type {
   ActiveProjectMemoryEntry,
   ProjectMemoryScope,
@@ -24,10 +25,9 @@ import type { SkillPolicyReport } from "./skill-user-config.ts";
 // The report schema is consumed by external tooling (the eval runner and any
 // script comparing runs across keel versions). Bump schemaVersion on any
 // breaking change to the shape.
-interface RunReportInput {
+interface RunReportInputBase {
   readonly tasks: readonly RunReportTask[];
   readonly modelOperations: readonly RunReportModelOperation[];
-  readonly end: EndEventWithCost;
   readonly durationMs: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
   readonly skillActivations: readonly SkillActivationRecord[];
@@ -38,6 +38,20 @@ interface RunReportInput {
   readonly memory: RunReportMemory;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
+
+type RunReportInput = RunReportInputBase & {
+  readonly outcome:
+    | {
+        readonly status: "completed";
+        readonly end: EndEventWithCost;
+      }
+    | {
+        readonly status: "failed";
+        readonly error: unknown;
+        readonly maxCostUsd?: number;
+        readonly sessionId?: string;
+      };
+};
 
 export type RunReportMemory =
   | {
@@ -154,7 +168,15 @@ export type RunReportGoalOutcome =
       readonly evidenceKind?: never;
     };
 
-interface RunReport {
+type RunReportFailureCategory = KeelErrorCode | "unexpected_error";
+
+interface RunReportFailure {
+  readonly category: RunReportFailureCategory;
+  readonly message: string;
+  readonly sessionId?: string;
+}
+
+interface RunReportBase {
   readonly schemaVersion: 20;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
@@ -167,7 +189,6 @@ interface RunReport {
   }[];
   readonly usageByModel: readonly RunReportModelUsage[];
   readonly agentLoopTurns: number;
-  readonly stopReason: string;
   readonly usage: Extract<AgentEvent, { readonly type: "end" }>["usage"];
   readonly durationMs: number;
   readonly costUsd: number;
@@ -182,6 +203,18 @@ interface RunReport {
   readonly memory: RunReportMemory;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
+
+type RunReport = RunReportBase &
+  (
+    | {
+        readonly stopReason: "failed";
+        readonly failure: RunReportFailure;
+      }
+    | {
+        readonly stopReason: string;
+        readonly failure?: never;
+      }
+  );
 
 type EndEventWithCost = EndEvent & { readonly cost: CostReport };
 
@@ -209,15 +242,20 @@ export function assertEndEventHasCost(
 
 export function writeRunReport(filePath: string, input: RunReportInput): void {
   const accounting = accountModelOperations(input.modelOperations);
+  const outcome = input.outcome;
   const costBudgetUsd =
-    input.end.cost.budget.kind === "unbounded"
-      ? undefined
-      : input.end.cost.budget.maxUsd;
+    outcome.status === "completed"
+      ? outcome.end.cost.budget.kind === "unbounded"
+        ? undefined
+        : outcome.end.cost.budget.maxUsd
+      : outcome.maxCostUsd;
   const costOvershootUsd =
-    input.end.cost.budget.kind === "budget_limited"
-      ? input.end.cost.budget.overshootUsd
-      : 0;
-  const report: RunReport = {
+    outcome.status === "completed"
+      ? outcome.end.cost.budget.kind === "budget_limited"
+        ? outcome.end.cost.budget.overshootUsd
+        : 0
+      : Math.max(0, accounting.costUsd - (outcome.maxCostUsd ?? Infinity));
+  const reportBase: RunReportBase = {
     schemaVersion: 20,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
@@ -230,7 +268,6 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
     modelsUsed: accounting.modelsUsed,
     usageByModel: accounting.usageByModel,
     agentLoopTurns: accounting.agentLoopTurns,
-    stopReason: input.end.stopReason,
     usage: accounting.usage,
     durationMs: input.durationMs,
     costUsd: accounting.costUsd,
@@ -247,11 +284,49 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
       ? { goalOutcome: input.goalOutcome }
       : {}),
   };
+  const report: RunReport =
+    outcome.status === "completed"
+      ? { ...reportBase, stopReason: outcome.end.stopReason }
+      : {
+          ...reportBase,
+          stopReason: "failed",
+          failure: runReportFailure(outcome.error, outcome.sessionId),
+        };
   try {
     writeFileSync(filePath, `${JSON.stringify(report)}\n`, "utf8");
   } catch (error) {
     throw new RunReportWriteError(filePath, error);
   }
+}
+
+export function writeRunReportBestEffort(
+  filePath: string,
+  input: RunReportInput,
+  onWriteError: (error: unknown) => void,
+): void {
+  try {
+    writeRunReport(filePath, input);
+  } catch (error) {
+    onWriteError(error);
+  }
+}
+
+const MAX_RUN_REPORT_FAILURE_MESSAGE_CHARS = 2_000;
+
+function runReportFailure(
+  error: unknown,
+  sessionId: string | undefined,
+): RunReportFailure {
+  const redactedMessage = redactTextForPersistence(errorMessage(error));
+  const message =
+    redactedMessage.length <= MAX_RUN_REPORT_FAILURE_MESSAGE_CHARS
+      ? redactedMessage
+      : `${redactedMessage.slice(0, MAX_RUN_REPORT_FAILURE_MESSAGE_CHARS - 3)}...`;
+  return {
+    category: error instanceof KeelError ? error.code : "unexpected_error",
+    message,
+    ...(sessionId !== undefined ? { sessionId } : {}),
+  };
 }
 
 export function reportActiveSkills(
