@@ -78,37 +78,9 @@ jobs:
       - name: Summarize eval results
         if: always()
         run: |
-          node --input-type=commonjs <<'NODE'
-          const fs = require("node:fs");
-          const { z } = require("zod");
-
-          const resultLineSchema = z.object({
-            schemaVersion: z.literal(1),
-            timestamp: z.string(),
-            keelVersion: z.string(),
-            taskId: z.string(),
-            trial: z.number().int().positive(),
-            pass: z.boolean(),
-            outcome: z.enum(["verified", "verify_failed", "timeout", "crashed"]),
-            wallMs: z.number().nonnegative(),
-            report: z
-              .object({
-                schemaVersion: z.literal(1),
-                provider: z.string(),
-                model: z.string(),
-                turns: z.number().int().positive(),
-                stopReason: z.string(),
-                usage: z.object({
-                  inputTokens: z.number(),
-                  cachedInputTokens: z.number(),
-                  uncachedInputTokens: z.number(),
-                  outputTokens: z.number(),
-                }),
-                durationMs: z.number().nonnegative(),
-                costUsd: z.number(),
-              })
-              .optional(),
-          });
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { evalResultLineSchema } from "./dist/eval/result-schema.js";
 
           const summaryPath = process.env.GITHUB_STEP_SUMMARY;
           if (!summaryPath) process.exit(0);
@@ -129,18 +101,32 @@ jobs:
             .trim()
             .split("\n")
             .filter(Boolean)
-            .map((line) => resultLineSchema.parse(JSON.parse(line)));
+            .map((line) => evalResultLineSchema.parse(JSON.parse(line)));
 
-          const passed = rows.filter((row) => row.pass).length;
+          const requiredRows = rows.filter((row) => row.requiredToPass);
+          const gatePassed = (row) =>
+            row.pass &&
+            (row.delegationSelection === undefined ||
+              (row.delegationSelection.status === "observed" &&
+                row.delegationSelection.satisfied));
+          const passed = requiredRows.filter(gatePassed).length;
           const harnessFailures = rows.filter(
-            (row) => row.outcome === "crashed" || row.outcome === "timeout",
+            (row) => row.harnessOutcome !== "completed",
+          ).length;
+          const selectionFailures = requiredRows.filter(
+            (row) =>
+              row.delegationSelection !== undefined &&
+              !(
+                row.delegationSelection.status === "observed" &&
+                row.delegationSelection.satisfied
+              ),
           ).length;
           const totalCost = rows.reduce(
             (sum, row) => sum + (row.report?.costUsd ?? 0),
             0,
           );
           const totalTurns = rows.reduce(
-            (sum, row) => sum + (row.report?.turns ?? 0),
+            (sum, row) => sum + (row.report?.agentLoopTurns ?? 0),
             0,
           );
           const totalTokens = rows.reduce(
@@ -153,8 +139,9 @@ jobs:
 
           lines.push(`Result file: \`${resultPath}\``);
           lines.push("");
-          lines.push(`- Pass: ${passed}/${rows.length}`);
+          lines.push(`- Required gates passed: ${passed}/${requiredRows.length}`);
           lines.push(`- Harness failures: ${harnessFailures}`);
+          lines.push(`- Selection failures: ${selectionFailures}`);
           if (harnessFailures > 0) {
             lines.push(`- **Harness failures require investigation**; see \`${resultPath}\`.`);
           }
@@ -162,16 +149,20 @@ jobs:
           lines.push(`- Reported tokens: ${totalTokens}`);
           lines.push(`- Reported cost: $${totalCost.toFixed(6)}`);
           lines.push("");
-          lines.push("| Task | Trial | Outcome | Turns | Tokens | Cost |");
-          lines.push("|---|---:|---|---:|---:|---:|");
+          lines.push("| Task | Trial | Condition | Gate | Outcome | Turns | Tokens | Cost |");
+          lines.push("|---|---:|---|---|---|---:|---:|---:|");
 
           for (const row of rows) {
             const tokens =
               (row.report?.usage?.inputTokens ?? 0) +
               (row.report?.usage?.outputTokens ?? 0);
             const cost = row.report?.costUsd ?? 0;
+            const outcome =
+              row.harnessOutcome === "completed"
+                ? row.taskOutcome
+                : row.harnessOutcome;
             lines.push(
-              `| ${row.taskId} | ${row.trial} | ${row.outcome} | ${row.report?.turns ?? ""} | ${tokens || ""} | ${cost ? `$${cost.toFixed(6)}` : ""} |`,
+              `| ${row.taskId} | ${row.trial} | ${row.condition} | ${row.requiredToPass ? (gatePassed(row) ? "pass" : "fail") : "observe"} | ${outcome} | ${row.report?.agentLoopTurns ?? ""} | ${tokens || ""} | ${cost ? `$${cost.toFixed(6)}` : ""} |`,
             );
           }
 
