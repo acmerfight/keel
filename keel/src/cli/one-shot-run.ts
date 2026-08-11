@@ -65,7 +65,7 @@ import {
   loadRenderedProjectMemory,
   ProjectMemoryError,
 } from "./project-memory.ts";
-import { approvalProjectRoot } from "./project-root.ts";
+import { projectRoot } from "./project-root.ts";
 import {
   ProviderConfigError,
   requireKnownCostModel,
@@ -287,7 +287,7 @@ export async function runOneShotCli(
         lifecycle: createCliMcpLifecyclePolicy(runtime),
         permission: createMcpPermissionPolicy({
           runtime,
-          projectRoot: approvalProjectRoot(workspace),
+          projectRoot: projectRoot(workspace),
           prompt:
             approvalLineReader === undefined
               ? {
@@ -419,10 +419,13 @@ export async function runOneShotCli(
             platform: runtime.platform,
             parentRunId: `main-${randomUUID()}`,
             provider: resolved.provider,
-            providerId: resolved.provider.id,
+            providerId: resolved.providerId,
             model: resolved.model,
             maxCostUsd: delegationRun.maxCostUsd,
             costModel: delegationRun.costModel,
+            modelMetadata: resolved.modelMetadata ?? {
+              status: "unknown" as const,
+            },
             projectInstructions,
             hiddenWorkspacePaths,
             contextCompaction: resolved.contextCompaction,
@@ -432,6 +435,33 @@ export async function runOneShotCli(
             now: runtime.now,
             onProgress: (event) => {
               runtime.writeStderr(formatSubagentProgress(event));
+            },
+            resolveProvider: (selection) => {
+              const child = resolveProvider(
+                originalUserMessage,
+                runtime,
+                selection,
+              );
+              const childModelMaxOutputTokens = modelMetadataMaxOutputTokens(
+                child.modelMetadata,
+              );
+              return {
+                provider: child.provider,
+                providerId: child.providerId,
+                model: child.model,
+                costModel: requireKnownCostModel(child),
+                modelMetadata: child.modelMetadata ?? {
+                  status: "unknown" as const,
+                },
+                ...(child.contextCompaction !== undefined
+                  ? { contextCompaction: child.contextCompaction }
+                  : {}),
+                ...(childModelMaxOutputTokens !== undefined
+                  ? {
+                      modelMaxOutputTokens: childModelMaxOutputTokens,
+                    }
+                  : {}),
+              };
             },
           })
         : undefined;

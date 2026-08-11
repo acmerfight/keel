@@ -2,6 +2,7 @@ import type {
   KeelErrorCode,
   ProviderRequestTerminalErrorCode,
 } from "../core/error.ts";
+import type { ReasoningEffort } from "../core/model-metadata.ts";
 import type { ModelToolExposure, ToolCall } from "../tools/tool-call.ts";
 
 export type { ModelToolExposure } from "../tools/tool-call.ts";
@@ -131,6 +132,7 @@ export interface StreamOptions {
   // must produce text only, e.g. the wrap-up summary after the turn limit.
   readonly toolExposure?: ModelToolExposure;
   readonly maxOutputTokens?: number;
+  readonly reasoningEffort?: ReasoningEffort;
   readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
   readonly providerRetryCoordination?: ProviderRetryCoordination;
   readonly providerRequestConcurrency?: ProviderRequestConcurrency;

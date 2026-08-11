@@ -14,7 +14,10 @@ import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../src/agent/stop-policy.ts";
-import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
+import {
+  builtinSubagentProfileCatalog,
+  resolveBuiltinSubagentProfile,
+} from "../../src/agent/subagent-profile.ts";
 import {
   type CostModel,
   calculateConservativeRequestCostUsd,
@@ -279,6 +282,7 @@ describe("Cost Budget", () => {
           stopPolicy: defaultStopPolicy(),
           delegation: {
             mode: "foreground",
+            profileCatalog: builtinSubagentProfileCatalog,
             available: () => true,
             prepareBatch: () => ({
               close: () => {},
@@ -483,7 +487,13 @@ describe("Cost Budget", () => {
       systemPrompt: "main",
       messages: initialMessages,
       signal: freshSignal(),
-      toolExposure: { kind: "auto", delegation: "foreground" } as const,
+      toolExposure: {
+        kind: "auto",
+        delegation: {
+          mode: "foreground",
+          profileCatalog: builtinSubagentProfileCatalog,
+        },
+      } as const,
     };
     const childOptions: StreamOptions = {
       systemPrompt: "child",
@@ -602,7 +612,10 @@ describe("Cost Budget", () => {
           requestSystemPrompt: () => "unpriced request-time prompt",
           toolExposure: {
             kind: "auto",
-            delegation: "background",
+            delegation: {
+              mode: "background",
+              profileCatalog: builtinSubagentProfileCatalog,
+            },
             agentControl: true,
           },
           maxOutputTokens: 10_000,
@@ -625,7 +638,13 @@ describe("Cost Budget", () => {
     expect(providerCalls).toBe(4);
     expect(observedRequests[2]).toMatchObject({
       systemPrompt: "main",
-      toolExposure: { kind: "auto", delegation: "foreground" },
+      toolExposure: {
+        kind: "auto",
+        delegation: {
+          mode: "foreground",
+          profileCatalog: builtinSubagentProfileCatalog,
+        },
+      },
       maxOutputTokens: 256,
     });
     expect(observedRequests[2]?.requestSystemPrompt).toBeUndefined();

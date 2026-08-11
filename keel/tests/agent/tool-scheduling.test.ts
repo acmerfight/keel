@@ -6,6 +6,7 @@ import type { AgentEvent } from "../../src/agent/events.ts";
 import { runAgent, runAgentTurn } from "../../src/agent/loop.ts";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { defaultStopPolicy } from "../../src/agent/stop-policy.ts";
+import { builtinSubagentProfileCatalog } from "../../src/agent/subagent-profile.ts";
 import type { SubagentResultContinuationBudget } from "../../src/agent/subagent-tree-budget.ts";
 import type {
   ToolOutputArtifactSaveInput,
@@ -500,6 +501,7 @@ describe("Tool Scheduling", () => {
     };
     const delegation: DelegationCapability = {
       mode: "background",
+      profileCatalog: builtinSubagentProfileCatalog,
       available: () => true,
       delegate: async () => ({
         ok: false,
@@ -617,6 +619,7 @@ describe("Tool Scheduling", () => {
     };
     const delegation: DelegationCapability = {
       mode: "background",
+      profileCatalog: builtinSubagentProfileCatalog,
       available: () => {
         availabilityCalls++;
         if (availabilityCalls === 2) throw new Error("capability failed");

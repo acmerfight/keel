@@ -2,6 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { z } from "zod";
+import { builtinSubagentProfileCatalog } from "../../src/agent/subagent-profile.ts";
 import { createDeepseekProvider } from "../../src/llm/providers/deepseek.ts";
 import type { LLMEvent } from "../../src/llm/types.ts";
 
@@ -3966,7 +3967,13 @@ describe("DeepSeek Provider", () => {
         systemPrompt: "You are helpful.",
         messages: [{ role: "user", content: "invalid-delegate-task" }],
         signal: freshSignal(),
-        toolExposure: { kind: "auto", delegation: "foreground" },
+        toolExposure: {
+          kind: "auto",
+          delegation: {
+            mode: "foreground",
+            profileCatalog: builtinSubagentProfileCatalog,
+          },
+        },
       }),
     );
 

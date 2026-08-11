@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { DelegatingAgentPolicy } from "../../../src/core/agent-policy.ts";
 import { evalResultLineSchema } from "../../../src/eval/result-schema.ts";
 import { runEvalCommand } from "../../../src/eval/run.ts";
+import type { EvalDelegationExpectation } from "../../../src/eval/task.ts";
 
 export {
   isAbsolute,
@@ -37,16 +38,25 @@ export type TaskFixture = TaskFixtureBase &
         readonly agentPolicy?: "off";
         readonly maxCostUsd?: number;
         readonly delegationPolicy?: never;
+        readonly delegationExpectation?: never;
       }
-    | {
+    | ({
         readonly agentPolicy: DelegatingAgentPolicy;
         readonly maxCostUsd: number;
-        readonly delegationPolicy?:
-          | "require_one"
-          | "require_any"
-          | "forbid"
-          | "at_most_one";
-      }
+      } & (
+        | {
+            readonly delegationPolicy?: never;
+            readonly delegationExpectation?: never;
+          }
+        | {
+            readonly delegationPolicy:
+              | "require_one"
+              | "require_any"
+              | "forbid"
+              | "at_most_one";
+            readonly delegationExpectation?: EvalDelegationExpectation;
+          }
+      ))
   );
 
 export interface MemoryPairTaskFixture {
@@ -118,6 +128,9 @@ export async function createTask(
         : {}),
       ...(fixture.delegationPolicy !== undefined
         ? { delegationPolicy: fixture.delegationPolicy }
+        : {}),
+      ...(fixture.delegationExpectation !== undefined
+        ? { delegationExpectation: fixture.delegationExpectation }
         : {}),
     }),
     "utf8",
@@ -196,7 +209,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 20,
+  schemaVersion: 21,
   tasks: [
     {
       ordinal: 1,

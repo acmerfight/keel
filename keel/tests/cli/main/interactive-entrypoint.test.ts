@@ -293,7 +293,9 @@ describe("CLI Main - Interactive Entrypoint", () => {
       mode: "background",
       providerId: "fake",
       model: "fake",
+      effort: null,
       systemPrompt: "Read-only child instructions.",
+      threadCapabilityCeiling: explorerCapability,
       capability: explorerCapability,
       lineage: { kind: "root" },
     });

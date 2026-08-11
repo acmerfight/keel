@@ -2,6 +2,7 @@ import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { narrowSubagentCapabilityLimits } from "../../src/agent/subagent-capability.ts";
 import type {
   AgentId,
   PersistedSubagentCanonicalResult,
@@ -38,7 +39,9 @@ function acceptedLifecycle(
     mode: "foreground",
     providerId: "deepseek",
     model: "deepseek-chat",
+    effort: null,
     systemPrompt: "Read-only child instructions.",
+    threadCapabilityCeiling: explorerCapability,
     capability: explorerCapability,
     lineage: { kind: "root" },
   };
@@ -49,7 +52,7 @@ function acceptedRecord(
   sessionId: string,
 ): AgentRunAcceptedRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     type: "agent_run_accepted",
     timestamp: "2023-11-14T22:13:20.000Z",
     transcriptRef: `agent-transcript:${sessionId}/${lifecycle.childRunId}`,
@@ -61,7 +64,7 @@ function runningRecord(
   accepted: AgentRunAcceptedRecord,
 ): AgentRunRunningRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     type: "agent_run_running",
     timestamp: "2023-11-14T22:13:21.000Z",
     childAgentId: accepted.childAgentId,
@@ -73,7 +76,7 @@ function accountingRecord(
   accepted: AgentRunAcceptedRecord,
 ): AgentRunAccountingRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     type: "agent_run_accounting",
     timestamp: "2023-11-14T22:13:22.000Z",
     childAgentId: accepted.childAgentId,
@@ -115,7 +118,7 @@ function completedResult(
 
 function resultRecord(accepted: AgentRunAcceptedRecord): AgentResultRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     type: "agent_result",
     timestamp: "2023-11-14T22:13:23.000Z",
     result: completedResult(accepted),
@@ -127,7 +130,7 @@ function terminalRecord(
   status: AgentRunTerminalRecord["status"] = "completed",
 ): AgentRunTerminalRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     type: "agent_run_terminal",
     timestamp: "2023-11-14T22:13:24.000Z",
     childAgentId: accepted.childAgentId,
@@ -250,9 +253,9 @@ describe("Agent Tree Store", () => {
     }
   });
 
-  test(`Given continuation acceptance references durable child Runs,
-    When a caller points to an unknown, different, active, or stale predecessor,
-    Then the event store rejects the invalid lineage before it can change thread history`, async () => {
+  test(`Given continuation acceptance may only narrow its Thread capability,
+    When a caller narrows a Run or points to an expanding, unknown, different, active, or stale predecessor,
+    Then the store accepts the narrowing and rejects every authority or lineage violation`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-lineage-"));
     const keelHome = join(workspace, ".keel-home");
     let now = 1_700_000_000_000;
@@ -265,6 +268,10 @@ describe("Agent Tree Store", () => {
     const firstRunId: SubagentRunId = "subagent-aaaaaaaa";
     const secondRunId: SubagentRunId = "subagent-bbbbbbbb";
     createSessionStore({ sessionId, workspace, runtime });
+    const narrowedExplorerCapability = narrowSubagentCapabilityLimits(
+      explorerCapability,
+      { maxTurns: 8, deadlineMs: 60_000 },
+    );
 
     const continuation = (
       agentId: AgentId,
@@ -308,10 +315,11 @@ describe("Agent Tree Store", () => {
           ),
           capability: reviewerCapability,
         }),
-      ).toThrow("changes capability snapshot");
-      const second = history.persistence.accepted(
-        continuation(childAgentId, secondRunId, firstRunId, "second"),
-      );
+      ).toThrow("expands thread capability baseProfile");
+      const second = history.persistence.accepted({
+        ...continuation(childAgentId, secondRunId, firstRunId, "second"),
+        capability: narrowedExplorerCapability,
+      });
       second.transcript.initialize([]);
       const secondRunning = second.running();
 
@@ -336,14 +344,15 @@ describe("Agent Tree Store", () => {
         ),
       ).toThrow("changes child agent identity");
       expect(() =>
-        history.persistence.accepted(
-          continuation(
+        history.persistence.accepted({
+          ...continuation(
             childAgentId,
             "subagent-eeeeeeee",
             secondRunId,
             "active",
           ),
-        ),
+          capability: narrowedExplorerCapability,
+        }),
       ).toThrow("follows a non-terminal run");
 
       secondRunning.terminal({
@@ -362,8 +371,24 @@ describe("Agent Tree Store", () => {
       });
       expect(() =>
         history.persistence.accepted(
-          continuation(childAgentId, "subagent-ffffffff", firstRunId, "stale"),
+          continuation(
+            childAgentId,
+            "subagent-11111111",
+            secondRunId,
+            "capability-expansion",
+          ),
         ),
+      ).toThrow("expands maxTurns");
+      expect(() =>
+        history.persistence.accepted({
+          ...continuation(
+            childAgentId,
+            "subagent-ffffffff",
+            firstRunId,
+            "stale",
+          ),
+          capability: narrowedExplorerCapability,
+        }),
       ).toThrow("does not follow the latest run");
       expect(history.runs(childAgentId)).toHaveLength(2);
     } finally {
@@ -907,7 +932,7 @@ describe("Agent Tree Store", () => {
       });
       await appendFile(
         join(keelHome, "sessions", "interrupted", "agents", "events.jsonl"),
-        '{"schemaVersion":5,"type":"agent_result"',
+        '{"schemaVersion":6,"type":"agent_result"',
         "utf8",
       );
       await appendFile(
@@ -919,7 +944,7 @@ describe("Agent Tree Store", () => {
           "transcripts",
           `${lifecycle.childRunId}.jsonl`,
         ),
-        '{"schemaVersion":5,"type":"transcript_append"',
+        '{"schemaVersion":6,"type":"transcript_append"',
         "utf8",
       );
 
@@ -1241,7 +1266,7 @@ describe("Agent Tree Store", () => {
 
       lines[0] = originalHeader;
       lines[1] =
-        '{"schemaVersion":5,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
+        '{"schemaVersion":6,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
       expect(inspectTranscript).toThrow("invalid agent transcript record");
 
@@ -1289,7 +1314,7 @@ describe("Agent Tree Store", () => {
 
       await writeFile(
         transcriptPath,
-        '{"schemaVersion":5,"type":"unknown"}\n',
+        '{"schemaVersion":6,"type":"unknown"}\n',
         "utf8",
       );
       expect(inspectTranscript).toThrow("invalid agent transcript header");
@@ -1329,7 +1354,7 @@ describe("Agent Tree Store", () => {
       if (openEntry === undefined) throw new Error("missing open child");
       await appendFile(
         join(transcriptsDirectory, `${openLifecycle.childRunId}.jsonl`),
-        '{"schemaVersion":5,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":5,"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n',
+        '{"schemaVersion":6,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":6,"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n',
         "utf8",
       );
       expect(() => history.transcript(openEntry)).toThrow(
@@ -1489,7 +1514,7 @@ describe("Agent Tree Store", () => {
         createAgentTreeHistory({ sessionId, runtime });
         const events = [
           {
-            schemaVersion: 5,
+            schemaVersion: 6,
             type: "agent_tree",
             sessionId,
             createdAt: "2023-11-14T22:13:20.000Z",
@@ -1523,7 +1548,7 @@ describe("Agent Tree Store", () => {
       id: "header",
       name: "an invalid header",
       events: () =>
-        `${JSON.stringify({ schemaVersion: 5, type: "unknown" })}\n`,
+        `${JSON.stringify({ schemaVersion: 6, type: "unknown" })}\n`,
       expected: "invalid agent tree header",
     },
     {
@@ -1531,7 +1556,7 @@ describe("Agent Tree Store", () => {
       name: "a header for another session",
       events: (sessionId: string) =>
         `${JSON.stringify({
-          schemaVersion: 5,
+          schemaVersion: 6,
           type: "agent_tree",
           sessionId: `${sessionId}-other`,
           createdAt: "2023-11-14T22:13:20.000Z",
@@ -1543,11 +1568,11 @@ describe("Agent Tree Store", () => {
       name: "a malformed middle record",
       events: (sessionId: string) =>
         `${JSON.stringify({
-          schemaVersion: 5,
+          schemaVersion: 6,
           type: "agent_tree",
           sessionId,
           createdAt: "2023-11-14T22:13:20.000Z",
-        })}\n{"schemaVersion":5,broken}\n`,
+        })}\n{"schemaVersion":6,broken}\n`,
       expected: "cannot parse",
     },
     {
@@ -1556,12 +1581,12 @@ describe("Agent Tree Store", () => {
       events: (sessionId: string) =>
         `${[
           {
-            schemaVersion: 5,
+            schemaVersion: 6,
             type: "agent_tree",
             sessionId,
             createdAt: "2023-11-14T22:13:20.000Z",
           },
-          { schemaVersion: 5, type: "unknown" },
+          { schemaVersion: 6, type: "unknown" },
         ]
           .map((record) => JSON.stringify(record))
           .join("\n")}\n`,

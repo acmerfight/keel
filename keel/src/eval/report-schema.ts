@@ -3,6 +3,7 @@ import {
   keelErrorCodes,
   providerRequestTerminalErrorCodes,
 } from "../core/error.ts";
+import { reasoningEfforts } from "../core/model-metadata.ts";
 
 // Mirrors the CLI --report payload. The eval runner and comparator consume the
 // same report file a user would, so bump this together with CLI report output.
@@ -139,6 +140,8 @@ const modelOperationAttributionSchema = z.object({
   type: z.literal("subagent"),
   delegationId: z.string(),
   childRunId: z.string(),
+  profile: z.string().min(1),
+  effort: z.enum(reasoningEfforts).nullable(),
 });
 
 const modelOperationBase = {
@@ -324,7 +327,7 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 
 const runReportBaseSchema = z.object({
-  schemaVersion: z.literal(20),
+  schemaVersion: z.literal(21),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),

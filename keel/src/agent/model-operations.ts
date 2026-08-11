@@ -1,11 +1,13 @@
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import { KeelError } from "../core/error.ts";
+import type { ReasoningEffort } from "../core/model-metadata.ts";
 import type {
   ProviderRequestAttemptObserver,
   ProviderRequestAttemptOutcome,
   Usage,
 } from "../llm/types.ts";
 import { CostBudgetAdmissionError } from "./cost-budget.ts";
+import type { SubagentProfileName } from "./subagent-capability.ts";
 
 export type ModelOperationPurpose =
   | "agent_turn"
@@ -28,6 +30,8 @@ export interface ModelOperationAttribution {
   readonly type: "subagent";
   readonly delegationId: string;
   readonly childRunId: string;
+  readonly profile: SubagentProfileName;
+  readonly effort: ReasoningEffort | null;
 }
 
 export type MainOnlyModelOperationPurpose = Extract<

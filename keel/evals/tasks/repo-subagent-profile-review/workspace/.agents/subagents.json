@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "focused-review": {
+      "base": "explorer",
+      "model": "deepseek-v4-pro",
+      "effort": "max",
+      "tools": ["read", "grep"],
+      "maxTurns": 4,
+      "deadlineMs": 60000,
+      "maxResultChars": 800
+    }
+  }
+}

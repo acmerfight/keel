@@ -3,9 +3,13 @@ import type { SessionMessage } from "../../agent/session-message.ts";
 import {
   EXPLORER_MAX_TURNS,
   REVIEWER_MAX_TURNS,
+  type RepoSubagentCapabilitySnapshotId,
+  type RepoSubagentProfileName,
   SUBAGENT_DEADLINE_MS,
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   type SubagentCapabilitySnapshot,
+  subagentBuiltinToolNames,
+  subagentProfileIds,
 } from "../../agent/subagent-capability.ts";
 import type {
   AgentId,
@@ -22,10 +26,12 @@ import {
   subagentNonCompletedStatuses,
   subagentTerminalStatuses,
 } from "../../agent/subagent-lifecycle.ts";
+import { reasoningEfforts } from "../../core/model-metadata.ts";
+import { providerIds } from "../../core/provider-id.ts";
 import type { Usage } from "../../llm/types.ts";
 import { sessionMessageSchema } from "../session-message-schema.ts";
 
-export const AGENT_TREE_SCHEMA_VERSION = 5;
+export const AGENT_TREE_SCHEMA_VERSION = 6;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -155,8 +161,13 @@ const capabilityLimitsShape = {
     .max(SUBAGENT_MAX_FINAL_TEXT_CHARS),
 };
 
-const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> =
-  z.discriminatedUnion("id", [
+const repoCapabilityIdSchema: z.ZodType<RepoSubagentCapabilitySnapshotId> =
+  z.templateLiteral(["repo-profile-v1:", z.string().regex(/^[a-f0-9]{64}$/u)]);
+const repoProfileNameSchema: z.ZodType<RepoSubagentProfileName> =
+  z.templateLiteral(["repo:", z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u)]);
+
+const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
+  [
     z
       .object({
         id: z.literal("builtin-explorer-v1"),
@@ -187,7 +198,22 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> =
         ...capabilityLimitsShape,
       })
       .strict(),
-  ]);
+    z
+      .object({
+        id: repoCapabilityIdSchema,
+        profile: repoProfileNameSchema,
+        baseProfile: z.enum(subagentProfileIds),
+        builtinTools: z
+          .array(z.enum(subagentBuiltinToolNames))
+          .min(1)
+          .max(subagentBuiltinToolNames.length)
+          .refine((tools) => new Set(tools).size === tools.length),
+        maxTurns: z.number().int().positive().max(REVIEWER_MAX_TURNS),
+        ...capabilityLimitsShape,
+      })
+      .strict(),
+  ],
+);
 
 const canonicalResultBaseSchema = z
   .object({
@@ -227,8 +253,10 @@ const lifecycleIdentitySchema = z
     task: z.string().min(1),
     focusPaths: z.array(z.string()),
     mode: z.enum(["foreground", "background"]),
-    providerId: z.string().min(1),
+    providerId: z.enum(providerIds),
     model: z.string().min(1),
+    effort: z.enum(reasoningEfforts).nullable(),
+    threadCapabilityCeiling: capabilitySnapshotSchema,
     capability: capabilitySnapshotSchema,
     systemPrompt: z.string(),
     lineage: z.discriminatedUnion("kind", [

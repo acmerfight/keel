@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from "../core/model-metadata.ts";
+import type { ProviderId } from "../core/provider-id.ts";
 import type { Usage } from "../llm/types.ts";
 import type { SessionLedgerObserver } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
@@ -46,8 +48,10 @@ interface SubagentRunIdentity {
 export interface SubagentAcceptedLifecycle extends SubagentRunIdentity {
   readonly lineage: SubagentRunLineage;
   readonly mode: SubagentRunMode;
-  readonly providerId: string;
+  readonly providerId: ProviderId;
   readonly model: string;
+  readonly effort: ReasoningEffort | null;
+  readonly threadCapabilityCeiling: SubagentCapabilitySnapshot;
   readonly capability: SubagentCapabilitySnapshot;
   readonly systemPrompt: string;
 }

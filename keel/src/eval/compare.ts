@@ -84,7 +84,7 @@ function readEvalResultLines(filePath: string): readonly EvalResultLine[] {
     const parsedLine = evalResultLineSchema.safeParse(parsedJson);
     if (!parsedLine.success) {
       throw new Error(
-        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 3 eval result.`,
+        `cannot read eval result file ${filePath}: line ${index + 1} is not a schemaVersion 4 eval result.`,
       );
     }
     results.push(parsedLine.data);

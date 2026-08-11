@@ -177,7 +177,7 @@ interface RunReportFailure {
 }
 
 interface RunReportBase {
-  readonly schemaVersion: 20;
+  readonly schemaVersion: 21;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -256,7 +256,7 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
         : 0
       : Math.max(0, accounting.costUsd - (outcome.maxCostUsd ?? Infinity));
   const reportBase: RunReportBase = {
-    schemaVersion: 20,
+    schemaVersion: 21,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,

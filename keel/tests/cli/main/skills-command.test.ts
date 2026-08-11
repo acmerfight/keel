@@ -2322,7 +2322,7 @@ describe("CLI Main - Skills", () => {
       );
       expect(firstSystemPrompt).not.toContain("Private checklist body.");
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 20,
+        schemaVersion: 21,
         skillActivations: [
           {
             name: "repo:review",
@@ -2410,7 +2410,7 @@ describe("CLI Main - Skills", () => {
         }),
       );
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 20,
+        schemaVersion: 21,
         skillActivations: [],
       });
     } finally {
@@ -2494,7 +2494,7 @@ describe("CLI Main - Skills", () => {
       );
       expect(JSON.stringify(secondRequest)).not.toContain(secret);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 20,
+        schemaVersion: 21,
         skillActivations: [],
       });
     } finally {

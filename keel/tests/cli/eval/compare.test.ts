@@ -299,7 +299,7 @@ describe("CLI Eval", () => {
       await writeFile(
         baseFile,
         `${JSON.stringify({
-          schemaVersion: 3,
+          schemaVersion: 4,
           timestamp: "2026-06-22T00:00:00.000Z",
           keelVersion: "0.0.1",
           taskId: "contradictory-result",
@@ -329,7 +329,7 @@ describe("CLI Eval", () => {
         expect(result.stdout).toBe("");
         expect(result.stderr).toContain(baseFile);
         expect(result.stderr).toContain(
-          "line 1 is not a schemaVersion 3 eval result",
+          "line 1 is not a schemaVersion 4 eval result",
         );
       } finally {
         await rm(root, { recursive: true, force: true });
@@ -347,7 +347,7 @@ describe("CLI Eval", () => {
     await writeFile(
       baseFile,
       `${JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         timestamp: "2026-06-22T00:00:00.000Z",
         keelVersion: "0.0.1",
         taskId: "old-report",
@@ -397,7 +397,7 @@ describe("CLI Eval", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(baseFile);
       expect(result.stderr).toContain(
-        "line 1 is not a schemaVersion 3 eval result",
+        "line 1 is not a schemaVersion 4 eval result",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

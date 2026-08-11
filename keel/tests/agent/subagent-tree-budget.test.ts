@@ -1,14 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { SharedCostBudgetedProvider } from "../../src/agent/cost-budget.ts";
+import { builtinSubagentProfileCatalog } from "../../src/agent/subagent-profile.ts";
 import { createSubagentTreeBudget } from "../../src/agent/subagent-tree-budget.ts";
-import type { CostModel } from "../../src/core/cost.ts";
-
-const costModel: CostModel = {
-  type: "fixed",
-  uncachedInputPerMillionTokens: 1,
-  cachedInputPerMillionTokens: 0.5,
-  outputPerMillionTokens: 2,
-};
 
 function rootBudgetFixture(): {
   readonly rootBudget: SharedCostBudgetedProvider;
@@ -64,7 +57,13 @@ function rootBudgetFixture(): {
             provider,
             requestShape: {
               systemPrompt: "main",
-              toolExposure: { kind: "auto", delegation: "foreground" },
+              toolExposure: {
+                kind: "auto",
+                delegation: {
+                  mode: "foreground",
+                  profileCatalog: builtinSubagentProfileCatalog,
+                },
+              },
             },
             release,
           },
@@ -85,7 +84,6 @@ describe("Subagent tree budget", () => {
     const fixture = rootBudgetFixture();
     const budget = createSubagentTreeBudget({
       rootBudget: fixture.rootBudget,
-      costModel,
     });
 
     const resultAdmission = budget.planResults([
@@ -97,10 +95,10 @@ describe("Subagent tree budget", () => {
     const lease = budget.leaseBatch({
       resultAdmission,
       children: [
-        { value: "one", minimumInputTokens: 100 },
-        { value: "two", minimumInputTokens: 200 },
-        { value: "three", minimumInputTokens: 300 },
-        { value: "four", minimumInputTokens: 400 },
+        { value: "one", minimumCostUsd: 0.0001 },
+        { value: "two", minimumCostUsd: 0.0002 },
+        { value: "three", minimumCostUsd: 0.0003 },
+        { value: "four", minimumCostUsd: 0.0004 },
       ],
       continuationMaxOutputTokens: 4_096,
     });
@@ -140,7 +138,7 @@ describe("Subagent tree budget", () => {
         children: [
           {
             value: "fresh",
-            minimumInputTokens: 100,
+            minimumCostUsd: 0.0001,
           },
         ],
         exactResult: "R".repeat(6_000),
@@ -164,7 +162,7 @@ describe("Subagent tree budget", () => {
         children: [
           {
             value: "fresh",
-            minimumInputTokens: 100,
+            minimumCostUsd: 0.0001,
           },
         ],
         exactResult: '{"status":"completed","finalText":"cached"}',
@@ -189,7 +187,6 @@ describe("Subagent tree budget", () => {
       const fixture = rootBudgetFixture();
       const budget = createSubagentTreeBudget({
         rootBudget: fixture.rootBudget,
-        costModel,
       });
       const resultAdmission = budget.planResults(scenario.outcomes);
       const lease = budget.leaseBatch({

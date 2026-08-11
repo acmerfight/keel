@@ -50,7 +50,9 @@ function acceptedLifecycle(childAgentId: AgentId): SubagentAcceptedLifecycle {
     mode: "foreground",
     providerId: "deepseek",
     model: "deepseek-chat",
+    effort: null,
     systemPrompt: "Read-only child instructions.",
+    threadCapabilityCeiling: explorerCapability,
     capability: explorerCapability,
     lineage: { kind: "root" },
   };

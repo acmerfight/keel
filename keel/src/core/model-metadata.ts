@@ -1,6 +1,10 @@
 import { type CostModel, ZERO_COST_MODEL } from "./cost.ts";
 import { type ProviderId, providerIds } from "./provider-id.ts";
 
+export const reasoningEfforts = ["high", "max"] as const;
+
+export type ReasoningEffort = (typeof reasoningEfforts)[number];
+
 export interface ModelCapabilities {
   readonly textInput: boolean;
   readonly toolCalls: boolean;
@@ -14,6 +18,7 @@ export type ModelMetadata =
       readonly contextWindowTokens: number | null;
       readonly maxOutputTokens: number | null;
       readonly capabilities: ModelCapabilities;
+      readonly reasoningEfforts?: readonly ReasoningEffort[];
       readonly costModel: CostModel | null;
       readonly lastVerified: string;
     }
@@ -160,6 +165,7 @@ const MODEL_METADATA_REGISTRY: ModelMetadataRegistry = {
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
       capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
+      reasoningEfforts,
       costModel: DEEPSEEK_V4_FLASH_COST_MODEL,
     }),
     "deepseek-v4-pro": verifiedMetadata({
@@ -168,6 +174,7 @@ const MODEL_METADATA_REGISTRY: ModelMetadataRegistry = {
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
       capabilities: TEXT_TOOL_REASONING_CAPABILITIES,
+      reasoningEfforts,
       costModel: DEEPSEEK_V4_PRO_COST_MODEL,
     }),
   },

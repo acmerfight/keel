@@ -93,6 +93,8 @@ describe("CLI Run Report Recorder", () => {
         type: "subagent",
         delegationId: "main:delegate-pending",
         childRunId: "subagent-pending",
+        profile: "explorer",
+        effort: null,
       },
       recoveryFor: null,
     });
@@ -113,6 +115,8 @@ describe("CLI Run Report Recorder", () => {
         type: "subagent",
         delegationId: "main:delegate-interleaved",
         childRunId: "subagent-interleaved",
+        profile: "explorer",
+        effort: null,
       },
       recoveryFor: null,
     });
@@ -129,6 +133,8 @@ describe("CLI Run Report Recorder", () => {
         type: "subagent",
         delegationId: "main:delegate-completed",
         childRunId: "subagent-completed",
+        profile: "explorer",
+        effort: null,
       },
       recoveryFor: null,
     });
@@ -340,6 +346,8 @@ describe("CLI Run Report Recorder", () => {
       type: "subagent" as const,
       delegationId: "main:delegate-1",
       childRunId: "subagent-1",
+      profile: "explorer" as const,
+      effort: null,
     };
 
     // When

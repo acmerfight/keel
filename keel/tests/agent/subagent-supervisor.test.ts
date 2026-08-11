@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import {
+  createSharedCostBudgetAccount,
   createSharedCostBudgetedProvider,
   type SharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
@@ -14,7 +15,11 @@ import {
   type SubagentRunId,
   type SubagentTerminalSnapshot,
 } from "../../src/agent/subagent-lifecycle.ts";
-import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
+import {
+  builtinSubagentProfileCatalog,
+  createSubagentProfileRegistry,
+  resolveBuiltinSubagentProfile,
+} from "../../src/agent/subagent-profile.ts";
 import {
   createSubagentSupervisor,
   projectSubagentResult,
@@ -207,10 +212,12 @@ function supervisorFixture(
     options.providerAbortSignalSupport === false
       ? options.provider
       : { ...options.provider, abortSignalSupport: true };
+  const sharedCostBudget = createSharedCostBudgetAccount(rootMaxCostUsd);
   const sharedRootBudget = createSharedCostBudgetedProvider({
     provider,
     model: costModel,
     maxCostUsd: rootMaxCostUsd,
+    sharedAccount: sharedCostBudget,
   });
   const rootBudget: SharedCostBudgetedProvider = {
     ...sharedRootBudget,
@@ -230,7 +237,13 @@ function supervisorFixture(
               provider: sharedRootBudget.provider,
               requestShape: {
                 systemPrompt: "main",
-                toolExposure: { kind: "auto", delegation: "background" },
+                toolExposure: {
+                  kind: "auto",
+                  delegation: {
+                    mode: "background",
+                    profileCatalog: builtinSubagentProfileCatalog,
+                  },
+                },
               },
               release,
             },
@@ -257,11 +270,22 @@ function supervisorFixture(
       workspace: options.workspace,
       platform: process.platform,
       parentRunId: "main-run",
-      provider: rootBudget.provider,
-      providerId: provider.id,
-      model: "test-model",
-      costModel,
       rootBudget,
+      sharedCostBudget,
+      profileRegistry: createSubagentProfileRegistry({
+        execution: { providerId: "fake", model: "test-model" },
+        ...(options.maxTurns !== undefined
+          ? { maxTurns: options.maxTurns }
+          : {}),
+        ...(options.deadlineMs !== undefined
+          ? { deadlineMs: options.deadlineMs }
+          : {}),
+      }),
+      resolveExecution: (snapshot) => ({
+        snapshot,
+        provider,
+        costModel,
+      }),
       transcriptStore: options.transcriptStore ?? artifacts.store,
       ...lifecycleOwnership,
       now: options.now ?? (() => 0),
@@ -269,13 +293,9 @@ function supervisorFixture(
       ...(options.hiddenWorkspacePaths !== undefined
         ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
         : {}),
-      ...(options.deadlineMs !== undefined
-        ? { deadlineMs: options.deadlineMs }
-        : {}),
       ...(options.settlementGraceMs !== undefined
         ? { settlementGraceMs: options.settlementGraceMs }
         : {}),
-      ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
       ...(options.maxActiveAgentRuns !== undefined
         ? { maxActiveAgentRuns: options.maxActiveAgentRuns }
         : {}),
@@ -528,10 +548,16 @@ describe("Subagent Supervisor", () => {
     });
 
     try {
-      const request = {
+      const request: SubagentContinuationRequest = {
         childAgentId,
         previousRunId,
         capability: explorerCapability,
+        threadCapabilityCeiling: explorerCapability,
+        execution: {
+          providerId: "fake",
+          model: "test-model",
+          effort: null,
+        },
         toolCallId: "resume-child",
         message: "Now inspect its callers.",
         focusPaths: [],
@@ -617,6 +643,12 @@ describe("Subagent Supervisor", () => {
       childAgentId,
       previousRunId,
       capability: explorerCapability,
+      threadCapabilityCeiling: explorerCapability,
+      execution: {
+        providerId: "fake",
+        model: "test-model",
+        effort: null,
+      },
       toolCallId,
       message: "Inspect callers.",
       focusPaths: [],
@@ -774,6 +806,12 @@ describe("Subagent Supervisor", () => {
       childAgentId: "agent-aaaaaaaa",
       previousRunId: "subagent-aaaaaaaa",
       capability: explorerCapability,
+      threadCapabilityCeiling: explorerCapability,
+      execution: {
+        providerId: "fake",
+        model: "test-model",
+        effort: null,
+      },
       toolCallId: "resume-storage",
       message: "Inspect callers.",
       focusPaths: [],
@@ -1510,9 +1548,9 @@ describe("Subagent Supervisor", () => {
         delivery: "rejected",
         ok: false,
         reason:
-          "Delegation rejected: the configured provider does not certify AbortSignal settlement.",
+          "Delegation rejected: the selected child provider does not certify AbortSignal settlement.",
         recovery:
-          "Continue in Main without delegating, or switch to a provider that certifies cancellation settlement.",
+          "Continue in Main, or select a child model whose provider certifies cancellation settlement.",
         maxResultChars: 6_000,
       });
       expect(providerCalls).toBe(0);
@@ -1936,7 +1974,10 @@ describe("Subagent Supervisor", () => {
             bash: { kind: "disabled" },
             builtinToolAuthority: {
               kind: "auto",
-              delegation: "foreground",
+              delegation: {
+                mode: "foreground",
+                profileCatalog: builtinSubagentProfileCatalog,
+              },
             },
             toolCall: entry.toolCall,
             delegation: batch.executor,
@@ -2256,21 +2297,28 @@ describe("Subagent Supervisor", () => {
         yield { type: "stop", reason: "stop", usage };
       },
     };
+    const sharedCostBudget = createSharedCostBudgetAccount(0.008922);
     const rootBudget = createSharedCostBudgetedProvider({
       provider: rawProvider,
       model: costModel,
       maxCostUsd: 0.008922,
+      sharedAccount: sharedCostBudget,
     });
     const artifacts = createArtifactCapture();
     const supervisor = createSubagentSupervisor({
       workspace,
       platform: process.platform,
       parentRunId: "shape-sensitive-main",
-      provider: rootBudget.provider,
-      providerId: rawProvider.id,
-      model: "test-model",
-      costModel,
       rootBudget,
+      sharedCostBudget,
+      profileRegistry: createSubagentProfileRegistry({
+        execution: { providerId: "fake", model: "test-model" },
+      }),
+      resolveExecution: (snapshot) => ({
+        snapshot,
+        provider: rawProvider,
+        costModel,
+      }),
       transcriptStore: artifacts.store,
       now: () => 0,
       onProgress: () => {},
@@ -2281,7 +2329,13 @@ describe("Subagent Supervisor", () => {
         systemPrompt: "main",
         messages: [{ role: "user", content: "Use a subagent." }],
         signal: new AbortController().signal,
-        toolExposure: { kind: "auto", delegation: "foreground" },
+        toolExposure: {
+          kind: "auto",
+          delegation: {
+            mode: "foreground",
+            profileCatalog: builtinSubagentProfileCatalog,
+          },
+        },
       })) {
         // Establish the completed main request used by the continuation lease.
       }

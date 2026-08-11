@@ -142,7 +142,7 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 20,
+    schemaVersion: 21,
     tasks: [
       {
         ordinal: 1,
@@ -224,7 +224,7 @@ export function evalResultLine(options: EvalResultLineOptions): EvalResultLine {
           } as const);
   const resultCondition = evalFixtureCondition(options);
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     timestamp: "2026-06-22T00:00:00.000Z",
     keelVersion: "0.0.1",
     taskId: options.taskId,

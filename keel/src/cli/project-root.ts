@@ -5,7 +5,7 @@ function pathExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
 
-export function approvalProjectRoot(workspace: string): string {
+export function projectRoot(workspace: string): string {
   const resolvedWorkspace = resolve(workspace);
   let current = resolvedWorkspace;
   while (true) {

@@ -128,7 +128,7 @@ const modelOperationSchema = z.discriminatedUnion("purpose", [
 
 const modelOperationReportSchema = z
   .object({
-    schemaVersion: z.literal(20),
+    schemaVersion: z.literal(21),
     modelOperations: z.array(modelOperationSchema),
     modelOperationCount: z.number().int().nonnegative(),
     providerRequestAttemptCount: z.number().int().nonnegative(),
@@ -489,7 +489,7 @@ describe("CLI Run Report - Model Operations", () => {
     expect(stderr).toContain("Context compacted: manual");
     expect(result.report).toBeDefined();
     const rawReport = {
-      schemaVersion: 20,
+      schemaVersion: 21,
       tasks: result.report?.tasks ?? [],
       modelOperations: result.report?.modelOperations ?? [],
       modelOperationCount: result.report?.modelOperationCount ?? 0,
