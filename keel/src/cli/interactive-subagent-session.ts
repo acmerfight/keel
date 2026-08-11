@@ -338,6 +338,7 @@ export function createInteractiveSubagentSession(
         toolCallId: request.requestId,
         message: request.message,
         skills: request.skills,
+        mcp: request.mcp,
         focusPaths: entry.focusPaths,
         systemPrompt: entry.systemPrompt,
         priorMessages: options.history.messages(entry),

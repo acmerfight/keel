@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 import {
+  MAX_SUBAGENT_MCP_TOOLS,
   MAX_SUBAGENT_SKILLS,
+  type SubagentMcpToolSelector,
   type SubagentProfileName,
   subagentProfileIds,
 } from "../agent/subagent-capability.ts";
@@ -53,7 +55,11 @@ function profileDescription(catalog: SubagentProfileCatalog): string {
         entry.skills.length === 0
           ? "no Skills"
           : `Skills: ${entry.skills.join(", ")}`;
-      return `${entry.name} (${entry.base} base; ${skills})`;
+      const mcp =
+        entry.mcp.length === 0
+          ? "no MCP"
+          : `MCP: ${entry.mcp.map(({ server, tool }) => `${server}/${tool}`).join(", ")}`;
+      return `${entry.name} (${entry.base} base; ${skills}; ${mcp})`;
     })
     .join(", ");
   return `Select an exact governed child profile from this catalog: ${choices}. Defaults to explorer.`;
@@ -61,6 +67,44 @@ function profileDescription(catalog: SubagentProfileCatalog): string {
 
 function catalogSkillNames(catalog: SubagentProfileCatalog): readonly string[] {
   return [...new Set(catalog.flatMap((entry) => entry.skills))].toSorted();
+}
+
+function mcpSelectorKey(selector: SubagentMcpToolSelector): string {
+  return `${selector.server}\u0000${selector.tool}`;
+}
+
+const mcpToolSelectorSchema = z
+  .object({
+    server: z.string().trim().min(1).max(64),
+    tool: z.string().trim().min(1).max(128),
+  })
+  .strict();
+
+function delegateMcpSchema(catalog: SubagentProfileCatalog) {
+  const available = new Map(
+    catalog.flatMap((entry) =>
+      entry.mcp.map(
+        (selector) => [mcpSelectorKey(selector), selector] as const,
+      ),
+    ),
+  );
+  const description =
+    available.size === 0
+      ? "No child MCP tools are available; omit this field."
+      : `Optional exact task-approved MCP tool lease: ${[...available.values()].map(({ server, tool }) => `${server}/${tool}`).join(", ")}.`;
+  return z
+    .array(
+      mcpToolSelectorSchema.refine(
+        (selector) => available.has(mcpSelectorKey(selector)),
+        { message: "must name an MCP tool allowed by a child profile" },
+      ),
+    )
+    .max(Math.min(MAX_SUBAGENT_MCP_TOOLS, available.size))
+    .refine(
+      (tools) => new Set(tools.map(mcpSelectorKey)).size === tools.length,
+      { message: "mcp tools must not contain duplicates" },
+    )
+    .describe(description);
 }
 
 function delegateSkillsSchema(catalog: SubagentProfileCatalog) {
@@ -99,6 +143,40 @@ function validateProfileSkillLease(
     path: ["skills"],
     message: `skills must be allowed by selected profile ${JSON.stringify(profileName)}`,
   });
+}
+
+function validateProfileMcpLease(
+  catalog: SubagentProfileCatalog,
+  input: {
+    readonly profile?: SubagentProfileName | undefined;
+    readonly mcp?: readonly SubagentMcpToolSelector[] | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  const profileName = input.profile ?? "explorer";
+  const profile = catalog.find((entry) => entry.name === profileName);
+  const allowed = new Set((profile?.mcp ?? []).map(mcpSelectorKey));
+  if ((input.mcp ?? []).every((tool) => allowed.has(mcpSelectorKey(tool)))) {
+    return;
+  }
+  context.addIssue({
+    code: "custom",
+    path: ["mcp"],
+    message: `mcp tools must be allowed by selected profile ${JSON.stringify(profileName)}`,
+  });
+}
+
+function validateProfileLeases(
+  catalog: SubagentProfileCatalog,
+  input: {
+    readonly profile?: SubagentProfileName | undefined;
+    readonly skills?: readonly string[] | undefined;
+    readonly mcp?: readonly SubagentMcpToolSelector[] | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  validateProfileSkillLease(catalog, input, context);
+  validateProfileMcpLease(catalog, input, context);
 }
 
 function catalogProfileSchema(
@@ -148,6 +226,7 @@ function delegateProviderSchema(
           ),
       ),
       skills: optionalToolArgument(delegateSkillsSchema(catalog)),
+      mcp: optionalToolArgument(delegateMcpSchema(catalog)),
     })
     .strict();
 }
@@ -157,6 +236,12 @@ const delegatedSkillLeaseSchema = z
   .max(MAX_SUBAGENT_SKILLS)
   .refine((skills) => new Set(skills).size === skills.length, {
     message: "skills must not contain duplicates",
+  });
+const delegatedMcpLeaseSchema = z
+  .array(mcpToolSelectorSchema)
+  .max(MAX_SUBAGENT_MCP_TOOLS)
+  .refine((tools) => new Set(tools.map(mcpSelectorKey)).size === tools.length, {
+    message: "mcp tools must not contain duplicates",
   });
 
 export const delegateProviderArgumentsSchema = delegateProviderSchema(
@@ -183,6 +268,10 @@ export const delegateToolArgumentsSchema =
       (value) => (value === null ? undefined : value),
       delegatedSkillLeaseSchema.optional(),
     ),
+    mcp: z.preprocess(
+      (value) => (value === null ? undefined : value),
+      delegatedMcpLeaseSchema.optional(),
+    ),
   });
 
 export const foregroundDelegateProviderArgumentsSchema = delegateProviderSchema(
@@ -202,7 +291,7 @@ export function delegateProviderArgumentsSchemaForCatalog(
     mode === "foreground" ? foregroundDelegationModes : delegationModes,
     catalog,
   ).superRefine((input, context) =>
-    validateProfileSkillLease(catalog, input, context),
+    validateProfileLeases(catalog, input, context),
   );
 }
 
@@ -234,9 +323,13 @@ export function delegateToolArgumentsSchemaForCatalog(
         (value) => (value === null ? undefined : value),
         delegateSkillsSchema(catalog).default([]),
       ),
+      mcp: z.preprocess(
+        (value) => (value === null ? undefined : value),
+        delegateMcpSchema(catalog).default([]),
+      ),
     })
     .superRefine((input, context) =>
-      validateProfileSkillLease(catalog, input, context),
+      validateProfileLeases(catalog, input, context),
     );
 }
 
@@ -283,6 +376,7 @@ export const agentResumeToolArgumentsSchema = z
   .object({
     ...agentMessageShape,
     skills: optionalToolArgument(delegatedSkillLeaseSchema),
+    mcp: optionalToolArgument(delegatedMcpLeaseSchema),
   })
   .strict();
 

@@ -1,4 +1,7 @@
-import type { SubagentProfileName } from "../agent/subagent-capability.ts";
+import type {
+  SubagentMcpToolSelector,
+  SubagentProfileName,
+} from "../agent/subagent-capability.ts";
 import type { SubagentProfileCatalog } from "../agent/subagent-profile.ts";
 import type { ProviderContinuationLease, Usage } from "../llm/types.ts";
 
@@ -56,6 +59,7 @@ export interface DelegationRequest {
   readonly task: string;
   readonly focusPaths: readonly string[];
   readonly skills?: readonly string[];
+  readonly mcp: readonly SubagentMcpToolSelector[];
   readonly signal: AbortSignal;
 }
 

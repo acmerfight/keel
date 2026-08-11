@@ -933,7 +933,7 @@ describe("Agent Tree Store", () => {
       });
       await appendFile(
         join(keelHome, "sessions", "interrupted", "agents", "events.jsonl"),
-        '{"schemaVersion":7,"type":"agent_result"',
+        '{"schemaVersion":8,"type":"agent_result"',
         "utf8",
       );
       await appendFile(
@@ -945,7 +945,7 @@ describe("Agent Tree Store", () => {
           "transcripts",
           `${lifecycle.childRunId}.jsonl`,
         ),
-        '{"schemaVersion":7,"type":"transcript_append"',
+        '{"schemaVersion":8,"type":"transcript_append"',
         "utf8",
       );
 
@@ -1267,7 +1267,7 @@ describe("Agent Tree Store", () => {
 
       lines[0] = originalHeader;
       lines[1] =
-        '{"schemaVersion":7,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
+        '{"schemaVersion":8,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
       expect(inspectTranscript).toThrow("invalid agent transcript record");
 
@@ -1315,7 +1315,7 @@ describe("Agent Tree Store", () => {
 
       await writeFile(
         transcriptPath,
-        '{"schemaVersion":7,"type":"unknown"}\n',
+        '{"schemaVersion":8,"type":"unknown"}\n',
         "utf8",
       );
       expect(inspectTranscript).toThrow("invalid agent transcript header");
@@ -1355,7 +1355,7 @@ describe("Agent Tree Store", () => {
       if (openEntry === undefined) throw new Error("missing open child");
       await appendFile(
         join(transcriptsDirectory, `${openLifecycle.childRunId}.jsonl`),
-        '{"schemaVersion":7,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":7,"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n',
+        '{"schemaVersion":8,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":8,"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n',
         "utf8",
       );
       expect(() => history.transcript(openEntry)).toThrow(
@@ -1573,7 +1573,7 @@ describe("Agent Tree Store", () => {
           type: "agent_tree",
           sessionId,
           createdAt: "2023-11-14T22:13:20.000Z",
-        })}\n{"schemaVersion":7,broken}\n`,
+        })}\n{"schemaVersion":8,broken}\n`,
       expected: "cannot parse",
     },
     {

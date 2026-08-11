@@ -72,6 +72,8 @@ export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
     `tools: ${entry.capability.builtinTools.join(", ")}`,
     `thread skill ceiling: ${entry.threadCapabilityCeiling.skills.length === 0 ? "none" : entry.threadCapabilityCeiling.skills.map((skill) => skill.qualifiedName).join(", ")}`,
     `skills: ${entry.capability.skills.length === 0 ? "none" : entry.capability.skills.map((skill) => skill.qualifiedName).join(", ")}`,
+    `thread MCP ceiling: ${entry.threadCapabilityCeiling.mcpTools.length === 0 ? "none" : entry.threadCapabilityCeiling.mcpTools.map((tool) => `${tool.serverId}/${tool.rawToolName}`).join(", ")}`,
+    `MCP tools: ${entry.capability.mcpTools.length === 0 ? "none" : entry.capability.mcpTools.map((tool) => `${tool.serverId}/${tool.rawToolName}`).join(", ")}`,
     `limits: turns=${entry.capability.maxTurns} deadlineMs=${entry.capability.deadlineMs} resultChars=${entry.capability.maxFinalTextChars}`,
     `turns: ${entry.accounting.turns}`,
     `cost: ${formatCost(entry.accounting.costUsd)}`,

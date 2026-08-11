@@ -582,8 +582,8 @@ const delegateTool = defineTool({
   description: [
     "Delegate one independent, read-only workspace investigation to a fresh child agent. Select explorer for codebase investigation or reviewer for correctness-focused code review; explorer is the default. Foreground is the default. In a saved interactive session, background returns a stable agent ID immediately so independent work can continue.",
     "Use when the task is context-heavy and can be investigated independently before you synthesize the final answer.",
-    "The task must be self-contained, no longer than 4,000 characters, and state only the scope, expected output, and completion criteria. focusPaths are advisory workspace-relative areas, not extra authority. skills is an optional task lease chosen only from the selected profile's advertised Skill ceiling.",
-    "Do not use for small tasks, sequential critical-path work, writes, approval-requiring work, or tasks that need the parent transcript, Goal, memory, parent-active Skills, queued input, MCP, or web access.",
+    "The task must be self-contained, no longer than 4,000 characters, and state only the scope, expected output, and completion criteria. focusPaths are advisory workspace-relative areas, not extra authority. skills and mcp are optional exact task leases chosen only from the selected profile's advertised ceilings.",
+    "Do not use for small tasks, sequential critical-path work, writes, interactive approval-requiring work, or tasks that need the parent transcript, Goal, memory, parent-active Skills, queued input, or web access. Child MCP calls require an exact saved project approval and cannot prompt.",
     "Use background only for genuinely independent work. Do not poll it: continue useful work, then use agent_wait when its result is needed. A pure delegate batch can admit up to four concurrent children, subject to the shared root budget and total child limit. Foreground results return in tool-call source order after every admitted sibling settles. Inspect child evidence and remain the sole author of the final answer.",
   ].join("\n"),
   args: toolArgs(delegateToolArgumentsSchema),
@@ -652,7 +652,7 @@ const agentResumeTool = defineTool({
   name: "agent_resume",
   availability: "agent-control",
   description:
-    "Continue one terminal subagent thread by stable agent ID. This starts one new admitted background Run under the same Agent ID and preserves all prior Run results. skills is the exact optional task lease for this new Run and may only retain Skills authorized by the previous Run, Thread ceiling, and current policy. Call it in an isolated tool round so Keel can preserve a complete Main continuation.",
+    "Continue one terminal subagent thread by stable agent ID. This starts one new admitted background Run under the same Agent ID and preserves all prior Run results. skills and mcp are exact optional task leases for this new Run and may only retain authority authorized by the previous Run, Thread ceiling, and current policy. Child MCP calls require an exact saved project approval and cannot prompt. Call it in an isolated tool round so Keel can preserve a complete Main continuation.",
   args: toolArgs(agentResumeToolArgumentsSchema),
   permission: { kind: "none" },
   output: { kind: "text" },

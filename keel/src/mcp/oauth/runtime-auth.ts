@@ -275,6 +275,9 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
   private readonly rejectedTokens = new WeakMap<Response, string>();
   private readonly expectedAuthorization =
     new AsyncLocalStorage<McpAuthorizationIdentity>();
+  private readonly fixedAuthorizationIdentity:
+    | McpAuthorizationIdentity
+    | undefined;
 
   constructor(options: {
     readonly server: McpOAuthServerEndpoint;
@@ -283,6 +286,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
     readonly isCurrentAndEnabled: (
       server: McpOAuthServerEndpoint,
     ) => boolean | Promise<boolean>;
+    readonly fixedAuthorizationIdentity?: McpAuthorizationIdentity;
   }) {
     this.server = options.server;
     this.store = new OAuthCredentialStore({
@@ -293,6 +297,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
     });
     this.refreshLockRoot = options.refreshLockRoot;
     this.isCurrentAndEnabled = options.isCurrentAndEnabled;
+    this.fixedAuthorizationIdentity = options.fixedAuthorizationIdentity;
   }
 
   private async ensureAvailable(): Promise<void> {
@@ -317,7 +322,9 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
     }
     requireAuthorizationIdentity(
       record,
-      this.expectedAuthorization.getStore() ?? null,
+      this.expectedAuthorization.getStore() ??
+        this.fixedAuthorizationIdentity ??
+        null,
     );
     const accessToken = activeCredentials(record)?.tokens.access_token;
     if (accessToken === undefined && this.server.authenticationRequired) {
@@ -340,13 +347,31 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
       }
       throw error;
     }
-    return authorizationIdentity(record);
+    const identity = authorizationIdentity(record);
+    const expected = this.fixedAuthorizationIdentity;
+    if (
+      expected !== undefined &&
+      !sameMcpAuthorizationIdentity(expected, identity)
+    ) {
+      throw new McpOAuthCredentialUnavailableError(
+        "Error: MCP authorization identity changed after capability admission.",
+      );
+    }
+    return identity;
   }
 
   async withAuthorizationIdentity<Result>(
     expected: McpAuthorizationIdentity,
     action: () => Promise<Result>,
   ): Promise<Result> {
+    if (
+      this.fixedAuthorizationIdentity !== undefined &&
+      !sameMcpAuthorizationIdentity(this.fixedAuthorizationIdentity, expected)
+    ) {
+      throw new McpOAuthCredentialUnavailableError(
+        "Error: MCP authorization identity changed after capability admission.",
+      );
+    }
     return await this.expectedAuthorization.run(expected, action);
   }
 
@@ -375,7 +400,9 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
         refreshLockRoot: this.refreshLockRoot,
         rejectedAccessToken,
         expectedAuthorizationIdentity:
-          this.expectedAuthorization.getStore() ?? null,
+          this.expectedAuthorization.getStore() ??
+          this.fixedAuthorizationIdentity ??
+          null,
         fetchFn: context.fetchFn,
         ensureAvailable: async () => await this.ensureAvailable(),
       });
@@ -390,6 +417,7 @@ export function createMcpBearerAuthProvider(options: {
   readonly isCurrentAndEnabled: (
     server: McpOAuthServerEndpoint,
   ) => boolean | Promise<boolean>;
+  readonly fixedAuthorizationIdentity?: McpAuthorizationIdentity;
 }): McpRuntimeAuthProvider {
   return new KeelMcpBearerAuthProvider(options);
 }

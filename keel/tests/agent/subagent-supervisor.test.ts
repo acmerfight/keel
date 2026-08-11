@@ -19,6 +19,7 @@ import {
   builtinSubagentProfileCatalog,
   createSubagentProfileRegistry,
   resolveBuiltinSubagentProfile,
+  type SubagentProfileRegistry,
 } from "../../src/agent/subagent-profile.ts";
 import {
   createSubagentSupervisor,
@@ -36,6 +37,7 @@ import type {
 import type { CostModel } from "../../src/core/cost.ts";
 import { KeelError } from "../../src/core/error.ts";
 import type { LLMProvider, Usage } from "../../src/llm/types.ts";
+import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import type { DelegationToolResult } from "../../src/tools/delegation.ts";
 import { executeToolCall } from "../../src/tools/execution.ts";
 import { openAICompatibleTools } from "../../src/tools/registry.ts";
@@ -192,6 +194,7 @@ function supervisorFixture(
     readonly maxActiveAgentRuns?: number;
     readonly maxTotalChildRuns?: number;
     readonly providerBlocked?: () => boolean;
+    readonly profileRegistry?: SubagentProfileRegistry;
   } & (
     | {
         readonly lifecyclePersistence?: SubagentLifecyclePersistence;
@@ -272,15 +275,17 @@ function supervisorFixture(
       parentRunId: "main-run",
       rootBudget,
       sharedCostBudget,
-      profileRegistry: createSubagentProfileRegistry({
-        execution: { providerId: "fake", model: "test-model" },
-        ...(options.maxTurns !== undefined
-          ? { maxTurns: options.maxTurns }
-          : {}),
-        ...(options.deadlineMs !== undefined
-          ? { deadlineMs: options.deadlineMs }
-          : {}),
-      }),
+      profileRegistry:
+        options.profileRegistry ??
+        createSubagentProfileRegistry({
+          execution: { providerId: "fake", model: "test-model" },
+          ...(options.maxTurns !== undefined
+            ? { maxTurns: options.maxTurns }
+            : {}),
+          ...(options.deadlineMs !== undefined
+            ? { deadlineMs: options.deadlineMs }
+            : {}),
+        }),
       resolveExecution: (snapshot) => ({
         snapshot,
         provider,
@@ -373,6 +378,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "background",
         task: "Finish independently of the Main turn.",
+        mcp: [],
         focusPaths: [],
         signal: mainTurn.signal,
       });
@@ -383,6 +389,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "background",
           task: "Replay while the background child is still live.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         }),
@@ -415,6 +422,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "background",
           task: "Changed replay text must not create another background run.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         }),
@@ -475,6 +483,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "background",
         task: "Inspect the boundary.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -561,6 +570,7 @@ describe("Subagent Supervisor", () => {
         toolCallId: "resume-child",
         message: "Now inspect its callers.",
         skills: [],
+        mcp: [],
         focusPaths: [],
         systemPrompt: "Read-only child instructions.",
         priorMessages: [
@@ -653,6 +663,7 @@ describe("Subagent Supervisor", () => {
       toolCallId,
       message: "Inspect callers.",
       skills: [],
+      mcp: [],
       focusPaths: [],
       systemPrompt: "Read-only child instructions.",
       priorMessages: [],
@@ -707,6 +718,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "background",
           task: "Must not outlive the closed owner.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         }),
@@ -813,6 +825,83 @@ describe("Subagent Supervisor", () => {
     }
   });
 
+  test(`Given a terminal child previously leased an MCP tool whose configuration is no longer current,
+    When Main requests the same MCP lease on resume,
+    Then continuation rejects before provider work instead of restoring stale authority`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-resume-mcp-"));
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      ...singleFinalProvider("must not run"),
+      async *stream() {
+        providerCalls++;
+        yield { type: "text", text: "must not run" };
+      },
+    };
+    const mcpSnapshot = {
+      serverId: "catalog",
+      rawToolName: "search",
+      serverIncarnation: "server-v1",
+      configurationDigest: "a".repeat(64),
+      authorizationIdentity: { kind: "anonymous" as const },
+    };
+    const profileRegistry = createSubagentProfileRegistry({
+      execution: { providerId: "fake", model: "test-model" },
+      repoProfiles: [
+        {
+          name: "repo:remote",
+          base: "explorer",
+          mcp: [{ server: "catalog", tool: "search" }],
+        },
+      ],
+      mcpRuntime: {
+        kind: "enabled",
+        resolveTool: () => mcpSnapshot,
+        resolveCurrent: async () => [],
+        createRuntime: () => undefined,
+      },
+    });
+    const profile = profileRegistry.resolve("repo:remote");
+    if (profile === undefined) throw new Error("missing MCP test profile");
+    const fixture = supervisorFixture({
+      workspace,
+      provider,
+      profileRegistry,
+      background: {
+        signal: new AbortController().signal,
+        register: () => {
+          throw new Error("stale MCP resume must not register a Run");
+        },
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+    });
+
+    try {
+      const result = await fixture.supervisor.continuation.resume({
+        childAgentId: "agent-aaaaaaaa",
+        previousRunId: "subagent-aaaaaaaa",
+        capability: profile.capability,
+        threadCapabilityCeiling: profile.capability,
+        execution: profile.execution,
+        toolCallId: "resume-stale-mcp",
+        message: "Search again.",
+        skills: [],
+        mcp: [{ server: "catalog", tool: "search" }],
+        focusPaths: [],
+        systemPrompt: "Read-only child instructions.",
+        priorMessages: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        content: expect.stringContaining("task MCP lease is outside"),
+      });
+      expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given continuation lifecycle acceptance cannot be stored durably,
     When resume attempts to create the new Run,
     Then ordinary storage errors become a stable rejection while indeterminate writes remain fatal`, async () => {
@@ -830,6 +919,7 @@ describe("Subagent Supervisor", () => {
       toolCallId: "resume-storage",
       message: "Inspect callers.",
       skills: [],
+      mcp: [],
       focusPaths: [],
       systemPrompt: "Read-only child instructions.",
       priorMessages: [],
@@ -946,6 +1036,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "background",
         task: "Inspect the boundary.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -1032,6 +1123,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Return a durable result.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -1098,6 +1190,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Do not continue after durable storage fails.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         }),
@@ -1149,6 +1242,7 @@ describe("Subagent Supervisor", () => {
       profile: "explorer" as const,
       mode: "foreground" as const,
       task: `Inspect ${toolCallId}.`,
+      mcp: [],
       focusPaths: [],
       signal,
     }));
@@ -1182,6 +1276,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect four.",
+        mcp: [],
         focusPaths: [],
         signal,
       });
@@ -1190,6 +1285,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect five.",
+        mcp: [],
         focusPaths: [],
         signal,
       });
@@ -1268,6 +1364,7 @@ describe("Subagent Supervisor", () => {
       profile: "explorer" as const,
       mode: "foreground" as const,
       task: "Do not start this child.",
+      mcp: [],
       focusPaths: [],
       signal: new AbortController().signal,
     };
@@ -1342,6 +1439,7 @@ describe("Subagent Supervisor", () => {
       profile: "explorer" as const,
       mode: "foreground" as const,
       task: "Do not start this child.",
+      mcp: [],
       focusPaths: [],
       signal: new AbortController().signal,
     };
@@ -1400,6 +1498,7 @@ describe("Subagent Supervisor", () => {
       profile: "explorer" as const,
       mode: "foreground" as const,
       task: `Wait in ${toolCallId}.`,
+      mcp: [],
       focusPaths: [],
       signal: parent.signal,
     }));
@@ -1473,6 +1572,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Fail independently.",
+        mcp: [],
         focusPaths: [],
         signal,
       },
@@ -1481,6 +1581,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Complete independently.",
+        mcp: [],
         focusPaths: [],
         signal,
       },
@@ -1556,6 +1657,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Do not start this child.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -1612,6 +1714,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Reject without starting a child.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -1661,6 +1764,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Reject without corrupting the durable ledger.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         }),
@@ -1719,6 +1823,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Do not start without durable acceptance.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         });
@@ -1775,6 +1880,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect module.ts.",
+        mcp: [],
         focusPaths: ["module.ts"],
         signal,
       });
@@ -1783,6 +1889,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Changed replay text must not create a new run.",
+        mcp: [],
         focusPaths: [],
         signal,
       });
@@ -1791,6 +1898,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Replay beside one fresh child.",
+        mcp: [],
         focusPaths: [],
         signal,
       };
@@ -1799,6 +1907,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect it again.",
+        mcp: [],
         focusPaths: [],
         signal,
       };
@@ -1903,6 +2012,7 @@ describe("Subagent Supervisor", () => {
       profile: "explorer" as const,
       mode: "foreground" as const,
       task: "Return one stable result.",
+      mcp: [],
       focusPaths: [],
       signal: new AbortController().signal,
     };
@@ -1966,6 +2076,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task,
+          mcp: [],
           focusPaths,
           signal,
         },
@@ -1975,6 +2086,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task,
+          mcp: [],
           focusPaths,
         },
       };
@@ -2046,6 +2158,7 @@ describe("Subagent Supervisor", () => {
             profile: "explorer" as const,
             mode: "foreground" as const,
             task: "A replay must join the registered run.",
+            mcp: [],
             focusPaths: [],
             signal: new AbortController().signal,
           });
@@ -2061,6 +2174,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect module.ts.",
+        mcp: [],
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
       });
@@ -2119,6 +2233,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Complete despite observation failure.",
+          mcp: [],
           focusPaths: ["module.ts"],
           signal: new AbortController().signal,
         });
@@ -2166,6 +2281,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "background",
           task: "Do not detach from this ephemeral owner.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         },
@@ -2176,6 +2292,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect an invalid path.",
+        mcp: [],
         focusPaths: ["../outside"],
         signal: new AbortController().signal,
       });
@@ -2185,6 +2302,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "A replay cannot change admission.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         },
@@ -2199,6 +2317,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect without a child budget.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -2215,6 +2334,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Reject before running with an invalid provider estimate.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         });
@@ -2229,6 +2349,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Do not start after the provider circuit opens.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         });
@@ -2361,6 +2482,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect the workspace.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -2401,6 +2523,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Return a deliberately large result.",
+        mcp: [],
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
       });
@@ -2440,6 +2563,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Return JSON-expanding bounded fields.",
+        mcp: [],
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
       });
@@ -2523,6 +2647,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Encounter the provider failure.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         });
@@ -2575,6 +2700,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Read once before provider failure.",
+        mcp: [],
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
       });
@@ -2610,6 +2736,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Encounter a large provider failure.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -2692,6 +2819,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Report only observed resources.",
+          mcp: [],
           focusPaths: ["module.ts"],
           signal: new AbortController().signal,
         },
@@ -2702,6 +2830,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Fail transcript storage.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         },
@@ -2790,6 +2919,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Reach the requested terminal state.",
+          mcp: [],
           focusPaths: [],
           signal: new AbortController().signal,
         });
@@ -2829,6 +2959,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Reach the child budget guard.",
+        mcp: [],
         focusPaths: [],
         signal: new AbortController().signal,
       });
@@ -2887,6 +3018,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Complete before slow storage settles.",
+        mcp: [],
         focusPaths: ["module.ts"],
         signal: new AbortController().signal,
       });
@@ -2897,6 +3029,81 @@ describe("Subagent Supervisor", () => {
       expect(fixture.supervisor.activeChildRunCount()).toBe(0);
       expect(artifacts.inputs).toHaveLength(1);
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a child MCP transport never settles its close promise,
+    When the child finishes,
+    Then Supervisor bounds cleanup and settles the Run instead of hanging forever`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-child-mcp-close-"));
+    const mcpSnapshot = {
+      serverId: "catalog",
+      rawToolName: "search",
+      serverIncarnation: "server-v1",
+      configurationDigest: "a".repeat(64),
+      authorizationIdentity: { kind: "anonymous" as const },
+    };
+    const neverClosed = Promise.withResolvers<void>();
+    const closeStarted = Promise.withResolvers<void>();
+    const childMcpRuntime: McpRuntime = {
+      prepareTurn: async () => {},
+      exposureSnapshot: async () => ({
+        snapshotId: "empty",
+        catalogAvailable: true,
+        tools: [],
+      }),
+      search: async () => ({ ok: false, content: "unused" }),
+      execute: async () => ({
+        identity: "unidentified",
+        content: "unused",
+        ok: false,
+      }),
+      close: async () => {
+        closeStarted.resolve();
+        await neverClosed.promise;
+      },
+    };
+    const profileRegistry = createSubagentProfileRegistry({
+      execution: { providerId: "fake", model: "test-model" },
+      repoProfiles: [
+        {
+          name: "repo:remote",
+          base: "explorer",
+          mcp: [{ server: "catalog", tool: "search" }],
+        },
+      ],
+      mcpRuntime: {
+        kind: "enabled",
+        resolveTool: () => mcpSnapshot,
+        resolveCurrent: async () => [mcpSnapshot],
+        createRuntime: () => childMcpRuntime,
+      },
+    });
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("Child work completed."),
+      profileRegistry,
+      settlementGraceMs: 5,
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "mcp-close-hang",
+        profile: "repo:remote",
+        mode: "foreground",
+        task: "Finish without using the remote tool.",
+        mcp: [{ server: "catalog", tool: "search" }],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      await closeStarted.promise;
+      expect(result.ok).toBe(false);
+      expect(result.content).toContain("Child MCP runtime could not close");
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
+    } finally {
+      neverClosed.resolve();
       await rm(workspace, { recursive: true, force: true });
     }
   });
@@ -2944,6 +3151,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Settle the already-cancelled child.",
+        mcp: [],
         focusPaths: [],
         signal: controller.signal,
       });
@@ -3000,6 +3208,7 @@ describe("Subagent Supervisor", () => {
         profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Complete before parent cancellation.",
+        mcp: [],
         focusPaths: ["module.ts"],
         signal: controller.signal,
       });
@@ -3083,6 +3292,7 @@ describe("Subagent Supervisor", () => {
           profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Wait for cancellation.",
+          mcp: [],
           focusPaths: [],
           signal: controller.signal,
         });

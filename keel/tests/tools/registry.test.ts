@@ -1030,7 +1030,7 @@ describe("tool registry", () => {
 
     expect(argumentsByTool).toEqual({
       delegate: {
-        fields: ["profile", "mode", "task", "focusPaths", "skills"],
+        fields: ["profile", "mode", "task", "focusPaths", "skills", "mcp"],
         required: ["task"],
       },
       agent_list: { fields: [], required: [] },
@@ -1041,7 +1041,7 @@ describe("tool registry", () => {
         required: ["agentId", "message"],
       },
       agent_resume: {
-        fields: ["agentId", "message", "skills"],
+        fields: ["agentId", "message", "skills", "mcp"],
         required: ["agentId", "message"],
       },
       update_plan: { fields: ["plan"], required: ["plan"] },

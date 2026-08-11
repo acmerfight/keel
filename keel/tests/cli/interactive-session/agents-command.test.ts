@@ -311,10 +311,11 @@ describe("Interactive /agents command", () => {
       selector: "2",
       message: "Verify the fix",
       skills: [],
+      mcp: [],
     });
     expect(
       parseInteractiveCommand(
-        "/agents resume 2 --skill repo:review-guide -- Re-check callers",
+        "/agents resume 2 --skill repo:review-guide --mcp catalog/search -- Re-check callers",
       ),
     ).toEqual({
       kind: "agents",
@@ -322,6 +323,7 @@ describe("Interactive /agents command", () => {
       selector: "2",
       message: "Re-check callers",
       skills: ["repo:review-guide"],
+      mcp: [{ server: "catalog", tool: "search" }],
     });
   });
 
@@ -334,12 +336,13 @@ describe("Interactive /agents command", () => {
       "/agents show 1 extra",
       "/agents input 1",
       "/agents resume 1",
+      "/agents resume 1 --mcp catalog -- Re-check callers",
       "/agents unknown 1",
     ]) {
       expect(parseInteractiveCommand(input)).toEqual({
         kind: "invalid",
         message:
-          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> [--skill <name> ... --] <message>.",
+          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> [--skill <name> | --mcp <server/tool> ... --] <message>.",
       });
     }
   });

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { connectMcpServer } from "../mcp/discovery.ts";
 import {
   createMcpBearerAuthProvider,
+  type McpAuthorizationIdentity,
   type McpRuntimeAuthProvider,
 } from "../mcp/oauth.ts";
 import type {
@@ -22,6 +23,7 @@ export function mcpOAuthRefreshLockRoot(
 export function createCliMcpAuthProvider(
   runtime: Pick<CliRuntime, "env" | "mcpSecretBackend">,
   server: McpRuntimeServer,
+  fixedAuthorizationIdentity?: McpAuthorizationIdentity,
 ): McpRuntimeAuthProvider {
   return createMcpBearerAuthProvider({
     server,
@@ -29,6 +31,9 @@ export function createCliMcpAuthProvider(
     refreshLockRoot: mcpOAuthRefreshLockRoot(runtime),
     isCurrentAndEnabled: async () =>
       await isMcpServerCurrentAndEnabled(runtime, server),
+    ...(fixedAuthorizationIdentity === undefined
+      ? {}
+      : { fixedAuthorizationIdentity }),
   });
 }
 
@@ -44,13 +49,14 @@ export function createCliMcpLifecyclePolicy(
 
 export function createCliMcpConnectionFactory(
   runtime: Pick<CliRuntime, "env" | "mcpSecretBackend">,
+  fixedAuthorizationIdentity?: McpAuthorizationIdentity,
 ): McpConnectionFactory {
   return {
     connect: async (server, signal) =>
       await connectMcpServer(
         server,
         signal,
-        createCliMcpAuthProvider(runtime, server),
+        createCliMcpAuthProvider(runtime, server, fixedAuthorizationIdentity),
       ),
   };
 }

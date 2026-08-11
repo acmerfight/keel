@@ -5,6 +5,7 @@ import {
 } from "../core/cost.ts";
 import { errorMessage, isAbortThrow, KeelError } from "../core/error.ts";
 import type { LLMProvider, StreamOptions, Usage } from "../llm/types.ts";
+import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import type {
   DelegationBatch,
   DelegationBatchEntry,
@@ -43,9 +44,13 @@ import {
   narrowSubagentCapabilityToCeiling,
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   type SubagentCapabilitySnapshot,
+  type SubagentMcpToolSelector,
+  selectSubagentCapabilityMcpTools,
   selectSubagentCapabilitySkills,
   skillDescriptorFromSubagentSnapshot,
   subagentCapabilityBaseProfile,
+  subagentCapabilityFingerprint,
+  subagentCapabilityWithMcpTools,
   subagentCapabilityWithSkills,
 } from "./subagent-capability.ts";
 import type {
@@ -90,6 +95,27 @@ const MAX_ADMITTED_ID_CHARS = 512;
 const MAX_ADMITTED_TRANSCRIPT_REF_CHARS = 512;
 const MAX_QUEUED_INPUT_MESSAGES = 16;
 const MAX_QUEUED_INPUT_CHARS = 64_000;
+
+async function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) throw signal.reason;
+  return await new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
 
 type AgentTerminalStatus = SubagentTerminalStatus;
 
@@ -219,6 +245,7 @@ export interface SubagentContinuationRequest {
   readonly toolCallId: string;
   readonly message: string;
   readonly skills: readonly string[];
+  readonly mcp: readonly SubagentMcpToolSelector[];
   readonly focusPaths: readonly string[];
   readonly systemPrompt: string;
   readonly priorMessages: readonly SessionMessage[];
@@ -711,6 +738,20 @@ export function createSubagentSupervisor(
       systemPrompt,
       capability.skills.map(skillDescriptorFromSubagentSnapshot),
     );
+  const childToolExposure = (capability: SubagentCapabilitySnapshot) => ({
+    kind: "auto" as const,
+    profile: "subagent" as const,
+    capability,
+    ...(capability.mcpTools.length > 0
+      ? {
+          mcp: {
+            snapshotId: subagentCapabilityFingerprint(capability),
+            catalogAvailable: true,
+            tools: [],
+          },
+        }
+      : {}),
+  });
   const resultContinuationBudget: SubagentResultContinuationBudget = {
     lease: (toolCallIds) => {
       const resultAdmission = treeBudget.planResults(
@@ -908,6 +949,13 @@ export function createSubagentSupervisor(
               input.capability,
             )
           : undefined;
+      const childMcpRuntime =
+        options.profileRegistry.mcpRuntime.kind === "enabled"
+          ? options.profileRegistry.mcpRuntime.createRuntime(
+              input.capability,
+              input.execution.snapshot,
+            )
+          : undefined;
       try {
         for await (const event of runAgent({
           workspace: options.workspace,
@@ -923,6 +971,17 @@ export function createSubagentSupervisor(
           toolProfile: "subagent",
           subagentCapability: input.capability,
           ...(skillActivation !== undefined ? { skillActivation } : {}),
+          ...(childMcpRuntime !== undefined
+            ? {
+                mcp: {
+                  runtime: childMcpRuntime,
+                  schemaTarget: mcpProviderSchemaTarget(
+                    input.execution.snapshot.providerId,
+                    input.execution.snapshot.model,
+                  ),
+                },
+              }
+            : {}),
           stopPolicy: maxTurnFallbackPolicy(input.capability.maxTurns),
           costTracking: {
             model: input.execution.costModel,
@@ -984,6 +1043,25 @@ export function createSubagentSupervisor(
           finalText: null,
           error: errorMessage(caught),
         };
+      } finally {
+        try {
+          if (childMcpRuntime !== undefined) {
+            const closeSignal = AbortSignal.any([
+              input.lifecycle.settlementAbortController.signal,
+              AbortSignal.timeout(settlementGraceMs),
+            ]);
+            await awaitWithAbort(
+              childMcpRuntime.close(closeSignal),
+              closeSignal,
+            );
+          }
+        } catch (caught) {
+          terminal = {
+            status: "failed",
+            finalText: null,
+            error: `Child MCP runtime could not close: ${errorMessage(caught)}`,
+          };
+        }
       }
 
       const unprocessedInput = input.inputQueue.close();
@@ -1293,15 +1371,27 @@ export function createSubagentSupervisor(
         });
         continue;
       }
-      const capability = selectSubagentCapabilitySkills(
+      const skillCapability = selectSubagentCapabilitySkills(
         profile.capability,
         input.skills ?? [],
       );
-      if (capability === null) {
+      if (skillCapability === null) {
         recordRejection(input, delegationId, {
           reason: `Delegation rejected: profile ${JSON.stringify(input.profile)} does not allow every requested workflow Skill.`,
           recovery:
             "Select only Skill names advertised for that exact profile, or omit the Skill lease.",
+        });
+        continue;
+      }
+      const capability = selectSubagentCapabilityMcpTools(
+        skillCapability,
+        input.mcp ?? [],
+      );
+      if (capability === null) {
+        recordRejection(input, delegationId, {
+          reason: `Delegation rejected: profile ${JSON.stringify(input.profile)} does not allow every requested MCP tool.`,
+          recovery:
+            "Select only MCP tools advertised for that exact profile, or omit the MCP lease.",
         });
         continue;
       }
@@ -1335,11 +1425,7 @@ export function createSubagentSupervisor(
         systemPrompt: effectiveChildSystemPrompt(systemPrompt, capability),
         messages: [{ role: "user", content: userMessage }],
         signal: input.signal,
-        toolExposure: {
-          kind: "auto",
-          profile: "subagent",
-          capability,
-        },
+        toolExposure: childToolExposure(capability),
       };
       const minimumInputTokens = estimateProviderInputTokens(
         execution.provider,
@@ -1691,21 +1777,36 @@ export function createSubagentSupervisor(
               request.threadCapabilityCeiling.skills,
             )
           : [];
-      const currentCapabilityCeiling = subagentCapabilityWithSkills(
-        currentPolicy.capability,
-        currentSkills,
+      const currentMcpTools =
+        options.profileRegistry.mcpRuntime.kind === "enabled"
+          ? await options.profileRegistry.mcpRuntime.resolveCurrent(
+              request.threadCapabilityCeiling.mcpTools,
+            )
+          : [];
+      const currentCapabilityCeiling = subagentCapabilityWithMcpTools(
+        subagentCapabilityWithSkills(currentPolicy.capability, currentSkills),
+        currentMcpTools,
       );
       const currentlyAllowedCapability = narrowSubagentCapabilityToCeiling(
         request.capability,
         currentCapabilityCeiling,
       );
-      const capability = selectSubagentCapabilitySkills(
+      const skillCapability = selectSubagentCapabilitySkills(
         currentlyAllowedCapability,
         request.skills,
       );
-      if (capability === null) {
+      if (skillCapability === null) {
         return reject(
           "Agent resume rejected because its task Skill lease is outside the previous Run, Thread ceiling, or current policy.",
+        );
+      }
+      const capability = selectSubagentCapabilityMcpTools(
+        skillCapability,
+        request.mcp,
+      );
+      if (capability === null) {
+        return reject(
+          "Agent resume rejected because its task MCP lease is outside the previous Run, Thread ceiling, or current policy.",
         );
       }
       const capabilityRelations = [
@@ -1739,11 +1840,7 @@ export function createSubagentSupervisor(
             { role: "user", content: request.message },
           ],
           signal: request.signal,
-          toolExposure: {
-            kind: "auto",
-            profile: "subagent",
-            capability,
-          },
+          toolExposure: childToolExposure(capability),
           maxOutputTokens: MIN_USEFUL_OUTPUT_TOKENS,
         },
       );
@@ -1771,6 +1868,10 @@ export function createSubagentSupervisor(
           task: request.message,
           focusPaths: request.focusPaths,
           skills: capability.skills.map((skill) => skill.qualifiedName),
+          mcp: capability.mcpTools.map((tool) => ({
+            server: tool.serverId,
+            tool: tool.rawToolName,
+          })),
           signal: request.signal,
         },
         delegationId,
