@@ -8,6 +8,7 @@ import type {
   SubagentAcceptedLifecycle,
   SubagentRunId,
 } from "../../src/agent/subagent-lifecycle.ts";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import type {
   AgentResultRecord,
   AgentRunAcceptedRecord,
@@ -18,6 +19,9 @@ import type {
 import { transcriptFilePath } from "../../src/cli/agent-tree-store/transcript.ts";
 import { createAgentTreeHistory } from "../../src/cli/agent-tree-store.ts";
 import { createSessionStore } from "../../src/cli/session-store.ts";
+
+const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
+const reviewerCapability = resolveBuiltinSubagentProfile("reviewer").snapshot;
 
 function acceptedLifecycle(
   childAgentId: AgentId,
@@ -35,6 +39,7 @@ function acceptedLifecycle(
     providerId: "deepseek",
     model: "deepseek-chat",
     systemPrompt: "Read-only child instructions.",
+    capability: explorerCapability,
     lineage: { kind: "root" },
   };
 }
@@ -44,7 +49,7 @@ function acceptedRecord(
   sessionId: string,
 ): AgentRunAcceptedRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     type: "agent_run_accepted",
     timestamp: "2023-11-14T22:13:20.000Z",
     transcriptRef: `agent-transcript:${sessionId}/${lifecycle.childRunId}`,
@@ -56,7 +61,7 @@ function runningRecord(
   accepted: AgentRunAcceptedRecord,
 ): AgentRunRunningRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     type: "agent_run_running",
     timestamp: "2023-11-14T22:13:21.000Z",
     childAgentId: accepted.childAgentId,
@@ -68,7 +73,7 @@ function accountingRecord(
   accepted: AgentRunAcceptedRecord,
 ): AgentRunAccountingRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     type: "agent_run_accounting",
     timestamp: "2023-11-14T22:13:22.000Z",
     childAgentId: accepted.childAgentId,
@@ -110,7 +115,7 @@ function completedResult(
 
 function resultRecord(accepted: AgentRunAcceptedRecord): AgentResultRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     type: "agent_result",
     timestamp: "2023-11-14T22:13:23.000Z",
     result: completedResult(accepted),
@@ -122,7 +127,7 @@ function terminalRecord(
   status: AgentRunTerminalRecord["status"] = "completed",
 ): AgentRunTerminalRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     type: "agent_run_terminal",
     timestamp: "2023-11-14T22:13:24.000Z",
     childAgentId: accepted.childAgentId,
@@ -293,6 +298,17 @@ describe("Agent Tree Store", () => {
         turns: 1,
         costUsd: 0,
       });
+      expect(() =>
+        history.persistence.accepted({
+          ...continuation(
+            childAgentId,
+            "subagent-12121212",
+            firstRunId,
+            "capability-expansion",
+          ),
+          capability: reviewerCapability,
+        }),
+      ).toThrow("changes capability snapshot");
       const second = history.persistence.accepted(
         continuation(childAgentId, secondRunId, firstRunId, "second"),
       );
@@ -891,7 +907,7 @@ describe("Agent Tree Store", () => {
       });
       await appendFile(
         join(keelHome, "sessions", "interrupted", "agents", "events.jsonl"),
-        '{"schemaVersion":4,"type":"agent_result"',
+        '{"schemaVersion":5,"type":"agent_result"',
         "utf8",
       );
       await appendFile(
@@ -903,7 +919,7 @@ describe("Agent Tree Store", () => {
           "transcripts",
           `${lifecycle.childRunId}.jsonl`,
         ),
-        '{"schemaVersion":4,"type":"transcript_append"',
+        '{"schemaVersion":5,"type":"transcript_append"',
         "utf8",
       );
 
@@ -1216,9 +1232,16 @@ describe("Agent Tree Store", () => {
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
       expect(inspectTranscript).toThrow("identity mismatches acceptance");
 
+      lines[0] = originalHeader.replace(
+        JSON.stringify(explorerCapability),
+        JSON.stringify(reviewerCapability),
+      );
+      await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
+      expect(inspectTranscript).toThrow("identity mismatches acceptance");
+
       lines[0] = originalHeader;
       lines[1] =
-        '{"schemaVersion":4,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
+        '{"schemaVersion":5,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
       expect(inspectTranscript).toThrow("invalid agent transcript record");
 
@@ -1266,7 +1289,7 @@ describe("Agent Tree Store", () => {
 
       await writeFile(
         transcriptPath,
-        '{"schemaVersion":4,"type":"unknown"}\n',
+        '{"schemaVersion":5,"type":"unknown"}\n',
         "utf8",
       );
       expect(inspectTranscript).toThrow("invalid agent transcript header");
@@ -1306,7 +1329,7 @@ describe("Agent Tree Store", () => {
       if (openEntry === undefined) throw new Error("missing open child");
       await appendFile(
         join(transcriptsDirectory, `${openLifecycle.childRunId}.jsonl`),
-        '{"schemaVersion":4,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":4,"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n',
+        '{"schemaVersion":5,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":5,"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n',
         "utf8",
       );
       expect(() => history.transcript(openEntry)).toThrow(
@@ -1466,7 +1489,7 @@ describe("Agent Tree Store", () => {
         createAgentTreeHistory({ sessionId, runtime });
         const events = [
           {
-            schemaVersion: 4,
+            schemaVersion: 5,
             type: "agent_tree",
             sessionId,
             createdAt: "2023-11-14T22:13:20.000Z",
@@ -1500,7 +1523,7 @@ describe("Agent Tree Store", () => {
       id: "header",
       name: "an invalid header",
       events: () =>
-        `${JSON.stringify({ schemaVersion: 4, type: "unknown" })}\n`,
+        `${JSON.stringify({ schemaVersion: 5, type: "unknown" })}\n`,
       expected: "invalid agent tree header",
     },
     {
@@ -1508,7 +1531,7 @@ describe("Agent Tree Store", () => {
       name: "a header for another session",
       events: (sessionId: string) =>
         `${JSON.stringify({
-          schemaVersion: 4,
+          schemaVersion: 5,
           type: "agent_tree",
           sessionId: `${sessionId}-other`,
           createdAt: "2023-11-14T22:13:20.000Z",
@@ -1520,11 +1543,11 @@ describe("Agent Tree Store", () => {
       name: "a malformed middle record",
       events: (sessionId: string) =>
         `${JSON.stringify({
-          schemaVersion: 4,
+          schemaVersion: 5,
           type: "agent_tree",
           sessionId,
           createdAt: "2023-11-14T22:13:20.000Z",
-        })}\n{"schemaVersion":4,broken}\n`,
+        })}\n{"schemaVersion":5,broken}\n`,
       expected: "cannot parse",
     },
     {
@@ -1533,12 +1556,12 @@ describe("Agent Tree Store", () => {
       events: (sessionId: string) =>
         `${[
           {
-            schemaVersion: 4,
+            schemaVersion: 5,
             type: "agent_tree",
             sessionId,
             createdAt: "2023-11-14T22:13:20.000Z",
           },
-          { schemaVersion: 4, type: "unknown" },
+          { schemaVersion: 5, type: "unknown" },
         ]
           .map((record) => JSON.stringify(record))
           .join("\n")}\n`,

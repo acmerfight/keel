@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import { WorkflowSkillError } from "../../src/skills/model.ts";
 import { executeToolCall } from "../../src/tools/execution.ts";
 import type {
@@ -11,10 +12,14 @@ import type {
   OpenAICompatibleToolParameter,
 } from "../../src/tools/registry.ts";
 import {
+  builtinToolAuthorityAllows,
   isToolName,
+  modelToolExposureAccounting,
+  modelToolExposuresEqual,
   normalizeProviderToolCall,
   openAICompatibleTools,
   providerToolCallFromParsedArguments,
+  resolveModelToolExposure,
   type ToolName,
   toolCallArguments,
   toolCallCanonicalArguments,
@@ -26,6 +31,8 @@ const emptyMcpExposure = {
   catalogAvailable: true,
   tools: [],
 } as const;
+
+const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
 
 import {
   builtinToolRegistry,
@@ -121,7 +128,8 @@ function allBuiltinProviderTools(): readonly OpenAICompatibleToolDefinition[] {
     }),
     ...openAICompatibleTools({
       kind: "auto",
-      profile: "read-only-subagent",
+      profile: "subagent",
+      capability: explorerCapability,
     }),
   ];
 
@@ -883,6 +891,7 @@ describe("tool registry", () => {
     const providerDelegateCall = {
       id: "call_delegate",
       tool: "delegate",
+      profile: null,
       mode: null,
       task: "Inspect one module.",
     } as const;
@@ -892,6 +901,7 @@ describe("tool registry", () => {
 
     expect(delegateWithNullMode).toMatchObject({
       tool: "delegate",
+      profile: "explorer",
       mode: "foreground",
     });
 
@@ -1012,7 +1022,7 @@ describe("tool registry", () => {
 
     expect(argumentsByTool).toEqual({
       delegate: {
-        fields: ["mode", "task", "focusPaths"],
+        fields: ["profile", "mode", "task", "focusPaths"],
         required: ["task"],
       },
       agent_list: { fields: [], required: [] },
@@ -1180,13 +1190,7 @@ describe("tool registry", () => {
       )
       .map((tool) => tool.name);
     const fullyEnabledMainToolNames = builtinTools.map((tool) => tool.name);
-    const readOnlySubagentToolNames = builtinTools
-      .filter(
-        (tool) =>
-          tool.availability === undefined &&
-          tool.risk.kind === "workspace-read",
-      )
-      .map((tool) => tool.name);
+    const explorerToolNames = [...explorerCapability.builtinTools];
 
     expect(
       openAICompatibleTools({ kind: "auto" }).map((tool) => tool.function.name),
@@ -1210,9 +1214,47 @@ describe("tool registry", () => {
     expect(
       openAICompatibleTools({
         kind: "auto",
-        profile: "read-only-subagent",
+        profile: "subagent",
+        capability: explorerCapability,
       }).map((tool) => tool.function.name),
-    ).toEqual(readOnlySubagentToolNames);
+    ).toEqual(explorerToolNames);
+  });
+
+  test(`Given a reviewer capability snapshot governs a child,
+    When its provider schema, dispatcher authority, and accounting identity are derived,
+    Then they preserve the bounded profile without collapsing it into main`, () => {
+    const reviewerCapability =
+      resolveBuiltinSubagentProfile("reviewer").snapshot;
+    const exposure: ModelToolExposure = {
+      kind: "auto",
+      profile: "subagent",
+      capability: reviewerCapability,
+    };
+    const schemaToolNames = openAICompatibleTools(exposure).map(
+      (tool) => tool.function.name,
+    );
+
+    expect(schemaToolNames).toEqual(reviewerCapability.builtinTools);
+    expect(
+      reviewerCapability.builtinTools.every((tool) =>
+        builtinToolAuthorityAllows(exposure, tool),
+      ),
+    ).toBe(true);
+    expect(builtinToolAuthorityAllows(exposure, "write")).toBe(false);
+    expect(builtinToolAuthorityAllows(exposure, "delegate")).toBe(false);
+    expect(modelToolExposureAccounting(exposure)).toMatchObject({
+      allowBash: false,
+      allowSkill: false,
+      toolChoice: "auto",
+    });
+    const reviewerAccounting = resolveModelToolExposure(exposure);
+    const mainAccounting = resolveModelToolExposure({ kind: "auto" });
+    expect(modelToolExposuresEqual(reviewerAccounting, mainAccounting)).toBe(
+      false,
+    );
+    expect(modelToolExposuresEqual(mainAccounting, reviewerAccounting)).toBe(
+      false,
+    );
   });
 
   test(`Given background ownership exists only in a saved interactive session,

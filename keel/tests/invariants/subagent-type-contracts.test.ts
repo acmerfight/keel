@@ -134,11 +134,11 @@ describe("subagent static type contracts", () => {
     >().toEqualTypeOf<false>();
   });
 
-  test(`Given a read-only child returns a normal final message under a host budget,
+  test(`Given a governed child returns a normal final message under a host budget,
     When run options omit the budget or add delegation,
     Then both invalid execution modes are not assignable`, () => {
     type ChildWithoutBudget = RunAgentBase & {
-      readonly toolProfile: "read-only-subagent";
+      readonly toolProfile: "subagent";
       readonly userMessageOrigin: {
         readonly type: "runtime_subagent_delegation";
       };
@@ -157,7 +157,7 @@ describe("subagent static type contracts", () => {
     expectTypeOf<
       Extract<
         RunAgentOptions,
-        { readonly toolProfile: "read-only-subagent" }
+        { readonly toolProfile: "subagent" }
       >["costBudgetProvider"]
     >().toEqualTypeOf<LLMProvider>();
   });

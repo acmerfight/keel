@@ -2,6 +2,7 @@ import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SessionLedgerObserver } from "../../agent/session-ledger.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
+import { subagentCapabilitiesEqual } from "../../agent/subagent-capability.ts";
 import type {
   SubagentRunId,
   SubagentTerminalStatus,
@@ -83,6 +84,7 @@ function transcriptHeader(
     providerId: accepted.providerId,
     model: accepted.model,
     systemPrompt: accepted.systemPrompt,
+    capability: accepted.capability,
     lineage: accepted.lineage,
   };
 }
@@ -210,6 +212,7 @@ function assertTranscriptIdentity(
     header.providerId !== accepted.providerId ||
     header.model !== accepted.model ||
     header.systemPrompt !== accepted.systemPrompt ||
+    !subagentCapabilitiesEqual(header.capability, accepted.capability) ||
     JSON.stringify(header.lineage) !== JSON.stringify(accepted.lineage) ||
     header.focusPaths.length !== accepted.focusPaths.length ||
     header.focusPaths.some(

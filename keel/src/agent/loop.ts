@@ -110,6 +110,7 @@ import type {
   SessionMessage,
 } from "./session-message.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
+import type { SubagentCapabilitySnapshot } from "./subagent-capability.ts";
 import {
   maxSubagentResultCharsForBatch,
   type SubagentResultContinuationBudget,
@@ -187,7 +188,8 @@ interface SubagentRunAgentOptionsBase {
   readonly memory?: never;
   readonly mcp?: never;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
-  readonly toolProfile: "read-only-subagent";
+  readonly toolProfile: "subagent";
+  readonly subagentCapability: SubagentCapabilitySnapshot;
   readonly delegation?: never;
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
@@ -281,7 +283,8 @@ interface SubagentRunAgentTurnOptions {
   readonly memory?: never;
   readonly mcp?: never;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
-  readonly toolProfile: "read-only-subagent";
+  readonly toolProfile: "subagent";
+  readonly subagentCapability: SubagentCapabilitySnapshot;
   readonly delegation?: never;
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
@@ -300,10 +303,11 @@ export type RunAgentTurnOptions = RunAgentTurnOptionsBase &
 function agentTurnExecutionOptions(
   options: RunAgentOptions,
 ): MainRunAgentTurnOptions | SubagentRunAgentTurnOptions {
-  if (options.toolProfile === "read-only-subagent") {
+  if (options.toolProfile === "subagent") {
     return {
       bash: options.bash,
       toolProfile: options.toolProfile,
+      subagentCapability: options.subagentCapability,
       costBudgetProvider: options.costBudgetProvider,
       drainInjectedUserMessages: options.injectedUserMessages.drain,
       closeInjectedUserMessagesAtTerminalBoundary:
@@ -550,6 +554,7 @@ function delegationBatchEntry(
       toolCallId: toolCall.id,
       mode: toolCall.mode,
       task: toolCall.task,
+      profile: toolCall.profile,
       focusPaths: toolCall.focusPaths ?? [],
       signal,
     },
@@ -835,7 +840,7 @@ function agentTurnModelOperation(
   options: RunAgentTurnOptions,
 ): ModelOperationRequest<"agent_turn" | "subagent_turn"> | null {
   if (options.modelOperations === undefined) return null;
-  return options.toolProfile === "read-only-subagent"
+  return options.toolProfile === "subagent"
     ? {
         instrumentation: options.modelOperations,
         purpose: "subagent_turn",
@@ -903,13 +908,13 @@ export async function* runAgentTurn(
     drainInjectedUserMessages,
   } = options;
   const closeInjectedUserMessagesAtTerminalBoundary =
-    options.toolProfile === "read-only-subagent"
+    options.toolProfile === "subagent"
       ? options.closeInjectedUserMessagesAtTerminalBoundary
       : undefined;
   const hiddenWorkspacePaths = options.hiddenWorkspacePaths ?? [];
   const allowSkill = options.skillActivation !== undefined;
   const assertionGoalModelOperations =
-    options.toolProfile === "read-only-subagent"
+    options.toolProfile === "subagent"
       ? null
       : (options.modelOperations ?? null);
   let untrustedMcpContentObserved = hasUntrustedMcpContent(
@@ -1077,14 +1082,12 @@ export async function* runAgentTurn(
       prepareWithContinuationCleanup(pendingMainContinuation, () =>
         reviewedMemory.proposal.sourceFor(currentMemorySource),
       ) !== undefined;
-    const memoryToolExposure: Extract<
-      ModelToolExposure,
-      { readonly kind: "auto" }
-    >["memory"] = exposeMemoryTools
-      ? exposeReviewedMemory
-        ? "reviewed"
-        : "direct"
-      : undefined;
+    const memoryToolExposure: "direct" | "reviewed" | undefined =
+      exposeMemoryTools
+        ? exposeReviewedMemory
+          ? "reviewed"
+          : "direct"
+        : undefined;
     if (exposeMemoryTools) {
       memoryToolsExposedForMessages.add(currentMemorySource);
     }
@@ -1127,24 +1130,33 @@ export async function* runAgentTurn(
       prepareWithContinuationCleanup(pendingMainContinuation, () =>
         delegation.available(),
       );
-    const preparedToolExposure: ModelToolExposure = {
-      kind: "auto",
-      ...(options.toolProfile !== undefined
-        ? { profile: options.toolProfile }
-        : {}),
-      ...(delegationAvailable
+    const preparedToolExposure: ModelToolExposure =
+      options.toolProfile === "subagent"
         ? {
-            delegation: delegation.mode,
+            kind: "auto",
+            profile: "subagent",
+            capability: options.subagentCapability,
           }
-        : {}),
-      ...agentControlExposure,
-      ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
-      ...(allowSkill && !untrustedMcpContentObserved ? { skill: true } : {}),
-      ...(memoryToolExposure !== undefined
-        ? { memory: memoryToolExposure }
-        : {}),
-      ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
-    };
+        : {
+            kind: "auto",
+            ...(options.toolProfile !== undefined
+              ? { profile: options.toolProfile }
+              : {}),
+            ...(delegationAvailable
+              ? {
+                  delegation: delegation.mode,
+                }
+              : {}),
+            ...agentControlExposure,
+            ...(bashRuntimeExposesTool(bash) ? { bash: true } : {}),
+            ...(allowSkill && !untrustedMcpContentObserved
+              ? { skill: true }
+              : {}),
+            ...(memoryToolExposure !== undefined
+              ? { memory: memoryToolExposure }
+              : {}),
+            ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
+          };
     let turnResult: AgentTurn;
     const mainContinuation = pendingMainContinuation;
     pendingMainContinuation = null;
@@ -1774,7 +1786,7 @@ export async function* runAgent(
     origin: options.userMessageOrigin ?? { type: "user_prompt" },
   };
   const transcriptObserver =
-    options.toolProfile === "read-only-subagent" &&
+    options.toolProfile === "subagent" &&
     options.priorMessages !== undefined &&
     options.transcriptObserver !== undefined
       ? {
@@ -1786,7 +1798,7 @@ export async function* runAgent(
       : options.transcriptObserver;
   const ledger = sessionLedgerFromMessages(
     [
-      ...(options.toolProfile === "read-only-subagent"
+      ...(options.toolProfile === "subagent"
         ? (options.priorMessages ?? [])
         : []),
       userMessage,

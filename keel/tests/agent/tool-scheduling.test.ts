@@ -482,6 +482,7 @@ describe("Tool Scheduling", () => {
           type: "tool_call",
           id: "unexposed-delegate",
           tool: "delegate",
+          profile: "explorer",
           mode: "background",
           task: "Must not be admitted.",
         };

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { SubagentPersistenceError } from "../../src/agent/subagent-lifecycle.ts";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import type { AgentControlCapability } from "../../src/tools/agent-control.ts";
 import { createDelegationExecutor } from "../../src/tools/delegation.ts";
@@ -27,6 +28,8 @@ const unusedAgentMutationControl = {
   input: () => ({ ok: false, content: "unused" }),
   resume: async () => ({ ok: false, content: "unused" }),
 } satisfies Pick<AgentControlCapability, "input" | "resume">;
+
+const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
 
 const EDIT_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const SHELL_ENV_KEY = "SHELL";
@@ -81,7 +84,8 @@ describe("Tool Execution", () => {
       bash: { kind: "disabled" } as const,
       builtinToolAuthority: {
         kind: "auto",
-        profile: "read-only-subagent",
+        profile: "subagent",
+        capability: explorerCapability,
       } as const,
     };
 
@@ -140,7 +144,8 @@ describe("Tool Execution", () => {
             bash: { kind: "disabled" },
             builtinToolAuthority: {
               kind: "auto",
-              profile: "read-only-subagent",
+              profile: "subagent",
+              capability: explorerCapability,
             },
           }),
         ).rejects;
@@ -171,6 +176,7 @@ describe("Tool Execution", () => {
         toolCall: {
           id: "forged_delegate",
           tool: "delegate",
+          profile: "explorer",
           mode: "foreground",
           task: "Inspect the workspace.",
         },
@@ -198,7 +204,8 @@ describe("Tool Execution", () => {
         bash: { kind: "disabled" },
         builtinToolAuthority: {
           kind: "auto",
-          profile: "read-only-subagent",
+          profile: "subagent",
+          capability: explorerCapability,
         },
       });
 
@@ -228,7 +235,8 @@ describe("Tool Execution", () => {
       bash: { kind: "disabled" } as const,
       builtinToolAuthority: {
         kind: "auto",
-        profile: "read-only-subagent",
+        profile: "subagent",
+        capability: explorerCapability,
       } as const,
     };
     const results = await Promise.all([
@@ -301,6 +309,7 @@ describe("Tool Execution", () => {
       toolCall: {
         id: "missing_delegate_capability",
         tool: "delegate",
+        profile: "explorer",
         mode: "foreground",
         task: "Inspect the workspace.",
       },
@@ -326,6 +335,7 @@ describe("Tool Execution", () => {
       toolCall: {
         id: "delegate_result",
         tool: "delegate",
+        profile: "explorer",
         mode: "foreground",
         task: "Inspect the workspace.",
       },
@@ -413,6 +423,7 @@ describe("Tool Execution", () => {
         toolCall: {
           id: "delegate_persistence_failure",
           tool: "delegate",
+          profile: "explorer",
           mode: "foreground",
           task: "Inspect the workspace.",
         },
@@ -616,6 +627,7 @@ describe("Tool Execution", () => {
       toolCall: {
         id: "delegate_once",
         tool: "delegate",
+        profile: "explorer",
         mode: "foreground",
         task: "Inspect src/tools/delegation.ts.",
         focusPaths: ["src/tools/delegation.ts"],

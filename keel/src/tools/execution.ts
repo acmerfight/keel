@@ -186,6 +186,7 @@ async function executeDelegateTool(
   }
   const result = await context.delegation.delegate({
     toolCallId: toolCall.id,
+    profile: toolCall.profile,
     mode: toolCall.mode,
     task: toolCall.task,
     focusPaths: toolCall.focusPaths ?? [],
@@ -758,12 +759,12 @@ function executeUpdatePlanTool(toolCall: UpdatePlanToolCall): ToolExecution {
   };
 }
 
-function contextUsesReadOnlySubagentProfile(
+function contextUsesSubagentProfile(
   context: BuiltinToolExecutionContext,
 ): boolean {
   return (
     context.builtinToolAuthority?.kind === "auto" &&
-    context.builtinToolAuthority.profile === "read-only-subagent"
+    context.builtinToolAuthority.profile === "subagent"
   );
 }
 
@@ -780,7 +781,7 @@ async function executeReadTool(
       ? { hiddenPaths: hiddenWorkspacePaths }
       : {}),
   };
-  const result = contextUsesReadOnlySubagentProfile(context)
+  const result = contextUsesSubagentProfile(context)
     ? await executeReadAbortable(workspace, toolCall.path, {
         ...readOptions,
         signal,
@@ -831,7 +832,7 @@ async function executeLsTool(
       ? { hiddenPaths: hiddenWorkspacePaths }
       : {}),
   };
-  const result = contextUsesReadOnlySubagentProfile(context)
+  const result = contextUsesSubagentProfile(context)
     ? await executeLsAbortable(workspace, { ...lsOptions, signal })
     : executeLs(workspace, lsOptions);
   return {

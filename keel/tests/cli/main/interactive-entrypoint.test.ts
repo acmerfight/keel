@@ -17,6 +17,7 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { resolveBuiltinSubagentProfile } from "../../../src/agent/subagent-profile.ts";
 import { createAgentTreeHistory } from "../../../src/cli/agent-tree-store.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
 import {
@@ -36,6 +37,7 @@ import {
   sseToolCall,
   sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
+
 import {
   appendSessionRecordLine,
   endForkGraph,
@@ -44,6 +46,8 @@ import {
   taskProgressRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
+
+const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
 
 const DEEPSEEK_MISSING_API_KEY_GUIDANCE = [
   "Error: missing API key for deepseek.",
@@ -290,6 +294,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       providerId: "fake",
       model: "fake",
       systemPrompt: "Read-only child instructions.",
+      capability: explorerCapability,
       lineage: { kind: "root" },
     });
     first.transcript.initialize([

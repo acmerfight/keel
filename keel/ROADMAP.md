@@ -471,10 +471,12 @@ Not needed to switch; revisit once P0/P1 are done.
 
 - Sub-agents — #590 provides stable default-off `off|explicit|auto` policy,
   foreground read-only parallelism, durable history, and saved-session attached
-  background list/wait/cancel. Crash-safe delivery, multi-Run child threads,
-  governed profiles, isolated writes, bounded nesting, and any default-on
-  decision remain gated by their later epic slices and same-budget value
-  evidence.
+  background list/wait/cancel, crash-safe result delivery, and stable multi-Run
+  child threads. Built-in `explorer`/`reviewer` profiles now derive model-visible
+  tools and dispatcher authority from one persisted capability snapshot.
+  Repo-defined narrowing, Skills/MCP derivation, isolated writes, bounded
+  nesting, and any default-on decision remain gated by their later epic slices
+  and same-budget value evidence.
 - Plan mode
 - IDE integration
 - Skill marketplace

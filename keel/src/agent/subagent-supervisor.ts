@@ -34,6 +34,10 @@ import { buildReadOnlySubagentSystemPrompt } from "./prompt.ts";
 import { projectSessionMessageToProvider } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
 import { maxTurnFallbackPolicy } from "./stop-policy.ts";
+import {
+  SUBAGENT_MAX_FINAL_TEXT_CHARS,
+  type SubagentCapabilitySnapshot,
+} from "./subagent-capability.ts";
 import type {
   AgentId,
   SubagentCanonicalResult,
@@ -45,6 +49,7 @@ import type {
   SubagentTerminalStatus,
 } from "./subagent-lifecycle.ts";
 import { SubagentPersistenceError } from "./subagent-lifecycle.ts";
+import { resolveBuiltinSubagentProfile } from "./subagent-profile.ts";
 import {
   createSubagentTreeAdmission,
   type SubagentAdmissionLease,
@@ -65,11 +70,8 @@ import type {
   ToolOutputArtifactSaveResult,
 } from "./tool-output-artifacts.ts";
 
-const DEFAULT_CHILD_DEADLINE_MS = 120_000;
 const DEFAULT_SETTLEMENT_GRACE_MS = 2_000;
-const DEFAULT_CHILD_MAX_TURNS = 16;
 const MAIN_CONTINUATION_MAX_OUTPUT_TOKENS = 4_096;
-const MAX_ADMITTED_FINAL_TEXT_CHARS = 4_000;
 const MAX_ADMITTED_ERROR_CHARS = 2_000;
 const MAX_ADMITTED_ID_CHARS = 512;
 const MAX_ADMITTED_TRANSCRIPT_REF_CHARS = 512;
@@ -169,6 +171,7 @@ type DelegationReceipt = AcceptedDelegation | RejectedDelegation;
 interface PreparedDelegationCandidate {
   readonly input: DelegationRequest;
   readonly delegationId: string;
+  readonly capability: SubagentCapabilitySnapshot;
   readonly systemPrompt: string;
   readonly userMessage: string;
   readonly minimumInputTokens: number;
@@ -195,6 +198,7 @@ export interface SubagentSupervisor {
 export interface SubagentContinuationRequest {
   readonly childAgentId: AgentId;
   readonly previousRunId: SubagentRunId;
+  readonly capability: SubagentCapabilitySnapshot;
   readonly toolCallId: string;
   readonly message: string;
   readonly focusPaths: readonly string[];
@@ -448,7 +452,7 @@ export function projectSubagentResult(
     result.status === "completed" ? result.finalText : result.error;
   const textLimit =
     result.status === "completed"
-      ? MAX_ADMITTED_FINAL_TEXT_CHARS
+      ? SUBAGENT_MAX_FINAL_TEXT_CHARS
       : MAX_ADMITTED_ERROR_CHARS;
   const delegationId = admittedText(result.delegationId, MAX_ADMITTED_ID_CHARS);
   const admittedResultText = admittedText(rawText, textLimit);
@@ -696,10 +700,8 @@ export function createSubagentSupervisor(
           };
     },
   };
-  const deadlineMs = options.deadlineMs ?? DEFAULT_CHILD_DEADLINE_MS;
   const settlementGraceMs =
     options.settlementGraceMs ?? DEFAULT_SETTLEMENT_GRACE_MS;
-  const maxTurns = options.maxTurns ?? DEFAULT_CHILD_MAX_TURNS;
   const observationNow = (fallback = 0): number => {
     try {
       const now = options.now();
@@ -717,7 +719,10 @@ export function createSubagentSupervisor(
       // Progress is an observation adapter and cannot own child lifecycle.
     }
   };
-  const createLifecycle = (parentSignal: AbortSignal): ChildLifecycle => {
+  const createLifecycle = (
+    parentSignal: AbortSignal,
+    deadlineMs: number,
+  ): ChildLifecycle => {
     const startedAt = observationNow();
     const abortController = new AbortController();
     const settlementAbortController = new AbortController();
@@ -766,6 +771,7 @@ export function createSubagentSupervisor(
     readonly systemPrompt: string;
     readonly userMessage: string;
     readonly priorMessages?: readonly SessionMessage[];
+    readonly capability: SubagentCapabilitySnapshot;
     readonly inputQueue: SubagentInputQueue;
     readonly childMaxCostUsd: number;
     readonly lifecycle: ChildLifecycle;
@@ -780,7 +786,7 @@ export function createSubagentSupervisor(
         delegationId: input.delegationId,
         task: input.task,
         elapsedMs: elapsedSince(input.lifecycle.startedAt),
-        deadlineMs,
+        deadlineMs: input.capability.deadlineMs,
       });
     };
     const toolProgress = (tool: string): void => {
@@ -790,7 +796,7 @@ export function createSubagentSupervisor(
         task: input.task,
         tool,
         elapsedMs: elapsedSince(input.lifecycle.startedAt),
-        deadlineMs,
+        deadlineMs: input.capability.deadlineMs,
       });
     };
     const turnProgress = (turn: number): void => {
@@ -800,7 +806,7 @@ export function createSubagentSupervisor(
         task: input.task,
         turn,
         elapsedMs: elapsedSince(input.lifecycle.startedAt),
-        deadlineMs,
+        deadlineMs: input.capability.deadlineMs,
       });
     };
     try {
@@ -862,8 +868,9 @@ export function createSubagentSupervisor(
           systemPrompt: input.systemPrompt,
           signal: input.lifecycle.abortController.signal,
           bash: { kind: "disabled" },
-          toolProfile: "read-only-subagent",
-          stopPolicy: maxTurnFallbackPolicy(maxTurns),
+          toolProfile: "subagent",
+          subagentCapability: input.capability,
+          stopPolicy: maxTurnFallbackPolicy(input.capability.maxTurns),
           costTracking: {
             model: options.costModel,
             maxCostUsd: input.childMaxCostUsd,
@@ -1018,7 +1025,8 @@ export function createSubagentSupervisor(
     persistence: SubagentRunPersistence | undefined,
   ): AcceptedDelegation => {
     const candidate = childBudget.value;
-    const { input, delegationId, systemPrompt, userMessage } = candidate;
+    const { input, delegationId, capability, systemPrompt, userMessage } =
+      candidate;
     const record: SubagentRunRecord = {
       delegationId,
       childAgentId,
@@ -1031,6 +1039,7 @@ export function createSubagentSupervisor(
       input.mode === "background" && options.background !== undefined
         ? options.background.signal
         : input.signal,
+      capability.deadlineMs,
     );
     const releaseResources = (): void => {
       lifecycle.cleanup();
@@ -1072,7 +1081,7 @@ export function createSubagentSupervisor(
         delegationId,
         task: input.task,
         elapsedMs: elapsedSince(lifecycle.startedAt),
-        deadlineMs,
+        deadlineMs: capability.deadlineMs,
       });
       releaseResources();
     };
@@ -1088,6 +1097,7 @@ export function createSubagentSupervisor(
             toolCallId: input.toolCallId,
             task: input.task,
             focusPaths: input.focusPaths,
+            capability,
             systemPrompt,
             userMessage,
             ...(candidate.priorMessages !== undefined
@@ -1218,6 +1228,14 @@ export function createSubagentSupervisor(
         });
         continue;
       }
+      const profile = resolveBuiltinSubagentProfile(input.profile, {
+        ...(options.maxTurns !== undefined
+          ? { maxTurns: options.maxTurns }
+          : {}),
+        ...(options.deadlineMs !== undefined
+          ? { deadlineMs: options.deadlineMs }
+          : {}),
+      });
       const systemPrompt = buildReadOnlySubagentSystemPrompt({
         workspace: options.workspace,
         platform: options.platform,
@@ -1225,6 +1243,9 @@ export function createSubagentSupervisor(
           ? { projectInstructions: options.projectInstructions }
           : {}),
         focusPaths: input.focusPaths,
+        profile: profile.snapshot.profile,
+        roleInstructions: profile.roleInstructions,
+        maxFinalTextChars: profile.snapshot.maxFinalTextChars,
       });
       const userMessage = childTaskMessage(
         delegationId,
@@ -1235,7 +1256,11 @@ export function createSubagentSupervisor(
         systemPrompt,
         messages: [{ role: "user", content: userMessage }],
         signal: input.signal,
-        toolExposure: { kind: "auto", profile: "read-only-subagent" },
+        toolExposure: {
+          kind: "auto",
+          profile: "subagent",
+          capability: profile.snapshot,
+        },
       };
       const minimumInputTokens = estimateProviderInputTokens(options.provider, {
         ...childInputOptions,
@@ -1253,6 +1278,7 @@ export function createSubagentSupervisor(
       candidates.push({
         input,
         delegationId,
+        capability: profile.snapshot,
         systemPrompt,
         userMessage,
         minimumInputTokens,
@@ -1358,6 +1384,7 @@ export function createSubagentSupervisor(
             mode: candidate.input.mode,
             providerId: options.providerId,
             model: options.model,
+            capability: candidate.capability,
             systemPrompt: candidate.systemPrompt,
             lineage: { kind: "root" },
           });
@@ -1399,7 +1426,7 @@ export function createSubagentSupervisor(
           delegationId: candidate.delegationId,
           task: candidate.input.task,
           elapsedMs: 0,
-          deadlineMs,
+          deadlineMs: candidate.capability.deadlineMs,
         });
       }
     }
@@ -1577,7 +1604,11 @@ export function createSubagentSupervisor(
           { role: "user", content: request.message },
         ],
         signal: request.signal,
-        toolExposure: { kind: "auto", profile: "read-only-subagent" },
+        toolExposure: {
+          kind: "auto",
+          profile: "subagent",
+          capability: request.capability,
+        },
         maxOutputTokens: MIN_USEFUL_OUTPUT_TOKENS,
       });
       if (minimumInputTokens === null) {
@@ -1599,12 +1630,14 @@ export function createSubagentSupervisor(
       const candidate: PreparedDelegationCandidate = {
         input: {
           toolCallId: request.toolCallId,
+          profile: request.capability.profile,
           mode: "background",
           task: request.message,
           focusPaths: request.focusPaths,
           signal: request.signal,
         },
         delegationId,
+        capability: request.capability,
         systemPrompt: request.systemPrompt,
         userMessage: request.message,
         minimumInputTokens,
@@ -1634,6 +1667,7 @@ export function createSubagentSupervisor(
           mode: "background",
           providerId: options.providerId,
           model: options.model,
+          capability: request.capability,
           systemPrompt: request.systemPrompt,
           lineage: {
             kind: "continuation",
@@ -1664,7 +1698,7 @@ export function createSubagentSupervisor(
         delegationId,
         task: request.message,
         elapsedMs: 0,
-        deadlineMs,
+        deadlineMs: request.capability.deadlineMs,
       });
       const result = receipt.run();
       options.background.register({

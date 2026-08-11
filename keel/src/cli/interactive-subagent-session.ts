@@ -328,6 +328,7 @@ export function createInteractiveSubagentSession(
       const result = await continuationCapability.resume({
         childAgentId: entry.childAgentId,
         previousRunId: entry.childRunId,
+        capability: entry.capability,
         toolCallId: request.requestId,
         message: request.message,
         focusPaths: entry.focusPaths,
