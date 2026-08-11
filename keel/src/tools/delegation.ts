@@ -55,6 +55,7 @@ export interface DelegationRequest {
   readonly mode: "foreground" | "background";
   readonly task: string;
   readonly focusPaths: readonly string[];
+  readonly skills?: readonly string[];
   readonly signal: AbortSignal;
 }
 

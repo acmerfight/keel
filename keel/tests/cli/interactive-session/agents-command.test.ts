@@ -310,6 +310,18 @@ describe("Interactive /agents command", () => {
       action: "resume",
       selector: "2",
       message: "Verify the fix",
+      skills: [],
+    });
+    expect(
+      parseInteractiveCommand(
+        "/agents resume 2 --skill repo:review-guide -- Re-check callers",
+      ),
+    ).toEqual({
+      kind: "agents",
+      action: "resume",
+      selector: "2",
+      message: "Re-check callers",
+      skills: ["repo:review-guide"],
     });
   });
 
@@ -327,7 +339,7 @@ describe("Interactive /agents command", () => {
       expect(parseInteractiveCommand(input)).toEqual({
         kind: "invalid",
         message:
-          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> <message>.",
+          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> [--skill <name> ... --] <message>.",
       });
     }
   });

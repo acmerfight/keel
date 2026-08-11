@@ -1,3 +1,5 @@
+import type { SkillDescriptor, WorkflowSkill } from "../skills/model.ts";
+
 export const subagentProfileIds = ["explorer", "reviewer"] as const;
 
 export type SubagentProfileId = (typeof subagentProfileIds)[number];
@@ -21,11 +23,29 @@ export const SUBAGENT_MAX_FINAL_TEXT_CHARS = 4_000;
 export const SUBAGENT_DEADLINE_MS = 120_000;
 export const EXPLORER_MAX_TURNS = 16;
 export const REVIEWER_MAX_TURNS = 20;
+export const MAX_SUBAGENT_SKILLS = 8;
+
+export interface SubagentSkillSnapshot {
+  readonly descriptorId: string;
+  readonly packageId: string;
+  readonly rootKey: string;
+  readonly rootPriority: number;
+  readonly qualifiedName: string;
+  readonly scope: SkillDescriptor["scope"];
+  readonly activationPolicy: "implicit";
+  readonly name: string;
+  readonly description: string;
+  readonly relativePath: string;
+  readonly digest: string;
+  readonly resourcePaths: readonly string[];
+  readonly content: string;
+}
 
 interface SubagentCapabilityLimits {
   readonly maxTurns: number;
   readonly deadlineMs: number;
   readonly maxFinalTextChars: number;
+  readonly skills: readonly SubagentSkillSnapshot[];
 }
 
 interface ExplorerCapabilitySnapshot extends SubagentCapabilityLimits {
@@ -64,6 +84,7 @@ export type SubagentCapabilitySnapshot =
 type SubagentCapabilityDimension =
   | "baseProfile"
   | "builtinTools"
+  | "skills"
   | "maxTurns"
   | "deadlineMs"
   | "maxFinalTextChars";
@@ -74,6 +95,72 @@ export type SubagentCapabilityRelation =
       readonly kind: "expansion";
       readonly dimension: SubagentCapabilityDimension;
     };
+
+export function subagentSkillSnapshotFromWorkflowSkill(
+  skill: WorkflowSkill,
+  descriptor: SkillDescriptor & { readonly activationPolicy: "implicit" },
+): SubagentSkillSnapshot {
+  return {
+    descriptorId: skill.id,
+    packageId: skill.packageId,
+    rootKey: descriptor.rootKey,
+    rootPriority: descriptor.rootPriority,
+    qualifiedName: skill.qualifiedName,
+    scope: skill.scope,
+    activationPolicy: descriptor.activationPolicy,
+    name: skill.name,
+    description: descriptor.description,
+    relativePath: skill.relativePath,
+    digest: skill.digest,
+    resourcePaths: [...skill.resourcePaths],
+    content: skill.content,
+  };
+}
+
+export function workflowSkillFromSubagentSnapshot(
+  snapshot: SubagentSkillSnapshot,
+): WorkflowSkill {
+  return {
+    id: snapshot.descriptorId,
+    packageId: snapshot.packageId,
+    qualifiedName: snapshot.qualifiedName,
+    scope: snapshot.scope,
+    digest: snapshot.digest,
+    relativePath: snapshot.relativePath,
+    name: snapshot.name,
+    resourcePaths: [...snapshot.resourcePaths],
+    content: snapshot.content,
+  };
+}
+
+export function skillDescriptorFromSubagentSnapshot(
+  snapshot: SubagentSkillSnapshot,
+): SkillDescriptor {
+  return {
+    id: snapshot.descriptorId,
+    packageId: snapshot.packageId,
+    rootKey: snapshot.rootKey,
+    rootPriority: snapshot.rootPriority,
+    qualifiedName: snapshot.qualifiedName,
+    scope: snapshot.scope,
+    activationPolicy: snapshot.activationPolicy,
+    name: snapshot.name,
+    description: snapshot.description,
+    relativePath: snapshot.relativePath,
+    digest: snapshot.digest,
+  };
+}
+
+function subagentSkillFingerprint(snapshot: SubagentSkillSnapshot): string {
+  return JSON.stringify(snapshot);
+}
+
+function subagentSkillsEqual(
+  left: readonly SubagentSkillSnapshot[],
+  right: readonly SubagentSkillSnapshot[],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 export function subagentCapabilityBaseProfile(
   snapshot: SubagentCapabilitySnapshot,
@@ -98,6 +185,14 @@ export function compareSubagentCapability(
   );
   if (candidate.builtinTools.some((tool) => !ceilingTools.has(tool))) {
     return { kind: "expansion", dimension: "builtinTools" };
+  }
+  const ceilingSkills = new Set(ceiling.skills.map(subagentSkillFingerprint));
+  if (
+    candidate.skills.some(
+      (skill) => !ceilingSkills.has(subagentSkillFingerprint(skill)),
+    )
+  ) {
+    return { kind: "expansion", dimension: "skills" };
   }
   if (candidate.maxTurns > ceiling.maxTurns) {
     return { kind: "expansion", dimension: "maxTurns" };
@@ -148,18 +243,49 @@ export function narrowSubagentCapabilityToCeiling(
   ceiling: SubagentCapabilitySnapshot,
 ): SubagentCapabilitySnapshot {
   const narrowed = narrowSubagentCapabilityLimits(snapshot, ceiling);
+  const ceilingSkills = new Set(ceiling.skills.map(subagentSkillFingerprint));
+  const skills = narrowed.skills.filter((skill) =>
+    ceilingSkills.has(subagentSkillFingerprint(skill)),
+  );
   if (narrowed.profile === "explorer" || narrowed.profile === "reviewer") {
-    return narrowed;
+    return { ...narrowed, skills };
   }
   const ceilingTools: ReadonlySet<SubagentBuiltinToolName> = new Set(
     ceiling.builtinTools,
   );
   return {
     ...narrowed,
+    skills,
     builtinTools: narrowed.builtinTools.filter((tool) =>
       ceilingTools.has(tool),
     ),
   };
+}
+
+export function subagentCapabilityWithSkills(
+  snapshot: SubagentCapabilitySnapshot,
+  skills: readonly SubagentSkillSnapshot[],
+): SubagentCapabilitySnapshot {
+  return { ...snapshot, skills: [...skills] };
+}
+
+export function selectSubagentCapabilitySkills(
+  snapshot: SubagentCapabilitySnapshot,
+  qualifiedNames: readonly string[],
+): SubagentCapabilitySnapshot | null {
+  const requested = new Set(qualifiedNames);
+  if (
+    qualifiedNames.length > MAX_SUBAGENT_SKILLS ||
+    requested.size !== qualifiedNames.length
+  ) {
+    return null;
+  }
+  const skills = snapshot.skills.filter((skill) =>
+    requested.has(skill.qualifiedName),
+  );
+  return skills.length === requested.size
+    ? subagentCapabilityWithSkills(snapshot, skills)
+    : null;
 }
 
 export function subagentCapabilityFingerprint(
@@ -170,6 +296,7 @@ export function subagentCapabilityFingerprint(
     profile: snapshot.profile,
     baseProfile: subagentCapabilityBaseProfile(snapshot),
     builtinTools: snapshot.builtinTools,
+    skills: snapshot.skills,
     maxTurns: snapshot.maxTurns,
     deadlineMs: snapshot.deadlineMs,
     maxFinalTextChars: snapshot.maxFinalTextChars,
@@ -188,6 +315,7 @@ export function subagentCapabilitiesEqual(
     left.maxTurns === right.maxTurns &&
     left.deadlineMs === right.deadlineMs &&
     left.maxFinalTextChars === right.maxFinalTextChars &&
+    subagentSkillsEqual(left.skills, right.skills) &&
     left.builtinTools.length === right.builtinTools.length &&
     left.builtinTools.every((tool, index) => tool === right.builtinTools[index])
   );

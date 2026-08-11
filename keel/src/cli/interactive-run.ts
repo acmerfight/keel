@@ -983,6 +983,7 @@ async function runActiveSessionCli(
         skills = {
           kind: "managed",
           activation,
+          catalog: skillDiscovery.catalog,
           implicitSkills: skillDiscovery.catalog.implicitSkills,
           loadExplicit: (lookup) => skillDiscovery.catalog.load(lookup),
           initialActivationRecords: initialSkillActivationRecords,

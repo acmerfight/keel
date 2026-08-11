@@ -428,6 +428,7 @@ export async function runOneShotCli(
             },
             projectInstructions,
             hiddenWorkspacePaths,
+            ...(catalog !== undefined ? { skillCatalog: catalog } : {}),
             contextCompaction: resolved.contextCompaction,
             modelMaxOutputTokens,
             modelOperations,

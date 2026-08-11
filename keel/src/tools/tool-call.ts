@@ -145,6 +145,7 @@ export type ResolvedModelToolExposure =
       readonly kind: "auto";
       readonly profile: "subagent";
       readonly capabilitySnapshotFingerprint: string;
+      readonly skill: boolean;
     };
 
 export interface ModelToolExposureAccounting {
@@ -168,6 +169,9 @@ function builtinToolIsExposed(
   tool: RegisteredBuiltinTool,
 ): boolean {
   if (exposure.profile === "subagent") {
+    if (tool.availability === "skill-catalog") {
+      return exposure.capability.skills.length > 0;
+    }
     return (
       exposure.capability.builtinTools.some((name) => name === tool.name) &&
       tool.availability === undefined &&
@@ -413,6 +417,7 @@ export function resolveModelToolExposure(
       capabilitySnapshotFingerprint: subagentCapabilityFingerprint(
         exposure.capability,
       ),
+      skill: exposure.capability.skills.length > 0,
     };
   }
   return {
@@ -421,7 +426,10 @@ export function resolveModelToolExposure(
     delegation: exposure?.delegation !== undefined,
     backgroundDelegation: exposure?.delegation?.mode === "background",
     delegationProfileCatalog:
-      exposure?.delegation?.profileCatalog.map((entry) => ({ ...entry })) ?? [],
+      exposure?.delegation?.profileCatalog.map((entry) => ({
+        ...entry,
+        skills: [...entry.skills],
+      })) ?? [],
     agentControl: exposure?.agentControl === true,
     bash: exposure?.bash === true,
     skill: exposure?.skill === true,
@@ -440,7 +448,9 @@ export function modelToolExposuresEqual(
   if (left.profile === "subagent") {
     return (
       right.profile === "subagent" &&
-      left.capabilitySnapshotFingerprint === right.capabilitySnapshotFingerprint
+      left.capabilitySnapshotFingerprint ===
+        right.capabilitySnapshotFingerprint &&
+      left.skill === right.skill
     );
   }
   if (right.profile === "subagent") return false;
@@ -449,12 +459,8 @@ export function modelToolExposuresEqual(
     left.profile === right.profile &&
     left.delegation === right.delegation &&
     left.backgroundDelegation === right.backgroundDelegation &&
-    left.delegationProfileCatalog.length ===
-      right.delegationProfileCatalog.length &&
-    left.delegationProfileCatalog.every((entry, index) => {
-      const compared = right.delegationProfileCatalog[index];
-      return entry.name === compared?.name && entry.base === compared.base;
-    }) &&
+    JSON.stringify(left.delegationProfileCatalog) ===
+      JSON.stringify(right.delegationProfileCatalog) &&
     left.agentControl === right.agentControl &&
     left.skill === right.skill &&
     left.memory === right.memory &&
@@ -478,7 +484,7 @@ export function modelToolExposureAccounting(
   if (resolved.profile === "subagent") {
     return {
       allowBash: false,
-      allowSkill: false,
+      allowSkill: resolved.skill,
       allowMemory: false,
       allowMemoryProposal: false,
       toolChoice: "auto",

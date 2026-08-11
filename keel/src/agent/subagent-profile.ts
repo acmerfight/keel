@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ReasoningEffort } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
+import type { SkillActivationCapability } from "../skills/model.ts";
 import type {
   RepoSubagentCapabilitySnapshotId,
   RepoSubagentProfileName,
@@ -8,6 +9,7 @@ import type {
   SubagentCapabilitySnapshot,
   SubagentProfileId,
   SubagentProfileName,
+  SubagentSkillSnapshot,
 } from "./subagent-capability.ts";
 import {
   compareSubagentCapability,
@@ -15,6 +17,7 @@ import {
   REVIEWER_MAX_TURNS,
   SUBAGENT_DEADLINE_MS,
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
+  subagentCapabilityWithSkills,
   subagentProfileIds,
 } from "./subagent-capability.ts";
 
@@ -30,6 +33,7 @@ export interface RepoSubagentProfileDefinition {
   readonly model?: string;
   readonly effort?: ReasoningEffort;
   readonly tools?: readonly SubagentBuiltinToolName[];
+  readonly skills?: readonly string[];
   readonly maxTurns?: number;
   readonly deadlineMs?: number;
   readonly maxResultChars?: number;
@@ -43,7 +47,6 @@ interface BuiltinSubagentProfile {
 interface ResolvedSubagentProfile {
   readonly name: SubagentProfileName;
   readonly base: SubagentProfileId;
-  readonly threadCapabilityCeiling: SubagentCapabilitySnapshot;
   readonly capability: SubagentCapabilitySnapshot;
   readonly execution: SubagentExecutionSnapshot;
   readonly roleInstructions: string;
@@ -52,6 +55,7 @@ interface ResolvedSubagentProfile {
 export interface SubagentProfileCatalogEntry {
   readonly name: SubagentProfileName;
   readonly base: SubagentProfileId;
+  readonly skills: readonly string[];
 }
 
 export type SubagentProfileCatalog = readonly [
@@ -60,15 +64,33 @@ export type SubagentProfileCatalog = readonly [
 ];
 
 export const builtinSubagentProfileCatalog: SubagentProfileCatalog = [
-  { name: "explorer", base: "explorer" },
-  { name: "reviewer", base: "reviewer" },
+  { name: "explorer", base: "explorer", skills: [] },
+  { name: "reviewer", base: "reviewer", skills: [] },
 ];
+
+export type SubagentProfileSkillRuntime =
+  | { readonly kind: "disabled" }
+  | {
+      readonly kind: "enabled";
+      readonly resolveSkill: (
+        qualifiedName: string,
+      ) => SubagentSkillSnapshot | undefined;
+      readonly createActivation: (
+        capability: SubagentCapabilitySnapshot,
+      ) => SkillActivationCapability | undefined;
+      readonly resolveCurrent: (
+        skills: readonly SubagentSkillSnapshot[],
+      ) => readonly SubagentSkillSnapshot[];
+    };
 
 export interface SubagentProfileRegistry {
   readonly catalog: SubagentProfileCatalog;
+  readonly skillRuntime: SubagentProfileSkillRuntime;
   readonly resolve: (
     name: SubagentProfileName,
   ) => ResolvedSubagentProfile | undefined;
+  readonly resolveBuiltin: (name: SubagentProfileId) => ResolvedSubagentProfile;
+  readonly all: () => readonly ResolvedSubagentProfile[];
 }
 
 class SubagentProfileDefinitionError extends Error {}
@@ -92,6 +114,7 @@ const builtinSubagentProfiles = {
       id: "builtin-explorer-v1",
       profile: "explorer",
       builtinTools: explorerTools,
+      skills: [],
       maxTurns: EXPLORER_MAX_TURNS,
       deadlineMs: SUBAGENT_DEADLINE_MS,
       maxFinalTextChars: SUBAGENT_MAX_FINAL_TEXT_CHARS,
@@ -104,6 +127,7 @@ const builtinSubagentProfiles = {
       id: "builtin-reviewer-v1",
       profile: "reviewer",
       builtinTools: reviewerTools,
+      skills: [],
       maxTurns: REVIEWER_MAX_TURNS,
       deadlineMs: SUBAGENT_DEADLINE_MS,
       maxFinalTextChars: SUBAGENT_MAX_FINAL_TEXT_CHARS,
@@ -127,6 +151,7 @@ export function resolveBuiltinSubagentProfile(
       snapshot: {
         ...selected.snapshot,
         builtinTools: [...selected.snapshot.builtinTools],
+        skills: [...selected.snapshot.skills],
         maxTurns: Math.min(
           overrides.maxTurns ?? selected.snapshot.maxTurns,
           selected.snapshot.maxTurns,
@@ -144,6 +169,7 @@ export function resolveBuiltinSubagentProfile(
     snapshot: {
       ...selected.snapshot,
       builtinTools: [...selected.snapshot.builtinTools],
+      skills: [...selected.snapshot.skills],
       maxTurns: Math.min(
         overrides.maxTurns ?? selected.snapshot.maxTurns,
         selected.snapshot.maxTurns,
@@ -160,6 +186,7 @@ function repoCapabilityId(input: {
   readonly name: RepoSubagentProfileName;
   readonly base: SubagentProfileId;
   readonly builtinTools: readonly SubagentBuiltinToolName[];
+  readonly skills: readonly SubagentSkillSnapshot[];
   readonly maxTurns: number;
   readonly deadlineMs: number;
   readonly maxFinalTextChars: number;
@@ -173,6 +200,10 @@ function repoCapabilityId(input: {
 export function createSubagentProfileRegistry(options: {
   readonly execution: Omit<SubagentExecutionSnapshot, "effort">;
   readonly repoProfiles?: readonly RepoSubagentProfileDefinition[];
+  readonly skillRuntime?: Extract<
+    SubagentProfileSkillRuntime,
+    { readonly kind: "enabled" }
+  >;
   readonly maxTurns?: number;
   readonly deadlineMs?: number;
 }): SubagentProfileRegistry {
@@ -186,7 +217,6 @@ export function createSubagentProfileRegistry(options: {
     return {
       name,
       base: name,
-      threadCapabilityCeiling: selected.snapshot,
       capability: selected.snapshot,
       execution: { ...options.execution, effort: null },
       roleInstructions: selected.roleInstructions,
@@ -198,20 +228,26 @@ export function createSubagentProfileRegistry(options: {
     reviewer: resolveBuiltin("reviewer"),
   };
   const resolved = new Map<SubagentProfileName, ResolvedSubagentProfile>();
+  const repoProfiles: ResolvedSubagentProfile[] = [];
   for (const name of subagentProfileIds) {
     resolved.set(name, builtinProfiles[name]);
   }
   for (const definition of options.repoProfiles ?? []) {
-    if (resolved.has(definition.name)) {
-      throw new SubagentProfileDefinitionError(
-        `duplicate project subagent profile ${JSON.stringify(definition.name)}`,
-      );
-    }
     const base = builtinProfiles[definition.base];
+    const skills = (definition.skills ?? []).map((qualifiedName) => {
+      const skill = options.skillRuntime?.resolveSkill(qualifiedName);
+      if (skill === undefined) {
+        throw new SubagentProfileDefinitionError(
+          `project subagent profile ${JSON.stringify(definition.name)} references unavailable or non-model-activatable workflow Skill ${JSON.stringify(qualifiedName)}`,
+        );
+      }
+      return skill;
+    });
     const capabilityFields = {
       name: definition.name,
       base: definition.base,
       builtinTools: definition.tools ?? base.capability.builtinTools,
+      skills,
       maxTurns: definition.maxTurns ?? base.capability.maxTurns,
       deadlineMs: definition.deadlineMs ?? base.capability.deadlineMs,
       maxFinalTextChars:
@@ -222,23 +258,23 @@ export function createSubagentProfileRegistry(options: {
       profile: definition.name,
       baseProfile: definition.base,
       builtinTools: [...capabilityFields.builtinTools],
+      skills: [...capabilityFields.skills],
       maxTurns: capabilityFields.maxTurns,
       deadlineMs: capabilityFields.deadlineMs,
       maxFinalTextChars: capabilityFields.maxFinalTextChars,
     };
     const relation = compareSubagentCapability(
       capability,
-      base.threadCapabilityCeiling,
+      subagentCapabilityWithSkills(base.capability, skills),
     );
     if (relation.kind === "expansion") {
       throw new SubagentProfileDefinitionError(
         `project subagent profile ${JSON.stringify(definition.name)} expands ${definition.base} ${relation.dimension}`,
       );
     }
-    resolved.set(definition.name, {
+    const profile: ResolvedSubagentProfile = {
       name: definition.name,
       base: definition.base,
-      threadCapabilityCeiling: base.threadCapabilityCeiling,
       capability,
       execution: {
         providerId: options.execution.providerId,
@@ -246,15 +282,26 @@ export function createSubagentProfileRegistry(options: {
         effort: definition.effort ?? null,
       },
       roleInstructions: base.roleInstructions,
-    });
+    };
+    resolved.set(definition.name, profile);
+    repoProfiles.push(profile);
   }
 
+  const all: readonly [ResolvedSubagentProfile, ...ResolvedSubagentProfile[]] =
+    [builtinProfiles.explorer, builtinProfiles.reviewer, ...repoProfiles];
   const catalog: SubagentProfileCatalog = [
     ...builtinSubagentProfileCatalog,
-    ...(options.repoProfiles ?? []).map(({ name, base }) => ({ name, base })),
+    ...repoProfiles.map((profile) => ({
+      name: profile.name,
+      base: profile.base,
+      skills: profile.capability.skills.map((skill) => skill.qualifiedName),
+    })),
   ];
   return {
     catalog,
+    skillRuntime: options.skillRuntime ?? { kind: "disabled" },
     resolve: (name) => resolved.get(name),
+    resolveBuiltin: (name) => builtinProfiles[name],
+    all: () => [...all],
   };
 }

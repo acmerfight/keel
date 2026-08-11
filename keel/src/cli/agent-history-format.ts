@@ -70,6 +70,8 @@ export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
     `capability snapshot: ${entry.capability.id}`,
     `provider/model/effort: ${entry.providerId}/${entry.model}/${entry.effort ?? "default"}`,
     `tools: ${entry.capability.builtinTools.join(", ")}`,
+    `thread skill ceiling: ${entry.threadCapabilityCeiling.skills.length === 0 ? "none" : entry.threadCapabilityCeiling.skills.map((skill) => skill.qualifiedName).join(", ")}`,
+    `skills: ${entry.capability.skills.length === 0 ? "none" : entry.capability.skills.map((skill) => skill.qualifiedName).join(", ")}`,
     `limits: turns=${entry.capability.maxTurns} deadlineMs=${entry.capability.deadlineMs} resultChars=${entry.capability.maxFinalTextChars}`,
     `turns: ${entry.accounting.turns}`,
     `cost: ${formatCost(entry.accounting.costUsd)}`,

@@ -560,6 +560,7 @@ describe("Subagent Supervisor", () => {
         },
         toolCallId: "resume-child",
         message: "Now inspect its callers.",
+        skills: [],
         focusPaths: [],
         systemPrompt: "Read-only child instructions.",
         priorMessages: [
@@ -651,6 +652,7 @@ describe("Subagent Supervisor", () => {
       },
       toolCallId,
       message: "Inspect callers.",
+      skills: [],
       focusPaths: [],
       systemPrompt: "Read-only child instructions.",
       priorMessages: [],
@@ -750,6 +752,19 @@ describe("Subagent Supervisor", () => {
         ),
       ).toContain("outside the workspace");
 
+      const invalidSkillLease = supervisorFixture({
+        workspace,
+        provider,
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(
+        await rejectedContent(
+          invalidSkillLease,
+          request("invalid-skill-lease", { skills: ["repo:unleased"] }),
+        ),
+      ).toContain("task Skill lease is outside");
+
       const unknownEstimate = supervisorFixture({
         workspace,
         provider: { ...provider, estimateInputTokens: () => Number.NaN },
@@ -814,6 +829,7 @@ describe("Subagent Supervisor", () => {
       },
       toolCallId: "resume-storage",
       message: "Inspect callers.",
+      skills: [],
       focusPaths: [],
       systemPrompt: "Read-only child instructions.",
       priorMessages: [],

@@ -1,11 +1,15 @@
 import { z } from "zod";
 
 import {
+  MAX_SUBAGENT_SKILLS,
   type SubagentProfileName,
   subagentProfileIds,
 } from "../agent/subagent-capability.ts";
 import type { AgentId } from "../agent/subagent-lifecycle.ts";
-import type { SubagentProfileCatalog } from "../agent/subagent-profile.ts";
+import {
+  builtinSubagentProfileCatalog,
+  type SubagentProfileCatalog,
+} from "../agent/subagent-profile.ts";
 import {
   DEFAULT_COMMAND_TIMEOUT_MS,
   MAX_COMMAND_TIMEOUT_MS,
@@ -18,6 +22,11 @@ const delegationModeDescription =
   "Run in the foreground by default, or as an attached background child in a saved interactive session.";
 
 const repoSubagentProfilePattern = /^repo:[a-z][a-z0-9-]{0,31}$/u;
+const qualifiedSkillNameSchema = z
+  .string()
+  .regex(
+    /^(?:repo|user|system|extra):(?:(?:[a-f0-9]{12}):)?[a-z0-9]+(?:-[a-z0-9]+)*$/u,
+  );
 const subagentProfileNameSchema = z
   .string()
   .refine(
@@ -39,9 +48,57 @@ function profileDescription(catalog: SubagentProfileCatalog): string {
     return "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.";
   }
   const choices = catalog
-    .map((entry) => `${entry.name} (${entry.base} base)`)
+    .map((entry) => {
+      const skills =
+        entry.skills.length === 0
+          ? "no Skills"
+          : `Skills: ${entry.skills.join(", ")}`;
+      return `${entry.name} (${entry.base} base; ${skills})`;
+    })
     .join(", ");
   return `Select an exact governed child profile from this catalog: ${choices}. Defaults to explorer.`;
+}
+
+function catalogSkillNames(catalog: SubagentProfileCatalog): readonly string[] {
+  return [...new Set(catalog.flatMap((entry) => entry.skills))].toSorted();
+}
+
+function delegateSkillsSchema(catalog: SubagentProfileCatalog) {
+  const names = new Set(catalogSkillNames(catalog));
+  const catalogDescription =
+    names.size === 0
+      ? "No child Skills are available; omit this field."
+      : `Optional exact task-approved Skill lease. Every name must be allowed by the selected profile: ${[...names].join(", ")}.`;
+  return z
+    .array(
+      z.string().refine((name) => names.has(name), {
+        message: "must name a Skill allowed by a child profile",
+      }),
+    )
+    .max(Math.min(MAX_SUBAGENT_SKILLS, names.size))
+    .refine((skills) => new Set(skills).size === skills.length, {
+      message: "skills must not contain duplicates",
+    })
+    .describe(catalogDescription);
+}
+
+function validateProfileSkillLease(
+  catalog: SubagentProfileCatalog,
+  input: {
+    readonly profile?: SubagentProfileName | undefined;
+    readonly skills?: readonly string[] | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  const profileName = input.profile ?? "explorer";
+  const profile = catalog.find((entry) => entry.name === profileName);
+  const allowed = new Set(profile?.skills ?? []);
+  if ((input.skills ?? []).every((skill) => allowed.has(skill))) return;
+  context.addIssue({
+    code: "custom",
+    path: ["skills"],
+    message: `skills must be allowed by selected profile ${JSON.stringify(profileName)}`,
+  });
 }
 
 function catalogProfileSchema(
@@ -59,6 +116,7 @@ function delegateProviderSchema(
   profile: z.ZodType<SubagentProfileName>,
   catalogDescription: string,
   modes: readonly ["foreground", ...("foreground" | "background")[]],
+  catalog: SubagentProfileCatalog,
 ) {
   return z
     .object({
@@ -89,14 +147,23 @@ function delegateProviderSchema(
             "Optional workspace-relative files or directories that should receive most of the child agent's attention.",
           ),
       ),
+      skills: optionalToolArgument(delegateSkillsSchema(catalog)),
     })
     .strict();
 }
+
+const delegatedSkillLeaseSchema = z
+  .array(qualifiedSkillNameSchema)
+  .max(MAX_SUBAGENT_SKILLS)
+  .refine((skills) => new Set(skills).size === skills.length, {
+    message: "skills must not contain duplicates",
+  });
 
 export const delegateProviderArgumentsSchema = delegateProviderSchema(
   z.enum(["explorer", "reviewer"]),
   "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
   ["foreground", "background"],
+  builtinSubagentProfileCatalog,
 );
 
 export const delegateToolArgumentsSchema =
@@ -112,12 +179,17 @@ export const delegateToolArgumentsSchema =
         .default("foreground")
         .describe(delegationModeDescription),
     ),
+    skills: z.preprocess(
+      (value) => (value === null ? undefined : value),
+      delegatedSkillLeaseSchema.optional(),
+    ),
   });
 
 export const foregroundDelegateProviderArgumentsSchema = delegateProviderSchema(
   z.enum(["explorer", "reviewer"]),
   "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
   ["foreground"],
+  builtinSubagentProfileCatalog,
 );
 
 export function delegateProviderArgumentsSchemaForCatalog(
@@ -128,6 +200,9 @@ export function delegateProviderArgumentsSchemaForCatalog(
     catalogProfileSchema(catalog),
     profileDescription(catalog),
     mode === "foreground" ? foregroundDelegationModes : delegationModes,
+    catalog,
+  ).superRefine((input, context) =>
+    validateProfileSkillLease(catalog, input, context),
   );
 }
 
@@ -135,21 +210,34 @@ export function delegateToolArgumentsSchemaForCatalog(
   catalog: SubagentProfileCatalog,
   mode: "foreground" | "background",
 ) {
-  return delegateProviderArgumentsSchemaForCatalog(catalog, mode).extend({
-    profile: z.preprocess(
-      (value) => (value === null ? undefined : value),
-      catalogProfileSchema(catalog).default("explorer"),
-    ),
-    mode: z.preprocess(
-      (value) => (value === null ? undefined : value),
-      z
-        .enum(
-          mode === "foreground" ? foregroundDelegationModes : delegationModes,
-        )
-        .default("foreground")
-        .describe(delegationModeDescription),
-    ),
-  });
+  return delegateProviderSchema(
+    catalogProfileSchema(catalog),
+    profileDescription(catalog),
+    mode === "foreground" ? foregroundDelegationModes : delegationModes,
+    catalog,
+  )
+    .extend({
+      profile: z.preprocess(
+        (value) => (value === null ? undefined : value),
+        catalogProfileSchema(catalog).default("explorer"),
+      ),
+      mode: z.preprocess(
+        (value) => (value === null ? undefined : value),
+        z
+          .enum(
+            mode === "foreground" ? foregroundDelegationModes : delegationModes,
+          )
+          .default("foreground")
+          .describe(delegationModeDescription),
+      ),
+      skills: z.preprocess(
+        (value) => (value === null ? undefined : value),
+        delegateSkillsSchema(catalog).default([]),
+      ),
+    })
+    .superRefine((input, context) =>
+      validateProfileSkillLease(catalog, input, context),
+    );
 }
 
 export const agentListToolArgumentsSchema = z.object({}).strict();
@@ -192,7 +280,10 @@ export const agentInputToolArgumentsSchema = z
   .strict();
 
 export const agentResumeToolArgumentsSchema = z
-  .object(agentMessageShape)
+  .object({
+    ...agentMessageShape,
+    skills: optionalToolArgument(delegatedSkillLeaseSchema),
+  })
   .strict();
 
 export const skillToolArgumentsSchema = z

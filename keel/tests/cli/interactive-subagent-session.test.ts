@@ -288,6 +288,7 @@ describe("Interactive subagent session", () => {
       id,
       requestId: "resume-request",
       message: "Now inspect callers.",
+      skills: [],
       signal: new AbortController().signal,
       maxResultChars: 6_000,
     });

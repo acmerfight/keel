@@ -6,6 +6,13 @@ import {
 } from "../agent/cost-budget.ts";
 import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import type { ProjectInstructions } from "../agent/prompt.ts";
+import {
+  type SubagentCapabilitySnapshot,
+  type SubagentSkillSnapshot,
+  skillDescriptorFromSubagentSnapshot,
+  subagentSkillSnapshotFromWorkflowSkill,
+  workflowSkillFromSubagentSnapshot,
+} from "../agent/subagent-capability.ts";
 import type { SubagentLifecyclePersistence } from "../agent/subagent-lifecycle.ts";
 import {
   createSubagentProfileRegistry,
@@ -29,7 +36,14 @@ import type { CostModel } from "../core/cost.ts";
 import type { ModelMetadata } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import type { LLMProvider } from "../llm/types.ts";
+import { createSkillActivation } from "../skills/lifecycle.ts";
+import type {
+  SkillActivationCapability,
+  SkillCatalog,
+} from "../skills/model.ts";
+import { WorkflowSkillError } from "../skills/model.ts";
 import { loadRepoSubagentProfiles } from "./subagent-profile-config.ts";
+import { workflowSkillWorkspacePaths } from "./workflow-skills.ts";
 
 interface CreateCliSubagentRuntimeOptionsBase {
   readonly workspace: string;
@@ -43,6 +57,7 @@ interface CreateCliSubagentRuntimeOptionsBase {
   readonly maxCostUsd: number;
   readonly projectInstructions: ProjectInstructions | undefined;
   readonly hiddenWorkspacePaths: readonly string[];
+  readonly skillCatalog?: SkillCatalog;
   readonly contextCompaction: ContextCompactionOptions | undefined;
   readonly modelMaxOutputTokens: number | undefined;
   readonly modelOperations: MainModelOperationInstrumentation | undefined;
@@ -88,6 +103,97 @@ type CreateCliSubagentRuntimeOptions = CreateCliSubagentRuntimeOptionsBase &
 export interface CliSubagentRuntime {
   readonly costBudgetProvider: LLMProvider;
   readonly supervisor: SubagentSupervisor;
+}
+
+function resolveCatalogSkillSnapshot(
+  catalog: SkillCatalog,
+  qualifiedName: string,
+): SubagentSkillSnapshot | undefined {
+  const descriptor = catalog.skills.find(
+    (candidate) => candidate.qualifiedName === qualifiedName,
+  );
+  if (descriptor === undefined || descriptor.activationPolicy !== "implicit") {
+    return undefined;
+  }
+  const implicitDescriptor: typeof descriptor & {
+    readonly activationPolicy: "implicit";
+  } = { ...descriptor, activationPolicy: "implicit" };
+  return subagentSkillSnapshotFromWorkflowSkill(
+    catalog.load(qualifiedName),
+    implicitDescriptor,
+  );
+}
+
+function childSkillCatalog(
+  catalog: SkillCatalog,
+  skills: readonly SubagentSkillSnapshot[],
+): SkillCatalog {
+  const descriptors = skills.map(skillDescriptorFromSubagentSnapshot);
+  const byQualifiedName = new Map(
+    skills.map((skill) => [skill.qualifiedName, skill]),
+  );
+  const resolve = (lookup: string): SubagentSkillSnapshot => {
+    const skill = byQualifiedName.get(lookup);
+    if (skill !== undefined) return skill;
+    throw new WorkflowSkillError(
+      `Error: workflow skill ${JSON.stringify(lookup)} is outside this child Run's task lease.`,
+    );
+  };
+  return {
+    skills: descriptors,
+    implicitSkills: descriptors,
+    warnings: [],
+    audits: [],
+    load: (lookup) => workflowSkillFromSubagentSnapshot(resolve(lookup)),
+    loadImplicit: (lookup) =>
+      workflowSkillFromSubagentSnapshot(resolve(lookup)),
+    loadPackage: (packageId) => {
+      const skill = skills.find(
+        (candidate) => candidate.packageId === packageId,
+      );
+      return skill === undefined
+        ? undefined
+        : workflowSkillFromSubagentSnapshot(skill);
+    },
+    search: (query, limit = 20) => {
+      const normalized = query.trim().toLowerCase();
+      return descriptors
+        .filter(
+          (descriptor) =>
+            descriptor.qualifiedName.toLowerCase().includes(normalized) ||
+            descriptor.description.toLowerCase().includes(normalized),
+        )
+        .slice(0, Math.max(0, limit));
+    },
+    readResource: (lookup, path) => {
+      const skill = resolve(lookup);
+      return catalog.readPackageResource(skill.packageId, skill.digest, path);
+    },
+    readPackageResource: (packageId, digest, path) => {
+      const skill = skills.find(
+        (candidate) =>
+          candidate.packageId === packageId && candidate.digest === digest,
+      );
+      if (skill === undefined) {
+        throw new WorkflowSkillError(
+          "Error: workflow Skill resource is outside this child Run's task lease.",
+        );
+      }
+      return catalog.readPackageResource(packageId, digest, path);
+    },
+  };
+}
+
+function childSkillActivation(
+  catalog: SkillCatalog,
+  capability: SubagentCapabilitySnapshot,
+): SkillActivationCapability | undefined {
+  if (capability.skills.length === 0) return undefined;
+  const boundedCatalog = childSkillCatalog(catalog, capability.skills);
+  const activation = createSkillActivation(boundedCatalog);
+  activation.expose(boundedCatalog.skills);
+  activation.beginTurn();
+  return activation;
 }
 
 export function createCliSubagentRuntime(
@@ -187,16 +293,35 @@ export function createCliSubagentRuntime(
     executionCache.set(key, execution);
     return execution;
   };
+  const skillCatalog = options.skillCatalog;
   const profileRegistry = createSubagentProfileRegistry({
     execution: {
       providerId: options.providerId,
       model: options.model,
     },
     repoProfiles: loadRepoSubagentProfiles(options.workspace),
+    ...(skillCatalog !== undefined
+      ? {
+          skillRuntime: {
+            kind: "enabled",
+            resolveSkill: (qualifiedName: string) =>
+              resolveCatalogSkillSnapshot(skillCatalog, qualifiedName),
+            createActivation: (capability: SubagentCapabilitySnapshot) =>
+              childSkillActivation(skillCatalog, capability),
+            resolveCurrent: (skills: readonly SubagentSkillSnapshot[]) =>
+              skills.flatMap((skill) => {
+                const current = resolveCatalogSkillSnapshot(
+                  skillCatalog,
+                  skill.qualifiedName,
+                );
+                return current === undefined ? [] : [current];
+              }),
+          },
+        }
+      : {}),
   });
-  for (const entry of profileRegistry.catalog) {
-    const profile = profileRegistry.resolve(entry.name);
-    if (profile !== undefined) resolveExecution(profile.execution);
+  for (const profile of profileRegistry.all()) {
+    resolveExecution(profile.execution);
   }
   const rootExecution = resolveExecution({
     providerId: options.providerId,
@@ -220,6 +345,17 @@ export function createCliSubagentRuntime(
           lifecyclePersistence: options.attachedSession.lifecyclePersistence,
           backgroundModelOperations: options.attachedSession.modelOperations,
         };
+  const childHiddenWorkspacePaths = [
+    ...new Set([
+      ...options.hiddenWorkspacePaths,
+      ...(options.skillCatalog === undefined
+        ? []
+        : workflowSkillWorkspacePaths(
+            options.workspace,
+            options.skillCatalog.skills,
+          )),
+    ]),
+  ];
   return {
     costBudgetProvider: rootBudget.provider,
     supervisor: createSubagentSupervisor({
@@ -237,7 +373,7 @@ export function createCliSubagentRuntime(
       ...(options.projectInstructions !== undefined
         ? { projectInstructions: options.projectInstructions }
         : {}),
-      hiddenWorkspacePaths: options.hiddenWorkspacePaths,
+      hiddenWorkspacePaths: childHiddenWorkspacePaths,
       ...(options.modelMaxOutputTokens !== undefined
         ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
         : {}),

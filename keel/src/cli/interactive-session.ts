@@ -1314,6 +1314,9 @@ export async function runInteractiveSession(
               maxCostUsd: remainingCostUsd,
               projectInstructions: options.projectInstructions,
               hiddenWorkspacePaths,
+              ...(managedSkills !== null
+                ? { skillCatalog: managedSkills.catalog }
+                : {}),
               contextCompaction: resolved.contextCompaction,
               modelMaxOutputTokens,
               modelOperations: turnModelOperations ?? undefined,
@@ -2034,6 +2037,9 @@ export async function runInteractiveSession(
                   maxCostUsd: subagentSession.sharedCostBudget.remainingUsd(),
                   projectInstructions: options.projectInstructions,
                   hiddenWorkspacePaths,
+                  ...(managedSkills !== null
+                    ? { skillCatalog: managedSkills.catalog }
+                    : {}),
                   contextCompaction: commandResolved.contextCompaction,
                   modelMaxOutputTokens: modelMetadataMaxOutputTokens(
                     commandResolved.modelMetadata,
@@ -2072,6 +2078,7 @@ export async function runInteractiveSession(
                     id: entry.childAgentId,
                     requestId: `agents-resume-${randomUUID()}`,
                     message: interactiveCommand.message,
+                    skills: interactiveCommand.skills,
                     signal: commandAbortController.signal,
                     maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
                   });

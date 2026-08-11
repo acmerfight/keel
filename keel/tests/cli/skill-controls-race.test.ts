@@ -629,7 +629,7 @@ describe("Workflow Skill Control Races", () => {
           "repo:root:review",
         ]),
       ).toThrow(
-        'Error: cannot enforce the disabled workflow skill boundary for "repo:review" because its canonical package path is unavailable.',
+        'Error: cannot enforce the workflow skill workspace boundary for "repo:review" because its canonical package path is unavailable.',
       );
     } finally {
       await rm(workspace, { recursive: true, force: true });

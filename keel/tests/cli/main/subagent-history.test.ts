@@ -61,15 +61,43 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Durable Subagent History", () => {
-  test(`Given a project defines a narrower reviewer profile with a registered model and effort,
-    When main delegates it and the user resumes the thread after removing the project config,
-    Then every child Run uses the original narrower capability and execution snapshots`, async () => {
+  test(`Given a project defines a narrower reviewer profile with a Skill ceiling, registered model, and effort,
+    When main delegates it and the user resumes the thread after removing the profile and changing the Skill,
+    Then execution stays stable while the changed Skill authority is removed from the resumed Run`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-repo-profile-"));
     const keelHome = join(workspace, ".keel-home");
     const sessionId = "repo-agent-profile";
     await mkdir(join(workspace, ".git"));
-    await mkdir(join(workspace, ".agents"));
+    await mkdir(
+      join(workspace, ".agents", "skills", "review-guide", "references"),
+      { recursive: true },
+    );
+    await writeFile(
+      join(workspace, ".agents", "skills", "review-guide", "SKILL.md"),
+      "---\nname: review-guide\ndescription: Review with the stable checklist.\n---\nDURABLE_REVIEW_SKILL\n",
+      "utf8",
+    );
+    await mkdir(join(workspace, ".agents", "skills", "future-guide"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, ".agents", "skills", "future-guide", "SKILL.md"),
+      "---\nname: future-guide\ndescription: A second profile-approved workflow.\n---\nFUTURE_REVIEW_SKILL\n",
+      "utf8",
+    );
+    await writeFile(
+      join(
+        workspace,
+        ".agents",
+        "skills",
+        "review-guide",
+        "references",
+        "checklist.md",
+      ),
+      "Review exported values.\n",
+      "utf8",
+    );
     await writeFile(
       join(workspace, ".agents", "subagents.json"),
       JSON.stringify({
@@ -80,6 +108,7 @@ describe("CLI Main - Durable Subagent History", () => {
             model: "deepseek-v4-pro",
             effort: "max",
             tools: ["read", "grep", "git_diff"],
+            skills: ["repo:review-guide", "repo:future-guide"],
             maxTurns: 4,
             deadlineMs: 30_000,
             maxResultChars: 1_200,
@@ -112,6 +141,7 @@ describe("CLI Main - Durable Subagent History", () => {
               [
                 sseToolCall("delegate_repo_review", "delegate", {
                   profile: "repo:focused-review",
+                  skills: ["repo:review-guide"],
                   task: "Review module.ts using the focused project profile.",
                   focusPaths: ["module.ts"],
                 }),
@@ -123,19 +153,61 @@ describe("CLI Main - Durable Subagent History", () => {
           case 2:
             response.end(
               [
-                sseToolCall("focused_read", "read", { path: "module.ts" }),
+                sseToolCall("activate_focused_skill", "skill", {
+                  name: "repo:review-guide",
+                }),
                 sseToolFinish(),
                 "data: [DONE]\n\n",
               ].join(""),
             );
             return;
           case 3:
-            response.end(sseTextReplyWithUsage("R".repeat(2_000)));
+            response.end(
+              [
+                sseToolCall("focused_checklist", "skill_resource", {
+                  skill: "repo:review-guide",
+                  path: "references/checklist.md",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
             return;
           case 4:
-            response.end(sseTextReplyWithUsage("Focused review completed."));
+            response.end(sseTextReplyWithUsage("R".repeat(2_000)));
             return;
           case 5:
+            response.end(sseTextReplyWithUsage("Focused review completed."));
+            return;
+          case 6:
+            response.end(
+              [
+                sseToolCall("reactivate_focused_skill", "skill", {
+                  name: "repo:review-guide",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 7:
+            response.end(
+              [
+                sseToolCall("continued_checklist", "skill_resource", {
+                  skill: "repo:review-guide",
+                  path: "references/checklist.md",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 8:
+            response.end(
+              sseTextReplyWithUsage("The retained Skill review is complete."),
+            );
+            return;
+          case 9:
             response.end(
               [
                 sseToolCall("continued_read", "read", { path: "module.ts" }),
@@ -144,7 +216,7 @@ describe("CLI Main - Durable Subagent History", () => {
               ].join(""),
             );
             return;
-          case 6:
+          case 10:
             response.end(
               sseTextReplyWithUsage("The focused review remains complete."),
             );
@@ -166,7 +238,6 @@ describe("CLI Main - Durable Subagent History", () => {
         "explicit",
         "--max-cost",
         "0.05",
-        "--no-skills",
       ],
       {
         cwd: workspace,
@@ -195,7 +266,6 @@ describe("CLI Main - Durable Subagent History", () => {
           "explicit",
           "--max-cost",
           "0.05",
-          "--no-skills",
         ],
         {
           cwd: workspace,
@@ -210,21 +280,35 @@ describe("CLI Main - Durable Subagent History", () => {
 
       // Then
       expect(exitCode, inspect.stderr()).toBe(0);
-      expect(requests).toHaveLength(4);
+      expect(requests).toHaveLength(5);
       expect(JSON.stringify(requests[0])).toContain("repo:focused-review");
       expect(requests[1]).toMatchObject({
         model: "deepseek-v4-pro",
         reasoning_effort: "max",
       });
       expect(toolNames(requests[1]).toSorted()).toEqual(
-        ["read", "grep", "git_diff"].toSorted(),
+        [
+          "read",
+          "grep",
+          "git_diff",
+          "skill",
+          "skill_search",
+          "skill_resource",
+        ].toSorted(),
       );
+      expect(JSON.stringify(requests[1])).not.toContain("DURABLE_REVIEW_SKILL");
+      expect(JSON.stringify(requests[1])).not.toContain("repo:future-guide");
+      expect(JSON.stringify(requests[2])).toContain("DURABLE_REVIEW_SKILL");
       expect(inspect.stdout()).toContain("profile: repo:focused-review");
       expect(inspect.stdout()).toContain("base profile: reviewer");
       expect(inspect.stdout()).toContain(
         "provider/model/effort: deepseek/deepseek-v4-pro/max",
       );
       expect(inspect.stdout()).toContain("tools: read, grep, git_diff");
+      expect(inspect.stdout()).toContain("skills: repo:review-guide");
+      expect(inspect.stdout()).toContain(
+        "thread skill ceiling: repo:review-guide, repo:future-guide",
+      );
       expect(inspect.stdout()).toContain(
         "limits: turns=4 deadlineMs=30000 resultChars=1200",
       );
@@ -232,6 +316,48 @@ describe("CLI Main - Durable Subagent History", () => {
       expect(inspect.stdout()).not.toContain("R".repeat(1_201));
       expect(inspect.stdout()).toContain("status: completed");
 
+      const retainedInput = new PassThrough();
+      retainedInput.end(
+        "/agents resume 1 --skill repo:review-guide -- Re-check with the same guide.\n/agents wait 1\n/agents show 1\n",
+      );
+      const retained = createRuntime(
+        [
+          "--resume",
+          sessionId,
+          "--provider",
+          "deepseek",
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+        ],
+        {
+          cwd: workspace,
+          input: retainedInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+      expect(await runCliMain(retained.runtime), retained.stderr()).toBe(0);
+      expect(requests).toHaveLength(8);
+      expect(requests[5]).toMatchObject({
+        model: "deepseek-v4-pro",
+        reasoning_effort: "max",
+      });
+      expect(toolNames(requests[5])).toContain("skill");
+      expect(JSON.stringify(requests[5])).not.toContain("DURABLE_REVIEW_SKILL");
+      expect(JSON.stringify(requests[6])).toContain("DURABLE_REVIEW_SKILL");
+      expect(retained.stdout()).toContain("skills: repo:review-guide");
+
+      await writeFile(
+        join(workspace, ".agents", "skills", "review-guide", "SKILL.md"),
+        "---\nname: review-guide\ndescription: Changed review workflow.\n---\nCHANGED_REVIEW_SKILL\n",
+        "utf8",
+      );
       await rm(join(workspace, ".agents", "subagents.json"));
       const resumeInput = new PassThrough();
       resumeInput.end(
@@ -247,7 +373,6 @@ describe("CLI Main - Durable Subagent History", () => {
           "explicit",
           "--max-cost",
           "0.05",
-          "--no-skills",
         ],
         {
           cwd: workspace,
@@ -262,20 +387,26 @@ describe("CLI Main - Durable Subagent History", () => {
       );
 
       expect(await runCliMain(resume.runtime), resume.stderr()).toBe(0);
-      expect(requests).toHaveLength(6);
-      expect(requests[4]).toMatchObject({
+      expect(requests).toHaveLength(10);
+      expect(requests[8]).toMatchObject({
         model: "deepseek-v4-pro",
         reasoning_effort: "max",
       });
-      expect(toolNames(requests[4]).toSorted()).toEqual(
+      expect(toolNames(requests[8]).toSorted()).toEqual(
         ["read", "grep", "git_diff"].toSorted(),
       );
+      expect(JSON.stringify(requests[8])).not.toContain("DURABLE_REVIEW_SKILL");
+      expect(JSON.stringify(requests[8])).not.toContain("CHANGED_REVIEW_SKILL");
       expect(resume.stdout()).toContain("profile: repo:focused-review");
       expect(resume.stdout()).toContain(
         "provider/model/effort: deepseek/deepseek-v4-pro/max",
       );
       expect(resume.stdout()).toContain(
         "limits: turns=4 deadlineMs=30000 resultChars=1200",
+      );
+      expect(resume.stdout()).toContain("skills: none");
+      expect(resume.stdout()).toContain(
+        "thread skill ceiling: repo:review-guide, repo:future-guide",
       );
       expect(resume.stdout()).toContain("The focused review remains complete.");
       expect(resume.stdout()).toContain("continuation of:");
@@ -343,6 +474,66 @@ describe("CLI Main - Durable Subagent History", () => {
       expect(run.stderr()).toContain(
         'project subagent profile "repo:unsafe" expands explorer builtinTools',
       );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project profile names an explicit-only workflow Skill,
+    When Keel loads the enabled subagent runtime,
+    Then it fails closed before the Skill can become model-selectable or any provider request starts`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-repo-skill-policy-"));
+    const keelHome = join(workspace, ".keel-home");
+    await mkdir(join(workspace, ".git"));
+    await mkdir(join(workspace, ".agents", "skills", "manual-guide"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, ".agents", "skills", "manual-guide", "SKILL.md"),
+      "---\nname: manual-guide\ndescription: Run only after direct user activation.\nmetadata:\n  keel.activation: explicit\n---\nMANUAL_ONLY_BODY\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, ".agents", "subagents.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: {
+          unsafe: {
+            base: "explorer",
+            skills: ["repo:manual-guide"],
+          },
+        },
+      }),
+      "utf8",
+    );
+    let providerRequests = 0;
+    const server = createServer((request, response) => {
+      providerRequests++;
+      request.resume();
+      response.writeHead(500);
+      response.end("must not be called");
+    });
+    await listen(server);
+    const run = createRuntime(
+      ["--agent-policy", "explicit", "--max-cost", "0.05", "Inspect module.ts"],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      expect(await runCliMain(run.runtime)).toBe(1);
+      expect(providerRequests).toBe(0);
+      expect(run.stderr()).toContain(
+        'references unavailable or non-model-activatable workflow Skill "repo:manual-guide"',
+      );
+      expect(run.stderr()).not.toContain("MANUAL_ONLY_BODY");
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });

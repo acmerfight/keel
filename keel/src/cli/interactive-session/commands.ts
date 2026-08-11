@@ -80,12 +80,20 @@ type AgentSelectorCommand<
   readonly selector: string;
 };
 
-type AgentMessageCommand<Action extends "input" | "resume"> = {
+type AgentMessageCommand<Action extends "input"> = {
   readonly kind: "agents";
   readonly action: Action;
   readonly selector: string;
   readonly message: string;
 };
+
+interface AgentResumeCommand {
+  readonly kind: "agents";
+  readonly action: "resume";
+  readonly selector: string;
+  readonly message: string;
+  readonly skills: readonly string[];
+}
 
 type AgentsCommand =
   | { readonly kind: "agents"; readonly action: "list" }
@@ -94,7 +102,7 @@ type AgentsCommand =
   | AgentSelectorCommand<"wait">
   | AgentSelectorCommand<"cancel">
   | AgentMessageCommand<"input">
-  | AgentMessageCommand<"resume">;
+  | AgentResumeCommand;
 
 interface SessionsCommand {
   readonly kind: "sessions";
@@ -198,8 +206,8 @@ export function formatInteractiveHelp(): string {
     "                     Cancel and settle one attached background subagent.",
     "  /agents input <id|index> <message>",
     "                     Queue input for one running attached subagent.",
-    "  /agents resume <id|index> <message>",
-    "                     Continue one terminal subagent as a new Run.",
+    "  /agents resume <id|index> [--skill <name> ... --] <message>",
+    "                     Continue one terminal subagent as a new Run with an exact optional Skill lease.",
     "  /sessions          Choose another saved session in this workspace.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
@@ -843,20 +851,48 @@ export function parseInteractiveCommand(
   if (agentsMatch !== null) {
     const args = agentsMatch[1]?.trim() ?? "";
     if (args === "") return { kind: "agents", action: "list" };
-    for (const action of ["input", "resume"] as const) {
-      const prefix = `${action} `;
-      if (!args.startsWith(prefix)) continue;
-      const body = args.slice(prefix.length).trim();
+    const inputPrefix = "input ";
+    if (args.startsWith(inputPrefix)) {
+      const body = args.slice(inputPrefix.length).trim();
       const messageSeparator = body.search(/\s/u);
       if (messageSeparator > 0) {
         return {
           kind: "agents",
-          action,
+          action: "input",
           selector: body.slice(0, messageSeparator),
           message: body.slice(messageSeparator).trim(),
         };
       }
-      break;
+    }
+    const resumePrefix = "resume ";
+    if (args.startsWith(resumePrefix)) {
+      const body = args.slice(resumePrefix.length).trim();
+      const selectorSeparator = body.search(/\s/u);
+      if (selectorSeparator > 0) {
+        const selector = body.slice(0, selectorSeparator);
+        let remainder = body.slice(selectorSeparator).trim();
+        const skills: string[] = [];
+        while (remainder.startsWith("--skill ")) {
+          const skill = /^--skill\s+(\S+)(?:\s+|$)/u.exec(remainder);
+          if (skill?.[1] === undefined) break;
+          skills.push(skill[1]);
+          remainder = remainder.slice(skill[0].length).trimStart();
+        }
+        if (skills.length > 0) {
+          remainder = remainder.startsWith("-- ")
+            ? remainder.slice(3).trim()
+            : "";
+        }
+        if (remainder !== "") {
+          return {
+            kind: "agents",
+            action: "resume",
+            selector,
+            message: remainder,
+            skills,
+          };
+        }
+      }
     }
     const parts = args.split(/\s+/u);
     const action = parts[0];
@@ -872,7 +908,7 @@ export function parseInteractiveCommand(
       return {
         kind: "invalid",
         message:
-          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> <message>.",
+          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> [--skill <name> ... --] <message>.",
       };
     }
     return { kind: "agents", action, selector };

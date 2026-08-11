@@ -35,6 +35,7 @@ import type {
 import { WorkflowSkillError } from "./model.ts";
 import {
   isWorkflowSkillResourcePath,
+  MAX_WORKFLOW_SKILL_BYTES,
   MAX_WORKFLOW_SKILL_RESOURCE_ENTRY_VISITS,
   MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
   MAX_WORKFLOW_SKILL_TEXT_RESOURCE_BYTES,
@@ -44,7 +45,6 @@ import { parseSkillDocument, validateSkillName } from "./schema.ts";
 
 const LOCAL_SKILL_ROOT = join(".agents", "skills");
 const SKILL_FILE = "SKILL.md";
-const MAX_WORKFLOW_SKILL_BYTES = 50 * 1024;
 const QUALIFIED_SKILL_PREFIXES: readonly {
   readonly prefix: `${SkillScope}:`;
   readonly scope: SkillScope;
