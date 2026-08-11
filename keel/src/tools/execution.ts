@@ -190,6 +190,7 @@ async function executeDelegateTool(
     mode: toolCall.mode,
     task: toolCall.task,
     focusPaths: toolCall.focusPaths ?? [],
+    skills: toolCall.skills ?? [],
     signal: context.signal,
   });
   const effects: readonly DelegationToolExecutionEffect[] =
@@ -321,6 +322,7 @@ async function executeAgentResumeTool(
     id: toolCall.agentId,
     requestId: toolCall.id,
     message: toolCall.message,
+    skills: toolCall.skills ?? [],
     signal: context.signal,
     maxResultChars: Math.min(
       context.agentControlResultMaxChars,

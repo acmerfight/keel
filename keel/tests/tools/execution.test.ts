@@ -533,6 +533,7 @@ describe("Tool Execution", () => {
           tool: "agent_resume",
           agentId: "agent-a1",
           message: "Verify the fix.",
+          skills: [],
         },
       }),
     ]);
@@ -565,6 +566,7 @@ describe("Tool Execution", () => {
             tool: "agent_resume",
             agentId: "agent-a1",
             message: "Verify without consuming Main's continuation.",
+            skills: [],
           },
         }),
       ),
@@ -620,6 +622,7 @@ describe("Tool Execution", () => {
           tool: "agent_resume",
           agentId: "agent-a1",
           message: "Verify the fix.",
+          skills: [],
         },
       }),
     ]);

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "skill-review": {
+      "base": "explorer",
+      "model": "deepseek-v4-flash",
+      "tools": ["read", "grep"],
+      "skills": ["repo:release-guide"],
+      "maxTurns": 8,
+      "deadlineMs": 120000,
+      "maxResultChars": 800
+    }
+  }
+}

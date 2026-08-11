@@ -194,7 +194,7 @@ interface SubagentRunAgentOptionsBase {
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
   readonly costBudgetProvider: LLMProvider;
-  readonly skillActivation?: never;
+  readonly skillActivation?: SkillActivationCapability;
   readonly taskProgress?: never;
   readonly modelOperations?: SubagentModelOperationInstrumentation;
   readonly injectedUserMessages: AgentInjectedUserMessageQueue;
@@ -289,7 +289,7 @@ interface SubagentRunAgentTurnOptions {
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
   readonly costBudgetProvider: LLMProvider;
-  readonly skillActivation?: never;
+  readonly skillActivation?: SkillActivationCapability;
   readonly taskProgress?: never;
   readonly sessionGoal?: never;
   readonly drainInjectedUserMessages: AgentInjectedUserMessageQueue["drain"];
@@ -309,6 +309,9 @@ function agentTurnExecutionOptions(
       toolProfile: options.toolProfile,
       subagentCapability: options.subagentCapability,
       costBudgetProvider: options.costBudgetProvider,
+      ...(options.skillActivation !== undefined
+        ? { skillActivation: options.skillActivation }
+        : {}),
       drainInjectedUserMessages: options.injectedUserMessages.drain,
       closeInjectedUserMessagesAtTerminalBoundary:
         options.injectedUserMessages.closeAtTerminalBoundary,
@@ -556,6 +559,7 @@ function delegationBatchEntry(
       task: toolCall.task,
       profile: toolCall.profile,
       focusPaths: toolCall.focusPaths ?? [],
+      skills: toolCall.skills ?? [],
       signal,
     },
   };

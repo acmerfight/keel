@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { z } from "zod";
 import {
   EXPLORER_MAX_TURNS,
+  MAX_SUBAGENT_SKILLS,
   REVIEWER_MAX_TURNS,
   type RepoSubagentProfileName,
   SUBAGENT_DEADLINE_MS,
@@ -27,12 +28,24 @@ const profileToolsSchema = z
   .refine((tools) => new Set(tools).size === tools.length, {
     message: "tools must not contain duplicates",
   });
+const qualifiedSkillNameSchema = z
+  .string()
+  .regex(
+    /^(?:repo|user|system|extra):(?:(?:[a-f0-9]{12}):)?[a-z0-9]+(?:-[a-z0-9]+)*$/u,
+  );
+const profileSkillsSchema = z
+  .array(qualifiedSkillNameSchema)
+  .max(MAX_SUBAGENT_SKILLS)
+  .refine((skills) => new Set(skills).size === skills.length, {
+    message: "skills must not contain duplicates",
+  });
 const profileDefinitionSchema = z
   .object({
     base: z.enum(subagentProfileIds),
     model: z.string().trim().min(1).max(128).optional(),
     effort: z.enum(reasoningEfforts).optional(),
     tools: profileToolsSchema.optional(),
+    skills: profileSkillsSchema.optional(),
     maxTurns: z
       .number()
       .int()
@@ -129,6 +142,7 @@ export function loadRepoSubagentProfiles(
     ...(definition.model !== undefined ? { model: definition.model } : {}),
     ...(definition.effort !== undefined ? { effort: definition.effort } : {}),
     ...(definition.tools !== undefined ? { tools: definition.tools } : {}),
+    ...(definition.skills !== undefined ? { skills: definition.skills } : {}),
     ...(definition.maxTurns !== undefined
       ? { maxTurns: definition.maxTurns }
       : {}),

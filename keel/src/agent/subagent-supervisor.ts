@@ -31,7 +31,10 @@ import type {
   SubagentModelOperationInstrumentation,
 } from "./model-operations.ts";
 import type { ProjectInstructions } from "./prompt.ts";
-import { buildReadOnlySubagentSystemPrompt } from "./prompt.ts";
+import {
+  appendWorkflowSkillCatalogToSystemPrompt,
+  buildReadOnlySubagentSystemPrompt,
+} from "./prompt.ts";
 import { projectSessionMessageToProvider } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
 import { maxTurnFallbackPolicy } from "./stop-policy.ts";
@@ -40,7 +43,10 @@ import {
   narrowSubagentCapabilityToCeiling,
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   type SubagentCapabilitySnapshot,
+  selectSubagentCapabilitySkills,
+  skillDescriptorFromSubagentSnapshot,
   subagentCapabilityBaseProfile,
+  subagentCapabilityWithSkills,
 } from "./subagent-capability.ts";
 import type {
   AgentId,
@@ -212,6 +218,7 @@ export interface SubagentContinuationRequest {
   readonly execution: SubagentExecutionSnapshot;
   readonly toolCallId: string;
   readonly message: string;
+  readonly skills: readonly string[];
   readonly focusPaths: readonly string[];
   readonly systemPrompt: string;
   readonly priorMessages: readonly SessionMessage[];
@@ -696,6 +703,14 @@ export function createSubagentSupervisor(
     MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
     options.modelMaxOutputTokens ?? MAIN_CONTINUATION_MAX_OUTPUT_TOKENS,
   );
+  const effectiveChildSystemPrompt = (
+    systemPrompt: string,
+    capability: SubagentCapabilitySnapshot,
+  ): string =>
+    appendWorkflowSkillCatalogToSystemPrompt(
+      systemPrompt,
+      capability.skills.map(skillDescriptorFromSubagentSnapshot),
+    );
   const resultContinuationBudget: SubagentResultContinuationBudget = {
     lease: (toolCallIds) => {
       const resultAdmission = treeBudget.planResults(
@@ -887,17 +902,27 @@ export function createSubagentSupervisor(
               userMessageOrigin: { type: "runtime_subagent_input" as const },
               priorMessages: input.priorMessages,
             };
+      const skillActivation =
+        options.profileRegistry.skillRuntime.kind === "enabled"
+          ? options.profileRegistry.skillRuntime.createActivation(
+              input.capability,
+            )
+          : undefined;
       try {
         for await (const event of runAgent({
           workspace: options.workspace,
           provider: input.execution.provider,
           userMessage: input.userMessage,
           ...childInput,
-          systemPrompt: input.systemPrompt,
+          systemPrompt: effectiveChildSystemPrompt(
+            input.systemPrompt,
+            input.capability,
+          ),
           signal: input.lifecycle.abortController.signal,
           bash: { kind: "disabled" },
           toolProfile: "subagent",
           subagentCapability: input.capability,
+          ...(skillActivation !== undefined ? { skillActivation } : {}),
           stopPolicy: maxTurnFallbackPolicy(input.capability.maxTurns),
           costTracking: {
             model: input.execution.costModel,
@@ -1268,6 +1293,18 @@ export function createSubagentSupervisor(
         });
         continue;
       }
+      const capability = selectSubagentCapabilitySkills(
+        profile.capability,
+        input.skills ?? [],
+      );
+      if (capability === null) {
+        recordRejection(input, delegationId, {
+          reason: `Delegation rejected: profile ${JSON.stringify(input.profile)} does not allow every requested workflow Skill.`,
+          recovery:
+            "Select only Skill names advertised for that exact profile, or omit the Skill lease.",
+        });
+        continue;
+      }
       const execution = options.resolveExecution(profile.execution);
       if (execution.provider.abortSignalSupport !== true) {
         recordRejection(input, delegationId, {
@@ -1285,9 +1322,9 @@ export function createSubagentSupervisor(
           ? { projectInstructions: options.projectInstructions }
           : {}),
         focusPaths: input.focusPaths,
-        profile: profile.capability.profile,
+        profile: capability.profile,
         roleInstructions: profile.roleInstructions,
-        maxFinalTextChars: profile.capability.maxFinalTextChars,
+        maxFinalTextChars: capability.maxFinalTextChars,
       });
       const userMessage = childTaskMessage(
         delegationId,
@@ -1295,13 +1332,13 @@ export function createSubagentSupervisor(
         input.focusPaths,
       );
       const childInputOptions: StreamOptions = {
-        systemPrompt,
+        systemPrompt: effectiveChildSystemPrompt(systemPrompt, capability),
         messages: [{ role: "user", content: userMessage }],
         signal: input.signal,
         toolExposure: {
           kind: "auto",
           profile: "subagent",
-          capability: profile.capability,
+          capability,
         },
       };
       const minimumInputTokens = estimateProviderInputTokens(
@@ -1323,8 +1360,8 @@ export function createSubagentSupervisor(
       candidates.push({
         input,
         delegationId,
-        capability: profile.capability,
-        threadCapabilityCeiling: profile.threadCapabilityCeiling,
+        capability,
+        threadCapabilityCeiling: profile.capability,
         execution,
         systemPrompt,
         userMessage,
@@ -1647,20 +1684,34 @@ export function createSubagentSupervisor(
         return reject(`Agent resume rejected: ${invalidFocusPath}`);
       }
       const baseProfile = subagentCapabilityBaseProfile(request.capability);
-      const currentPolicy = options.profileRegistry.resolve(baseProfile);
-      if (currentPolicy === undefined) {
+      const currentPolicy = options.profileRegistry.resolveBuiltin(baseProfile);
+      const currentSkills =
+        options.profileRegistry.skillRuntime.kind === "enabled"
+          ? options.profileRegistry.skillRuntime.resolveCurrent(
+              request.threadCapabilityCeiling.skills,
+            )
+          : [];
+      const currentCapabilityCeiling = subagentCapabilityWithSkills(
+        currentPolicy.capability,
+        currentSkills,
+      );
+      const currentlyAllowedCapability = narrowSubagentCapabilityToCeiling(
+        request.capability,
+        currentCapabilityCeiling,
+      );
+      const capability = selectSubagentCapabilitySkills(
+        currentlyAllowedCapability,
+        request.skills,
+      );
+      if (capability === null) {
         return reject(
-          "Agent resume rejected because its built-in capability base is unavailable.",
+          "Agent resume rejected because its task Skill lease is outside the previous Run, Thread ceiling, or current policy.",
         );
       }
-      const capability = narrowSubagentCapabilityToCeiling(
-        request.capability,
-        currentPolicy.capability,
-      );
       const capabilityRelations = [
         compareSubagentCapability(capability, request.capability),
         compareSubagentCapability(capability, request.threadCapabilityCeiling),
-        compareSubagentCapability(capability, currentPolicy.capability),
+        compareSubagentCapability(capability, currentCapabilityCeiling),
       ];
       const expansion = capabilityRelations.find(
         (relation) => relation.kind === "expansion",
@@ -1679,7 +1730,10 @@ export function createSubagentSupervisor(
       const minimumInputTokens = estimateProviderInputTokens(
         execution.provider,
         {
-          systemPrompt: request.systemPrompt,
+          systemPrompt: effectiveChildSystemPrompt(
+            request.systemPrompt,
+            capability,
+          ),
           messages: [
             ...request.priorMessages.map(projectSessionMessageToProvider),
             { role: "user", content: request.message },
@@ -1716,6 +1770,7 @@ export function createSubagentSupervisor(
           mode: "background",
           task: request.message,
           focusPaths: request.focusPaths,
+          skills: capability.skills.map((skill) => skill.qualifiedName),
           signal: request.signal,
         },
         delegationId,

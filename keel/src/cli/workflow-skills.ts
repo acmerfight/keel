@@ -92,14 +92,24 @@ export function disabledWorkflowSkillWorkspacePaths(
   catalog: SkillCatalog,
   disabledPackageIds: readonly string[],
 ): readonly string[] {
-  const workspacePath = realpathSync(workspace);
   const disabled = new Set(disabledPackageIds);
+  return workflowSkillWorkspacePaths(
+    workspace,
+    catalog.skills.filter(
+      (skill) => skill.scope === "repo" && disabled.has(skill.packageId),
+    ),
+  );
+}
+
+export function workflowSkillWorkspacePaths(
+  workspace: string,
+  skills: readonly SkillDescriptor[],
+): readonly string[] {
+  const workspacePath = realpathSync(workspace);
   return [
     ...new Set(
-      catalog.skills
-        .filter(
-          (skill) => skill.scope === "repo" && disabled.has(skill.packageId),
-        )
+      skills
+        .filter((skill) => skill.scope === "repo")
         .flatMap((skill) => {
           const requestedPackagePath = resolve(
             workspacePath,
@@ -110,7 +120,7 @@ export function disabledWorkflowSkillWorkspacePaths(
             resolvedPackagePath = realpathSync(requestedPackagePath);
           } catch {
             throw new WorkflowSkillError(
-              `Error: cannot enforce the disabled workflow skill boundary for ${JSON.stringify(skill.qualifiedName)} because its canonical package path is unavailable.`,
+              `Error: cannot enforce the workflow skill workspace boundary for ${JSON.stringify(skill.qualifiedName)} because its canonical package path is unavailable.`,
             );
           }
           return [requestedPackagePath, resolvedPackagePath];

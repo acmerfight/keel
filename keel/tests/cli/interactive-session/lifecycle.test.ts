@@ -591,6 +591,7 @@ describe("Interactive Session - Lifecycle", () => {
       skills: {
         kind: "managed",
         activation: skillActivation,
+        catalog: skillCatalog,
         implicitSkills: skillCatalog.implicitSkills,
         loadExplicit: (lookup) => skillCatalog.load(lookup),
         initialActivationRecords:

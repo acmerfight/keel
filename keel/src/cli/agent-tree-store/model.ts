@@ -2,12 +2,14 @@ import { z } from "zod";
 import type { SessionMessage } from "../../agent/session-message.ts";
 import {
   EXPLORER_MAX_TURNS,
+  MAX_SUBAGENT_SKILLS,
   REVIEWER_MAX_TURNS,
   type RepoSubagentCapabilitySnapshotId,
   type RepoSubagentProfileName,
   SUBAGENT_DEADLINE_MS,
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   type SubagentCapabilitySnapshot,
+  type SubagentSkillSnapshot,
   subagentBuiltinToolNames,
   subagentProfileIds,
 } from "../../agent/subagent-capability.ts";
@@ -29,9 +31,14 @@ import {
 import { reasoningEfforts } from "../../core/model-metadata.ts";
 import { providerIds } from "../../core/provider-id.ts";
 import type { Usage } from "../../llm/types.ts";
+import {
+  isWorkflowSkillResourcePath,
+  MAX_WORKFLOW_SKILL_BYTES,
+  MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
+} from "../../skills/resources.ts";
 import { sessionMessageSchema } from "../session-message-schema.ts";
 
-export const AGENT_TREE_SCHEMA_VERSION = 6;
+export const AGENT_TREE_SCHEMA_VERSION = 7;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -166,6 +173,48 @@ const repoCapabilityIdSchema: z.ZodType<RepoSubagentCapabilitySnapshotId> =
 const repoProfileNameSchema: z.ZodType<RepoSubagentProfileName> =
   z.templateLiteral(["repo:", z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u)]);
 
+const subagentSkillSnapshotSchema: z.ZodType<SubagentSkillSnapshot> = z
+  .object({
+    descriptorId: z.string().min(1).max(256),
+    packageId: z.string().min(1).max(256),
+    rootKey: z.string().min(1).max(64),
+    rootPriority: z.number().int().nonnegative(),
+    qualifiedName: z.string().min(1).max(256),
+    scope: z.enum(["repo", "user", "system", "extra"]),
+    activationPolicy: z.literal("implicit"),
+    name: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
+    description: z.string().trim().min(1).max(1_024),
+    relativePath: z.string().min(1).max(1_000),
+    digest: z.string().regex(/^[a-f0-9]{64}$/u),
+    resourcePaths: z
+      .array(z.string().max(1_000).refine(isWorkflowSkillResourcePath))
+      .max(MAX_WORKFLOW_SKILL_RESOURCE_PATHS)
+      .refine((paths) => new Set(paths).size === paths.length),
+    content: z
+      .string()
+      .refine(
+        (content) =>
+          Buffer.byteLength(content, "utf8") <= MAX_WORKFLOW_SKILL_BYTES,
+        {
+          message:
+            "workflow Skill content exceeds the persisted snapshot limit",
+        },
+      ),
+  })
+  .strict();
+const subagentSkillsSchema = z
+  .array(subagentSkillSnapshotSchema)
+  .max(MAX_SUBAGENT_SKILLS)
+  .refine(
+    (skills) =>
+      new Set(skills.map((skill) => skill.qualifiedName)).size ===
+      skills.length,
+  );
+
 const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
   [
     z
@@ -178,6 +227,7 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
           z.literal("glob"),
           z.literal("grep"),
         ]),
+        skills: z.tuple([]),
         maxTurns: z.number().int().positive().max(EXPLORER_MAX_TURNS),
         ...capabilityLimitsShape,
       })
@@ -194,6 +244,7 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
           z.literal("git_status"),
           z.literal("git_diff"),
         ]),
+        skills: z.tuple([]),
         maxTurns: z.number().int().positive().max(REVIEWER_MAX_TURNS),
         ...capabilityLimitsShape,
       })
@@ -208,6 +259,7 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
           .min(1)
           .max(subagentBuiltinToolNames.length)
           .refine((tools) => new Set(tools).size === tools.length),
+        skills: subagentSkillsSchema,
         maxTurns: z.number().int().positive().max(REVIEWER_MAX_TURNS),
         ...capabilityLimitsShape,
       })

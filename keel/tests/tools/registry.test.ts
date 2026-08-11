@@ -584,6 +584,7 @@ describe("tool registry", () => {
       builtinToolRegistry.agent_resume.display.formatLabel({
         agentId: "agent-a1",
         message: "Verify the fix.",
+        skills: [],
       }),
     ).toBe("agent_resume agent-a1");
     expect(bashTool.permission.kind).toBe("approval");
@@ -1029,7 +1030,7 @@ describe("tool registry", () => {
 
     expect(argumentsByTool).toEqual({
       delegate: {
-        fields: ["profile", "mode", "task", "focusPaths"],
+        fields: ["profile", "mode", "task", "focusPaths", "skills"],
         required: ["task"],
       },
       agent_list: { fields: [], required: [] },
@@ -1040,7 +1041,7 @@ describe("tool registry", () => {
         required: ["agentId", "message"],
       },
       agent_resume: {
-        fields: ["agentId", "message"],
+        fields: ["agentId", "message", "skills"],
         required: ["agentId", "message"],
       },
       update_plan: { fields: ["plan"], required: ["plan"] },
@@ -1123,14 +1124,21 @@ describe("tool registry", () => {
         ]),
       );
       const completeArgs =
-        tool.name === "update_goal"
-          ? { ...completeArgsFromMetadata, status: "blocked" }
-          : tool.name === "agent_wait" ||
-              tool.name === "agent_cancel" ||
-              tool.name === "agent_input" ||
-              tool.name === "agent_resume"
-            ? { ...completeArgsFromMetadata, agentId: "agent-a1" }
-            : completeArgsFromMetadata;
+        tool.name === "delegate"
+          ? { ...completeArgsFromMetadata, skills: [] }
+          : tool.name === "agent_resume"
+            ? {
+                ...completeArgsFromMetadata,
+                agentId: "agent-a1",
+                skills: [],
+              }
+            : tool.name === "update_goal"
+              ? { ...completeArgsFromMetadata, status: "blocked" }
+              : tool.name === "agent_wait" ||
+                  tool.name === "agent_cancel" ||
+                  tool.name === "agent_input"
+                ? { ...completeArgsFromMetadata, agentId: "agent-a1" }
+                : completeArgsFromMetadata;
 
       expect(jsonSchema.type, `${tool.name} schema must be an object`).toBe(
         "object",

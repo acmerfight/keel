@@ -17,6 +17,7 @@ interface AgentInputRequest extends AgentControlRequest {
 
 interface AgentResumeRequest extends AgentInputRequest {
   readonly requestId: string;
+  readonly skills: readonly string[];
 }
 
 interface AgentSettlementRequest {

@@ -29,6 +29,7 @@ import type {
 import type {
   SkillActivationCapability,
   SkillActivationRecord,
+  SkillCatalog,
   SkillDescriptor,
   SkillLifecycleState,
   WorkflowSkill,
@@ -227,6 +228,7 @@ export type InteractiveSkillRuntime =
   | {
       readonly kind: "managed";
       readonly activation: SkillActivationCapability;
+      readonly catalog: SkillCatalog;
       readonly implicitSkills: readonly SkillDescriptor[];
       readonly loadExplicit: (lookup: string) => WorkflowSkill;
       readonly initialActivationRecords: readonly SkillActivationRecord[];

@@ -86,6 +86,7 @@ as `repo:<name>`:
       "model": "deepseek-v4-pro",
       "effort": "max",
       "tools": ["read", "grep", "git_diff"],
+      "skills": ["repo:review-guide"],
       "maxTurns": 4,
       "deadlineMs": 30000,
       "maxResultChars": 1200
@@ -95,11 +96,18 @@ as `repo:<name>`:
 ```
 
 Every project profile must be a subset of its built-in base. It can select a
-registered model and supported effort and can reduce tools, turns, deadline,
-and result size; it cannot add write, Bash, Skills, MCP, or delegation
-authority. Invalid or expanding configuration stops before any child starts.
-Accepted saved-session Runs persist their exact execution and capability
-snapshots, so later project-config changes affect only new delegations.
+registered model and supported effort, reduce tools, turns, deadline, and
+result size, and name up to eight audited model-activatable Skills as its ceiling. Each delegate
+call leases a subset of that ceiling. The child sees only the leased Skill
+catalog, activates a matching Skill through the normal Skill lifecycle, and
+cannot gain write, Bash, MCP, delegation, or other tools from Skill content.
+Main's active Skills are not copied. Invalid or expanding configuration stops
+before any child starts. Accepted saved-session Runs persist exact execution
+and capability snapshots; each resume supplies a fresh task Skill lease and may
+only retain unchanged authority from the prior Run and Thread ceiling. Missing,
+disabled, changed, or omitted Skills are removed; config or parent activation
+changes cannot add one. `/agents resume` accepts repeated `--skill <name>`
+options before `-- <message>` when a direct continuation needs a retained Skill.
 
 ## Project Memory
 

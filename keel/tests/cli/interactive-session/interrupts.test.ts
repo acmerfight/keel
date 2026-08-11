@@ -43,6 +43,7 @@ function managedSkills(workspace: string): InteractiveSkillRuntime {
   return {
     kind: "managed",
     activation: createSkillActivation(catalog),
+    catalog,
     implicitSkills: catalog.implicitSkills,
     loadExplicit: (lookup) => catalog.load(lookup),
     initialActivationRecords: [],

@@ -196,9 +196,12 @@ What a user can do today:
   once as `interrupted` instead of remaining falsely live. Projects can define
   `repo:*` profiles in `.agents/subagents.json` that select a registered child
   model/effort and narrow a built-in profile's tools, turns, deadline, and
-  result bound. Accepted Threads retain their persisted capability and
-  execution snapshots across config changes. #590 remains the governing epic;
-  Skills/MCP inheritance, write authority, nesting, or default-on autonomous
+  result bound and declare an audited Skill ceiling. Each Run leases an exact
+  subset, exposes only that bounded catalog, and uses normal Skill activation;
+  parent-active Skills are not copied and resume can only preserve or remove
+  persisted Skill authority. Accepted Threads retain their persisted capability
+  and execution snapshots across config changes. #590 remains the governing
+  epic; MCP inheritance, write authority, nesting, or default-on autonomous
   delegation still require their own slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
@@ -295,8 +298,9 @@ Known limits that shape the priorities below:
   task outcomes before pinned distribution. Sub-agents now have stable
   default-off `off|explicit|auto` policy, foreground read-only parallelism,
   attached background control, crash-safe delivery, stable multi-Run child
-  threads, and built-in plus project-narrowed profiles. Skills/MCP derivation,
-  isolated writes, nesting, and any default-on decision remain subject to the
+  threads, built-in plus project-narrowed profiles, and per-Run governed Skill
+  catalogs derived from profile/task leases. MCP derivation, isolated writes,
+  nesting, and any default-on decision remain subject to the
   issue's reliability and same-budget value gates. Marketplaces and IDE
   integration remain deferred.
 - MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
@@ -484,9 +488,10 @@ Not needed to switch; revisit once P0/P1 are done.
   background list/wait/cancel, crash-safe result delivery, and stable multi-Run
   child threads. Built-in `explorer`/`reviewer` profiles now derive model-visible
   tools and dispatcher authority from one persisted capability snapshot;
-  project `repo:*` profiles can select a registered model/effort and only narrow
-  that built-in authority. Skills/MCP derivation, isolated writes, bounded
-  nesting, and any default-on decision remain gated by their later epic slices
+  project `repo:*` profiles can select a registered model/effort, narrow that
+  built-in authority, and declare a Skill ceiling from which each Run leases a
+  bounded catalog. MCP derivation, isolated writes, bounded nesting, and any
+  default-on decision remain gated by their later epic slices
   and same-budget value evidence.
 - Plan mode
 - IDE integration

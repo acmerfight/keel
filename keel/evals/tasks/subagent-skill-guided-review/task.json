@@ -1,0 +1,16 @@
+{
+  "kind": "standard",
+  "prompt": "Use exactly one repo:skill-review subagent with only the repo:release-guide Skill. The child must activate that Skill and follow it to determine the release gate. Then, as Main, create result.txt containing exactly the one line reported by the child. Do not activate or inspect repo:release-guide in Main.",
+  "timeoutMs": 240000,
+  "scriptTimeoutMs": 60000,
+  "allowBash": false,
+  "maxCostUsd": 0.02,
+  "agentPolicy": "explicit",
+  "delegationPolicy": "require_one",
+  "delegationExpectation": {
+    "profile": "repo:skill-review",
+    "providerId": "deepseek",
+    "model": "deepseek-v4-flash",
+    "effort": null
+  }
+}

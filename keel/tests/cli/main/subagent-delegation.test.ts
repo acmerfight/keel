@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +64,387 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Subagent Delegation", () => {
+  test(`Given a project profile allows one workflow Skill while Main has another active,
+    When one child uses the leased Skill and another child invents the unleased Skill name,
+    Then only the leased instruction and resource load without gaining Main's Skill or write authority`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-skill-"));
+    const keelHome = join(workspace, ".keel-home");
+    await mkdir(join(workspace, ".git"));
+    await mkdir(
+      join(workspace, ".agents", "skills", "review-guide", "references"),
+      {
+        recursive: true,
+      },
+    );
+    await mkdir(join(workspace, ".agents", "skills", "main-only"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(workspace, ".agents", "skills", "review-guide", "SKILL.md"),
+      [
+        "---",
+        "name: review-guide",
+        "description: Apply the repository review checklist.",
+        "---",
+        "CHILD_REVIEW_GUIDE: read references/checklist.md before concluding.",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(
+        workspace,
+        ".agents",
+        "skills",
+        "review-guide",
+        "references",
+        "checklist.md",
+      ),
+      "CHECKLIST_FACT: exported values must remain stable.\n",
+    );
+    await writeFile(
+      join(workspace, ".agents", "skills", "main-only", "SKILL.md"),
+      [
+        "---",
+        "name: main-only",
+        "description: Main-only workflow guidance.",
+        "---",
+        "MAIN_ONLY_SKILL_BODY: never copy this into a child.",
+        "",
+      ].join("\n"),
+    );
+    await mkdir(join(workspace, ".agents"), { recursive: true });
+    await writeFile(
+      join(workspace, ".agents", "subagents.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: {
+          "skilled-review": {
+            base: "reviewer",
+            tools: ["read", "grep", "git_diff"],
+            skills: ["repo:review-guide"],
+            maxTurns: 6,
+          },
+        },
+      }),
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_skilled_review", "delegate", {
+                  profile: "repo:skilled-review",
+                  skills: ["repo:review-guide"],
+                  task: "Use the allowed review guide to inspect the repository policy.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              [
+                sseToolCall("read_leased_skill_directly", "read", {
+                  path: ".agents/skills/review-guide/SKILL.md",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(
+              [
+                sseToolCall("read_unleased_skill_directly", "read", {
+                  path: ".agents/skills/main-only/SKILL.md",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 4:
+            response.end(
+              [
+                sseToolCall("activate_review_guide", "skill", {
+                  name: "repo:review-guide",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 5:
+            response.end(
+              [
+                sseToolCall("read_review_checklist", "skill_resource", {
+                  skill: "repo:review-guide",
+                  path: "references/checklist.md",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 6:
+            response.end(
+              sseTextReplyWithUsage(
+                "The allowed checklist says exported values must remain stable.",
+              ),
+            );
+            return;
+          case 7:
+            response.end(
+              sseTextReplyWithUsage(
+                "The child used the task-approved review guide only.",
+              ),
+            );
+            return;
+          case 8:
+            response.end(
+              [
+                sseToolCall("delegate_unleased_attempt", "delegate", {
+                  profile: "repo:skilled-review",
+                  skills: ["repo:review-guide"],
+                  task: "Confirm that only the task-leased review guide is usable.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 9:
+            response.end(
+              [
+                sseToolCall("invent_unleased_skill", "skill", {
+                  name: "repo:main-only",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 10:
+            response.end(
+              sseTextReplyWithUsage(
+                "The unleased Skill was denied by the child dispatcher.",
+              ),
+            );
+            return;
+          case 11:
+            response.end(
+              sseTextReplyWithUsage("The unleased Skill was denied."),
+            );
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--agent-policy",
+        "explicit",
+        "--skill",
+        "repo:main-only",
+        "--max-cost",
+        "0.05",
+        "Use a subagent with the project-approved review guide.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(7);
+      const childInitial = requestText(requests[1]);
+      expect(childInitial).toContain("repo:review-guide");
+      expect(childInitial).not.toContain("CHILD_REVIEW_GUIDE");
+      expect(childInitial).not.toContain("repo:main-only");
+      expect(childInitial).not.toContain("MAIN_ONLY_SKILL_BODY");
+      expect(toolNames(requests[1]).toSorted()).toEqual(
+        [
+          "read",
+          "grep",
+          "git_diff",
+          "skill",
+          "skill_search",
+          "skill_resource",
+        ].toSorted(),
+      );
+      expect(toolNames(requests[1])).not.toContain("write");
+      expect(toolNames(requests[1])).not.toContain("bash");
+      expect(requestText(requests[2])).toContain(
+        "read failed: ignored path: .agents/skills/review-guide/SKILL.md",
+      );
+      expect(requestText(requests[2])).not.toContain("CHILD_REVIEW_GUIDE");
+      expect(requestText(requests[3])).toContain(
+        "read failed: ignored path: .agents/skills/main-only/SKILL.md",
+      );
+      expect(requestText(requests[3])).not.toContain("MAIN_ONLY_SKILL_BODY");
+      expect(requestText(requests[4])).toContain("CHILD_REVIEW_GUIDE");
+      expect(requestText(requests[4])).not.toContain("MAIN_ONLY_SKILL_BODY");
+      expect(toolNames(requests[4]).toSorted()).toEqual(
+        toolNames(requests[1]).toSorted(),
+      );
+      expect(requestText(requests[5])).toContain(
+        "CHECKLIST_FACT: exported values must remain stable.",
+      );
+      expect(fixture.stdout()).toBe(
+        "The child used the task-approved review guide only.\n",
+      );
+
+      const unauthorizedFixture = createRuntime(
+        [
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+          "Use a subagent to verify the Skill boundary.",
+        ],
+        {
+          cwd: workspace,
+          env: {
+            KEEL_HOME: keelHome,
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+      expect(
+        await runCliMain(unauthorizedFixture.runtime),
+        unauthorizedFixture.stderr(),
+      ).toBe(0);
+      expect(requests).toHaveLength(11);
+      expect(requestText(requests[8])).toContain("repo:review-guide");
+      expect(requestText(requests[8])).not.toContain("repo:main-only");
+      expect(requestText(requests[9])).toContain(
+        "outside this child Run's task lease",
+      );
+      expect(requestText(requests[9])).not.toContain("MAIN_ONLY_SKILL_BODY");
+      expect(unauthorizedFixture.stdout()).toBe(
+        "The unleased Skill was denied.\n",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given two child profiles allow different Skills,
+    When Main asks one profile to use the other profile's Skill,
+    Then the shared tool boundary rejects the profile and lease combination before starting a child request`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-skill-deny-"),
+    );
+    const keelHome = join(workspace, ".keel-home");
+    await mkdir(join(workspace, ".git"));
+    for (const name of ["alpha-guide", "beta-guide"]) {
+      await mkdir(join(workspace, ".agents", "skills", name), {
+        recursive: true,
+      });
+      await writeFile(
+        join(workspace, ".agents", "skills", name, "SKILL.md"),
+        `---\nname: ${name}\ndescription: Apply ${name}.\n---\n${name.toUpperCase()}_BODY\n`,
+      );
+    }
+    await writeFile(
+      join(workspace, ".agents", "subagents.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: {
+          alpha: { base: "explorer", skills: ["repo:alpha-guide"] },
+          beta: { base: "explorer", skills: ["repo:beta-guide"] },
+        },
+      }),
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        response.end(
+          requests.length === 1
+            ? [
+                sseToolCall("cross_profile_skill", "delegate", {
+                  profile: "repo:alpha",
+                  skills: ["repo:beta-guide"],
+                  task: "Use the beta guide.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join("")
+            : sseTextReplyWithUsage("The unauthorized Skill was rejected."),
+        );
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      ["--agent-policy", "explicit", "--max-cost", "0.05", "Use a subagent."],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(2);
+      expect(requestText(requests[1])).toContain(
+        "skills must be allowed by selected profile",
+      );
+      expect(requestText(requests[1])).not.toContain("BETA-GUIDE_BODY");
+      expect(fixture.stdout()).toBe("The unauthorized Skill was rejected.\n");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given auto agent policy is enabled with a minimal provider configuration,
     When main answers without delegating or writing a report,
     Then optional child metadata remains absent without changing one-shot behavior`, async () => {
