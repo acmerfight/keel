@@ -12,7 +12,9 @@ import {
   type SubagentCapabilitySnapshot,
   type SubagentSkillSnapshot,
   subagentBuiltinToolNames,
+  subagentCapabilityIsWriter,
   subagentProfileIds,
+  WRITER_MAX_TURNS,
 } from "../../agent/subagent-capability.ts";
 import type {
   AgentId,
@@ -29,6 +31,10 @@ import {
   subagentNonCompletedStatuses,
   subagentTerminalStatuses,
 } from "../../agent/subagent-lifecycle.ts";
+import type {
+  SubagentWriteWorkspaceReference,
+  SubagentWriteWorkspaceResult,
+} from "../../agent/subagent-workspace.ts";
 import { reasoningEfforts } from "../../core/model-metadata.ts";
 import { providerIds } from "../../core/provider-id.ts";
 import type { Usage } from "../../llm/types.ts";
@@ -39,7 +45,7 @@ import {
 } from "../../skills/resources.ts";
 import { sessionMessageSchema } from "../session-message-schema.ts";
 
-export const AGENT_TREE_SCHEMA_VERSION = 8;
+export const AGENT_TREE_SCHEMA_VERSION = 9;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -61,12 +67,12 @@ export interface AgentTreeHeaderRecord {
   readonly createdAt: string;
 }
 
-export interface AgentRunAcceptedRecord extends SubagentAcceptedLifecycle {
+export type AgentRunAcceptedRecord = SubagentAcceptedLifecycle & {
   readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "agent_run_accepted";
   readonly timestamp: string;
   readonly transcriptRef: string;
-}
+};
 
 export interface AgentRunRunningRecord {
   readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
@@ -135,13 +141,13 @@ export type AgentTreeMutationRecord =
   | AgentResultDeliveryDeliveredRecord
   | DelegationRejectedRecord;
 
-export interface AgentTranscriptHeaderRecord extends SubagentAcceptedLifecycle {
+export type AgentTranscriptHeaderRecord = SubagentAcceptedLifecycle & {
   readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "transcript";
   readonly kind: "subagent";
   readonly createdAt: string;
   readonly transcriptRef: string;
-}
+};
 
 export interface AgentTranscriptTerminalRecord {
   readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
@@ -286,6 +292,27 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
       .strict(),
     z
       .object({
+        id: z.literal("builtin-writer-v1"),
+        profile: z.literal("writer"),
+        builtinTools: z.tuple([
+          z.literal("read"),
+          z.literal("ls"),
+          z.literal("glob"),
+          z.literal("grep"),
+          z.literal("git_status"),
+          z.literal("git_diff"),
+          z.literal("edit"),
+          z.literal("write"),
+          z.literal("apply_patch"),
+        ]),
+        skills: z.tuple([]),
+        mcpTools: z.tuple([]),
+        maxTurns: z.number().int().positive().max(WRITER_MAX_TURNS),
+        ...capabilityLimitsShape,
+      })
+      .strict(),
+    z
+      .object({
         id: repoCapabilityIdSchema,
         profile: repoProfileNameSchema,
         baseProfile: z.enum(subagentProfileIds),
@@ -296,12 +323,113 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
           .refine((tools) => new Set(tools).size === tools.length),
         skills: subagentSkillsSchema,
         mcpTools: subagentMcpToolsSchema,
-        maxTurns: z.number().int().positive().max(REVIEWER_MAX_TURNS),
+        maxTurns: z
+          .number()
+          .int()
+          .positive()
+          .max(Math.max(REVIEWER_MAX_TURNS, WRITER_MAX_TURNS)),
         ...capabilityLimitsShape,
       })
       .strict(),
   ],
 );
+
+const workspaceReferenceSchema: z.ZodType<SubagentWriteWorkspaceReference> = z
+  .object({
+    kind: z.literal("isolated_write"),
+    leaseId: z.string().regex(/^subagent-[a-f0-9-]+$/u),
+    baseCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+    branch: z.string().regex(/^keel\/subagent\/[a-f0-9-]+$/u),
+    worktreePath: z.string().min(1).max(4_096),
+    workspaceRoot: z.string().min(1).max(4_096),
+  })
+  .strict();
+
+const workspaceResultBaseShape = {
+  kind: z.literal("isolated_write"),
+  leaseId: z.string().regex(/^subagent-[a-f0-9-]+$/u),
+  baseCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+  branch: z.string().regex(/^keel\/subagent\/[a-f0-9-]+$/u),
+};
+const workspaceCleanupFailureBaseShape = {
+  ...workspaceResultBaseShape,
+  disposition: z.literal("cleanup_failed"),
+  patchSourceTruncated: z.boolean(),
+  summary: z.string().max(4_000),
+  error: z.string().min(1),
+};
+const presentWorkspaceFailureLocationShape = {
+  worktreePath: z.string().min(1).max(4_096),
+  workspaceRoot: z.string().min(1).max(4_096).nullable(),
+};
+const missingWorkspaceFailureLocationShape = {
+  worktreePath: z.null(),
+  workspaceRoot: z.null(),
+};
+const storedWorkspaceFailurePatchShape = {
+  patchRef: z.string().min(1).max(512),
+  patchSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+};
+const missingWorkspaceFailurePatchShape = {
+  patchRef: z.null(),
+  patchSha256: z.null(),
+};
+const workspaceResultSchema: z.ZodType<SubagentWriteWorkspaceResult> = z.union([
+  z
+    .object({
+      ...workspaceResultBaseShape,
+      disposition: z.literal("preserved"),
+      worktreePath: z.string().min(1).max(4_096),
+      workspaceRoot: z.string().min(1).max(4_096),
+      patchRef: z.string().min(1).max(512),
+      patchSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+      patchSourceTruncated: z.boolean(),
+      summary: z.string().max(4_000),
+      error: z.null(),
+    })
+    .strict(),
+  z
+    .object({
+      ...workspaceResultBaseShape,
+      disposition: z.literal("preserved"),
+      worktreePath: z.string().min(1).max(4_096),
+      workspaceRoot: z.string().min(1).max(4_096),
+      patchRef: z.null(),
+      patchSha256: z.null(),
+      patchSourceTruncated: z.boolean(),
+      summary: z.string().max(4_000),
+      error: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      ...workspaceCleanupFailureBaseShape,
+      ...presentWorkspaceFailureLocationShape,
+      ...storedWorkspaceFailurePatchShape,
+    })
+    .strict(),
+  z
+    .object({
+      ...workspaceCleanupFailureBaseShape,
+      ...presentWorkspaceFailureLocationShape,
+      ...missingWorkspaceFailurePatchShape,
+    })
+    .strict(),
+  z
+    .object({
+      ...workspaceCleanupFailureBaseShape,
+      ...missingWorkspaceFailureLocationShape,
+      ...storedWorkspaceFailurePatchShape,
+    })
+    .strict(),
+  z
+    .object({
+      ...workspaceCleanupFailureBaseShape,
+      ...missingWorkspaceFailureLocationShape,
+      ...missingWorkspaceFailurePatchShape,
+    })
+    .strict(),
+]);
 
 const canonicalResultBaseSchema = z
   .object({
@@ -314,6 +442,7 @@ const canonicalResultBaseSchema = z
     costUsd: z.number().finite().nonnegative(),
     transcriptRef: z.string().min(1),
     pendingInputCount: z.number().int().nonnegative(),
+    workspace: workspaceResultSchema.nullable(),
   })
   .strict();
 
@@ -331,7 +460,7 @@ const canonicalResultSchema: z.ZodType<PersistedSubagentCanonicalResult> =
     }),
   ]);
 
-const lifecycleIdentitySchema = z
+const lifecycleIdentityInputSchema = z
   .object({
     delegationId: z.string().min(1),
     childAgentId: agentIdSchema,
@@ -346,6 +475,7 @@ const lifecycleIdentitySchema = z
     effort: z.enum(reasoningEfforts).nullable(),
     threadCapabilityCeiling: capabilitySnapshotSchema,
     capability: capabilitySnapshotSchema,
+    workspace: workspaceReferenceSchema.nullable(),
     systemPrompt: z.string(),
     lineage: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("root") }).strict(),
@@ -359,12 +489,93 @@ const lifecycleIdentitySchema = z
   })
   .strict();
 
-const acceptedRecordSchema = lifecycleIdentitySchema.extend({
-  schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
-  type: z.literal("agent_run_accepted"),
-  timestamp: z.string(),
-  transcriptRef: z.string().min(1),
-});
+function staticallyCoupledLifecycle<
+  Lifecycle extends z.infer<typeof lifecycleIdentityInputSchema>,
+>(
+  lifecycle: Lifecycle,
+  context: z.RefinementCtx,
+): (Lifecycle & SubagentAcceptedLifecycle) | typeof z.NEVER {
+  const capability = lifecycle.capability;
+  const threadCapabilityCeiling = lifecycle.threadCapabilityCeiling;
+  const writerCapability = subagentCapabilityIsWriter(capability);
+  const writerCeiling = subagentCapabilityIsWriter(threadCapabilityCeiling);
+  if (writerCapability) {
+    if (!writerCeiling) {
+      context.addIssue({
+        code: "custom",
+        path: ["threadCapabilityCeiling"],
+        message:
+          "run capability and thread ceiling must share workspace authority",
+      });
+      return z.NEVER;
+    }
+    if (lifecycle.workspace === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspace"],
+        message: "writer capability requires one isolated workspace",
+      });
+      return z.NEVER;
+    }
+    if (lifecycle.mode !== "foreground") {
+      context.addIssue({
+        code: "custom",
+        path: ["mode"],
+        message: "writer capability is foreground-only",
+      });
+      return z.NEVER;
+    }
+    if (lifecycle.workspace.leaseId !== lifecycle.childRunId) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspace", "leaseId"],
+        message: "writer workspace lease must match its child run",
+      });
+      return z.NEVER;
+    }
+    return {
+      ...lifecycle,
+      mode: lifecycle.mode,
+      threadCapabilityCeiling,
+      capability,
+      workspace: lifecycle.workspace,
+    };
+  }
+  if (writerCeiling) {
+    context.addIssue({
+      code: "custom",
+      path: ["threadCapabilityCeiling"],
+      message:
+        "run capability and thread ceiling must share workspace authority",
+    });
+    return z.NEVER;
+  }
+  if (lifecycle.workspace !== null) {
+    context.addIssue({
+      code: "custom",
+      path: ["workspace"],
+      message: "read-only capability forbids an isolated writer workspace",
+    });
+    return z.NEVER;
+  }
+  return {
+    ...lifecycle,
+    mode: lifecycle.mode,
+    threadCapabilityCeiling,
+    capability,
+    workspace: null,
+  };
+}
+
+const acceptedRecordSchema: z.ZodType<AgentRunAcceptedRecord> =
+  lifecycleIdentityInputSchema
+    .extend({
+      schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
+      type: z.literal("agent_run_accepted"),
+      timestamp: z.string(),
+      transcriptRef: z.string().min(1),
+    })
+    .transform(staticallyCoupledLifecycle);
 
 const runIdentitySchema = z
   .object({
@@ -381,8 +592,8 @@ const resultDeliveryReferenceShape = {
   canonicalResultSha256: z.string().regex(/^[a-f0-9]{64}$/u),
 };
 
-export const mutationRecordSchema: z.ZodType<AgentTreeMutationRecord> =
-  z.discriminatedUnion("type", [
+export const mutationRecordSchema: z.ZodType<AgentTreeMutationRecord> = z.union(
+  [
     acceptedRecordSchema,
     runIdentitySchema.extend({
       schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
@@ -444,7 +655,8 @@ export const mutationRecordSchema: z.ZodType<AgentTreeMutationRecord> =
         reason: z.string().min(1),
       })
       .strict(),
-  ]);
+  ],
+);
 
 export const headerRecordSchema: z.ZodType<AgentTreeHeaderRecord> = z
   .object({
@@ -456,13 +668,15 @@ export const headerRecordSchema: z.ZodType<AgentTreeHeaderRecord> = z
   .strict();
 
 export const transcriptHeaderSchema: z.ZodType<AgentTranscriptHeaderRecord> =
-  lifecycleIdentitySchema.extend({
-    schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
-    type: z.literal("transcript"),
-    kind: z.literal("subagent"),
-    createdAt: z.string(),
-    transcriptRef: z.string().min(1),
-  });
+  lifecycleIdentityInputSchema
+    .extend({
+      schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
+      type: z.literal("transcript"),
+      kind: z.literal("subagent"),
+      createdAt: z.string(),
+      transcriptRef: z.string().min(1),
+    })
+    .transform(staticallyCoupledLifecycle);
 
 const transcriptMessagesSchema = z
   .object({
@@ -526,5 +740,9 @@ export function copyAccounting(
 export function copyCanonicalResult(
   result: PersistedSubagentCanonicalResult,
 ): PersistedSubagentCanonicalResult {
-  return { ...result, usage: { ...result.usage } };
+  return {
+    ...result,
+    usage: { ...result.usage },
+    workspace: result.workspace === null ? null : { ...result.workspace },
+  };
 }

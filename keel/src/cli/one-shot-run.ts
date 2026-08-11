@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { runAgent } from "../agent/loop.ts";
 import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
@@ -87,6 +88,7 @@ import {
   createCliRuntimeErrorReporter,
   formatCliRuntimeError,
 } from "./runtime-error.ts";
+import { sessionHome } from "./session-store.ts";
 import {
   resolveSkillRuntimePolicy,
   SkillUserConfigError,
@@ -331,7 +333,14 @@ export async function runOneShotCli(
     const systemPrompt =
       cliArgs.agentPolicy === "off"
         ? baseSystemPrompt
-        : appendDelegationToSystemPrompt(baseSystemPrompt, cliArgs.agentPolicy);
+        : appendDelegationToSystemPrompt(
+            baseSystemPrompt,
+            cliArgs.agentPolicy,
+            {
+              background: false,
+              writer: cliArgs.agentPolicy === "explicit",
+            },
+          );
     const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
     let exposedMemoryBytes = 0;
     let exposedMemoryTokens = 0;
@@ -386,6 +395,7 @@ export async function runOneShotCli(
         ? ({ kind: "off" } as const)
         : ({
             kind: "enabled",
+            policy: cliArgs.agentPolicy,
             maxCostUsd: cliArgs.maxCostUsd,
             costModel: requireKnownCostModel(resolved),
           } as const);
@@ -419,11 +429,13 @@ export async function runOneShotCli(
       delegationRun.kind === "enabled"
         ? await createCliSubagentRuntime({
             workspace,
+            workspaceLeasesRoot: join(sessionHome(runtime), "worktrees"),
             platform: runtime.platform,
             parentRunId: `main-${randomUUID()}`,
             provider: resolved.provider,
             providerId: resolved.providerId,
             model: resolved.model,
+            policy: delegationRun.policy,
             maxCostUsd: delegationRun.maxCostUsd,
             costModel: delegationRun.costModel,
             modelMetadata: resolved.modelMetadata ?? {

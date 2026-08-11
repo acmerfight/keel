@@ -203,8 +203,12 @@ What a user can do today:
   active tools or interactive approval channel. Resume can only preserve or
   remove persisted authority and revalidates current MCP identity. Accepted
   Threads retain their persisted capability and execution snapshots across
-  config changes. #590 remains the governing epic; write authority, nesting, or
-  default-on autonomous delegation still require their own slices and gates.
+  config changes. The first writer slice adds one explicit-policy, foreground
+  writer in a clean, isolated branch/worktree; its preparation is durable before
+  Git side effects, its patch and location are reported, and it never edits,
+  deletes, or merges the user's checkout. #590 remains the governing epic;
+  bounded nesting or default-on autonomous delegation still require their own
+  slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -301,10 +305,11 @@ Known limits that shape the priorities below:
   default-off `off|explicit|auto` policy, foreground read-only parallelism,
   attached background control, crash-safe delivery, stable multi-Run child
   threads, built-in plus project-narrowed profiles, and per-Run governed Skill
-  and MCP catalogs derived from profile/task leases. Isolated writes, nesting,
-  and any default-on decision remain subject to the
-  issue's reliability and same-budget value gates. Marketplaces and IDE
-  integration remain deferred.
+  and MCP catalogs derived from profile/task leases. One explicit foreground
+  writer now returns an inspectable isolated branch/worktree; broader write
+  workflows, nesting, and any default-on decision remain subject to the issue's
+  reliability and same-budget value gates. Marketplaces and IDE integration
+  remain deferred.
 - MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
   transport over the same runtime and policy core, and Keel is a client only.
   Remaining work is calibrating progressive tool selection on real tasks.
@@ -332,9 +337,10 @@ Known limits that shape the priorities below:
    independent agent tree; attached background children remain owned across
    Main turns and are inspectable, waitable, and cancellable through `/agents`;
    result delivery is crash-safe, and stable child threads support follow-up
-   input plus terminal resume as new immutable Runs. Remaining subagent work is
-   isolated writes and bounded nesting rather than basic lifecycle persistence
-   or governed Skill/MCP derivation.
+   input plus terminal resume as new immutable Runs. One explicit foreground
+   writer can now make an isolated, inspectable change from a clean checkout.
+   Remaining subagent work is broader governed write workflows and bounded
+   nesting rather than basic lifecycle persistence or Skill/MCP derivation.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -436,8 +442,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   background runs remain live only under the current owner, `/agents` can list,
   wait, or cancel them, and stale nonterminal runs recover as interrupted.
   Canonical result delivery is crash-safe, and stable child threads support
-  follow-up input plus terminal resume as new immutable Runs. Remaining work is
-  capability expansion through isolated writes and bounded nesting.
+  follow-up input plus terminal resume as new immutable Runs. The first explicit
+  foreground writer is isolated and inspectable; remaining work is broader
+  governed write workflows and bounded nesting.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
@@ -477,8 +484,8 @@ Codex/Claude Code — or directly moves the eval numbers.
   and advisory portability, script, authority, and dangerous-instruction
   findings without executing package code. Remaining work is catalog-budget and
   routing calibration through evals, then pinned installation and update.
-  Marketplace, write-capable child execution, and remote installation remain
-  deferred.
+  Marketplace, broader write-capable child workflows, and remote installation
+  remain deferred.
 
 ## P2 — After the replacement works
 
@@ -487,15 +494,16 @@ Not needed to switch; revisit once P0/P1 are done.
 - Sub-agents — #590 provides stable default-off `off|explicit|auto` policy,
   foreground read-only parallelism, durable history, and saved-session attached
   background list/wait/cancel, crash-safe result delivery, and stable multi-Run
-  child threads. Built-in `explorer`/`reviewer` profiles now derive model-visible
+  child threads. Built-in `explorer`/`reviewer` profiles derive model-visible
   tools and dispatcher authority from one persisted capability snapshot;
   project `repo:*` profiles can select a registered model/effort, narrow that
   built-in authority, and declare Skill/MCP ceilings from which each Run leases
   bounded catalogs. Child MCP uses fresh discovery plus exact saved approvals;
-  Main-active tools and temporary interactive approvals are not inherited.
-  Isolated writes, bounded nesting, and any default-on decision remain gated by
-  their later epic slices
-  and same-budget value evidence.
+  Main-active tools and temporary interactive approvals are not inherited. An
+  explicit-policy `writer` profile now provides one foreground isolated
+  branch/worktree and a bounded inspectable patch without auto-merge or
+  auto-cleanup. Broader writes, bounded nesting, and any default-on decision
+  remain gated by later epic slices and same-budget value evidence.
 - Plan mode
 - IDE integration
 - Skill marketplace

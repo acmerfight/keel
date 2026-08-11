@@ -3,7 +3,14 @@ import type { ProviderId } from "../core/provider-id.ts";
 import type { Usage } from "../llm/types.ts";
 import type { SessionLedgerObserver } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
-import type { SubagentCapabilitySnapshot } from "./subagent-capability.ts";
+import type {
+  ReadOnlySubagentCapabilitySnapshot,
+  WriterSubagentCapabilitySnapshot,
+} from "./subagent-capability.ts";
+import type {
+  SubagentWriteWorkspaceReference,
+  SubagentWriteWorkspaceResult,
+} from "./subagent-workspace.ts";
 
 export const subagentNonCompletedStatuses = [
   "failed",
@@ -45,16 +52,32 @@ interface SubagentRunIdentity {
   readonly focusPaths: readonly string[];
 }
 
-export interface SubagentAcceptedLifecycle extends SubagentRunIdentity {
+interface SubagentAcceptedLifecycleBase extends SubagentRunIdentity {
   readonly lineage: SubagentRunLineage;
-  readonly mode: SubagentRunMode;
   readonly providerId: ProviderId;
   readonly model: string;
   readonly effort: ReasoningEffort | null;
-  readonly threadCapabilityCeiling: SubagentCapabilitySnapshot;
-  readonly capability: SubagentCapabilitySnapshot;
   readonly systemPrompt: string;
 }
+
+export type ReadOnlySubagentAcceptedLifecycle =
+  SubagentAcceptedLifecycleBase & {
+    readonly mode: SubagentRunMode;
+    readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+    readonly capability: ReadOnlySubagentCapabilitySnapshot;
+    readonly workspace: null;
+  };
+
+type WriterSubagentAcceptedLifecycle = SubagentAcceptedLifecycleBase & {
+  readonly mode: "foreground";
+  readonly threadCapabilityCeiling: WriterSubagentCapabilitySnapshot;
+  readonly capability: WriterSubagentCapabilitySnapshot;
+  readonly workspace: SubagentWriteWorkspaceReference;
+};
+
+export type SubagentAcceptedLifecycle =
+  | ReadOnlySubagentAcceptedLifecycle
+  | WriterSubagentAcceptedLifecycle;
 
 interface SubagentRejectedLifecycle {
   readonly delegationId: string;
@@ -72,6 +95,7 @@ export interface SubagentAccountingSnapshot {
 
 interface SubagentTerminalInputSnapshot {
   readonly pendingInputCount: number;
+  readonly workspace: SubagentWriteWorkspaceResult | null;
 }
 
 export type SubagentTerminalOutcome =
@@ -104,6 +128,7 @@ interface SubagentCanonicalResultBase extends SubagentAccountingSnapshot {
   readonly task: string;
   readonly transcriptRef: string | null;
   readonly pendingInputCount: number;
+  readonly workspace: SubagentWriteWorkspaceResult | null;
 }
 
 export type SubagentCanonicalResult = SubagentCanonicalResultBase &

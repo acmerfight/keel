@@ -1,4 +1,6 @@
+import { subagentCapabilityIsWriter } from "../agent/subagent-capability.ts";
 import { SubagentPersistenceError } from "../agent/subagent-lifecycle.ts";
+import type { SubagentWriteWorkspaceLease } from "../agent/subagent-workspace.ts";
 import {
   errorMessage,
   isAbortThrow,
@@ -56,6 +58,7 @@ import { ScopedProjectInstructionsNotVisibleError } from "./scoped-project-instr
 import {
   builtinToolAuthorityAllows,
   builtinToolCallSchema,
+  builtinToolUsesWorkspace,
   type InvalidToolCall,
   isInvalidToolCall,
   isMcpToolInvocation,
@@ -175,6 +178,7 @@ type BuiltinToolExecutionContext = GoalExecutionContext &
     readonly recordCheckpoints?: boolean;
     readonly readBeforeEdit?: ReadBeforeEdit;
     readonly projectInstructions?: ProjectInstructionVisibilityState;
+    readonly workspaceLease?: Pick<SubagentWriteWorkspaceLease, "verify">;
   };
 
 async function executeDelegateTool(
@@ -1218,7 +1222,33 @@ export async function executeToolCall(
       effects: NO_TOOL_EXECUTION_EFFECTS,
     };
   }
+  const subagentCapability =
+    context.builtinToolAuthority?.kind === "auto" &&
+    context.builtinToolAuthority.profile === "subagent"
+      ? context.builtinToolAuthority.capability
+      : null;
+  const writerAuthority =
+    subagentCapability === null
+      ? false
+      : subagentCapabilityIsWriter(subagentCapability);
+  if (
+    writerAuthority !== (context.workspaceLease !== undefined) &&
+    (subagentCapability !== null || context.workspaceLease !== undefined)
+  ) {
+    return {
+      content:
+        "Tool failed: subagent workspace authority does not match its lease.\nRecovery: Do not retry this tool call; restart the child through the governed Supervisor so read-only capability has no lease and writer capability has exactly one verified lease.",
+      ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
+    };
+  }
   try {
+    if (
+      context.workspaceLease !== undefined &&
+      builtinToolUsesWorkspace(toolCall.tool)
+    ) {
+      context.workspaceLease.verify(context.workspace);
+    }
     return await executeBuiltinToolCall(context, toolCall);
   } catch (error) {
     if (isAbortThrow(error, context.signal)) {

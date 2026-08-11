@@ -1,7 +1,7 @@
 import type { McpAuthorizationIdentity } from "../mcp/oauth.ts";
 import type { SkillDescriptor, WorkflowSkill } from "../skills/model.ts";
 
-export const subagentProfileIds = ["explorer", "reviewer"] as const;
+export const subagentProfileIds = ["explorer", "reviewer", "writer"] as const;
 
 export type SubagentProfileId = (typeof subagentProfileIds)[number];
 
@@ -16,6 +16,9 @@ export const subagentBuiltinToolNames = [
   "grep",
   "git_status",
   "git_diff",
+  "edit",
+  "write",
+  "apply_patch",
 ] as const;
 
 export type SubagentBuiltinToolName = (typeof subagentBuiltinToolNames)[number];
@@ -24,6 +27,7 @@ export const SUBAGENT_MAX_FINAL_TEXT_CHARS = 4_000;
 export const SUBAGENT_DEADLINE_MS = 120_000;
 export const EXPLORER_MAX_TURNS = 16;
 export const REVIEWER_MAX_TURNS = 20;
+export const WRITER_MAX_TURNS = 24;
 export const MAX_SUBAGENT_SKILLS = 8;
 export const MAX_SUBAGENT_MCP_TOOLS = 16;
 
@@ -83,19 +87,45 @@ interface ReviewerCapabilitySnapshot extends SubagentCapabilityLimits {
   ];
 }
 
+interface WriterCapabilitySnapshot extends SubagentCapabilityLimits {
+  readonly id: "builtin-writer-v1";
+  readonly profile: "writer";
+  readonly builtinTools: readonly [
+    "read",
+    "ls",
+    "glob",
+    "grep",
+    "git_status",
+    "git_diff",
+    "edit",
+    "write",
+    "apply_patch",
+  ];
+}
+
 export type RepoSubagentCapabilitySnapshotId = `repo-profile-v1:${string}`;
 
-interface RepoSubagentCapabilitySnapshot extends SubagentCapabilityLimits {
+export interface RepoSubagentCapabilitySnapshot<
+  BaseProfile extends SubagentProfileId,
+> extends SubagentCapabilityLimits {
   readonly id: RepoSubagentCapabilitySnapshotId;
   readonly profile: RepoSubagentProfileName;
-  readonly baseProfile: SubagentProfileId;
+  readonly baseProfile: BaseProfile;
   readonly builtinTools: readonly SubagentBuiltinToolName[];
 }
 
-export type SubagentCapabilitySnapshot =
+export type ReadOnlySubagentCapabilitySnapshot =
   | ExplorerCapabilitySnapshot
   | ReviewerCapabilitySnapshot
-  | RepoSubagentCapabilitySnapshot;
+  | RepoSubagentCapabilitySnapshot<"explorer" | "reviewer">;
+
+export type WriterSubagentCapabilitySnapshot =
+  | WriterCapabilitySnapshot
+  | RepoSubagentCapabilitySnapshot<"writer">;
+
+export type SubagentCapabilitySnapshot =
+  | ReadOnlySubagentCapabilitySnapshot
+  | WriterSubagentCapabilitySnapshot;
 
 type SubagentCapabilityDimension =
   | "baseProfile"
@@ -193,9 +223,17 @@ function subagentMcpToolsEqual(
 export function subagentCapabilityBaseProfile(
   snapshot: SubagentCapabilitySnapshot,
 ): SubagentProfileId {
-  return snapshot.profile === "explorer" || snapshot.profile === "reviewer"
+  return snapshot.profile === "explorer" ||
+    snapshot.profile === "reviewer" ||
+    snapshot.profile === "writer"
     ? snapshot.profile
     : snapshot.baseProfile;
+}
+
+export function subagentCapabilityIsWriter(
+  snapshot: SubagentCapabilitySnapshot,
+): snapshot is WriterSubagentCapabilitySnapshot {
+  return subagentCapabilityBaseProfile(snapshot) === "writer";
 }
 
 export function compareSubagentCapability(
@@ -245,6 +283,30 @@ export function compareSubagentCapability(
 }
 
 export function narrowSubagentCapabilityLimits(
+  snapshot: ReadOnlySubagentCapabilitySnapshot,
+  limits: {
+    readonly maxTurns?: number;
+    readonly deadlineMs?: number;
+    readonly maxFinalTextChars?: number;
+  },
+): ReadOnlySubagentCapabilitySnapshot;
+export function narrowSubagentCapabilityLimits(
+  snapshot: WriterSubagentCapabilitySnapshot,
+  limits: {
+    readonly maxTurns?: number;
+    readonly deadlineMs?: number;
+    readonly maxFinalTextChars?: number;
+  },
+): WriterSubagentCapabilitySnapshot;
+export function narrowSubagentCapabilityLimits(
+  snapshot: SubagentCapabilitySnapshot,
+  limits: {
+    readonly maxTurns?: number;
+    readonly deadlineMs?: number;
+    readonly maxFinalTextChars?: number;
+  },
+): SubagentCapabilitySnapshot;
+export function narrowSubagentCapabilityLimits(
   snapshot: SubagentCapabilitySnapshot,
   limits: {
     readonly maxTurns?: number;
@@ -263,19 +325,17 @@ export function narrowSubagentCapabilityLimits(
       snapshot.maxFinalTextChars,
     ),
   };
-  if (snapshot.profile === "explorer") {
-    return { ...snapshot, ...narrowedLimits };
-  }
-  if (snapshot.profile === "reviewer") {
-    return { ...snapshot, ...narrowedLimits };
-  }
-  return {
-    ...snapshot,
-    ...narrowedLimits,
-    builtinTools: [...snapshot.builtinTools],
-  };
+  return { ...snapshot, ...narrowedLimits };
 }
 
+export function narrowSubagentCapabilityToCeiling(
+  snapshot: ReadOnlySubagentCapabilitySnapshot,
+  ceiling: SubagentCapabilitySnapshot,
+): ReadOnlySubagentCapabilitySnapshot;
+export function narrowSubagentCapabilityToCeiling(
+  snapshot: WriterSubagentCapabilitySnapshot,
+  ceiling: SubagentCapabilitySnapshot,
+): WriterSubagentCapabilitySnapshot;
 export function narrowSubagentCapabilityToCeiling(
   snapshot: SubagentCapabilitySnapshot,
   ceiling: SubagentCapabilitySnapshot,
@@ -291,7 +351,11 @@ export function narrowSubagentCapabilityToCeiling(
   const mcpTools = narrowed.mcpTools.filter((tool) =>
     ceilingMcpTools.has(subagentMcpToolFingerprint(tool)),
   );
-  if (narrowed.profile === "explorer" || narrowed.profile === "reviewer") {
+  if (
+    narrowed.profile === "explorer" ||
+    narrowed.profile === "reviewer" ||
+    narrowed.profile === "writer"
+  ) {
     return { ...narrowed, skills, mcpTools };
   }
   const ceilingTools: ReadonlySet<SubagentBuiltinToolName> = new Set(
@@ -307,24 +371,24 @@ export function narrowSubagentCapabilityToCeiling(
   };
 }
 
-export function subagentCapabilityWithSkills(
-  snapshot: SubagentCapabilitySnapshot,
-  skills: readonly SubagentSkillSnapshot[],
-): SubagentCapabilitySnapshot {
+export function subagentCapabilityWithSkills<
+  Capability extends SubagentCapabilitySnapshot,
+>(snapshot: Capability, skills: readonly SubagentSkillSnapshot[]): Capability {
   return { ...snapshot, skills: [...skills] };
 }
 
-export function subagentCapabilityWithMcpTools(
-  snapshot: SubagentCapabilitySnapshot,
+export function subagentCapabilityWithMcpTools<
+  Capability extends SubagentCapabilitySnapshot,
+>(
+  snapshot: Capability,
   mcpTools: readonly SubagentMcpToolSnapshot[],
-): SubagentCapabilitySnapshot {
+): Capability {
   return { ...snapshot, mcpTools: [...mcpTools] };
 }
 
-export function selectSubagentCapabilitySkills(
-  snapshot: SubagentCapabilitySnapshot,
-  qualifiedNames: readonly string[],
-): SubagentCapabilitySnapshot | null {
+export function selectSubagentCapabilitySkills<
+  Capability extends SubagentCapabilitySnapshot,
+>(snapshot: Capability, qualifiedNames: readonly string[]): Capability | null {
   const requested = new Set(qualifiedNames);
   if (
     qualifiedNames.length > MAX_SUBAGENT_SKILLS ||
@@ -340,10 +404,12 @@ export function selectSubagentCapabilitySkills(
     : null;
 }
 
-export function selectSubagentCapabilityMcpTools(
-  snapshot: SubagentCapabilitySnapshot,
+export function selectSubagentCapabilityMcpTools<
+  Capability extends SubagentCapabilitySnapshot,
+>(
+  snapshot: Capability,
   selectors: readonly SubagentMcpToolSelector[],
-): SubagentCapabilitySnapshot | null {
+): Capability | null {
   const requested = new Set(
     selectors.map(({ server, tool }) => `${server}\u0000${tool}`),
   );

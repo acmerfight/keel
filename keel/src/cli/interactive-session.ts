@@ -521,7 +521,10 @@ export async function runInteractiveSession(
         ? appendDelegationToSystemPrompt(
             systemPrompt,
             options.delegation.policy,
-            { background: backgroundAgentsEnabled },
+            {
+              background: backgroundAgentsEnabled,
+              writer: options.delegation.policy === "explicit",
+            },
           )
         : systemPrompt,
       sessionGoal,
@@ -1336,11 +1339,13 @@ export async function runInteractiveSession(
         turnCostModel !== undefined
           ? await createCliSubagentRuntime({
               workspace: options.workspace,
+              workspaceLeasesRoot: options.workspaceLeasesRoot,
               platform: options.platform,
               parentRunId: `interactive-${randomUUID()}`,
               provider: resolved.provider,
               providerId: resolved.providerId,
               model: resolved.model,
+              policy: options.delegation.policy,
               costModel: turnCostModel,
               modelMetadata: resolved.modelMetadata ?? {
                 status: "unknown" as const,
@@ -2060,11 +2065,13 @@ export async function runInteractiveSession(
                   options.requireKnownCostModel(commandResolved);
                 const commandRuntime = await createCliSubagentRuntime({
                   workspace: options.workspace,
+                  workspaceLeasesRoot: options.workspaceLeasesRoot,
                   platform: options.platform,
                   parentRunId: `interactive-${randomUUID()}`,
                   provider: commandResolved.provider,
                   providerId: commandResolved.providerId,
                   model: commandResolved.model,
+                  policy: delegation.policy,
                   costModel: commandCostModel,
                   modelMetadata: commandResolved.modelMetadata ?? {
                     status: "unknown" as const,

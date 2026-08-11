@@ -83,6 +83,7 @@ function canonicalResult(
     task: entry.task,
     transcriptRef: entry.transcriptRef,
     pendingInputCount: 0,
+    workspace: null,
     ...accounting,
   };
   return status === "completed"
@@ -141,6 +142,7 @@ describe("Interactive subagent session", () => {
           turns: 0,
           costUsd: 0,
           pendingInputCount: 0,
+          workspace: null,
         }),
         cancel: () => {},
         input: () => ({ kind: "closed" }),
@@ -623,6 +625,7 @@ describe("Interactive subagent session", () => {
       turns: 1,
       costUsd: 0.0001,
       pendingInputCount: 0,
+      workspace: null,
     };
     const session = createInteractiveSubagentSession({
       maxCostUsd: 1,

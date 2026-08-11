@@ -4,6 +4,7 @@ import type { ProviderId } from "../core/provider-id.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
 import type {
+  RepoSubagentCapabilitySnapshot,
   RepoSubagentCapabilitySnapshotId,
   RepoSubagentProfileName,
   SubagentBuiltinToolName,
@@ -23,6 +24,7 @@ import {
   subagentCapabilityWithMcpTools,
   subagentCapabilityWithSkills,
   subagentProfileIds,
+  WRITER_MAX_TURNS,
 } from "./subagent-capability.ts";
 
 export interface SubagentExecutionSnapshot {
@@ -44,8 +46,10 @@ export interface RepoSubagentProfileDefinition {
   readonly maxResultChars?: number;
 }
 
-interface BuiltinSubagentProfile {
-  readonly snapshot: SubagentCapabilitySnapshot;
+interface BuiltinSubagentProfile<
+  Capability extends SubagentCapabilitySnapshot = SubagentCapabilitySnapshot,
+> {
+  readonly snapshot: Capability;
   readonly roleInstructions: string;
 }
 
@@ -69,10 +73,11 @@ export type SubagentProfileCatalog = readonly [
   ...SubagentProfileCatalogEntry[],
 ];
 
-export const builtinSubagentProfileCatalog: SubagentProfileCatalog = [
+export const builtinSubagentProfileCatalog = [
   { name: "explorer", base: "explorer", skills: [], mcp: [] },
   { name: "reviewer", base: "reviewer", skills: [], mcp: [] },
-];
+  { name: "writer", base: "writer", skills: [], mcp: [] },
+] as const satisfies SubagentProfileCatalog;
 
 export type SubagentProfileSkillRuntime =
   | { readonly kind: "disabled" }
@@ -131,6 +136,13 @@ const reviewerTools = [
   "git_diff",
 ] as const satisfies readonly SubagentBuiltinToolName[];
 
+const writerTools = [
+  ...reviewerTools,
+  "edit",
+  "write",
+  "apply_patch",
+] as const satisfies readonly SubagentBuiltinToolName[];
+
 const builtinSubagentProfiles = {
   explorer: {
     snapshot: {
@@ -160,8 +172,56 @@ const builtinSubagentProfiles = {
     roleInstructions:
       "Review for concrete correctness, security, regression, and missing-test risks. Start with the stated scope and inspect related code only when a concrete suspicion requires it; do not exhaustively read consumers to prove the absence of bugs. Prioritize actionable findings with exact workspace locations, and stop as soon as the available evidence supports those findings or a no-findings verdict.",
   },
+  writer: {
+    snapshot: {
+      id: "builtin-writer-v1",
+      profile: "writer",
+      builtinTools: writerTools,
+      skills: [],
+      mcpTools: [],
+      maxTurns: WRITER_MAX_TURNS,
+      deadlineMs: SUBAGENT_DEADLINE_MS,
+      maxFinalTextChars: SUBAGENT_MAX_FINAL_TEXT_CHARS,
+    },
+    roleInstructions:
+      "Make the delegated change only in the isolated child worktree. Inspect the exact targets before editing, keep the patch scoped to the task, and finish with a concise description of changed files and any verification still needed.",
+  },
 } satisfies Record<SubagentProfileId, BuiltinSubagentProfile>;
 
+export function resolveBuiltinSubagentProfile(
+  profile: "explorer",
+  overrides?: {
+    readonly maxTurns?: number;
+    readonly deadlineMs?: number;
+  },
+): BuiltinSubagentProfile<
+  Extract<SubagentCapabilitySnapshot, { readonly profile: "explorer" }>
+>;
+export function resolveBuiltinSubagentProfile(
+  profile: "reviewer",
+  overrides?: {
+    readonly maxTurns?: number;
+    readonly deadlineMs?: number;
+  },
+): BuiltinSubagentProfile<
+  Extract<SubagentCapabilitySnapshot, { readonly profile: "reviewer" }>
+>;
+export function resolveBuiltinSubagentProfile(
+  profile: "writer",
+  overrides?: {
+    readonly maxTurns?: number;
+    readonly deadlineMs?: number;
+  },
+): BuiltinSubagentProfile<
+  Extract<SubagentCapabilitySnapshot, { readonly profile: "writer" }>
+>;
+export function resolveBuiltinSubagentProfile(
+  profile: SubagentProfileId,
+  overrides?: {
+    readonly maxTurns?: number;
+    readonly deadlineMs?: number;
+  },
+): BuiltinSubagentProfile;
 export function resolveBuiltinSubagentProfile(
   profile: SubagentProfileId,
   overrides: {
@@ -189,7 +249,27 @@ export function resolveBuiltinSubagentProfile(
       },
     };
   }
-  const selected = builtinSubagentProfiles.reviewer;
+  if (profile === "reviewer") {
+    const selected = builtinSubagentProfiles.reviewer;
+    return {
+      ...selected,
+      snapshot: {
+        ...selected.snapshot,
+        builtinTools: [...selected.snapshot.builtinTools],
+        skills: [...selected.snapshot.skills],
+        mcpTools: [...selected.snapshot.mcpTools],
+        maxTurns: Math.min(
+          overrides.maxTurns ?? selected.snapshot.maxTurns,
+          selected.snapshot.maxTurns,
+        ),
+        deadlineMs: Math.min(
+          overrides.deadlineMs ?? selected.snapshot.deadlineMs,
+          selected.snapshot.deadlineMs,
+        ),
+      },
+    };
+  }
+  const selected = builtinSubagentProfiles.writer;
   return {
     ...selected,
     snapshot: {
@@ -225,8 +305,25 @@ function repoCapabilityId(input: {
   return `repo-profile-v1:${digest}`;
 }
 
+function repoCapabilitySnapshot<BaseProfile extends SubagentProfileId>(
+  baseProfile: BaseProfile,
+  input: {
+    readonly id: RepoSubagentCapabilitySnapshotId;
+    readonly profile: RepoSubagentProfileName;
+    readonly builtinTools: readonly SubagentBuiltinToolName[];
+    readonly skills: readonly SubagentSkillSnapshot[];
+    readonly mcpTools: readonly SubagentMcpToolSnapshot[];
+    readonly maxTurns: number;
+    readonly deadlineMs: number;
+    readonly maxFinalTextChars: number;
+  },
+): RepoSubagentCapabilitySnapshot<BaseProfile> {
+  return { ...input, baseProfile };
+}
+
 export function createSubagentProfileRegistry(options: {
   readonly execution: Omit<SubagentExecutionSnapshot, "effort">;
+  readonly writer?: "enabled" | "disabled";
   readonly repoProfiles?: readonly RepoSubagentProfileDefinition[];
   readonly skillRuntime?: Extract<
     SubagentProfileSkillRuntime,
@@ -258,13 +355,18 @@ export function createSubagentProfileRegistry(options: {
   const builtinProfiles: Record<SubagentProfileId, ResolvedSubagentProfile> = {
     explorer: resolveBuiltin("explorer"),
     reviewer: resolveBuiltin("reviewer"),
+    writer: resolveBuiltin("writer"),
   };
   const resolved = new Map<SubagentProfileName, ResolvedSubagentProfile>();
   const repoProfiles: ResolvedSubagentProfile[] = [];
   for (const name of subagentProfileIds) {
+    if (name === "writer" && options.writer === "disabled") continue;
     resolved.set(name, builtinProfiles[name]);
   }
   for (const definition of options.repoProfiles ?? []) {
+    if (definition.base === "writer" && options.writer === "disabled") {
+      continue;
+    }
     const base = builtinProfiles[definition.base];
     const skills = (definition.skills ?? []).map((qualifiedName) => {
       const skill = options.skillRuntime?.resolveSkill(qualifiedName);
@@ -284,6 +386,14 @@ export function createSubagentProfileRegistry(options: {
       }
       return tool;
     });
+    if (
+      definition.base === "writer" &&
+      (skills.length > 0 || mcpTools.length > 0)
+    ) {
+      throw new SubagentProfileDefinitionError(
+        `project subagent profile ${JSON.stringify(definition.name)} cannot attach Skills or MCP tools to the initial writer workspace lease`,
+      );
+    }
     const capabilityFields = {
       name: definition.name,
       base: definition.base,
@@ -295,17 +405,16 @@ export function createSubagentProfileRegistry(options: {
       maxFinalTextChars:
         definition.maxResultChars ?? base.capability.maxFinalTextChars,
     };
-    const capability: SubagentCapabilitySnapshot = {
+    const capability = repoCapabilitySnapshot(definition.base, {
       id: repoCapabilityId(capabilityFields),
       profile: definition.name,
-      baseProfile: definition.base,
       builtinTools: [...capabilityFields.builtinTools],
       skills: [...capabilityFields.skills],
       mcpTools: [...capabilityFields.mcpTools],
       maxTurns: capabilityFields.maxTurns,
       deadlineMs: capabilityFields.deadlineMs,
       maxFinalTextChars: capabilityFields.maxFinalTextChars,
-    };
+    });
     const relation = compareSubagentCapability(
       capability,
       subagentCapabilityWithMcpTools(
@@ -334,9 +443,18 @@ export function createSubagentProfileRegistry(options: {
   }
 
   const all: readonly [ResolvedSubagentProfile, ...ResolvedSubagentProfile[]] =
-    [builtinProfiles.explorer, builtinProfiles.reviewer, ...repoProfiles];
+    [
+      builtinProfiles.explorer,
+      builtinProfiles.reviewer,
+      ...(options.writer === "disabled" ? [] : [builtinProfiles.writer]),
+      ...repoProfiles,
+    ];
   const catalog: SubagentProfileCatalog = [
-    ...builtinSubagentProfileCatalog,
+    builtinSubagentProfileCatalog[0],
+    builtinSubagentProfileCatalog[1],
+    ...(options.writer === "disabled"
+      ? []
+      : [builtinSubagentProfileCatalog[2]]),
     ...repoProfiles.map((profile) => ({
       name: profile.name,
       base: profile.base,

@@ -12,7 +12,7 @@ import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import {
   type AgentId,
-  type SubagentAcceptedLifecycle,
+  type ReadOnlySubagentAcceptedLifecycle,
   SubagentPersistenceError,
 } from "../../src/agent/subagent-lifecycle.ts";
 import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
@@ -38,7 +38,9 @@ class TestWriteError extends Error {
   }
 }
 
-function acceptedLifecycle(childAgentId: AgentId): SubagentAcceptedLifecycle {
+function acceptedLifecycle(
+  childAgentId: AgentId,
+): ReadOnlySubagentAcceptedLifecycle {
   return {
     delegationId: `parent:tool-${childAgentId}`,
     childAgentId,
@@ -54,6 +56,7 @@ function acceptedLifecycle(childAgentId: AgentId): SubagentAcceptedLifecycle {
     systemPrompt: "Read-only child instructions.",
     threadCapabilityCeiling: explorerCapability,
     capability: explorerCapability,
+    workspace: null,
     lineage: { kind: "root" },
   };
 }
@@ -142,6 +145,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
           finalText: null,
           error: "provider failed before consuming the queued input",
           pendingInputCount: 1,
+          workspace: null,
           usage: {
             inputTokens: 10,
             cachedInputTokens: 0,
@@ -213,6 +217,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
           finalText: "Durable child result.",
           error: null,
           pendingInputCount: 0,
+          workspace: null,
           usage: {
             inputTokens: 10,
             cachedInputTokens: 0,
@@ -300,6 +305,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
         finalText: "Durable child result.",
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 10,
           cachedInputTokens: 0,
@@ -729,7 +735,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
 
   test(`Given durable acceptance writes a partial record and rollback cannot establish whether it committed,
     When the store attempts to admit the child,
-    Then admission fails fatally and its provisional transcript is removed`, async () => {
+    Then admission fails fatally without deleting the possibly accepted transcript`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-failpoint-"));
     const keelHome = join(workspace, ".keel-home");
     let now = 1_700_000_000_000;
@@ -782,7 +788,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
           ),
           "utf8",
         ),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      ).resolves.toContain('"type":"transcript"');
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -1019,6 +1025,7 @@ describe("Agent Tree Store Crash Boundaries", () => {
               finalText: "Complete before the simulated crash.",
               error: null,
               pendingInputCount: 0,
+              workspace: null,
               usage: {
                 inputTokens: 10,
                 cachedInputTokens: 0,

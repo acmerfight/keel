@@ -9,6 +9,7 @@ import type {
 } from "../../../src/agent/subagent-lifecycle.ts";
 import { resolveBuiltinSubagentProfile } from "../../../src/agent/subagent-profile.ts";
 import type { AbortableToolOutputArtifactStore } from "../../../src/agent/tool-output-artifacts.ts";
+import { formatAgentHistoryDetail } from "../../../src/cli/agent-history-format.ts";
 import type {
   AgentHistoryEntry,
   AgentTreeHistory,
@@ -25,6 +26,7 @@ import {
 } from "../../../src/testing/interactive-session-fixtures.ts";
 
 const reviewerCapability = resolveBuiltinSubagentProfile("reviewer").snapshot;
+const writerCapability = resolveBuiltinSubagentProfile("writer").snapshot;
 
 function entry(options: {
   readonly childAgentId: AgentId;
@@ -72,6 +74,7 @@ function entry(options: {
       finalText: null,
       error: "Provider failed.",
       pendingInputCount: 1,
+      workspace: null,
       ...accounting,
     },
   };
@@ -109,6 +112,78 @@ const unusedTranscriptStore: AbortableToolOutputArtifactStore = {
 };
 
 describe("Interactive /agents command", () => {
+  test(`Given saved writer Runs preserve either a patch or cleanup failure,
+    When the user inspects their /agents details,
+    Then the branch, worktree, patch identity, summary, and error remain actionable`, () => {
+    const base = entry({
+      childAgentId: "agent-11111111-1111-4111-8111-111111111111",
+      childRunId: "subagent-11111111-1111-4111-8111-111111111111",
+      delegationId: "parent:writer",
+    });
+    if (base.result === null) throw new Error("expected terminal fixture");
+    const workspaceBase = {
+      kind: "isolated_write" as const,
+      leaseId: base.childRunId,
+      baseCommit: "a".repeat(40),
+      branch: "keel/subagent/11111111-1111-4111-8111-111111111111",
+      patchSourceTruncated: false,
+      summary: "M README.md",
+    };
+    const preserved: AgentHistoryEntry = {
+      ...base,
+      threadCapabilityCeiling: writerCapability,
+      capability: writerCapability,
+      result: {
+        ...base.result,
+        workspace: {
+          ...workspaceBase,
+          disposition: "preserved",
+          worktreePath: "/tmp/keel-writer",
+          workspaceRoot: "/tmp/keel-writer",
+          patchRef: "tool-output:test/writer-patch",
+          patchSha256: "b".repeat(64),
+          error: null,
+        },
+      },
+    };
+    const cleanupFailed: AgentHistoryEntry = {
+      ...base,
+      index: 2,
+      childRunId: "subagent-22222222-2222-4222-8222-222222222222",
+      threadCapabilityCeiling: writerCapability,
+      capability: writerCapability,
+      result: {
+        ...base.result,
+        workspace: {
+          ...workspaceBase,
+          leaseId: "subagent-22222222-2222-4222-8222-222222222222",
+          disposition: "cleanup_failed",
+          worktreePath: null,
+          workspaceRoot: null,
+          patchRef: null,
+          patchSha256: null,
+          error: "worktree identity changed",
+        },
+      },
+    };
+
+    const preservedDetail = formatAgentHistoryDetail(preserved);
+    expect(preservedDetail).toContain("workspace worktree: /tmp/keel-writer");
+    expect(preservedDetail).toContain(
+      "workspace patch: tool-output:test/writer-patch",
+    );
+    expect(preservedDetail).toContain(
+      `workspace patch sha256: ${"b".repeat(64)}`,
+    );
+    expect(preservedDetail).not.toContain("workspace error:");
+    const failedDetail = formatAgentHistoryDetail(cleanupFailed);
+    expect(failedDetail).toContain("workspace worktree: removed");
+    expect(failedDetail).toContain("workspace patch: unavailable");
+    expect(failedDetail).toContain(
+      "workspace error: worktree identity changed",
+    );
+  });
+
   test(`Given a saved terminal child has durable context,
     When the user resumes it and waits through /agents,
     Then the same Agent ID completes a new Run without expanding its saved reviewer capability`, async () => {
@@ -141,6 +216,7 @@ describe("Interactive /agents command", () => {
         systemPrompt: "Read-only child instructions.",
         threadCapabilityCeiling: reviewerCapability,
         capability: reviewerCapability,
+        workspace: null,
         lineage: { kind: "root" },
       });
       first.transcript.initialize([
@@ -162,6 +238,7 @@ describe("Interactive /agents command", () => {
         finalText: "The boundary is sound.",
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 1,
           cachedInputTokens: 0,

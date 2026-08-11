@@ -1,4 +1,11 @@
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -6,6 +13,7 @@ import { narrowSubagentCapabilityLimits } from "../../src/agent/subagent-capabil
 import type {
   AgentId,
   PersistedSubagentCanonicalResult,
+  ReadOnlySubagentAcceptedLifecycle,
   SubagentAcceptedLifecycle,
   SubagentRunId,
 } from "../../src/agent/subagent-lifecycle.ts";
@@ -17,18 +25,22 @@ import type {
   AgentRunRunningRecord,
   AgentRunTerminalRecord,
 } from "../../src/cli/agent-tree-store/model.ts";
-import { AGENT_TREE_SCHEMA_VERSION } from "../../src/cli/agent-tree-store/model.ts";
+import {
+  AGENT_TREE_SCHEMA_VERSION,
+  mutationRecordSchema,
+} from "../../src/cli/agent-tree-store/model.ts";
 import { transcriptFilePath } from "../../src/cli/agent-tree-store/transcript.ts";
 import { createAgentTreeHistory } from "../../src/cli/agent-tree-store.ts";
 import { createSessionStore } from "../../src/cli/session-store.ts";
 
 const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
 const reviewerCapability = resolveBuiltinSubagentProfile("reviewer").snapshot;
+const writerCapability = resolveBuiltinSubagentProfile("writer").snapshot;
 
 function acceptedLifecycle(
   childAgentId: AgentId,
   childRunId: SubagentRunId,
-): SubagentAcceptedLifecycle {
+): ReadOnlySubagentAcceptedLifecycle {
   return {
     delegationId: `parent:tool-${childAgentId}`,
     childAgentId,
@@ -44,6 +56,7 @@ function acceptedLifecycle(
     systemPrompt: "Read-only child instructions.",
     threadCapabilityCeiling: explorerCapability,
     capability: explorerCapability,
+    workspace: null,
     lineage: { kind: "root" },
   };
 }
@@ -114,6 +127,7 @@ function completedResult(
     turns: 1,
     costUsd: 0.0001,
     pendingInputCount: 0,
+    workspace: null,
   };
 }
 
@@ -188,6 +202,7 @@ describe("Agent Tree Store", () => {
         finalText: null,
         error: "Provider failed before the queued input boundary.",
         pendingInputCount: 1,
+        workspace: null,
         usage: {
           inputTokens: 10,
           cachedInputTokens: 0,
@@ -218,6 +233,7 @@ describe("Agent Tree Store", () => {
         finalText: "The callers are sound too.",
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 20,
           cachedInputTokens: 0,
@@ -279,7 +295,7 @@ describe("Agent Tree Store", () => {
       runId: SubagentRunId,
       previousRunId: SubagentRunId,
       toolCallId: string,
-    ): SubagentAcceptedLifecycle => ({
+    ): ReadOnlySubagentAcceptedLifecycle => ({
       ...acceptedLifecycle(agentId, runId),
       delegationId: `parent:${toolCallId}`,
       parentToolCallId: toolCallId,
@@ -297,6 +313,7 @@ describe("Agent Tree Store", () => {
         finalText: "first complete",
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 1,
           cachedInputTokens: 0,
@@ -361,6 +378,7 @@ describe("Agent Tree Store", () => {
         finalText: "second complete",
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 1,
           cachedInputTokens: 0,
@@ -436,6 +454,7 @@ describe("Agent Tree Store", () => {
           finalText: null,
           error: "provider failed before the input boundary",
           pendingInputCount: 0,
+          workspace: null,
           usage: {
             inputTokens: 1,
             cachedInputTokens: 0,
@@ -526,6 +545,7 @@ describe("Agent Tree Store", () => {
         finalText: null,
         error: "Provider rejected the request.",
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 30,
           cachedInputTokens: 10,
@@ -554,6 +574,7 @@ describe("Agent Tree Store", () => {
           finalText: "must not replace the failure",
           error: null,
           pendingInputCount: 0,
+          workspace: null,
           usage: {
             inputTokens: 40,
             cachedInputTokens: 10,
@@ -579,6 +600,7 @@ describe("Agent Tree Store", () => {
         finalText: null,
         error: "Child was cancelled before execution started.",
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 0,
           cachedInputTokens: 0,
@@ -632,6 +654,9 @@ describe("Agent Tree Store", () => {
       message: "sk-messageSecret123456",
       result: "sk-resultSecret123456",
       rejection: "sk-rejectionSecret123456",
+      workspaceSummary: "sk-workspaceSummary123456",
+      workspaceSuccessSummary: "sk-workspaceSuccessSummary123456",
+      workspaceError: "sk-workspaceError123456",
     };
     createSessionStore({ sessionId, workspace, runtime });
 
@@ -664,6 +689,7 @@ describe("Agent Tree Store", () => {
         finalText: secrets.result,
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 10,
           cachedInputTokens: 0,
@@ -672,6 +698,107 @@ describe("Agent Tree Store", () => {
         },
         turns: 1,
         costUsd: 0.0001,
+      });
+      const writerRunId: SubagentRunId =
+        "subagent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      const writerRun = history.persistence.accepted({
+        ...acceptedLifecycle(
+          "agent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          writerRunId,
+        ),
+        mode: "foreground",
+        threadCapabilityCeiling: writerCapability,
+        capability: writerCapability,
+        workspace: {
+          kind: "isolated_write",
+          leaseId: writerRunId,
+          baseCommit: "d".repeat(40),
+          branch: "keel/subagent/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          worktreePath: join(keelHome, "worktrees", writerRunId),
+          workspaceRoot: join(keelHome, "worktrees", writerRunId),
+        },
+      });
+      writerRun.transcript.initialize([]);
+      writerRun.running().terminal({
+        status: "failed",
+        finalText: null,
+        error: secrets.workspaceError,
+        pendingInputCount: 0,
+        workspace: {
+          kind: "isolated_write",
+          leaseId: writerRunId,
+          baseCommit: "d".repeat(40),
+          branch: "keel/subagent/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          disposition: "cleanup_failed",
+          worktreePath: null,
+          workspaceRoot: null,
+          patchRef: null,
+          patchSha256: null,
+          patchSourceTruncated: false,
+          summary: secrets.workspaceSummary,
+          error: secrets.workspaceError,
+        },
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+        },
+        turns: 0,
+        costUsd: 0,
+      });
+      const successfulWriterRunId: SubagentRunId =
+        "subagent-cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+      const successfulWriterPath = join(
+        keelHome,
+        "worktrees",
+        successfulWriterRunId,
+      );
+      const successfulWriter = history.persistence.accepted({
+        ...acceptedLifecycle(
+          "agent-cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          successfulWriterRunId,
+        ),
+        mode: "foreground",
+        threadCapabilityCeiling: writerCapability,
+        capability: writerCapability,
+        workspace: {
+          kind: "isolated_write",
+          leaseId: successfulWriterRunId,
+          baseCommit: "e".repeat(40),
+          branch: "keel/subagent/cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          worktreePath: successfulWriterPath,
+          workspaceRoot: successfulWriterPath,
+        },
+      });
+      successfulWriter.transcript.initialize([]);
+      successfulWriter.running().terminal({
+        status: "completed",
+        finalText: "Writer completed.",
+        error: null,
+        pendingInputCount: 0,
+        workspace: {
+          kind: "isolated_write",
+          leaseId: successfulWriterRunId,
+          baseCommit: "e".repeat(40),
+          branch: "keel/subagent/cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          disposition: "preserved",
+          worktreePath: successfulWriterPath,
+          workspaceRoot: successfulWriterPath,
+          patchRef: "tool-output:test/successful-writer",
+          patchSha256: "c".repeat(64),
+          patchSourceTruncated: false,
+          summary: secrets.workspaceSuccessSummary,
+          error: null,
+        },
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+        },
+        turns: 1,
+        costUsd: 0,
       });
 
       const agentsDirectory = join(keelHome, "sessions", sessionId, "agents");
@@ -735,6 +862,7 @@ describe("Agent Tree Store", () => {
             finalText: "Done.",
             error: null,
             pendingInputCount: 0,
+            workspace: null,
             usage: {
               inputTokens: 10,
               cachedInputTokens: 0,
@@ -810,6 +938,7 @@ describe("Agent Tree Store", () => {
         finalText: "The module exports 42.",
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 100,
           cachedInputTokens: 0,
@@ -1028,6 +1157,382 @@ describe("Agent Tree Store", () => {
     }
   });
 
+  test(`Given a writer intent is durable but its planned worktree is absent after a crash,
+    When saved history repairs the interrupted run,
+    Then it retains the lease identity without falsely reporting a preserved path`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-agent-writer-repair-"),
+    );
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "writer-before-worktree-activation";
+    const childRunId: SubagentRunId =
+      "subagent-56565656-5656-4656-8656-565656565656";
+    const lifecycle: SubagentAcceptedLifecycle = {
+      ...acceptedLifecycle(
+        "agent-56565656-5656-4656-8656-565656565656",
+        childRunId,
+      ),
+      mode: "foreground",
+      task: "Make one isolated change.",
+      systemPrompt: "Writer instructions.",
+      threadCapabilityCeiling: writerCapability,
+      capability: writerCapability,
+      workspace: {
+        kind: "isolated_write",
+        leaseId: childRunId,
+        baseCommit: "a".repeat(40),
+        branch: "keel/subagent/56565656-5656-4656-8656-565656565656",
+        worktreePath: join(keelHome, "worktrees", childRunId),
+        workspaceRoot: join(keelHome, "worktrees", childRunId),
+      },
+    };
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      createAgentTreeHistory({ sessionId, runtime }).persistence.accepted(
+        lifecycle,
+      );
+
+      const recovered = createAgentTreeHistory({ sessionId, runtime });
+
+      expect(recovered.entries()).toMatchObject([
+        {
+          status: "interrupted",
+          result: {
+            workspace: {
+              leaseId: childRunId,
+              baseCommit: "a".repeat(40),
+              disposition: "cleanup_failed",
+              worktreePath: null,
+              workspaceRoot: null,
+              summary:
+                "planned writer workspace was not materialized or no longer exists",
+            },
+          },
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given interrupted writer worktrees survive with and without their nested workspace root,
+    When saved history repairs both Runs,
+    Then it preserves only filesystem identities that still exist`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-agent-writer-existing-repair-"),
+    );
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "writer-existing-worktree-repair";
+    const identities: readonly {
+      readonly childAgentId: AgentId;
+      readonly childRunId: SubagentRunId;
+      readonly workspaceRootExists: boolean;
+    }[] = [
+      {
+        childAgentId: "agent-10101010-1010-4010-8010-101010101010",
+        childRunId: "subagent-10101010-1010-4010-8010-101010101010",
+        workspaceRootExists: false,
+      },
+      {
+        childAgentId: "agent-20202020-2020-4020-8020-202020202020",
+        childRunId: "subagent-20202020-2020-4020-8020-202020202020",
+        workspaceRootExists: true,
+      },
+    ];
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      for (const identity of identities) {
+        const worktreePath = join(keelHome, "worktrees", identity.childRunId);
+        const workspaceRoot = join(worktreePath, "project");
+        history.persistence.accepted({
+          ...acceptedLifecycle(identity.childAgentId, identity.childRunId),
+          mode: "foreground",
+          threadCapabilityCeiling: writerCapability,
+          capability: writerCapability,
+          workspace: {
+            kind: "isolated_write",
+            leaseId: identity.childRunId,
+            baseCommit: "d".repeat(40),
+            branch: `keel/subagent/${identity.childRunId.slice("subagent-".length)}`,
+            worktreePath,
+            workspaceRoot,
+          },
+        });
+        await mkdir(
+          identity.workspaceRootExists ? workspaceRoot : worktreePath,
+          { recursive: true },
+        );
+      }
+
+      const repaired = createAgentTreeHistory({ sessionId, runtime }).entries();
+
+      expect(repaired).toHaveLength(2);
+      expect(repaired[0]?.result?.workspace).toMatchObject({
+        disposition: "cleanup_failed",
+        worktreePath: join(
+          keelHome,
+          "worktrees",
+          identities[0]?.childRunId ?? "missing",
+        ),
+        workspaceRoot: null,
+        summary: "writer workspace requires inspection after interrupted owner",
+      });
+      expect(repaired[1]?.result?.workspace).toMatchObject({
+        disposition: "cleanup_failed",
+        worktreePath: join(
+          keelHome,
+          "worktrees",
+          identities[1]?.childRunId ?? "missing",
+        ),
+        workspaceRoot: join(
+          keelHome,
+          "worktrees",
+          identities[1]?.childRunId ?? "missing",
+          "project",
+        ),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a persisted writer workspace is coupled to one child identity,
+    When terminal persistence presents a different workspace identity,
+    Then it rejects the writer identity drift`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-workspace-id-"));
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "workspace-identity";
+    const childRunId: SubagentRunId =
+      "subagent-67676767-6767-4676-8676-676767676767";
+    const reference = {
+      kind: "isolated_write" as const,
+      leaseId: childRunId,
+      baseCommit: "b".repeat(40),
+      branch: "keel/subagent/67676767-6767-4676-8676-676767676767",
+      worktreePath: join(keelHome, "worktrees", childRunId),
+      workspaceRoot: join(keelHome, "worktrees", childRunId),
+    };
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      const writer = history.persistence.accepted({
+        ...acceptedLifecycle(
+          "agent-67676767-6767-4676-8676-676767676767",
+          childRunId,
+        ),
+        mode: "foreground",
+        threadCapabilityCeiling: writerCapability,
+        capability: writerCapability,
+        workspace: reference,
+      });
+
+      const terminalBase = {
+        status: "failed" as const,
+        finalText: null,
+        error: "activation failed",
+        pendingInputCount: 0,
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+        },
+        turns: 0,
+        costUsd: 0,
+      };
+      const workspaceBase = {
+        kind: "isolated_write" as const,
+        leaseId: childRunId,
+        baseCommit: reference.baseCommit,
+        branch: reference.branch,
+        disposition: "cleanup_failed" as const,
+        worktreePath: null,
+        workspaceRoot: null,
+        patchRef: null,
+        patchSha256: null,
+        patchSourceTruncated: false,
+        summary: "failed",
+        error: "failed",
+      };
+      const invalidWriterResults: PersistedSubagentCanonicalResult["workspace"][] =
+        [
+          null,
+          { ...workspaceBase, leaseId: "subagent-99999999" },
+          { ...workspaceBase, baseCommit: "c".repeat(40) },
+          { ...workspaceBase, branch: "keel/subagent/other" },
+          {
+            ...workspaceBase,
+            worktreePath: join(keelHome, "worktrees", "other"),
+          },
+          {
+            ...workspaceBase,
+            worktreePath: reference.worktreePath,
+            workspaceRoot: join(keelHome, "worktrees", "other"),
+          },
+        ];
+      const runningWriter = writer.running();
+
+      for (const invalidWorkspace of invalidWriterResults) {
+        expect(() =>
+          runningWriter.terminal({
+            ...terminalBase,
+            workspace: invalidWorkspace,
+          }),
+        ).toThrow(
+          invalidWorkspace === null
+            ? "missing its workspace state"
+            : "workspace result mismatches acceptance",
+        );
+      }
+
+      const readerRunId: SubagentRunId =
+        "subagent-68686868-6868-4686-8686-686868686868";
+      const reader = history.persistence.accepted(
+        acceptedLifecycle(
+          "agent-68686868-6868-4686-8686-686868686868",
+          readerRunId,
+        ),
+      );
+      expect(() =>
+        reader.running().terminal({
+          ...terminalBase,
+          status: "failed",
+          workspace: { ...workspaceBase, leaseId: readerRunId },
+        }),
+      ).toThrow("recorded writer workspace state");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given untrusted accepted lifecycle records contradict writer authority,
+    When the JSONL schema validates the disk boundary,
+    Then every capability, mode, and workspace mismatch is rejected`, () => {
+    const childAgentId: AgentId = "agent-78787878-7878-4787-8787-787878787878";
+    const childRunId: SubagentRunId =
+      "subagent-78787878-7878-4787-8787-787878787878";
+    const readOnlyRecord = acceptedRecord(
+      acceptedLifecycle(childAgentId, childRunId),
+      "untrusted-writer-authority",
+    );
+    const workspace = {
+      kind: "isolated_write" as const,
+      leaseId: childRunId,
+      baseCommit: "c".repeat(40),
+      branch: "keel/subagent/78787878-7878-4787-8787-787878787878",
+      worktreePath: "/tmp/keel-writer-authority",
+      workspaceRoot: "/tmp/keel-writer-authority",
+    };
+    const writerRecord = {
+      ...readOnlyRecord,
+      mode: "foreground" as const,
+      threadCapabilityCeiling: writerCapability,
+      capability: writerCapability,
+      workspace,
+    };
+    const invalidRecords = [
+      { ...writerRecord, threadCapabilityCeiling: explorerCapability },
+      { ...writerRecord, workspace: null },
+      { ...writerRecord, mode: "background" as const },
+      { ...readOnlyRecord, threadCapabilityCeiling: writerCapability },
+      {
+        ...writerRecord,
+        workspace: { ...workspace, leaseId: "subagent-99999999" as const },
+      },
+      { ...readOnlyRecord, workspace },
+    ];
+
+    for (const invalidRecord of invalidRecords) {
+      expect(mutationRecordSchema.safeParse(invalidRecord).success).toBe(false);
+    }
+  });
+
+  test(`Given untrusted cleanup results split coupled workspace or patch identities,
+    When the JSONL schema validates the disk boundary,
+    Then it rejects every half-present pair`, () => {
+    const childAgentId: AgentId = "agent-79797979-7979-4979-8979-797979797979";
+    const childRunId: SubagentRunId =
+      "subagent-79797979-7979-4979-8979-797979797979";
+    const reference = {
+      kind: "isolated_write" as const,
+      leaseId: childRunId,
+      baseCommit: "d".repeat(40),
+      branch: "keel/subagent/79797979-7979-4979-8979-797979797979",
+      worktreePath: "/tmp/keel-writer-result",
+      workspaceRoot: "/tmp/keel-writer-result/project",
+    };
+    const accepted = acceptedRecord(
+      {
+        ...acceptedLifecycle(childAgentId, childRunId),
+        mode: "foreground",
+        threadCapabilityCeiling: writerCapability,
+        capability: writerCapability,
+        workspace: reference,
+      },
+      "untrusted-writer-result",
+    );
+    const validWorkspace = {
+      ...reference,
+      disposition: "cleanup_failed" as const,
+      worktreePath: null,
+      workspaceRoot: null,
+      patchRef: null,
+      patchSha256: null,
+      patchSourceTruncated: false,
+      summary: "workspace requires inspection",
+      error: "activation failed",
+    };
+    const record = {
+      schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+      type: "agent_result" as const,
+      timestamp: "2023-11-14T22:13:23.000Z",
+      result: { ...completedResult(accepted), workspace: validWorkspace },
+    };
+
+    expect(mutationRecordSchema.safeParse(record).success).toBe(true);
+    for (const invalidWorkspace of [
+      { ...validWorkspace, workspaceRoot: reference.workspaceRoot },
+      {
+        ...validWorkspace,
+        worktreePath: reference.worktreePath,
+        workspaceRoot: reference.workspaceRoot,
+        patchRef: "tool-output:run/patch",
+      },
+      {
+        ...validWorkspace,
+        worktreePath: reference.worktreePath,
+        workspaceRoot: reference.workspaceRoot,
+        patchSha256: "a".repeat(64),
+      },
+    ]) {
+      expect(
+        mutationRecordSchema.safeParse({
+          ...record,
+          result: { ...record.result, workspace: invalidWorkspace },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   test(`Given a running child result is durable but its transcript still has only a header,
     When recovery inspects the completed lifecycle,
     Then it rejects the missing started transcript instead of fabricating one`, async () => {
@@ -1054,6 +1559,7 @@ describe("Agent Tree Store", () => {
           finalText: "Done.",
           error: null,
           pendingInputCount: 0,
+          workspace: null,
           usage: {
             inputTokens: 10,
             cachedInputTokens: 0,
@@ -1192,6 +1698,7 @@ describe("Agent Tree Store", () => {
         finalText: "Done.",
         error: null,
         pendingInputCount: 0,
+        workspace: null,
         usage: {
           inputTokens: 10,
           cachedInputTokens: 0,
@@ -1266,8 +1773,7 @@ describe("Agent Tree Store", () => {
       expect(inspectTranscript).toThrow("identity mismatches acceptance");
 
       lines[0] = originalHeader;
-      lines[1] =
-        '{"schemaVersion":8,"type":"transcript_initialize","messages":[{"role":"assistant"}]}';
+      lines[1] = `{"schemaVersion":${AGENT_TREE_SCHEMA_VERSION},"type":"transcript_initialize","messages":[{"role":"assistant"}]}`;
       await writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf8");
       expect(inspectTranscript).toThrow("invalid agent transcript record");
 
@@ -1355,7 +1861,7 @@ describe("Agent Tree Store", () => {
       if (openEntry === undefined) throw new Error("missing open child");
       await appendFile(
         join(transcriptsDirectory, `${openLifecycle.childRunId}.jsonl`),
-        '{"schemaVersion":8,"type":"transcript_initialize","messages":[]}\n{"schemaVersion":8,"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n',
+        `{"schemaVersion":${AGENT_TREE_SCHEMA_VERSION},"type":"transcript_initialize","messages":[]}\n{"schemaVersion":${AGENT_TREE_SCHEMA_VERSION},"type":"transcript_terminal","status":"completed","pendingInputCount":0,"complete":true}\n`,
         "utf8",
       );
       expect(() => history.transcript(openEntry)).toThrow(

@@ -239,6 +239,7 @@ interface InteractiveSessionOptionsBase {
   readonly activeSession: InteractiveActiveSession;
   readonly cliArgs: InteractiveSessionArgs;
   readonly workspace: string;
+  readonly workspaceLeasesRoot: string;
   readonly hiddenWorkspacePaths?: readonly string[];
   readonly platform: NodeJS.Platform;
   readonly projectInstructions?: ProjectInstructions;

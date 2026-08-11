@@ -90,6 +90,7 @@ describe("Run Outcome Reporting", () => {
         userMessageOrigin: { type: "runtime_subagent_delegation" },
         bash: { kind: "disabled" },
         toolProfile: "subagent",
+        workspaceAccess: "read_only",
         subagentCapability: resolveBuiltinSubagentProfile("explorer").snapshot,
         costBudgetProvider: provider,
         injectedUserMessages: {

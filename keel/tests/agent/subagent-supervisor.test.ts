@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -8,8 +8,10 @@ import {
   createSharedCostBudgetedProvider,
   type SharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
+import type { ProjectInstructions } from "../../src/agent/prompt.ts";
 import {
   type AgentId,
+  type SubagentCanonicalResult,
   type SubagentLifecyclePersistence,
   SubagentPersistenceError,
   type SubagentRunId,
@@ -30,6 +32,11 @@ import {
   type SubagentProgressEvent,
   type SubagentSupervisor,
 } from "../../src/agent/subagent-supervisor.ts";
+import type {
+  SubagentWriteWorkspaceReference,
+  SubagentWriteWorkspaceRuntime,
+  SubagentWriteWorkspaceSettlement,
+} from "../../src/agent/subagent-workspace.ts";
 import type {
   AbortableToolOutputArtifactStore,
   ToolOutputArtifactSaveInput,
@@ -57,6 +64,7 @@ const requestUsage: Usage = {
 };
 
 const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
+const writerCapability = resolveBuiltinSubagentProfile("writer").snapshot;
 
 function deliveredContent(result: DelegationToolResult): string {
   if (result.delivery === "rejected") {
@@ -95,6 +103,46 @@ function createArtifactCapture(): ArtifactCapture {
         };
       },
       discard: async () => {},
+    },
+  };
+}
+
+function settledWriteWorkspaceRuntime(input: {
+  readonly workspace: string;
+  readonly settlement: (
+    reference: SubagentWriteWorkspaceReference,
+  ) => SubagentWriteWorkspaceSettlement;
+  readonly onPrepare?: () => void;
+  readonly onSettle?: () => void;
+}): SubagentWriteWorkspaceRuntime {
+  return {
+    prepare: ({ childRunId }) => {
+      input.onPrepare?.();
+      const reference: SubagentWriteWorkspaceReference = {
+        kind: "isolated_write",
+        leaseId: childRunId,
+        baseCommit: "a".repeat(40),
+        branch: `keel/subagent/${childRunId.slice("subagent-".length)}`,
+        worktreePath: join(input.workspace, "writer-worktree"),
+        workspaceRoot: join(input.workspace, "writer-worktree"),
+      };
+      return {
+        kind: "prepared",
+        workspace: {
+          reference,
+          activate: () => ({
+            kind: "acquired",
+            lease: {
+              reference,
+              verify: () => {},
+              settle: () => {
+                input.onSettle?.();
+                return input.settlement(reference);
+              },
+            },
+          }),
+        },
+      };
     },
   };
 }
@@ -187,6 +235,7 @@ function supervisorFixture(
     readonly onProgress?: (event: SubagentProgressEvent) => void;
     readonly providerAbortSignalSupport?: boolean;
     readonly hiddenWorkspacePaths?: readonly string[];
+    readonly projectInstructions?: ProjectInstructions;
     readonly onContinuationLease?: (
       input: Parameters<SharedCostBudgetedProvider["leaseContinuation"]>[0],
     ) => void;
@@ -195,6 +244,7 @@ function supervisorFixture(
     readonly maxTotalChildRuns?: number;
     readonly providerBlocked?: () => boolean;
     readonly profileRegistry?: SubagentProfileRegistry;
+    readonly writeWorkspace?: SubagentWriteWorkspaceRuntime;
   } & (
     | {
         readonly lifecyclePersistence?: SubagentLifecyclePersistence;
@@ -275,6 +325,9 @@ function supervisorFixture(
       parentRunId: "main-run",
       rootBudget,
       sharedCostBudget,
+      ...(options.writeWorkspace !== undefined
+        ? { writeWorkspace: options.writeWorkspace }
+        : {}),
       profileRegistry:
         options.profileRegistry ??
         createSubagentProfileRegistry({
@@ -298,6 +351,9 @@ function supervisorFixture(
       ...(options.hiddenWorkspacePaths !== undefined
         ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
         : {}),
+      ...(options.projectInstructions !== undefined
+        ? { projectInstructions: options.projectInstructions }
+        : {}),
       ...(options.settlementGraceMs !== undefined
         ? { settlementGraceMs: options.settlementGraceMs }
         : {}),
@@ -315,6 +371,199 @@ function supervisorFixture(
 }
 
 describe("Subagent Supervisor", () => {
+  test(`Given policy disables writer authority or a writer profile requests remote tools,
+    When the profile registry builds the model-visible catalog,
+    Then it omits every writer profile or rejects the expanding configuration`, () => {
+    const execution = { providerId: "fake" as const, model: "test-model" };
+    const disabled = createSubagentProfileRegistry({
+      execution,
+      writer: "disabled",
+      repoProfiles: [{ name: "repo:writer", base: "writer" }],
+    });
+    expect(disabled.resolve("writer")).toBeUndefined();
+    expect(disabled.resolve("repo:writer")).toBeUndefined();
+
+    const mcpSnapshot = {
+      serverId: "catalog",
+      rawToolName: "search",
+      serverIncarnation: "server-v1",
+      configurationDigest: "a".repeat(64),
+      authorizationIdentity: { kind: "anonymous" as const },
+    };
+    expect(() =>
+      createSubagentProfileRegistry({
+        execution,
+        repoProfiles: [
+          {
+            name: "repo:remote-writer",
+            base: "writer",
+            mcp: [{ server: "catalog", tool: "search" }],
+          },
+        ],
+        mcpRuntime: {
+          kind: "enabled",
+          resolveTool: () => mcpSnapshot,
+          resolveCurrent: async () => [mcpSnapshot],
+          createRuntime: () => undefined,
+        },
+      }),
+    ).toThrow("cannot attach Skills or MCP tools");
+
+    const narrowedWriter = createSubagentProfileRegistry({
+      execution,
+      repoProfiles: [{ name: "repo:focused-writer", base: "writer" }],
+    });
+    expect(narrowedWriter.resolve("repo:focused-writer")?.base).toBe("writer");
+  });
+
+  test(`Given delegation names an unknown profile or requests unleased resources,
+    When the Supervisor resolves optional read-only and writer requests,
+    Then valid omissions run while every unknown authority is rejected before provider work`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-profile-selection-"),
+    );
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      background: {
+        signal: new AbortController().signal,
+        register: () => {
+          throw new Error("rejected optional writer must not register");
+        },
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+      provider: {
+        ...singleFinalProvider("Selection complete."),
+        async *stream(options) {
+          providerCalls++;
+          yield { type: "text", text: "Selection complete." };
+          completeAttempt(options, requestUsage);
+          yield { type: "stop", reason: "stop", usage: requestUsage };
+        },
+      },
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      const validRead = await fixture.supervisor.capability.delegate({
+        toolCallId: "optional-read-resources",
+        profile: "explorer",
+        mode: "foreground",
+        task: "Inspect without optional resources.",
+        mcp: [],
+        focusPaths: [],
+        signal,
+      });
+      const unknown = await fixture.supervisor.capability.delegate({
+        toolCallId: "unknown-profile",
+        profile: "repo:missing",
+        mode: "foreground",
+        task: "Use a profile that does not exist.",
+        mcp: [],
+        focusPaths: [],
+        signal,
+      });
+      const unleasedSkill = await fixture.supervisor.capability.delegate({
+        toolCallId: "unleased-skill",
+        profile: "explorer",
+        mode: "foreground",
+        task: "Use a Skill outside the profile lease.",
+        skills: ["repo:missing"],
+        mcp: [],
+        focusPaths: [],
+        signal,
+      });
+      const unleasedMcp = await fixture.supervisor.capability.delegate({
+        toolCallId: "unleased-mcp",
+        profile: "explorer",
+        mode: "foreground",
+        task: "Use MCP outside the profile lease.",
+        mcp: [{ server: "missing", tool: "search" }],
+        focusPaths: [],
+        signal,
+      });
+      const optionalWriter = await fixture.supervisor.capability.delegate({
+        toolCallId: "optional-writer-resources",
+        profile: "writer",
+        mode: "background",
+        task: "Try a writer without optional resources.",
+        mcp: [],
+        focusPaths: [],
+        signal,
+      });
+
+      expect(validRead).toMatchObject({ delivery: "fresh", ok: true });
+      expect(rejectionReason(unknown)).toContain("unknown subagent profile");
+      expect(rejectionReason(unleasedSkill)).toContain(
+        "does not allow every requested workflow Skill",
+      );
+      expect(rejectionReason(unleasedMcp)).toContain(
+        "does not allow every requested MCP tool",
+      );
+      expect(rejectionReason(optionalWriter)).toContain("foreground-only");
+      expect(providerCalls).toBe(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a writer result has a maximum persisted path and summary,
+    When Main receives the bounded terminal handoff,
+    Then the base, branch, patch reference, and exact preserved path remain inspectable`, () => {
+    const worktreePath = `/${"w".repeat(4_094)}`;
+    const result: SubagentCanonicalResult = {
+      delegationId: "writer-result",
+      childAgentId: "agent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      childRunId: "subagent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      task: "Change the file in an isolated writer.",
+      usage: requestUsage,
+      turns: 2,
+      costUsd: 0.001,
+      transcriptRef: "agent-transcript:test/writer-result",
+      pendingInputCount: 0,
+      status: "completed",
+      finalText: "Changed the requested file.".repeat(200),
+      error: null,
+      workspace: {
+        kind: "isolated_write",
+        leaseId: "subagent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        baseCommit: "a".repeat(40),
+        branch: "keel/subagent/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        disposition: "preserved",
+        worktreePath,
+        workspaceRoot: worktreePath,
+        patchRef: "tool-output:test/writer-result",
+        patchSha256: "b".repeat(64),
+        patchSourceTruncated: false,
+        summary: "M changed.ts\n".repeat(300),
+        error: null,
+      },
+    };
+
+    const projection = projectSubagentResult(result);
+    const parsed = z
+      .object({
+        workspace: z.object({
+          baseCommit: z.string(),
+          branch: z.string(),
+          worktreePath: z.string(),
+          patchRef: z.string(),
+        }),
+        truncated: z.boolean(),
+      })
+      .passthrough()
+      .parse(JSON.parse(projection));
+
+    expect(projection.length).toBeLessThanOrEqual(6_000);
+    expect(parsed.workspace).toEqual({
+      baseCommit: "a".repeat(40),
+      branch: "keel/subagent/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      worktreePath,
+      patchRef: "tool-output:test/writer-result",
+    });
+    expect(parsed.truncated).toBe(true);
+  });
+
   test(`Given the root budget cannot reserve an isolated agent result continuation,
     When Main asks to wait for the result,
     Then result admission rejects before exposing an unbudgeted continuation`, async () => {
@@ -763,6 +1012,23 @@ describe("Subagent Supervisor", () => {
           request("invalid-path", { focusPaths: ["../outside"] }),
         ),
       ).toContain("outside the workspace");
+      expect(
+        await rejectedContent(
+          invalidPath,
+          request("writer-capability", {
+            capability: writerCapability,
+            threadCapabilityCeiling: writerCapability,
+          }),
+        ),
+      ).toContain("writer continuations are not supported");
+      expect(
+        await rejectedContent(
+          invalidPath,
+          request("writer-thread-ceiling", {
+            threadCapabilityCeiling: writerCapability,
+          }),
+        ),
+      ).toContain("writer continuations are not supported");
 
       const invalidSkillLease = supervisorFixture({
         workspace,
@@ -1050,6 +1316,7 @@ describe("Subagent Supervisor", () => {
         status: "failed",
         error: "provider failed before input boundary",
         pendingInputCount: 1,
+        workspace: null,
       });
       expect(projectSubagentResult(result)).toContain('"pendingInputCount":1');
       expect(appendedContents).toContain("Also inspect callers.");
@@ -1148,6 +1415,711 @@ describe("Subagent Supervisor", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given a writer workspace activation will fail,
+    When the Supervisor admits the writer,
+    Then durable acceptance records the exact workspace intent before any Git side effect`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-order-"),
+    );
+    const events: string[] = [];
+    let providerCalls = 0;
+    let preparedReference: SubagentWriteWorkspaceReference | undefined;
+    const transcript = {
+      initialize: () => {},
+      append: () => {},
+      replace: () => {},
+    };
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      writeWorkspace: {
+        prepare: ({ childRunId }) => {
+          const reference = {
+            kind: "isolated_write" as const,
+            leaseId: childRunId,
+            baseCommit: "a".repeat(40),
+            branch: `keel/subagent/${childRunId.slice("subagent-".length)}`,
+            worktreePath: join(workspace, "planned-worktree"),
+            workspaceRoot: join(workspace, "planned-worktree"),
+          };
+          preparedReference = reference;
+          return {
+            kind: "prepared",
+            workspace: {
+              reference,
+              activate: () => {
+                events.push("activate");
+                return {
+                  kind: "failed",
+                  worktreePath: reference.worktreePath,
+                  error: "simulated Git activation failure",
+                  recovery: "Inspect the planned path.",
+                };
+              },
+            },
+          };
+        },
+      },
+      lifecyclePersistence: {
+        accepted: (lifecycle) => {
+          events.push("accepted");
+          expect(lifecycle.workspace).toEqual(preparedReference);
+          return {
+            transcriptRef: "agent-transcript:test/writer-order",
+            transcript,
+            pendingInput: () => {},
+            running: () => {
+              events.push("running");
+              return {
+                transcriptRef: "agent-transcript:test/writer-order",
+                transcript,
+                pendingInput: () => {},
+                accounting: () => {},
+                terminal: () => events.push("terminal"),
+              };
+            },
+            terminal: () => {},
+          };
+        },
+        rejected: () => {},
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "writer-order",
+        profile: "writer",
+        mode: "foreground",
+        task: "Make one isolated change.",
+        mcp: [],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: false });
+      expect(deliveredContent(result)).toContain(
+        "simulated Git activation failure",
+      );
+      expect(events).toEqual(["accepted", "activate", "running", "terminal"]);
+      expect(providerCalls).toBe(0);
+      expect(
+        fixture.supervisor.runSnapshots()[0]?.terminal?.workspace,
+      ).toMatchObject({
+        disposition: "cleanup_failed",
+        worktreePath: preparedReference?.worktreePath,
+        workspaceRoot: preparedReference?.workspaceRoot,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given writer requests violate foreground or single-child admission,
+    When the Supervisor plans those delegations,
+    Then it rejects them before preparing any write workspace`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-admission-"),
+    );
+    let preparationCount = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("read-only child may be cancelled"),
+      background: {
+        signal: new AbortController().signal,
+        register: () => {
+          throw new Error("rejected writer must not register");
+        },
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+      writeWorkspace: settledWriteWorkspaceRuntime({
+        workspace,
+        settlement: (reference) => ({
+          disposition: "preserved",
+          worktreePath: reference.worktreePath,
+          patch: {
+            content: "",
+            sourceTruncated: false,
+            summary: "clean at base commit",
+          },
+        }),
+        onPrepare: () => preparationCount++,
+      }),
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      const background = await fixture.supervisor.capability.delegate({
+        toolCallId: "background-writer",
+        profile: "writer",
+        mode: "background",
+        task: "Make a background change.",
+        mcp: [],
+        focusPaths: [],
+        signal,
+      });
+      expect(rejectionReason(background)).toContain("foreground-only");
+
+      const writerRequest = {
+        toolCallId: "batched-writer",
+        profile: "writer" as const,
+        mode: "foreground" as const,
+        task: "Make a batched change.",
+        mcp: [],
+        focusPaths: [],
+        signal,
+      };
+      const explorerRequest = {
+        toolCallId: "batched-explorer",
+        profile: "explorer" as const,
+        mode: "foreground" as const,
+        task: "Inspect beside the writer.",
+        mcp: [],
+        focusPaths: [],
+        signal,
+      };
+      const batch = fixture.supervisor.capability.prepareBatch([
+        { kind: "request", request: writerRequest },
+        { kind: "request", request: explorerRequest },
+      ]);
+      const batchedWriter = await batch.executor.delegate(writerRequest);
+      batch.close();
+
+      expect(rejectionReason(batchedWriter)).toContain("only child");
+      expect(preparationCount).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given durable writer activation fails before a worktree is materialized,
+    When the Supervisor records the terminal Run,
+    Then it does not claim that either workspace path exists`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-pre-materialization-"),
+    );
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("must not run"),
+      lifecyclePersistence: durableLifecycleSink(),
+      writeWorkspace: {
+        prepare: ({ childRunId }) => {
+          const reference: SubagentWriteWorkspaceReference = {
+            kind: "isolated_write",
+            leaseId: childRunId,
+            baseCommit: "a".repeat(40),
+            branch: `keel/subagent/${childRunId.slice("subagent-".length)}`,
+            worktreePath: join(workspace, "planned-worktree"),
+            workspaceRoot: join(workspace, "planned-worktree"),
+          };
+          return {
+            kind: "prepared",
+            workspace: {
+              reference,
+              activate: () => ({
+                kind: "failed",
+                worktreePath: null,
+                error: "activation stopped before materialization",
+                recovery: "Retry from a clean checkout.",
+              }),
+            },
+          };
+        },
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "writer-before-materialization",
+        profile: "writer",
+        mode: "foreground",
+        task: "Make one isolated change.",
+        mcp: [],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: false });
+      expect(
+        fixture.supervisor.runSnapshots()[0]?.terminal?.workspace,
+      ).toMatchObject({
+        disposition: "cleanup_failed",
+        worktreePath: null,
+        workspaceRoot: null,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a writer profile is exposed without a workspace adapter,
+    When Main delegates one valid foreground writer,
+    Then admission fails closed before provider execution`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-unavailable-"),
+    );
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "missing-writer-workspace",
+        profile: "writer",
+        mode: "foreground",
+        task: "Make one isolated change.",
+        mcp: [],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(rejectionReason(result)).toContain(
+        "workspace isolation is unavailable",
+      );
+      expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an unsaved writer cannot activate its prepared worktree,
+    When Main delegates through the foreground Supervisor,
+    Then it receives a rejection and the provider never starts`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-activation-rejection-"),
+    );
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      writeWorkspace: {
+        prepare: ({ childRunId }) => {
+          const reference: SubagentWriteWorkspaceReference = {
+            kind: "isolated_write",
+            leaseId: childRunId,
+            baseCommit: "a".repeat(40),
+            branch: `keel/subagent/${childRunId.slice("subagent-".length)}`,
+            worktreePath: join(workspace, "unavailable-worktree"),
+            workspaceRoot: join(workspace, "unavailable-worktree"),
+          };
+          return {
+            kind: "prepared",
+            workspace: {
+              reference,
+              activate: () => ({
+                kind: "failed",
+                worktreePath: null,
+                error: "Git refused worktree activation",
+                recovery: "Repair Git and retry.",
+              }),
+            },
+          };
+        },
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "writer-activation-rejection",
+        profile: "writer",
+        mode: "foreground",
+        task: "Make one isolated change.",
+        mcp: [],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(rejectionReason(result)).toContain(
+        "rejected during isolated workspace activation",
+      );
+      expect(rejectionReason(result)).toContain("Git refused");
+      expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given Main hides workspace resources from an isolated writer,
+    When the child attempts to read a projected hidden path,
+    Then the child receives the same denial inside its worktree`, async () => {
+    const workspace = await realpath(
+      await mkdtemp(join(tmpdir(), "keel-subagent-writer-hidden-")),
+    );
+    const childWorkspace = join(workspace, "writer-worktree");
+    await mkdir(childWorkspace);
+    await writeFile(join(childWorkspace, "secret.txt"), "hidden\n");
+    let calls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      hiddenWorkspacePaths: [
+        "secret.txt",
+        join(workspace, "absolute-secret.txt"),
+        join(workspace, "..", "outside-parent.txt"),
+      ],
+      projectInstructions: {
+        relativePath: "AGENTS.md",
+        content: "Keep writer patches narrowly scoped.",
+      },
+      provider: {
+        id: "writer-hidden-path",
+        estimateInputTokens: () => 100,
+        async *stream(options) {
+          calls++;
+          if (calls === 1) {
+            yield {
+              type: "tool_call",
+              id: "read-hidden-writer-path",
+              tool: "read",
+              path: "secret.txt",
+            };
+          } else {
+            yield { type: "text", text: "The hidden file was unavailable." };
+          }
+          completeAttempt(options, requestUsage);
+          yield { type: "stop", reason: "stop", usage: requestUsage };
+        },
+      },
+      writeWorkspace: settledWriteWorkspaceRuntime({
+        workspace,
+        settlement: (reference) => ({
+          disposition: "preserved",
+          worktreePath: reference.worktreePath,
+          patch: {
+            content: "",
+            sourceTruncated: false,
+            summary: "clean at base commit",
+          },
+        }),
+      }),
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "writer-hidden-path",
+        profile: "writer",
+        mode: "foreground",
+        task: "Read secret.txt.",
+        mcp: [],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: true });
+      expect(fixture.artifacts.inputs[0]?.content).toContain(
+        "read failed: ignored path: secret.txt",
+      );
+      expect(fixture.artifacts.inputs[0]?.content).toContain(
+        "Keep writer patches narrowly scoped.",
+      );
+      expect(fixture.artifacts.inputs[0]?.content).not.toContain('"hidden\\n"');
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given writer settlement cannot persist its patch artifact,
+    When the child completes its isolated edit,
+    Then the Run fails with the preserved workspace and exact storage error`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-artifact-failure-"),
+    );
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("Writer edit complete."),
+      transcriptStore: {
+        abortSignalSupport: true,
+        verifyReusable: async () => ({ status: "not_reusable" }),
+        save: async () => ({
+          status: "failed",
+          reason: "artifact storage unavailable",
+        }),
+        discard: async () => {},
+      },
+      writeWorkspace: settledWriteWorkspaceRuntime({
+        workspace,
+        settlement: (reference) => ({
+          disposition: "preserved",
+          worktreePath: reference.worktreePath,
+          patch: {
+            content: "diff --git a/file b/file\n",
+            sourceTruncated: true,
+            summary: "M file",
+          },
+        }),
+      }),
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "writer-artifact-failure",
+        profile: "writer",
+        mode: "foreground",
+        task: "Make one isolated change.",
+        mcp: [],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: false });
+      expect(deliveredContent(result)).toContain(
+        "artifact storage unavailable",
+      );
+      expect(
+        fixture.supervisor.runSnapshots()[0]?.terminal?.workspace,
+      ).toMatchObject({
+        disposition: "preserved",
+        patchRef: null,
+        patchSourceTruncated: true,
+        error: expect.stringContaining("artifact storage unavailable"),
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an admitted writer is never consumed from its prepared batch,
+    When Main closes that batch,
+    Then the Supervisor settles the isolated workspace once and records cancellation`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-unused-writer-"),
+    );
+    let settlementCount = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("must not run"),
+      writeWorkspace: settledWriteWorkspaceRuntime({
+        workspace,
+        settlement: (reference) => ({
+          disposition: "preserved",
+          worktreePath: reference.worktreePath,
+          patch: {
+            content: "diff --git a/unexpected b/unexpected\n",
+            sourceTruncated: false,
+            summary: "M unexpected",
+          },
+        }),
+        onSettle: () => settlementCount++,
+      }),
+    });
+    const request = {
+      toolCallId: "unused-writer",
+      profile: "writer" as const,
+      mode: "foreground" as const,
+      task: "Make one isolated change.",
+      mcp: [],
+      focusPaths: [],
+      signal: new AbortController().signal,
+    };
+
+    try {
+      const batch = fixture.supervisor.capability.prepareBatch([
+        { kind: "request", request },
+      ]);
+      batch.close();
+
+      expect(settlementCount).toBe(1);
+      expect(fixture.supervisor.runSnapshots()[0]?.terminal).toMatchObject({
+        status: "cancelled",
+        workspace: {
+          disposition: "cleanup_failed",
+          patchRef: null,
+          summary: "M unexpected",
+          error: expect.stringContaining("Unused child worktree changed"),
+        },
+      });
+
+      const cleanupFixture = supervisorFixture({
+        workspace,
+        provider: singleFinalProvider("must not run"),
+        writeWorkspace: settledWriteWorkspaceRuntime({
+          workspace,
+          settlement: () => ({
+            disposition: "cleanup_failed",
+            worktreePath: null,
+            patch: null,
+            error: "worktree disappeared before execution",
+          }),
+        }),
+      });
+      const cleanupRequest = {
+        ...request,
+        toolCallId: "unused-writer-cleanup-failed",
+      };
+      const cleanupBatch = cleanupFixture.supervisor.capability.prepareBatch([
+        { kind: "request", request: cleanupRequest },
+      ]);
+      cleanupBatch.close();
+      expect(
+        cleanupFixture.supervisor.runSnapshots()[0]?.terminal?.workspace,
+      ).toMatchObject({
+        disposition: "cleanup_failed",
+        worktreePath: null,
+        workspaceRoot: null,
+        patchSourceTruncated: false,
+        summary: "workspace requires inspection",
+        error: "worktree disappeared before execution",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given workspace settlement fails after producing an inspectable patch,
+    When the writer child reaches its terminal boundary,
+    Then the failed Run retains both the patch artifact and cleanup evidence`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-settlement-failure-"),
+    );
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("Writer edit complete."),
+      lifecyclePersistence: durableLifecycleSink(),
+      writeWorkspace: settledWriteWorkspaceRuntime({
+        workspace,
+        settlement: (reference) => ({
+          disposition: "cleanup_failed",
+          worktreePath: reference.worktreePath,
+          patch: {
+            content: "diff --git a/file b/file\n",
+            sourceTruncated: false,
+            summary: "M file",
+          },
+          error: "workspace identity changed during settlement",
+        }),
+      }),
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "writer-settlement-failure",
+        profile: "writer",
+        mode: "foreground",
+        task: "Make one isolated change.",
+        mcp: [],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: false });
+      expect(deliveredContent(result)).toContain("identity changed");
+      expect(
+        fixture.supervisor.runSnapshots()[0]?.terminal?.workspace,
+      ).toMatchObject({
+        disposition: "cleanup_failed",
+        patchRef: expect.stringContaining("writer-settlement-failure"),
+        patchSourceTruncated: false,
+        error: "workspace identity changed during settlement",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      scenario: "no patch survived settlement",
+      patch: null,
+      artifactFailure: false,
+      expectedError: "workspace vanished",
+      expectedSummary: "workspace requires inspection",
+    },
+    {
+      scenario: "patch storage also failed",
+      patch: {
+        content: "diff --git a/file b/file\n",
+        sourceTruncated: true,
+        summary: "M file",
+      },
+      artifactFailure: true,
+      expectedError: "artifact storage unavailable",
+      expectedSummary: "M file",
+    },
+  ])(
+    `Given cleanup failed and $scenario,
+    When the writer reaches its terminal handoff,
+    Then Main receives truthful cleanup and artifact evidence`,
+    async ({ patch, artifactFailure, expectedError, expectedSummary }) => {
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-subagent-writer-cleanup-evidence-"),
+      );
+      const fixture = supervisorFixture({
+        workspace,
+        provider: singleFinalProvider("Writer edit complete."),
+        ...(artifactFailure
+          ? {
+              transcriptStore: {
+                abortSignalSupport: true as const,
+                verifyReusable: async () => ({
+                  status: "not_reusable" as const,
+                }),
+                save: async () => ({
+                  status: "failed" as const,
+                  reason: "artifact storage unavailable",
+                }),
+                discard: async () => {},
+              },
+            }
+          : {}),
+        writeWorkspace: settledWriteWorkspaceRuntime({
+          workspace,
+          settlement: () => ({
+            disposition: "cleanup_failed",
+            worktreePath: null,
+            patch,
+            error: "workspace vanished",
+          }),
+        }),
+      });
+
+      try {
+        const result = await fixture.supervisor.capability.delegate({
+          toolCallId: `writer-cleanup-${artifactFailure ? "artifact" : "missing"}`,
+          profile: "writer",
+          mode: "foreground",
+          task: "Make one isolated change.",
+          mcp: [],
+          focusPaths: [],
+          signal: new AbortController().signal,
+        });
+
+        expect(result).toMatchObject({ delivery: "fresh", ok: false });
+        expect(deliveredContent(result)).toContain(expectedError);
+        expect(
+          fixture.supervisor.runSnapshots()[0]?.terminal?.workspace,
+        ).toMatchObject({
+          disposition: "cleanup_failed",
+          worktreePath: null,
+          workspaceRoot: null,
+          patchRef: null,
+          patchSourceTruncated: patch?.sourceTruncated ?? false,
+          summary: expectedSummary,
+          error: expect.stringContaining(expectedError),
+        });
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given an accepted child's durable lifecycle writer fails before provider work,
     When the Supervisor starts that child,
@@ -1399,6 +2371,7 @@ describe("Subagent Supervisor", () => {
           turns: 0,
           costUsd: 0,
           pendingInputCount: 0,
+          workspace: null,
         },
       ]);
       expect(fixture.supervisor.activeChildRunCount()).toBe(0);

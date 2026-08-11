@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -64,6 +65,376 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Subagent Delegation", () => {
+  test(`Given a clean Git checkout and an explicit writer delegation,
+    When the child edits a tracked file,
+    Then Main receives an inspectable patch while the user checkout stays unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-writer-"));
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-home-"),
+    );
+    await writeFile(join(workspace, "message.txt"), "before\n");
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.name", "Keel Test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.email", "keel@example.test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["add", "message.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "--quiet", "-m", "initial"], {
+      cwd: workspace,
+    });
+    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: workspace,
+      encoding: "utf8",
+    }).trim();
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_writer", "delegate", {
+                  profile: "writer",
+                  task: "Change message.txt from before to after.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              [
+                sseToolCall("writer_read", "read", { path: "message.txt" }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(
+              [
+                sseToolCall("writer_edit", "edit", {
+                  path: "message.txt",
+                  edits: [{ oldText: "before", newText: "after" }],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 4:
+            response.end(
+              sseTextReplyWithUsage(
+                "Changed message.txt in my isolated workspace.",
+              ),
+            );
+            return;
+          case 5:
+            response.end(
+              sseTextReplyWithUsage(
+                "The writer patch is ready for inspection.",
+              ),
+            );
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "Use a writer subagent to update message.txt.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(5);
+      expect(await readFile(join(workspace, "message.txt"), "utf8")).toBe(
+        "before\n",
+      );
+      expect(
+        execFileSync("git", ["status", "--porcelain"], {
+          cwd: workspace,
+          encoding: "utf8",
+        }),
+      ).toBe("");
+      expect(toolNames(requests[1])).toEqual(
+        expect.arrayContaining([
+          "read",
+          "edit",
+          "write",
+          "apply_patch",
+          "git_status",
+          "git_diff",
+        ]),
+      );
+      expect(toolNames(requests[1])).not.toContain("bash");
+      const mainContinuation = requestSchema.parse(requests[4]);
+      const resultMessage = mainContinuation.messages?.findLast(
+        (message) => message.role === "tool",
+      );
+      const projectedResult = z
+        .object({
+          status: z.literal("completed"),
+          workspace: z.object({
+            kind: z.literal("isolated_write"),
+            baseCommit: z.literal(baseCommit),
+            branch: z.string().regex(/^keel\/subagent\/[a-f0-9-]+$/u),
+            disposition: z.literal("preserved"),
+            worktreePath: z.string(),
+            patchRef: artifactRefSchema,
+            patchSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+          }),
+        })
+        .passthrough()
+        .parse(JSON.parse(resultMessage?.content ?? "null"));
+      const childSystemPrompt = requestSchema
+        .parse(requests[1])
+        .messages?.find((message) => message.role === "system")?.content;
+      expect(childSystemPrompt).toContain(
+        projectedResult.workspace.worktreePath,
+      );
+      expect(childSystemPrompt).not.toContain(
+        "<isolated child worktree assigned at admission>",
+      );
+      expect(
+        await readFile(
+          join(projectedResult.workspace.worktreePath, "message.txt"),
+          "utf8",
+        ),
+      ).toBe("after\n");
+      expect(
+        execFileSync("git", ["worktree", "list", "--porcelain"], {
+          cwd: workspace,
+          encoding: "utf8",
+        }),
+      ).toContain(projectedResult.workspace.worktreePath);
+      expect(fixture.stdout()).toBe(
+        "The writer patch is ready for inspection.\n",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the user checkout contains an uncommitted change,
+    When Main requests a writer child,
+    Then delegation fails before a worktree or child provider request is created`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-dirty-"),
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-subagent-writer-dirty-home-"),
+    );
+    await writeFile(join(workspace, "message.txt"), "committed\n");
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.name", "Keel Test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.email", "keel@example.test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["add", "message.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "--quiet", "-m", "initial"], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, "message.txt"), "user change\n");
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        response.end(
+          requests.length === 1
+            ? [
+                sseToolCall("delegate_dirty_writer", "delegate", {
+                  profile: "writer",
+                  task: "Replace the content of message.txt.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join("")
+            : sseTextReplyWithUsage(
+                "The writer was not started because the checkout is dirty.",
+              ),
+        );
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "Use a writer subagent for message.txt.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(2);
+      expect(requestText(requests[1])).toContain(
+        "parent checkout has staged, unstaged, untracked, or unmerged changes",
+      );
+      expect(await readFile(join(workspace, "message.txt"), "utf8")).toBe(
+        "user change\n",
+      );
+      expect(
+        execFileSync("git", ["worktree", "list", "--porcelain"], {
+          cwd: workspace,
+          encoding: "utf8",
+        }).match(/^worktree /gmu),
+      ).toHaveLength(1);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given automatic delegation has no explicit writer authority,
+    When a provider attempts to forge a writer delegation,
+    Then writer is absent from the model contract and no worktree is created`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-auto-"));
+    const keelHome = await mkdtemp(join(tmpdir(), "keel-subagent-auto-home-"));
+    await writeFile(join(workspace, "message.txt"), "before\n");
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.name", "Keel Test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.email", "keel@example.test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["add", "message.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "--quiet", "-m", "initial"], {
+      cwd: workspace,
+    });
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(
+          requests.length === 1
+            ? [
+                sseToolCall("forged_writer", "delegate", {
+                  profile: "writer",
+                  task: "Change message.txt.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join("")
+            : sseTextReplyWithUsage("No writer was admitted."),
+        );
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--agent-policy",
+        "auto",
+        "--max-cost",
+        "0.05",
+        "Inspect whether message.txt needs work.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      expect(await runCliMain(fixture.runtime), fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(2);
+      expect(requestText(requests[0])).not.toContain('"writer"');
+      expect(requestText(requests[1])).toContain("invalid arguments");
+      expect(
+        execFileSync("git", ["worktree", "list", "--porcelain"], {
+          cwd: workspace,
+          encoding: "utf8",
+        }).match(/^worktree /gmu),
+      ).toHaveLength(1);
+      expect(await readFile(join(workspace, "message.txt"), "utf8")).toBe(
+        "before\n",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a project profile allows one workflow Skill while Main has another active,
     When one child uses the leased Skill and another child invents the unleased Skill name,
     Then only the leased instruction and resource load without gaining Main's Skill or write authority`, async () => {

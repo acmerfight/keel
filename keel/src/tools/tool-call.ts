@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   type SubagentCapabilitySnapshot,
   subagentCapabilityFingerprint,
+  subagentCapabilityIsWriter,
 } from "../agent/subagent-capability.ts";
 import type {
   SubagentProfileCatalog,
@@ -177,10 +178,14 @@ function builtinToolIsExposed(
     if (tool.availability === "mcp-catalog") {
       return exposure.mcp?.catalogAvailable === true;
     }
+    const permittedRisk = subagentCapabilityIsWriter(exposure.capability)
+      ? tool.risk.kind === "workspace-read" ||
+        tool.risk.kind === "workspace-write"
+      : tool.risk.kind === "workspace-read";
     return (
       exposure.capability.builtinTools.some((name) => name === tool.name) &&
       tool.availability === undefined &&
-      tool.risk.kind === "workspace-read"
+      permittedRisk
     );
   }
   return (
@@ -203,6 +208,11 @@ export function builtinToolAuthorityAllows(
     exposure.kind === "auto" &&
     builtinToolIsExposed(exposure, builtinToolForName(name))
   );
+}
+
+export function builtinToolUsesWorkspace(name: ToolName): boolean {
+  const risk = builtinToolForName(name).risk.kind;
+  return risk === "workspace-read" || risk === "workspace-write";
 }
 
 export type ValidToolCall = z.infer<typeof builtinToolCallSchema>;

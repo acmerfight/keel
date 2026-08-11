@@ -66,16 +66,22 @@ keel sessions
 ## Subagent Profiles
 
 Subagents are off by default. Enable explicit, cost-bounded delegation when a
-task benefits from an independent read-only investigation:
+task benefits from independent investigation, review, or an isolated file
+change:
 
 ```bash
 keel --agent-policy explicit --max-cost 0.05 \
   "Use subagents to review the parser and its tests."
 ```
 
-Keel includes `explorer` and `reviewer` profiles. A project can add narrower
-profiles in `.agents/subagents.json`; project profiles are exposed to the model
-as `repo:<name>`:
+Keel includes read-only `explorer` and `reviewer` profiles plus a `writer`
+profile. A writer runs only as a single foreground child from a clean Git
+checkout, edits its own branch/worktree, and returns an inspectable patch
+artifact without modifying or merging the user's checkout. Writer profiles are
+exposed only by `--agent-policy explicit`; their worktree and branch remain
+preserved at the reported path for explicit inspection or cleanup. A project can add
+narrower profiles in `.agents/subagents.json`; project profiles are exposed to
+the model as `repo:<name>`:
 
 ```json
 {
@@ -101,6 +107,8 @@ result size, and name up to eight audited model-activatable Skills as its ceilin
 call leases a subset of that ceiling. The child sees only the leased Skill
 catalog, activates a matching Skill through the normal Skill lifecycle, and
 cannot gain write, Bash, MCP, delegation, or other tools from Skill content.
+Writer-based project profiles cannot add Skills or MCP tools in this initial
+isolated-write slice.
 Main's active Skills are not copied. Invalid or expanding configuration stops
 before any child starts. Accepted saved-session Runs persist exact execution
 and capability snapshots; each resume supplies a fresh task Skill lease and may
