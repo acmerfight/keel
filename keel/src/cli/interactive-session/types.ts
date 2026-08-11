@@ -16,6 +16,7 @@ import type {
   UndoProtectionTracker,
 } from "../../core/undo-protection.ts";
 import type { LLMProvider, Usage } from "../../llm/types.ts";
+import type { McpSecretBackend } from "../../mcp/oauth.ts";
 import type {
   McpConnectionFactory,
   McpLifecyclePolicy,
@@ -252,6 +253,7 @@ interface InteractiveSessionOptionsBase {
     readonly canPrompt: boolean;
     readonly approvalRuntime: {
       readonly env: (key: string) => string | undefined;
+      readonly mcpSecretBackend: McpSecretBackend;
     };
   };
   readonly configuredModelSelection?: ProviderSelection;

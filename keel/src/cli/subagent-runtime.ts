@@ -8,6 +8,8 @@ import type { MainModelOperationInstrumentation } from "../agent/model-operation
 import type { ProjectInstructions } from "../agent/prompt.ts";
 import {
   type SubagentCapabilitySnapshot,
+  type SubagentMcpToolSelector,
+  type SubagentMcpToolSnapshot,
   type SubagentSkillSnapshot,
   skillDescriptorFromSubagentSnapshot,
   subagentSkillSnapshotFromWorkflowSkill,
@@ -36,6 +38,21 @@ import type { CostModel } from "../core/cost.ts";
 import type { ModelMetadata } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import type { LLMProvider } from "../llm/types.ts";
+import {
+  type McpAuthorizationIdentity,
+  sameMcpAuthorizationIdentity,
+} from "../mcp/oauth.ts";
+import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
+import {
+  createMcpRuntime,
+  mcpServerConfigurationDigest,
+} from "../mcp/runtime.ts";
+import type {
+  McpConnectionFactory,
+  McpLifecyclePolicy,
+  McpPermissionPolicy,
+  McpRuntimeServer,
+} from "../mcp/runtime-types.ts";
 import { createSkillActivation } from "../skills/lifecycle.ts";
 import type {
   SkillActivationCapability,
@@ -58,6 +75,17 @@ interface CreateCliSubagentRuntimeOptionsBase {
   readonly projectInstructions: ProjectInstructions | undefined;
   readonly hiddenWorkspacePaths: readonly string[];
   readonly skillCatalog?: SkillCatalog;
+  readonly mcp?: {
+    readonly servers: readonly McpRuntimeServer[];
+    readonly connectionFactory: (
+      authorizationIdentity: McpAuthorizationIdentity,
+    ) => McpConnectionFactory;
+    readonly lifecycle: McpLifecyclePolicy;
+    readonly permission: McpPermissionPolicy;
+    readonly authorizationIdentity: (
+      server: McpRuntimeServer,
+    ) => Promise<McpAuthorizationIdentity>;
+  };
   readonly contextCompaction: ContextCompactionOptions | undefined;
   readonly modelMaxOutputTokens: number | undefined;
   readonly modelOperations: MainModelOperationInstrumentation | undefined;
@@ -196,9 +224,123 @@ function childSkillActivation(
   return activation;
 }
 
-export function createCliSubagentRuntime(
+function mcpSelectorKey(selector: SubagentMcpToolSelector): string {
+  return `${selector.server}\u0000${selector.tool}`;
+}
+
+function mcpSnapshotKey(snapshot: SubagentMcpToolSnapshot): string {
+  return `${snapshot.serverId}\u0000${snapshot.rawToolName}`;
+}
+
+function configuredMcpToolIsAllowed(
+  server: McpRuntimeServer,
+  rawToolName: string,
+): boolean {
+  return (
+    !server.toolFilter.deny.includes(rawToolName) &&
+    (server.toolFilter.allow === null ||
+      server.toolFilter.allow.includes(rawToolName))
+  );
+}
+
+async function resolveMcpToolSnapshots(
+  selectors: readonly SubagentMcpToolSelector[],
+  servers: readonly McpRuntimeServer[],
+  authorizationIdentity: (
+    server: McpRuntimeServer,
+  ) => Promise<McpAuthorizationIdentity>,
+): Promise<readonly SubagentMcpToolSnapshot[]> {
+  const byId = new Map(
+    servers
+      .filter((server) => server.enabled)
+      .map((server) => [server.id, server]),
+  );
+  const identities = new Map<string, McpAuthorizationIdentity>();
+  const snapshots: SubagentMcpToolSnapshot[] = [];
+  for (const selector of selectors) {
+    const server = byId.get(selector.server);
+    if (
+      server === undefined ||
+      !configuredMcpToolIsAllowed(server, selector.tool)
+    ) {
+      continue;
+    }
+    let identity = identities.get(server.id);
+    if (identity === undefined) {
+      identity = await authorizationIdentity(server);
+      identities.set(server.id, identity);
+    }
+    snapshots.push({
+      serverId: server.id,
+      rawToolName: selector.tool,
+      serverIncarnation: server.incarnation,
+      configurationDigest: mcpServerConfigurationDigest(server),
+      authorizationIdentity: identity,
+    });
+  }
+  return snapshots;
+}
+
+type CliSubagentMcpOptions = NonNullable<
+  CreateCliSubagentRuntimeOptionsBase["mcp"]
+>;
+
+function serverMatchesMcpLeaseConfiguration(
+  server: McpRuntimeServer,
+  leased: readonly SubagentMcpToolSnapshot[],
+): readonly SubagentMcpToolSnapshot[] {
+  const configurationDigest = mcpServerConfigurationDigest(server);
+  return leased.filter(
+    (tool) =>
+      tool.serverId === server.id &&
+      tool.serverIncarnation === server.incarnation &&
+      tool.configurationDigest === configurationDigest &&
+      configuredMcpToolIsAllowed(server, tool.rawToolName),
+  );
+}
+
+async function serverMatchesCurrentMcpLease(
+  server: McpRuntimeServer,
+  leased: readonly SubagentMcpToolSnapshot[],
+  mcp: CliSubagentMcpOptions,
+): Promise<boolean> {
+  const candidates = serverMatchesMcpLeaseConfiguration(server, leased);
+  if (candidates.length === 0 || !server.enabled) return false;
+  try {
+    if (!(await mcp.lifecycle.isCurrentAndEnabled(server))) return false;
+    const currentIdentity = await mcp.authorizationIdentity(server);
+    return candidates.some((tool) =>
+      sameMcpAuthorizationIdentity(tool.authorizationIdentity, currentIdentity),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function leasedMcpLifecycle(
+  leased: readonly SubagentMcpToolSnapshot[],
+  mcp: CliSubagentMcpOptions,
+): McpLifecyclePolicy {
+  return {
+    isCurrentAndEnabled: async (server) =>
+      await serverMatchesCurrentMcpLease(server, leased, mcp),
+    listCurrent: async () => {
+      const current = await mcp.lifecycle.listCurrent();
+      const admitted = await Promise.all(
+        current.map(async (server) =>
+          (await serverMatchesCurrentMcpLease(server, leased, mcp))
+            ? [server]
+            : [],
+        ),
+      );
+      return admitted.flat();
+    },
+  };
+}
+
+export async function createCliSubagentRuntime(
   options: CreateCliSubagentRuntimeOptions,
-): CliSubagentRuntime {
+): Promise<CliSubagentRuntime> {
   const coordination =
     options.attachedSession?.providerCoordination ??
     createSubagentTreeProviderCoordination({ now: options.now });
@@ -294,12 +436,165 @@ export function createCliSubagentRuntime(
     return execution;
   };
   const skillCatalog = options.skillCatalog;
+  const repoProfiles = loadRepoSubagentProfiles(options.workspace);
+  const configuredMcpSelectors = repoProfiles.flatMap(
+    (profile) => profile.mcp ?? [],
+  );
+  const uniqueMcpSelectors = [
+    ...new Map(
+      configuredMcpSelectors.map((selector) => [
+        mcpSelectorKey(selector),
+        selector,
+      ]),
+    ).values(),
+  ];
+  let currentMcpServers = new Map<string, McpRuntimeServer>();
+  let resolvedMcpTools = new Map<string, SubagentMcpToolSnapshot>();
+  const mcpOptions = options.mcp;
+  if (mcpOptions !== undefined && uniqueMcpSelectors.length > 0) {
+    const servers = await mcpOptions.lifecycle.listCurrent();
+    currentMcpServers = new Map(servers.map((server) => [server.id, server]));
+    resolvedMcpTools = new Map(
+      (
+        await resolveMcpToolSnapshots(
+          uniqueMcpSelectors,
+          servers,
+          mcpOptions.authorizationIdentity,
+        )
+      ).map((snapshot) => [mcpSnapshotKey(snapshot), snapshot]),
+    );
+  }
+  const mcpRuntime =
+    mcpOptions === undefined
+      ? undefined
+      : {
+          kind: "enabled" as const,
+          resolveTool: (selector: SubagentMcpToolSelector) =>
+            resolvedMcpTools.get(mcpSelectorKey(selector)),
+          resolveCurrent: async (tools: readonly SubagentMcpToolSnapshot[]) => {
+            const servers = await mcpOptions.lifecycle.listCurrent();
+            currentMcpServers = new Map(
+              servers.map((server) => [server.id, server]),
+            );
+            const current = await resolveMcpToolSnapshots(
+              tools.map((tool) => ({
+                server: tool.serverId,
+                tool: tool.rawToolName,
+              })),
+              servers,
+              mcpOptions.authorizationIdentity,
+            );
+            return current.filter((candidate) => {
+              const previous = tools.find(
+                (tool) => mcpSnapshotKey(tool) === mcpSnapshotKey(candidate),
+              );
+              return (
+                previous !== undefined &&
+                previous.serverIncarnation === candidate.serverIncarnation &&
+                previous.configurationDigest ===
+                  candidate.configurationDigest &&
+                sameMcpAuthorizationIdentity(
+                  previous.authorizationIdentity,
+                  candidate.authorizationIdentity,
+                )
+              );
+            });
+          },
+          createRuntime: (
+            capability: SubagentCapabilitySnapshot,
+            execution: SubagentExecutionSnapshot,
+          ) => {
+            if (capability.mcpTools.length === 0) return undefined;
+            const leased = capability.mcpTools;
+            const servers = [
+              ...new Map(
+                leased.flatMap((tool) => {
+                  const server = currentMcpServers.get(tool.serverId);
+                  return server !== undefined &&
+                    server.incarnation === tool.serverIncarnation &&
+                    mcpServerConfigurationDigest(server) ===
+                      tool.configurationDigest
+                    ? [[server.id, server] as const]
+                    : [];
+                }),
+              ).values(),
+            ];
+            const lifecycle = leasedMcpLifecycle(leased, mcpOptions);
+            return createMcpRuntime({
+              servers,
+              connectionFactory: {
+                connect: async (server, signal) => {
+                  const expected = serverMatchesMcpLeaseConfiguration(
+                    server,
+                    leased,
+                  )[0];
+                  if (
+                    expected === undefined ||
+                    !(await serverMatchesCurrentMcpLease(
+                      server,
+                      leased,
+                      mcpOptions,
+                    ))
+                  ) {
+                    throw new Error(
+                      "MCP server or authorization identity changed after child capability admission.",
+                    );
+                  }
+                  return await mcpOptions
+                    .connectionFactory(expected.authorizationIdentity)
+                    .connect(server, signal);
+                },
+              },
+              lifecycle,
+              filter: {
+                allows: ({ server, rawToolName }) =>
+                  configuredMcpToolIsAllowed(server, rawToolName) &&
+                  leased.some(
+                    (tool) =>
+                      tool.serverId === server.id &&
+                      tool.rawToolName === rawToolName &&
+                      tool.serverIncarnation === server.incarnation &&
+                      tool.configurationDigest ===
+                        mcpServerConfigurationDigest(server),
+                  ),
+              },
+              permission: {
+                review: async (request) => {
+                  const authorized = leased.some(
+                    (tool) =>
+                      tool.serverId === request.serverId &&
+                      tool.rawToolName === request.rawToolName &&
+                      tool.configurationDigest ===
+                        request.configurationDigest &&
+                      sameMcpAuthorizationIdentity(
+                        tool.authorizationIdentity,
+                        request.authorizationIdentity,
+                      ),
+                  );
+                  return authorized
+                    ? await mcpOptions.permission.review(request)
+                    : {
+                        type: "deny" as const,
+                        message:
+                          "MCP call denied because the child task lease or authorization identity changed.",
+                      };
+                },
+              },
+              schemaTarget: mcpProviderSchemaTarget(
+                execution.providerId,
+                execution.model,
+              ),
+              now: options.now,
+            });
+          },
+        };
   const profileRegistry = createSubagentProfileRegistry({
     execution: {
       providerId: options.providerId,
       model: options.model,
     },
-    repoProfiles: loadRepoSubagentProfiles(options.workspace),
+    repoProfiles,
+    ...(mcpRuntime !== undefined ? { mcpRuntime } : {}),
     ...(skillCatalog !== undefined
       ? {
           skillRuntime: {

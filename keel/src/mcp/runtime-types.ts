@@ -42,6 +42,7 @@ export interface McpPermissionPolicy {
 }
 
 interface McpToolFilterRequest {
+  readonly server: McpRuntimeServer;
   readonly serverId: string;
   readonly rawToolName: string;
 }
@@ -118,5 +119,5 @@ export interface McpRuntime {
     toolCall: McpToolInvocation,
     signal: AbortSignal,
   ) => Promise<McpToolRuntimeResult>;
-  readonly close: () => Promise<void>;
+  readonly close: (signal?: AbortSignal) => Promise<void>;
 }

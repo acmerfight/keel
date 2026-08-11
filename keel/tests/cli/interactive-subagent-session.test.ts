@@ -289,6 +289,7 @@ describe("Interactive subagent session", () => {
       requestId: "resume-request",
       message: "Now inspect callers.",
       skills: [],
+      mcp: [],
       signal: new AbortController().signal,
       maxResultChars: 6_000,
     });

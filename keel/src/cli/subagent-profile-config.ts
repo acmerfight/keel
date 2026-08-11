@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { z } from "zod";
 import {
   EXPLORER_MAX_TURNS,
+  MAX_SUBAGENT_MCP_TOOLS,
   MAX_SUBAGENT_SKILLS,
   REVIEWER_MAX_TURNS,
   type RepoSubagentProfileName,
@@ -39,6 +40,22 @@ const profileSkillsSchema = z
   .refine((skills) => new Set(skills).size === skills.length, {
     message: "skills must not contain duplicates",
   });
+const profileMcpSchema = z
+  .array(
+    z
+      .object({
+        server: z.string().trim().min(1).max(64),
+        tool: z.string().trim().min(1).max(128),
+      })
+      .strict(),
+  )
+  .max(MAX_SUBAGENT_MCP_TOOLS)
+  .refine(
+    (tools) =>
+      new Set(tools.map(({ server, tool }) => `${server}\u0000${tool}`))
+        .size === tools.length,
+    { message: "mcp tools must not contain duplicates" },
+  );
 const profileDefinitionSchema = z
   .object({
     base: z.enum(subagentProfileIds),
@@ -46,6 +63,7 @@ const profileDefinitionSchema = z
     effort: z.enum(reasoningEfforts).optional(),
     tools: profileToolsSchema.optional(),
     skills: profileSkillsSchema.optional(),
+    mcp: profileMcpSchema.optional(),
     maxTurns: z
       .number()
       .int()
@@ -143,6 +161,7 @@ export function loadRepoSubagentProfiles(
     ...(definition.effort !== undefined ? { effort: definition.effort } : {}),
     ...(definition.tools !== undefined ? { tools: definition.tools } : {}),
     ...(definition.skills !== undefined ? { skills: definition.skills } : {}),
+    ...(definition.mcp !== undefined ? { mcp: definition.mcp } : {}),
     ...(definition.maxTurns !== undefined
       ? { maxTurns: definition.maxTurns }
       : {}),

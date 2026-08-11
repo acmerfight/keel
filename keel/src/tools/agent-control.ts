@@ -1,3 +1,4 @@
+import type { SubagentMcpToolSelector } from "../agent/subagent-capability.ts";
 import type { AgentId } from "../agent/subagent-lifecycle.ts";
 
 export interface AgentControlResult {
@@ -18,6 +19,7 @@ interface AgentInputRequest extends AgentControlRequest {
 interface AgentResumeRequest extends AgentInputRequest {
   readonly requestId: string;
   readonly skills: readonly string[];
+  readonly mcp: readonly SubagentMcpToolSelector[];
 }
 
 interface AgentSettlementRequest {

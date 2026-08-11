@@ -186,7 +186,7 @@ interface MainRunAgentOptions {
 
 interface SubagentRunAgentOptionsBase {
   readonly memory?: never;
-  readonly mcp?: never;
+  readonly mcp?: AgentMcpRuntime;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "subagent";
   readonly subagentCapability: SubagentCapabilitySnapshot;
@@ -281,7 +281,7 @@ type MainRunAgentTurnOptions = MainAgentControlOptions & {
 
 interface SubagentRunAgentTurnOptions {
   readonly memory?: never;
-  readonly mcp?: never;
+  readonly mcp?: AgentMcpRuntime;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "subagent";
   readonly subagentCapability: SubagentCapabilitySnapshot;
@@ -309,6 +309,7 @@ function agentTurnExecutionOptions(
       toolProfile: options.toolProfile,
       subagentCapability: options.subagentCapability,
       costBudgetProvider: options.costBudgetProvider,
+      ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.skillActivation !== undefined
         ? { skillActivation: options.skillActivation }
         : {}),
@@ -560,6 +561,7 @@ function delegationBatchEntry(
       profile: toolCall.profile,
       focusPaths: toolCall.focusPaths ?? [],
       skills: toolCall.skills ?? [],
+      mcp: toolCall.mcp ?? [],
       signal,
     },
   };
@@ -1140,6 +1142,7 @@ export async function* runAgentTurn(
             kind: "auto",
             profile: "subagent",
             capability: options.subagentCapability,
+            ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
           }
         : {
             kind: "auto",

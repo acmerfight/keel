@@ -1,3 +1,4 @@
+import type { SubagentMcpToolSelector } from "../../agent/subagent-capability.ts";
 import { errorMessage } from "../../core/error.ts";
 import { isProviderId } from "../../core/provider-id.ts";
 import {
@@ -23,6 +24,9 @@ import type {
   InteractiveGoalCommand,
   InteractiveGoalCommandOutput,
 } from "./goal-command.ts";
+
+const AGENTS_USAGE_ERROR =
+  "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> [--skill <name> | --mcp <server/tool> ... --] <message>.";
 
 interface HelpCommand {
   readonly kind: "help";
@@ -93,6 +97,7 @@ interface AgentResumeCommand {
   readonly selector: string;
   readonly message: string;
   readonly skills: readonly string[];
+  readonly mcp: readonly SubagentMcpToolSelector[];
 }
 
 type AgentsCommand =
@@ -206,7 +211,7 @@ export function formatInteractiveHelp(): string {
     "                     Cancel and settle one attached background subagent.",
     "  /agents input <id|index> <message>",
     "                     Queue input for one running attached subagent.",
-    "  /agents resume <id|index> [--skill <name> ... --] <message>",
+    "  /agents resume <id|index> [--skill <name> | --mcp <server/tool> ... --] <message>",
     "                     Continue one terminal subagent as a new Run with an exact optional Skill lease.",
     "  /sessions          Choose another saved session in this workspace.",
     "  /title [text]      Show or set this saved session title.",
@@ -872,13 +877,30 @@ export function parseInteractiveCommand(
         const selector = body.slice(0, selectorSeparator);
         let remainder = body.slice(selectorSeparator).trim();
         const skills: string[] = [];
-        while (remainder.startsWith("--skill ")) {
-          const skill = /^--skill\s+(\S+)(?:\s+|$)/u.exec(remainder);
-          if (skill?.[1] === undefined) break;
-          skills.push(skill[1]);
-          remainder = remainder.slice(skill[0].length).trimStart();
+        const mcp: SubagentMcpToolSelector[] = [];
+        while (
+          remainder.startsWith("--skill ") ||
+          remainder.startsWith("--mcp ")
+        ) {
+          const option = /^--(skill|mcp)\s+(\S+)(?:\s+|$)/u.exec(remainder);
+          if (option?.[1] === undefined || option[2] === undefined) {
+            return { kind: "invalid", message: AGENTS_USAGE_ERROR };
+          }
+          if (option[1] === "skill") {
+            skills.push(option[2]);
+          } else {
+            const separator = option[2].indexOf("/");
+            if (separator <= 0 || separator === option[2].length - 1) {
+              return { kind: "invalid", message: AGENTS_USAGE_ERROR };
+            }
+            mcp.push({
+              server: option[2].slice(0, separator),
+              tool: option[2].slice(separator + 1),
+            });
+          }
+          remainder = remainder.slice(option[0].length).trimStart();
         }
-        if (skills.length > 0) {
+        if (skills.length > 0 || mcp.length > 0) {
           remainder = remainder.startsWith("-- ")
             ? remainder.slice(3).trim()
             : "";
@@ -890,6 +912,7 @@ export function parseInteractiveCommand(
             selector,
             message: remainder,
             skills,
+            mcp,
           };
         }
       }
@@ -907,8 +930,7 @@ export function parseInteractiveCommand(
     ) {
       return {
         kind: "invalid",
-        message:
-          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> [--skill <name> ... --] <message>.",
+        message: AGENTS_USAGE_ERROR,
       };
     }
     return { kind: "agents", action, selector };

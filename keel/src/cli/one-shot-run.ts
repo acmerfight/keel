@@ -48,6 +48,7 @@ import {
 import { createMcpPermissionPolicy } from "./mcp-approval.ts";
 import { listMcpServers } from "./mcp-config.ts";
 import {
+  createCliMcpAuthProvider,
   createCliMcpConnectionFactory,
   createCliMcpLifecyclePolicy,
 } from "./mcp-connection.ts";
@@ -260,6 +261,8 @@ export async function runOneShotCli(
 
     const startedAt = runtime.now();
     const mcpServers = await listMcpServers(runtime);
+    const mcpConnectionFactory = createCliMcpConnectionFactory(runtime);
+    const mcpLifecycle = createCliMcpLifecyclePolicy(runtime);
     const needsApprovalInput =
       runtime.input.isTTY === true &&
       (cliArgs.bashMode === "ask" || mcpServers.length > 0);
@@ -283,8 +286,8 @@ export async function runOneShotCli(
     if (mcpServers.length > 0) {
       mcpRuntime = createMcpRuntime({
         servers: mcpServers,
-        connectionFactory: createCliMcpConnectionFactory(runtime),
-        lifecycle: createCliMcpLifecyclePolicy(runtime),
+        connectionFactory: mcpConnectionFactory,
+        lifecycle: mcpLifecycle,
         permission: createMcpPermissionPolicy({
           runtime,
           projectRoot: projectRoot(workspace),
@@ -414,7 +417,7 @@ export async function runOneShotCli(
         : undefined;
     const subagentRuntime =
       delegationRun.kind === "enabled"
-        ? createCliSubagentRuntime({
+        ? await createCliSubagentRuntime({
             workspace,
             platform: runtime.platform,
             parentRunId: `main-${randomUUID()}`,
@@ -429,6 +432,33 @@ export async function runOneShotCli(
             projectInstructions,
             hiddenWorkspacePaths,
             ...(catalog !== undefined ? { skillCatalog: catalog } : {}),
+            ...(mcpServers.length > 0
+              ? {
+                  mcp: {
+                    servers: mcpServers,
+                    connectionFactory: (authorizationIdentity) =>
+                      createCliMcpConnectionFactory(
+                        runtime,
+                        authorizationIdentity,
+                      ),
+                    lifecycle: mcpLifecycle,
+                    permission: createMcpPermissionPolicy({
+                      runtime,
+                      projectRoot: projectRoot(workspace),
+                      prompt: {
+                        kind: "headless",
+                        deniedMessage:
+                          "Child MCP calls require an exact saved project approval and cannot prompt.",
+                      },
+                    }),
+                    authorizationIdentity: async (server) =>
+                      await createCliMcpAuthProvider(
+                        runtime,
+                        server,
+                      ).authorizationIdentity(),
+                  },
+                }
+              : {}),
             contextCompaction: resolved.contextCompaction,
             modelMaxOutputTokens,
             modelOperations,

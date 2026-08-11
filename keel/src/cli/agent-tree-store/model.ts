@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { SessionMessage } from "../../agent/session-message.ts";
 import {
   EXPLORER_MAX_TURNS,
+  MAX_SUBAGENT_MCP_TOOLS,
   MAX_SUBAGENT_SKILLS,
   REVIEWER_MAX_TURNS,
   type RepoSubagentCapabilitySnapshotId,
@@ -38,7 +39,7 @@ import {
 } from "../../skills/resources.ts";
 import { sessionMessageSchema } from "../session-message-schema.ts";
 
-export const AGENT_TREE_SCHEMA_VERSION = 7;
+export const AGENT_TREE_SCHEMA_VERSION = 8;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -214,6 +215,38 @@ const subagentSkillsSchema = z
       new Set(skills.map((skill) => skill.qualifiedName)).size ===
       skills.length,
   );
+const mcpAuthorizationIdentitySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("anonymous") }).strict(),
+  z
+    .object({
+      kind: z.literal("oauth"),
+      issuer: z.string().min(1),
+      clientId: z.string().min(1),
+      grantId: z.string().min(1),
+    })
+    .strict(),
+]);
+const subagentMcpToolsSchema = z
+  .array(
+    z
+      .object({
+        serverId: z.string().min(1).max(64),
+        rawToolName: z.string().min(1).max(128),
+        serverIncarnation: z.string().min(1).max(256),
+        configurationDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+        authorizationIdentity: mcpAuthorizationIdentitySchema,
+      })
+      .strict(),
+  )
+  .max(MAX_SUBAGENT_MCP_TOOLS)
+  .refine(
+    (tools) =>
+      new Set(
+        tools.map(
+          ({ serverId, rawToolName }) => `${serverId}\u0000${rawToolName}`,
+        ),
+      ).size === tools.length,
+  );
 
 const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
   [
@@ -228,6 +261,7 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
           z.literal("grep"),
         ]),
         skills: z.tuple([]),
+        mcpTools: z.tuple([]),
         maxTurns: z.number().int().positive().max(EXPLORER_MAX_TURNS),
         ...capabilityLimitsShape,
       })
@@ -245,6 +279,7 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
           z.literal("git_diff"),
         ]),
         skills: z.tuple([]),
+        mcpTools: z.tuple([]),
         maxTurns: z.number().int().positive().max(REVIEWER_MAX_TURNS),
         ...capabilityLimitsShape,
       })
@@ -260,6 +295,7 @@ const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> = z.union(
           .max(subagentBuiltinToolNames.length)
           .refine((tools) => new Set(tools).size === tools.length),
         skills: subagentSkillsSchema,
+        mcpTools: subagentMcpToolsSchema,
         maxTurns: z.number().int().positive().max(REVIEWER_MAX_TURNS),
         ...capabilityLimitsShape,
       })

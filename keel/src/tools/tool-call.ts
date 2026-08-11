@@ -119,6 +119,7 @@ interface SubagentModelToolExposure {
   readonly kind: "auto";
   readonly profile: "subagent";
   readonly capability: SubagentCapabilitySnapshot;
+  readonly mcp?: McpToolExposureSnapshot;
 }
 
 type AutoModelToolExposure = MainModelToolExposure | SubagentModelToolExposure;
@@ -146,6 +147,7 @@ export type ResolvedModelToolExposure =
       readonly profile: "subagent";
       readonly capabilitySnapshotFingerprint: string;
       readonly skill: boolean;
+      readonly mcpSnapshotId: string | null;
     };
 
 export interface ModelToolExposureAccounting {
@@ -171,6 +173,9 @@ function builtinToolIsExposed(
   if (exposure.profile === "subagent") {
     if (tool.availability === "skill-catalog") {
       return exposure.capability.skills.length > 0;
+    }
+    if (tool.availability === "mcp-catalog") {
+      return exposure.mcp?.catalogAvailable === true;
     }
     return (
       exposure.capability.builtinTools.some((name) => name === tool.name) &&
@@ -400,7 +405,7 @@ export function openAICompatibleTools(
     .filter((tool) => builtinToolIsExposed(exposure, tool))
     .map((tool) => toOpenAICompatibleToolDefinition(tool, exposure));
   const mcpTools =
-    exposure.profile !== "subagent" && exposure.mcp?.catalogAvailable === true
+    exposure.mcp?.catalogAvailable === true
       ? exposure.mcp.tools.map(mcpOpenAICompatibleToolDefinition)
       : [];
   return [...builtins, ...mcpTools];
@@ -418,6 +423,10 @@ export function resolveModelToolExposure(
         exposure.capability,
       ),
       skill: exposure.capability.skills.length > 0,
+      mcpSnapshotId:
+        exposure.mcp?.catalogAvailable === true
+          ? exposure.mcp.snapshotId
+          : null,
     };
   }
   return {
@@ -429,6 +438,7 @@ export function resolveModelToolExposure(
       exposure?.delegation?.profileCatalog.map((entry) => ({
         ...entry,
         skills: [...entry.skills],
+        mcp: entry.mcp.map((tool) => ({ ...tool })),
       })) ?? [],
     agentControl: exposure?.agentControl === true,
     bash: exposure?.bash === true,
@@ -450,7 +460,8 @@ export function modelToolExposuresEqual(
       right.profile === "subagent" &&
       left.capabilitySnapshotFingerprint ===
         right.capabilitySnapshotFingerprint &&
-      left.skill === right.skill
+      left.skill === right.skill &&
+      left.mcpSnapshotId === right.mcpSnapshotId
     );
   }
   if (right.profile === "subagent") return false;
@@ -512,7 +523,7 @@ function mcpToolCallFromParsedArguments(
   id: string,
   name: string,
   parsedArguments: unknown,
-  exposure: MainModelToolExposure,
+  exposure: AutoModelToolExposure,
 ): McpToolCall | null {
   const definition = exposure.mcp?.tools.find(
     (candidate) => candidate.modelName === name,
@@ -560,7 +571,7 @@ export function providerToolCallFromParsedArguments(
     );
     return parsed.success ? parsed.data : null;
   }
-  if (exposure.kind !== "auto" || exposure.profile === "subagent") return null;
+  if (exposure.kind !== "auto") return null;
   const resolved = mcpToolCallFromParsedArguments(
     id,
     name,

@@ -63,12 +63,13 @@ import {
   undoCheckpointUnavailable,
 } from "../core/undo-protection.ts";
 import type { Usage } from "../llm/types.ts";
+import type { McpAuthorizationIdentity } from "../mcp/oauth.ts";
 import {
   type McpProviderSchemaTarget,
   mcpProviderSchemaTarget,
 } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
-import type { McpRuntime } from "../mcp/runtime-types.ts";
+import type { McpRuntime, McpRuntimeServer } from "../mcp/runtime-types.ts";
 import {
   type BashApprovalGrant,
   type BashProjectApprovalGrant,
@@ -180,6 +181,10 @@ import type {
 } from "./interactive-session/types.ts";
 import { createInteractiveSubagentSession } from "./interactive-subagent-session.ts";
 import { createMcpPermissionPolicy } from "./mcp-approval.ts";
+import {
+  createCliMcpAuthProvider,
+  createCliMcpConnectionFactory,
+} from "./mcp-connection.ts";
 import {
   formatLiveSessionGoalStatus,
   formatSubagentProgress,
@@ -658,6 +663,35 @@ export async function runInteractiveSession(
     });
     return mcpRuntime;
   };
+  const subagentMcpOptions = options.mcp;
+  const subagentMcp =
+    subagentMcpOptions === undefined
+      ? undefined
+      : {
+          servers: subagentMcpOptions.servers,
+          connectionFactory: (
+            authorizationIdentity: McpAuthorizationIdentity,
+          ) =>
+            createCliMcpConnectionFactory(
+              subagentMcpOptions.approvalRuntime,
+              authorizationIdentity,
+            ),
+          lifecycle: subagentMcpOptions.lifecycle,
+          permission: createMcpPermissionPolicy({
+            runtime: subagentMcpOptions.approvalRuntime,
+            projectRoot: projectRoot(options.workspace),
+            prompt: {
+              kind: "headless" as const,
+              deniedMessage:
+                "Child MCP calls require an exact saved project approval and cannot prompt.",
+            },
+          }),
+          authorizationIdentity: async (server: McpRuntimeServer) =>
+            await createCliMcpAuthProvider(
+              subagentMcpOptions.approvalRuntime,
+              server,
+            ).authorizationIdentity(),
+        };
   const reviewedMemory = isReviewedInteractiveActiveSession(activeSession)
     ? {
         ...activeSession,
@@ -1300,7 +1334,7 @@ export async function runInteractiveSession(
         options.delegation !== undefined &&
         remainingCostUsd !== undefined &&
         turnCostModel !== undefined
-          ? createCliSubagentRuntime({
+          ? await createCliSubagentRuntime({
               workspace: options.workspace,
               platform: options.platform,
               parentRunId: `interactive-${randomUUID()}`,
@@ -1317,6 +1351,7 @@ export async function runInteractiveSession(
               ...(managedSkills !== null
                 ? { skillCatalog: managedSkills.catalog }
                 : {}),
+              ...(subagentMcp !== undefined ? { mcp: subagentMcp } : {}),
               contextCompaction: resolved.contextCompaction,
               modelMaxOutputTokens,
               modelOperations: turnModelOperations ?? undefined,
@@ -2023,7 +2058,7 @@ export async function runInteractiveSession(
                 );
                 const commandCostModel =
                   options.requireKnownCostModel(commandResolved);
-                const commandRuntime = createCliSubagentRuntime({
+                const commandRuntime = await createCliSubagentRuntime({
                   workspace: options.workspace,
                   platform: options.platform,
                   parentRunId: `interactive-${randomUUID()}`,
@@ -2040,6 +2075,7 @@ export async function runInteractiveSession(
                   ...(managedSkills !== null
                     ? { skillCatalog: managedSkills.catalog }
                     : {}),
+                  ...(subagentMcp !== undefined ? { mcp: subagentMcp } : {}),
                   contextCompaction: commandResolved.contextCompaction,
                   modelMaxOutputTokens: modelMetadataMaxOutputTokens(
                     commandResolved.modelMetadata,
@@ -2079,6 +2115,7 @@ export async function runInteractiveSession(
                     requestId: `agents-resume-${randomUUID()}`,
                     message: interactiveCommand.message,
                     skills: interactiveCommand.skills,
+                    mcp: interactiveCommand.mcp,
                     signal: commandAbortController.signal,
                     maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
                   });

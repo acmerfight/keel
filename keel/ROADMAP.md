@@ -196,13 +196,15 @@ What a user can do today:
   once as `interrupted` instead of remaining falsely live. Projects can define
   `repo:*` profiles in `.agents/subagents.json` that select a registered child
   model/effort and narrow a built-in profile's tools, turns, deadline, and
-  result bound and declare an audited Skill ceiling. Each Run leases an exact
-  subset, exposes only that bounded catalog, and uses normal Skill activation;
-  parent-active Skills are not copied and resume can only preserve or remove
-  persisted Skill authority. Accepted Threads retain their persisted capability
-  and execution snapshots across config changes. #590 remains the governing
-  epic; MCP inheritance, write authority, nesting, or default-on autonomous
-  delegation still require their own slices and gates.
+  result bound and declare audited Skill and MCP ceilings. Each Run leases exact
+  subsets. Child Skills use normal bounded activation; child MCP uses a fresh
+  progressively disclosed runtime, exact saved project approvals, and current
+  server/configuration/authorization-identity checks without copying Main's
+  active tools or interactive approval channel. Resume can only preserve or
+  remove persisted authority and revalidates current MCP identity. Accepted
+  Threads retain their persisted capability and execution snapshots across
+  config changes. #590 remains the governing epic; write authority, nesting, or
+  default-on autonomous delegation still require their own slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -299,8 +301,8 @@ Known limits that shape the priorities below:
   default-off `off|explicit|auto` policy, foreground read-only parallelism,
   attached background control, crash-safe delivery, stable multi-Run child
   threads, built-in plus project-narrowed profiles, and per-Run governed Skill
-  catalogs derived from profile/task leases. MCP derivation, isolated writes,
-  nesting, and any default-on decision remain subject to the
+  and MCP catalogs derived from profile/task leases. Isolated writes, nesting,
+  and any default-on decision remain subject to the
   issue's reliability and same-budget value gates. Marketplaces and IDE
   integration remain deferred.
 - MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
@@ -331,8 +333,8 @@ Known limits that shape the priorities below:
    Main turns and are inspectable, waitable, and cancellable through `/agents`;
    result delivery is crash-safe, and stable child threads support follow-up
    input plus terminal resume as new immutable Runs. Remaining subagent work is
-   governed Skills/MCP derivation, isolated writes, and bounded nesting rather
-   than basic lifecycle persistence.
+   isolated writes and bounded nesting rather than basic lifecycle persistence
+   or governed Skill/MCP derivation.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -435,8 +437,7 @@ Codex/Claude Code — or directly moves the eval numbers.
   wait, or cancel them, and stale nonterminal runs recover as interrupted.
   Canonical result delivery is crash-safe, and stable child threads support
   follow-up input plus terminal resume as new immutable Runs. Remaining work is
-  capability expansion through governed Skills/MCP, isolated writes, and
-  bounded nesting.
+  capability expansion through isolated writes and bounded nesting.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
@@ -476,8 +477,8 @@ Codex/Claude Code — or directly moves the eval numbers.
   and advisory portability, script, authority, and dangerous-instruction
   findings without executing package code. Remaining work is catalog-budget and
   routing calibration through evals, then pinned installation and update.
-  Marketplace, Skills/MCP-governed or write-capable child execution, and remote
-  installation remain deferred.
+  Marketplace, write-capable child execution, and remote installation remain
+  deferred.
 
 ## P2 — After the replacement works
 
@@ -489,9 +490,11 @@ Not needed to switch; revisit once P0/P1 are done.
   child threads. Built-in `explorer`/`reviewer` profiles now derive model-visible
   tools and dispatcher authority from one persisted capability snapshot;
   project `repo:*` profiles can select a registered model/effort, narrow that
-  built-in authority, and declare a Skill ceiling from which each Run leases a
-  bounded catalog. MCP derivation, isolated writes, bounded nesting, and any
-  default-on decision remain gated by their later epic slices
+  built-in authority, and declare Skill/MCP ceilings from which each Run leases
+  bounded catalogs. Child MCP uses fresh discovery plus exact saved approvals;
+  Main-active tools and temporary interactive approvals are not inherited.
+  Isolated writes, bounded nesting, and any default-on decision remain gated by
+  their later epic slices
   and same-budget value evidence.
 - Plan mode
 - IDE integration

@@ -1,3 +1,4 @@
+import type { McpAuthorizationIdentity } from "../mcp/oauth.ts";
 import type { SkillDescriptor, WorkflowSkill } from "../skills/model.ts";
 
 export const subagentProfileIds = ["explorer", "reviewer"] as const;
@@ -24,6 +25,20 @@ export const SUBAGENT_DEADLINE_MS = 120_000;
 export const EXPLORER_MAX_TURNS = 16;
 export const REVIEWER_MAX_TURNS = 20;
 export const MAX_SUBAGENT_SKILLS = 8;
+export const MAX_SUBAGENT_MCP_TOOLS = 16;
+
+export interface SubagentMcpToolSelector {
+  readonly server: string;
+  readonly tool: string;
+}
+
+export interface SubagentMcpToolSnapshot {
+  readonly serverId: string;
+  readonly rawToolName: string;
+  readonly serverIncarnation: string;
+  readonly configurationDigest: string;
+  readonly authorizationIdentity: McpAuthorizationIdentity;
+}
 
 export interface SubagentSkillSnapshot {
   readonly descriptorId: string;
@@ -46,6 +61,7 @@ interface SubagentCapabilityLimits {
   readonly deadlineMs: number;
   readonly maxFinalTextChars: number;
   readonly skills: readonly SubagentSkillSnapshot[];
+  readonly mcpTools: readonly SubagentMcpToolSnapshot[];
 }
 
 interface ExplorerCapabilitySnapshot extends SubagentCapabilityLimits {
@@ -85,6 +101,7 @@ type SubagentCapabilityDimension =
   | "baseProfile"
   | "builtinTools"
   | "skills"
+  | "mcpTools"
   | "maxTurns"
   | "deadlineMs"
   | "maxFinalTextChars";
@@ -162,6 +179,17 @@ function subagentSkillsEqual(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function subagentMcpToolFingerprint(snapshot: SubagentMcpToolSnapshot): string {
+  return JSON.stringify(snapshot);
+}
+
+function subagentMcpToolsEqual(
+  left: readonly SubagentMcpToolSnapshot[],
+  right: readonly SubagentMcpToolSnapshot[],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export function subagentCapabilityBaseProfile(
   snapshot: SubagentCapabilitySnapshot,
 ): SubagentProfileId {
@@ -193,6 +221,16 @@ export function compareSubagentCapability(
     )
   ) {
     return { kind: "expansion", dimension: "skills" };
+  }
+  const ceilingMcpTools = new Set(
+    ceiling.mcpTools.map(subagentMcpToolFingerprint),
+  );
+  if (
+    candidate.mcpTools.some(
+      (tool) => !ceilingMcpTools.has(subagentMcpToolFingerprint(tool)),
+    )
+  ) {
+    return { kind: "expansion", dimension: "mcpTools" };
   }
   if (candidate.maxTurns > ceiling.maxTurns) {
     return { kind: "expansion", dimension: "maxTurns" };
@@ -247,8 +285,14 @@ export function narrowSubagentCapabilityToCeiling(
   const skills = narrowed.skills.filter((skill) =>
     ceilingSkills.has(subagentSkillFingerprint(skill)),
   );
+  const ceilingMcpTools = new Set(
+    ceiling.mcpTools.map(subagentMcpToolFingerprint),
+  );
+  const mcpTools = narrowed.mcpTools.filter((tool) =>
+    ceilingMcpTools.has(subagentMcpToolFingerprint(tool)),
+  );
   if (narrowed.profile === "explorer" || narrowed.profile === "reviewer") {
-    return { ...narrowed, skills };
+    return { ...narrowed, skills, mcpTools };
   }
   const ceilingTools: ReadonlySet<SubagentBuiltinToolName> = new Set(
     ceiling.builtinTools,
@@ -256,6 +300,7 @@ export function narrowSubagentCapabilityToCeiling(
   return {
     ...narrowed,
     skills,
+    mcpTools,
     builtinTools: narrowed.builtinTools.filter((tool) =>
       ceilingTools.has(tool),
     ),
@@ -267,6 +312,13 @@ export function subagentCapabilityWithSkills(
   skills: readonly SubagentSkillSnapshot[],
 ): SubagentCapabilitySnapshot {
   return { ...snapshot, skills: [...skills] };
+}
+
+export function subagentCapabilityWithMcpTools(
+  snapshot: SubagentCapabilitySnapshot,
+  mcpTools: readonly SubagentMcpToolSnapshot[],
+): SubagentCapabilitySnapshot {
+  return { ...snapshot, mcpTools: [...mcpTools] };
 }
 
 export function selectSubagentCapabilitySkills(
@@ -288,6 +340,27 @@ export function selectSubagentCapabilitySkills(
     : null;
 }
 
+export function selectSubagentCapabilityMcpTools(
+  snapshot: SubagentCapabilitySnapshot,
+  selectors: readonly SubagentMcpToolSelector[],
+): SubagentCapabilitySnapshot | null {
+  const requested = new Set(
+    selectors.map(({ server, tool }) => `${server}\u0000${tool}`),
+  );
+  if (
+    selectors.length > MAX_SUBAGENT_MCP_TOOLS ||
+    requested.size !== selectors.length
+  ) {
+    return null;
+  }
+  const mcpTools = snapshot.mcpTools.filter((candidate) =>
+    requested.has(`${candidate.serverId}\u0000${candidate.rawToolName}`),
+  );
+  return mcpTools.length === requested.size
+    ? subagentCapabilityWithMcpTools(snapshot, mcpTools)
+    : null;
+}
+
 export function subagentCapabilityFingerprint(
   snapshot: SubagentCapabilitySnapshot,
 ): string {
@@ -297,6 +370,7 @@ export function subagentCapabilityFingerprint(
     baseProfile: subagentCapabilityBaseProfile(snapshot),
     builtinTools: snapshot.builtinTools,
     skills: snapshot.skills,
+    mcpTools: snapshot.mcpTools,
     maxTurns: snapshot.maxTurns,
     deadlineMs: snapshot.deadlineMs,
     maxFinalTextChars: snapshot.maxFinalTextChars,
@@ -316,6 +390,7 @@ export function subagentCapabilitiesEqual(
     left.deadlineMs === right.deadlineMs &&
     left.maxFinalTextChars === right.maxFinalTextChars &&
     subagentSkillsEqual(left.skills, right.skills) &&
+    subagentMcpToolsEqual(left.mcpTools, right.mcpTools) &&
     left.builtinTools.length === right.builtinTools.length &&
     left.builtinTools.every((tool, index) => tool === right.builtinTools[index])
   );

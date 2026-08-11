@@ -83,7 +83,7 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function configurationDigest(server: McpRuntimeServer): string {
+export function mcpServerConfigurationDigest(server: McpRuntimeServer): string {
   return sha256(
     JSON.stringify({
       allowPrivateNetwork: server.allowPrivateNetwork,
@@ -418,6 +418,7 @@ class McpServerOwner {
   private pending: Promise<ReadyCatalogState> | null = null;
   private pendingAbort: AbortController | null = null;
   private suspension: Promise<void> | null = null;
+  private closing: Promise<void> | null = null;
 
   constructor(
     server: McpRuntimeServer,
@@ -433,12 +434,12 @@ class McpServerOwner {
         new McpServerLifecycleUnavailableError(server.id),
       );
     }
-    this.configurationDigest = configurationDigest(server);
+    this.configurationDigest = mcpServerConfigurationDigest(server);
   }
 
   updateServer(server: McpRuntimeServer): void {
     this.server = server;
-    this.configurationDigest = configurationDigest(server);
+    this.configurationDigest = mcpServerConfigurationDigest(server);
     if (server.enabled && !this.available) {
       this.available = true;
       this.availability = new AbortController();
@@ -597,14 +598,21 @@ class McpServerOwner {
     return tool === undefined ? null : { state: current, tool };
   }
 
-  async close(): Promise<void> {
-    this.lifecycle.abort();
-    this.availability.abort();
-    this.pendingAbort?.abort();
-    await this.pending?.catch(() => undefined);
-    const current = this.current();
-    this.state = { kind: "stopped" };
-    await current?.connection.close();
+  async close(signal?: AbortSignal): Promise<void> {
+    if (this.closing === null) {
+      this.lifecycle.abort();
+      this.availability.abort();
+      this.pendingAbort?.abort();
+      this.closing = (async () => {
+        await this.pending?.catch(() => undefined);
+        const current = this.current();
+        this.state = { kind: "stopped" };
+        await current?.connection.close();
+      })();
+    }
+    await (signal === undefined
+      ? this.closing
+      : awaitWithSignal(this.closing, signal));
   }
 }
 
@@ -642,6 +650,7 @@ class DefaultMcpRuntime implements McpRuntime {
   private reconciliation: Promise<void> | null = null;
   private schemaTarget: McpProviderSchemaTarget;
   private stopped = false;
+  private closing: Promise<void> | null = null;
 
   constructor(
     servers: readonly McpRuntimeServer[],
@@ -763,6 +772,7 @@ class DefaultMcpRuntime implements McpRuntime {
   private toolIsAllowed(owner: McpServerOwner, rawToolName: string): boolean {
     if (this.filter !== null) {
       return this.filter.allows({
+        server: owner.server,
         serverId: owner.server.id,
         rawToolName,
       });
@@ -1357,12 +1367,20 @@ class DefaultMcpRuntime implements McpRuntime {
     }
   }
 
-  async close(): Promise<void> {
-    if (this.stopped) return;
-    this.stopped = true;
-    this.lifecycleAbort.abort();
-    await this.lifecycleWatch;
-    await Promise.all(this.owners.map(async (owner) => await owner.close()));
+  async close(signal?: AbortSignal): Promise<void> {
+    if (this.closing === null) {
+      this.stopped = true;
+      this.lifecycleAbort.abort();
+      this.closing = (async () => {
+        await this.lifecycleWatch;
+        await Promise.all(
+          this.owners.map(async (owner) => await owner.close()),
+        );
+      })();
+    }
+    await (signal === undefined
+      ? this.closing
+      : awaitWithSignal(this.closing, signal));
   }
 }
 

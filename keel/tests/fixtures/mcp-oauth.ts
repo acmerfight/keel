@@ -65,6 +65,7 @@ export interface TestOAuthMcpServer {
   readonly rotateRevocationEndpoint: () => void;
   readonly calls: () => readonly string[];
   readonly authenticatedMcpRequest: Promise<void>;
+  readonly authenticatedMcpRequests: () => number;
   readonly releaseAuthenticatedMcpResponse: () => void;
   readonly expireAccessToken: () => void;
   readonly requireStepUp: () => void;
@@ -135,6 +136,7 @@ export async function startOAuthMcpServer(
   let acceptedAccessScope = options.stepUp?.initialScope ?? "mcp:tools";
   let stepUpRequired = false;
   const authenticatedMcpRequest = Promise.withResolvers<void>();
+  let authenticatedMcpRequests = 0;
   const authenticatedMcpResponse = Promise.withResolvers<void>();
 
   const mcpHandler = createMcpHandler(() => {
@@ -424,6 +426,7 @@ export async function startOAuthMcpServer(
           return new Response(null, { status: 403 });
         }
         if (authenticated) {
+          authenticatedMcpRequests++;
           authenticatedMcpRequest.resolve();
           if (options.authenticatedMcpResponse === "pending") {
             await authenticatedMcpResponse.promise;
@@ -464,6 +467,7 @@ export async function startOAuthMcpServer(
     },
     calls: () => [...calls],
     authenticatedMcpRequest: authenticatedMcpRequest.promise,
+    authenticatedMcpRequests: () => authenticatedMcpRequests,
     releaseAuthenticatedMcpResponse: () => {
       authenticatedMcpResponse.resolve();
     },
