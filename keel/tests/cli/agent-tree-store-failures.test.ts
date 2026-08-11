@@ -15,6 +15,7 @@ import {
   type SubagentAcceptedLifecycle,
   SubagentPersistenceError,
 } from "../../src/agent/subagent-lifecycle.ts";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import {
   createDurableJsonlWriter,
   createPlatformDirectorySync,
@@ -28,6 +29,8 @@ import {
   createAgentTreeHistory,
 } from "../../src/cli/agent-tree-store.ts";
 import { createSessionStore } from "../../src/cli/session-store.ts";
+
+const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
 
 class TestWriteError extends Error {
   constructor(stage: string) {
@@ -48,6 +51,7 @@ function acceptedLifecycle(childAgentId: AgentId): SubagentAcceptedLifecycle {
     providerId: "deepseek",
     model: "deepseek-chat",
     systemPrompt: "Read-only child instructions.",
+    capability: explorerCapability,
     lineage: { kind: "root" },
   };
 }

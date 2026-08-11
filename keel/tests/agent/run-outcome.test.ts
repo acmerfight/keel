@@ -9,6 +9,7 @@ import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../src/agent/stop-policy.ts";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import type { CostModel } from "../../src/core/cost.ts";
 import {
   createFakeProvider,
@@ -88,7 +89,8 @@ describe("Run Outcome Reporting", () => {
         signal: freshSignal(),
         userMessageOrigin: { type: "runtime_subagent_delegation" },
         bash: { kind: "disabled" },
-        toolProfile: "read-only-subagent",
+        toolProfile: "subagent",
+        subagentCapability: resolveBuiltinSubagentProfile("explorer").snapshot,
         costBudgetProvider: provider,
         injectedUserMessages: {
           drain: () => [],

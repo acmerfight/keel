@@ -64,6 +64,8 @@ export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
       ? [`continuation of: ${entry.lineage.previousRunId}`]
       : []),
     `parent run: ${entry.parentRunId}`,
+    `profile: ${entry.capability.profile}`,
+    `capability snapshot: ${entry.capability.id}`,
     `provider/model: ${entry.providerId}/${entry.model}`,
     `turns: ${entry.accounting.turns}`,
     `cost: ${formatCost(entry.accounting.costUsd)}`,

@@ -1,5 +1,12 @@
 import { z } from "zod";
 import type { SessionMessage } from "../../agent/session-message.ts";
+import {
+  EXPLORER_MAX_TURNS,
+  REVIEWER_MAX_TURNS,
+  SUBAGENT_DEADLINE_MS,
+  SUBAGENT_MAX_FINAL_TEXT_CHARS,
+  type SubagentCapabilitySnapshot,
+} from "../../agent/subagent-capability.ts";
 import type {
   AgentId,
   PersistedSubagentCanonicalResult,
@@ -18,7 +25,7 @@ import {
 import type { Usage } from "../../llm/types.ts";
 import { sessionMessageSchema } from "../session-message-schema.ts";
 
-export const AGENT_TREE_SCHEMA_VERSION = 4;
+export const AGENT_TREE_SCHEMA_VERSION = 5;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -139,6 +146,49 @@ const usageSchema: z.ZodType<Usage> = z
   })
   .strict();
 
+const capabilityLimitsShape = {
+  deadlineMs: z.number().int().positive().max(SUBAGENT_DEADLINE_MS),
+  maxFinalTextChars: z
+    .number()
+    .int()
+    .positive()
+    .max(SUBAGENT_MAX_FINAL_TEXT_CHARS),
+};
+
+const capabilitySnapshotSchema: z.ZodType<SubagentCapabilitySnapshot> =
+  z.discriminatedUnion("id", [
+    z
+      .object({
+        id: z.literal("builtin-explorer-v1"),
+        profile: z.literal("explorer"),
+        builtinTools: z.tuple([
+          z.literal("read"),
+          z.literal("ls"),
+          z.literal("glob"),
+          z.literal("grep"),
+        ]),
+        maxTurns: z.number().int().positive().max(EXPLORER_MAX_TURNS),
+        ...capabilityLimitsShape,
+      })
+      .strict(),
+    z
+      .object({
+        id: z.literal("builtin-reviewer-v1"),
+        profile: z.literal("reviewer"),
+        builtinTools: z.tuple([
+          z.literal("read"),
+          z.literal("ls"),
+          z.literal("glob"),
+          z.literal("grep"),
+          z.literal("git_status"),
+          z.literal("git_diff"),
+        ]),
+        maxTurns: z.number().int().positive().max(REVIEWER_MAX_TURNS),
+        ...capabilityLimitsShape,
+      })
+      .strict(),
+  ]);
+
 const canonicalResultBaseSchema = z
   .object({
     delegationId: z.string().min(1),
@@ -179,6 +229,7 @@ const lifecycleIdentitySchema = z
     mode: z.enum(["foreground", "background"]),
     providerId: z.string().min(1),
     model: z.string().min(1),
+    capability: capabilitySnapshotSchema,
     systemPrompt: z.string(),
     lineage: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("root") }).strict(),

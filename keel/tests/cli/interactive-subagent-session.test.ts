@@ -5,11 +5,14 @@ import type {
   SubagentCanonicalResult,
   SubagentRunId,
 } from "../../src/agent/subagent-lifecycle.ts";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import type {
   AgentHistoryEntry,
   AgentTreeHistory,
 } from "../../src/cli/agent-tree-store.ts";
 import { createInteractiveSubagentSession } from "../../src/cli/interactive-subagent-session.ts";
+
+const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
 
 function emptyHistory(): AgentTreeHistory {
   return {
@@ -57,6 +60,7 @@ function activeEntry(
     providerId: "deepseek",
     model: "deepseek-chat",
     systemPrompt: "Read-only child instructions.",
+    capability: explorerCapability,
     transcriptRef: `agent-transcript:saved-session/${childAgentId}`,
     acceptedAt: "2026-08-10T00:00:00.000Z",
     lineage: { kind: "root" },

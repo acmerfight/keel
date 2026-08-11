@@ -591,7 +591,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(childInitial).toContain("DELEGATED_FIXTURE_RULE");
       expect(childInitial).not.toContain("PRIVATE PARENT CONTEXT");
       expect(toolNames(requests[1]).toSorted()).toEqual(
-        ["git_diff", "git_status", "glob", "grep", "ls", "read"].toSorted(),
+        ["glob", "grep", "ls", "read"].toSorted(),
       );
       expect(toolNames(requests[1])).not.toContain("write");
       expect(toolNames(requests[1])).not.toContain("edit");

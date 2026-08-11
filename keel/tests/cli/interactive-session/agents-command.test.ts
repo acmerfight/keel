@@ -7,6 +7,7 @@ import type {
   AgentId,
   SubagentRunId,
 } from "../../../src/agent/subagent-lifecycle.ts";
+import { resolveBuiltinSubagentProfile } from "../../../src/agent/subagent-profile.ts";
 import type { AbortableToolOutputArtifactStore } from "../../../src/agent/tool-output-artifacts.ts";
 import type {
   AgentHistoryEntry,
@@ -22,6 +23,8 @@ import {
   savedInteractiveSession,
   ZERO_COST_MODEL,
 } from "../../../src/testing/interactive-session-fixtures.ts";
+
+const reviewerCapability = resolveBuiltinSubagentProfile("reviewer").snapshot;
 
 function entry(options: {
   readonly childAgentId: AgentId;
@@ -51,6 +54,7 @@ function entry(options: {
     providerId: "deepseek",
     model: "deepseek-chat",
     systemPrompt: "Read-only child instructions.",
+    capability: reviewerCapability,
     transcriptRef: `agent-transcript:test/${options.childAgentId}`,
     acceptedAt: "2023-11-14T22:13:20.000Z",
     lineage: { kind: "root" },
@@ -105,7 +109,7 @@ const unusedTranscriptStore: AbortableToolOutputArtifactStore = {
 describe("Interactive /agents command", () => {
   test(`Given a saved terminal child has durable context,
     When the user resumes it and waits through /agents,
-    Then the same Agent ID completes a new Run with the prior context and follow-up`, async () => {
+    Then the same Agent ID completes a new Run without expanding its saved reviewer capability`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-agents-resume-"));
     const keelHome = join(workspace, ".keel-home");
     const sessionId = "agents-resume";
@@ -132,6 +136,7 @@ describe("Interactive /agents command", () => {
         providerId: "fake",
         model: "fake-model",
         systemPrompt: "Read-only child instructions.",
+        capability: reviewerCapability,
         lineage: { kind: "root" },
       });
       first.transcript.initialize([
@@ -172,6 +177,11 @@ describe("Interactive /agents command", () => {
             import("../../../src/llm/types.ts").LLMProvider["stream"]
           >[0],
         ) {
+          expect(options.toolExposure).toEqual({
+            kind: "auto",
+            profile: "subagent",
+            capability: reviewerCapability,
+          });
           expect(options.messages).toMatchObject([
             { role: "user", content: "Inspect the boundary." },
             { role: "assistant", content: "The boundary is sound." },
@@ -249,6 +259,7 @@ describe("Interactive /agents command", () => {
       expect(agentHistory.runs(childAgentId)[1]).toMatchObject({
         childAgentId,
         status: "completed",
+        capability: reviewerCapability,
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

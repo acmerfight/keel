@@ -178,7 +178,7 @@ function parseToolCall(
   );
   if (parsedToolCall === null) {
     const isExposedMcpTool =
-      toolExposure.kind === "auto"
+      toolExposure.kind === "auto" && toolExposure.profile !== "subagent"
         ? (toolExposure.mcp?.tools.some(
             (tool) => tool.modelName === toolCallName,
           ) ?? false)

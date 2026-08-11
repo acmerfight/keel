@@ -14,6 +14,7 @@ import {
   type SubagentRunId,
   type SubagentTerminalSnapshot,
 } from "../../src/agent/subagent-lifecycle.ts";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import {
   createSubagentSupervisor,
   projectSubagentResult,
@@ -47,6 +48,8 @@ const requestUsage: Usage = {
   uncachedInputTokens: 100,
   outputTokens: 10,
 };
+
+const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
 
 function deliveredContent(result: DelegationToolResult): string {
   if (result.delivery === "rejected") {
@@ -347,6 +350,7 @@ describe("Subagent Supervisor", () => {
     try {
       const acknowledgement = await fixture.supervisor.capability.delegate({
         toolCallId: "background-turn",
+        profile: "explorer" as const,
         mode: "background",
         task: "Finish independently of the Main turn.",
         focusPaths: [],
@@ -356,6 +360,7 @@ describe("Subagent Supervisor", () => {
       await expect(
         fixture.supervisor.capability.delegate({
           toolCallId: "background-turn",
+          profile: "explorer" as const,
           mode: "background",
           task: "Replay while the background child is still live.",
           focusPaths: [],
@@ -387,6 +392,7 @@ describe("Subagent Supervisor", () => {
       await expect(
         fixture.supervisor.capability.delegate({
           toolCallId: "background-turn",
+          profile: "explorer" as const,
           mode: "background",
           task: "Changed replay text must not create another background run.",
           focusPaths: [],
@@ -446,6 +452,7 @@ describe("Subagent Supervisor", () => {
     try {
       await fixture.supervisor.capability.delegate({
         toolCallId: "live-input",
+        profile: "explorer" as const,
         mode: "background",
         task: "Inspect the boundary.",
         focusPaths: [],
@@ -524,6 +531,7 @@ describe("Subagent Supervisor", () => {
       const request = {
         childAgentId,
         previousRunId,
+        capability: explorerCapability,
         toolCallId: "resume-child",
         message: "Now inspect its callers.",
         focusPaths: [],
@@ -608,6 +616,7 @@ describe("Subagent Supervisor", () => {
     ): SubagentContinuationRequest => ({
       childAgentId,
       previousRunId,
+      capability: explorerCapability,
       toolCallId,
       message: "Inspect callers.",
       focusPaths: [],
@@ -661,6 +670,7 @@ describe("Subagent Supervisor", () => {
       await expect(
         closed.supervisor.capability.delegate({
           toolCallId: "closed-owner-delegate",
+          profile: "explorer" as const,
           mode: "background",
           task: "Must not outlive the closed owner.",
           focusPaths: [],
@@ -763,6 +773,7 @@ describe("Subagent Supervisor", () => {
     const request: SubagentContinuationRequest = {
       childAgentId: "agent-aaaaaaaa",
       previousRunId: "subagent-aaaaaaaa",
+      capability: explorerCapability,
       toolCallId: "resume-storage",
       message: "Inspect callers.",
       focusPaths: [],
@@ -878,6 +889,7 @@ describe("Subagent Supervisor", () => {
     try {
       await fixture.supervisor.capability.delegate({
         toolCallId: "failed-input",
+        profile: "explorer" as const,
         mode: "background",
         task: "Inspect the boundary.",
         focusPaths: [],
@@ -963,6 +975,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "durable",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Return a durable result.",
         focusPaths: [],
@@ -1028,6 +1041,7 @@ describe("Subagent Supervisor", () => {
       await expect(
         fixture.supervisor.capability.delegate({
           toolCallId: "fatal-persistence",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Do not continue after durable storage fails.",
           focusPaths: [],
@@ -1078,6 +1092,7 @@ describe("Subagent Supervisor", () => {
     const signal = new AbortController().signal;
     const requests = ["one", "two", "three"].map((toolCallId) => ({
       toolCallId,
+      profile: "explorer" as const,
       mode: "foreground" as const,
       task: `Inspect ${toolCallId}.`,
       focusPaths: [],
@@ -1110,6 +1125,7 @@ describe("Subagent Supervisor", () => {
 
       const lastAccepted = await fixture.supervisor.capability.delegate({
         toolCallId: "four",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect four.",
         focusPaths: [],
@@ -1117,6 +1133,7 @@ describe("Subagent Supervisor", () => {
       });
       const overTotal = await fixture.supervisor.capability.delegate({
         toolCallId: "five",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect five.",
         focusPaths: [],
@@ -1194,6 +1211,7 @@ describe("Subagent Supervisor", () => {
     });
     const request = {
       toolCallId: "prepared",
+      profile: "explorer" as const,
       mode: "foreground" as const,
       task: "Do not start this child.",
       focusPaths: [],
@@ -1267,6 +1285,7 @@ describe("Subagent Supervisor", () => {
     });
     const request = {
       toolCallId: "ephemeral-queued",
+      profile: "explorer" as const,
       mode: "foreground" as const,
       task: "Do not start this child.",
       focusPaths: [],
@@ -1324,6 +1343,7 @@ describe("Subagent Supervisor", () => {
     const parent = new AbortController();
     const requests = ["one", "two"].map((toolCallId) => ({
       toolCallId,
+      profile: "explorer" as const,
       mode: "foreground" as const,
       task: `Wait in ${toolCallId}.`,
       focusPaths: [],
@@ -1396,6 +1416,7 @@ describe("Subagent Supervisor", () => {
     const requests = [
       {
         toolCallId: "failed",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Fail independently.",
         focusPaths: [],
@@ -1403,6 +1424,7 @@ describe("Subagent Supervisor", () => {
       },
       {
         toolCallId: "successful",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Complete independently.",
         focusPaths: [],
@@ -1477,6 +1499,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "uncertified",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Do not start this child.",
         focusPaths: [],
@@ -1532,6 +1555,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "rejection-storage-failure",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Reject without starting a child.",
         focusPaths: [],
@@ -1580,6 +1604,7 @@ describe("Subagent Supervisor", () => {
       await expect(
         fixture.supervisor.capability.delegate({
           toolCallId: "indeterminate-rejection",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Reject without corrupting the durable ledger.",
           focusPaths: [],
@@ -1637,6 +1662,7 @@ describe("Subagent Supervisor", () => {
       try {
         const pending = fixture.supervisor.capability.delegate({
           toolCallId: `acceptance-${fatal ? "fatal" : "recoverable"}`,
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Do not start without durable acceptance.",
           focusPaths: [],
@@ -1692,6 +1718,7 @@ describe("Subagent Supervisor", () => {
       // When
       const first = await fixture.supervisor.capability.delegate({
         toolCallId: "delegate-1",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect module.ts.",
         focusPaths: ["module.ts"],
@@ -1699,6 +1726,7 @@ describe("Subagent Supervisor", () => {
       });
       const replayOnly = await fixture.supervisor.capability.delegate({
         toolCallId: "delegate-1",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Changed replay text must not create a new run.",
         focusPaths: [],
@@ -1706,6 +1734,7 @@ describe("Subagent Supervisor", () => {
       });
       const replayRequest = {
         toolCallId: "delegate-1",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Replay beside one fresh child.",
         focusPaths: [],
@@ -1713,6 +1742,7 @@ describe("Subagent Supervisor", () => {
       };
       const secondRequest = {
         toolCallId: "delegate-2",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect it again.",
         focusPaths: [],
@@ -1790,7 +1820,7 @@ describe("Subagent Supervisor", () => {
       expect(exposedTools).toHaveLength(3);
       for (const tools of exposedTools) {
         expect(tools.toSorted()).toEqual(
-          ["git_diff", "git_status", "glob", "grep", "ls", "read"].toSorted(),
+          [...explorerCapability.builtinTools].toSorted(),
         );
       }
     } finally {
@@ -1816,6 +1846,7 @@ describe("Subagent Supervisor", () => {
     });
     const request = {
       toolCallId,
+      profile: "explorer" as const,
       mode: "foreground" as const,
       task: "Return one stable result.",
       focusPaths: [],
@@ -1878,6 +1909,7 @@ describe("Subagent Supervisor", () => {
         kind: "request" as const,
         request: {
           toolCallId: `rejected-${index}`,
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task,
           focusPaths,
@@ -1886,6 +1918,7 @@ describe("Subagent Supervisor", () => {
         toolCall: {
           id: `rejected-${index}`,
           tool: "delegate" as const,
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task,
           focusPaths,
@@ -1953,6 +1986,7 @@ describe("Subagent Supervisor", () => {
           queuedSnapshot = supervisor.runSnapshots()[0];
           replay = supervisor.capability.delegate({
             toolCallId: "reentrant",
+            profile: "explorer" as const,
             mode: "foreground" as const,
             task: "A replay must join the registered run.",
             focusPaths: [],
@@ -1967,6 +2001,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await supervisor.capability.delegate({
         toolCallId: "reentrant",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect module.ts.",
         focusPaths: ["module.ts"],
@@ -2024,6 +2059,7 @@ describe("Subagent Supervisor", () => {
       try {
         const result = await fixture.supervisor.capability.delegate({
           toolCallId: "throwing-clock",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Complete despite observation failure.",
           focusPaths: ["module.ts"],
@@ -2070,6 +2106,7 @@ describe("Subagent Supervisor", () => {
       const unattached = await unattachedFixture.supervisor.capability.delegate(
         {
           toolCallId: "unattached-background",
+          profile: "explorer" as const,
           mode: "background",
           task: "Do not detach from this ephemeral owner.",
           focusPaths: [],
@@ -2079,6 +2116,7 @@ describe("Subagent Supervisor", () => {
       const invalidFixture = supervisorFixture({ workspace, provider });
       const invalid = await invalidFixture.supervisor.capability.delegate({
         toolCallId: "invalid-focus",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect an invalid path.",
         focusPaths: ["../outside"],
@@ -2087,6 +2125,7 @@ describe("Subagent Supervisor", () => {
       const invalidReplay = await invalidFixture.supervisor.capability.delegate(
         {
           toolCallId: "invalid-focus",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "A replay cannot change admission.",
           focusPaths: [],
@@ -2100,6 +2139,7 @@ describe("Subagent Supervisor", () => {
       });
       const noBudget = await budgetFixture.supervisor.capability.delegate({
         toolCallId: "no-budget",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect without a child budget.",
         focusPaths: [],
@@ -2115,6 +2155,7 @@ describe("Subagent Supervisor", () => {
       const invalidEstimate =
         await invalidEstimateFixture.supervisor.capability.delegate({
           toolCallId: "invalid-input-estimate",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Reject before running with an invalid provider estimate.",
           focusPaths: [],
@@ -2128,6 +2169,7 @@ describe("Subagent Supervisor", () => {
       const providerBlocked =
         await blockedFixture.supervisor.capability.delegate({
           toolCallId: "provider-blocked",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Do not start after the provider circuit opens.",
           focusPaths: [],
@@ -2203,6 +2245,7 @@ describe("Subagent Supervisor", () => {
             type: "tool_call",
             id: "delegate-call",
             tool: "delegate",
+            profile: "explorer" as const,
             mode: "foreground",
             task: "Inspect the workspace.",
           };
@@ -2245,6 +2288,7 @@ describe("Subagent Supervisor", () => {
 
       const result = await supervisor.capability.delegate({
         toolCallId: "delegate-call",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Inspect the workspace.",
         focusPaths: [],
@@ -2284,6 +2328,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "bounded",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Return a deliberately large result.",
         focusPaths: ["module.ts"],
@@ -2322,6 +2367,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "aggregate-bound",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Return JSON-expanding bounded fields.",
         focusPaths: ["module.ts"],
@@ -2404,6 +2450,7 @@ describe("Subagent Supervisor", () => {
       try {
         const result = await fixture.supervisor.capability.delegate({
           toolCallId: "failure",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Encounter the provider failure.",
           focusPaths: [],
@@ -2455,6 +2502,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "partially-billed",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Read once before provider failure.",
         focusPaths: ["module.ts"],
@@ -2489,6 +2537,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "large-failure",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Encounter a large provider failure.",
         focusPaths: [],
@@ -2570,6 +2619,7 @@ describe("Subagent Supervisor", () => {
       const provenance = await provenanceFixture.supervisor.capability.delegate(
         {
           toolCallId: "resource-provenance",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Report only observed resources.",
           focusPaths: ["module.ts"],
@@ -2579,6 +2629,7 @@ describe("Subagent Supervisor", () => {
       const storageFailed = await storageFixture.supervisor.capability.delegate(
         {
           toolCallId: "storage-failed",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Fail transcript storage.",
           focusPaths: [],
@@ -2666,6 +2717,7 @@ describe("Subagent Supervisor", () => {
       try {
         const result = await fixture.supervisor.capability.delegate({
           toolCallId: `terminal-${scenario}`,
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Reach the requested terminal state.",
           focusPaths: [],
@@ -2704,6 +2756,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "child-budget-limited",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Reach the child budget guard.",
         focusPaths: [],
@@ -2761,6 +2814,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "storage-deadline",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Complete before slow storage settles.",
         focusPaths: ["module.ts"],
@@ -2817,6 +2871,7 @@ describe("Subagent Supervisor", () => {
     try {
       const result = await fixture.supervisor.capability.delegate({
         toolCallId: "cancel-then-deadline",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Settle the already-cancelled child.",
         focusPaths: [],
@@ -2872,6 +2927,7 @@ describe("Subagent Supervisor", () => {
     try {
       const pending = fixture.supervisor.capability.delegate({
         toolCallId: "persistence-cancel",
+        profile: "explorer" as const,
         mode: "foreground" as const,
         task: "Complete before parent cancellation.",
         focusPaths: ["module.ts"],
@@ -2954,6 +3010,7 @@ describe("Subagent Supervisor", () => {
         // When
         const pending = fixture.supervisor.capability.delegate({
           toolCallId: "delegate-abort",
+          profile: "explorer" as const,
           mode: "foreground" as const,
           task: "Wait for cancellation.",
           focusPaths: [],

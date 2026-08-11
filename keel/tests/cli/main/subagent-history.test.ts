@@ -6,7 +6,10 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { runCliProcess } from "../../../src/testing/cli-harness.ts";
-import { requestWithMessagesSchema } from "../../../src/testing/cli-main-schemas.ts";
+import {
+  requestWithMessagesSchema,
+  requestWithToolsSchema,
+} from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
@@ -18,6 +21,17 @@ import {
 } from "../../../src/testing/provider-sse-fixtures.ts";
 
 const SESSION_ID = "agent-history";
+const requestSchema = requestWithMessagesSchema.and(requestWithToolsSchema);
+
+function toolNames(request: unknown): readonly string[] {
+  return (
+    requestSchema
+      .parse(request)
+      .tools?.flatMap((tool) =>
+        tool.function?.name === undefined ? [] : [tool.function.name],
+      ) ?? []
+  );
+}
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -40,6 +54,147 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Durable Subagent History", () => {
+  test(`Given a saved session asks for a reviewer subagent,
+    When main delegates the review and the user later inspects that agent,
+    Then the child has reviewer-only tools and /agents shows its durable capability snapshot`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-profile-"));
+    const keelHome = join(workspace, ".keel-home");
+    const sessionId = "reviewer-agent-profile";
+    await writeFile(
+      join(workspace, "module.ts"),
+      "export const answer = 42;\n",
+      "utf8",
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_review", "delegate", {
+                  profile: "reviewer",
+                  task: "Review module.ts and report one evidence-based finding.",
+                  focusPaths: ["module.ts"],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              [
+                sseToolCall("reviewer_read", "read", {
+                  path: "module.ts",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(
+              sseTextReplyWithUsage(
+                "module.ts:1 exports a constant without tests.",
+              ),
+            );
+            return;
+          case 4:
+            response.end(
+              sseTextReplyWithUsage("The reviewer found missing coverage."),
+            );
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("Use a reviewer subagent to review module.ts.\n");
+    const run = createRuntime(
+      [
+        "--session",
+        sessionId,
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "--no-skills",
+      ],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: keelHome,
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      expect(await runCliMain(run.runtime), run.stderr()).toBe(0);
+      const inspectInput = new PassThrough();
+      inspectInput.end("/agents show 1\n");
+      const inspect = createRuntime(
+        [
+          "--resume",
+          sessionId,
+          "--provider",
+          "fake",
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+          "--no-skills",
+        ],
+        {
+          cwd: workspace,
+          input: inspectInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+          },
+        },
+      );
+      const exitCode = await runCliMain(inspect.runtime);
+
+      // Then
+      expect(exitCode, inspect.stderr()).toBe(0);
+      expect(requests).toHaveLength(4);
+      expect(toolNames(requests[1]).toSorted()).toEqual(
+        ["read", "ls", "glob", "grep", "git_status", "git_diff"].toSorted(),
+      );
+      expect(inspect.stdout()).toContain("profile: reviewer");
+      expect(inspect.stdout()).toContain(
+        "capability snapshot: builtin-reviewer-v1",
+      );
+      expect(inspect.stdout()).toContain("status: completed");
+      expect(inspect.stdout()).toContain(
+        "result: module.ts:1 exports a constant without tests.",
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a saved-session delegation has an invalid focus path,
     When admission rejects it before creating a child run,
     Then only the durable rejection receipt remains and main can continue`, async () => {

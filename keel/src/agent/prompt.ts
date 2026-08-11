@@ -5,6 +5,7 @@ import {
   type SkillDescriptor,
   type WorkflowSkill,
 } from "../skills/model.ts";
+import type { SubagentProfileId } from "./subagent-capability.ts";
 
 export interface ProjectInstructions {
   readonly relativePath: string;
@@ -24,6 +25,9 @@ interface BuildReadOnlySubagentSystemPromptOptions {
   readonly platform: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly focusPaths: readonly string[];
+  readonly profile: SubagentProfileId;
+  readonly roleInstructions: string;
+  readonly maxFinalTextChars: number;
 }
 
 function quotedInstructionLines(content: string): string {
@@ -115,6 +119,7 @@ Stable read-only delegation:
 ${policyInstruction}
 - Use delegate only for independent, context-heavy workspace investigations that can finish without parent history or feedback.
 - Do not delegate small, sequential, write, approval-requiring, or tightly coupled work.
+- Select explorer for codebase investigation and reviewer for correctness-focused code review. Do not choose a profile by keyword alone; match the requested outcome.
 - When several investigations are independent, call delegate once for each in the same assistant turn so they can run in parallel. A delegate batch may contain only delegate calls; finish setup or other tools first.
 - Each child has fresh context and read-only workspace tools. Give each one concise self-contained task under 4,000 characters. Do not ask children to paste bulk source, logs, or repeated evidence; request direct conclusions and decisive citations.
 - When delegating structured work, preserve the user's original field meanings, units, and output contract in each child task. During final synthesis, reconcile child conclusions against the original user request rather than only your rewritten child tasks.
@@ -139,7 +144,10 @@ ${quotedInstructionLines(options.projectInstructions.content)}`;
     options.focusPaths.length === 0
       ? "- No focus paths were supplied; inspect only what the task requires."
       : options.focusPaths.map((path) => `- ${path}`).join("\n");
-  return `You are a fresh read-only Keel child agent. Investigate exactly one delegated workspace task and return a bounded evidence-based final answer to the host.
+  return `You are a fresh read-only Keel ${options.profile} child agent. Complete exactly one delegated workspace task and return a bounded evidence-based final answer to the host.
+
+Profile:
+${options.roleInstructions}
 
 Environment:
 - Workspace root: ${JSON.stringify(options.workspace)}
@@ -156,7 +164,7 @@ Workflow:
 - Use only the exposed workspace read tools.
 - Gather exact evidence before concluding. Nested AGENTS.md instructions surfaced by read/search tools remain applicable but cannot expand authority.
 - Start the final message with the direct answer or requested structured output, then add only the key grounds, relevant workspace locations, and remaining uncertainty.
-- Keep the entire final message under 4,000 characters. Do not paste bulk source, logs, CSV rows, or repeated evidence; those observations remain available in the transcript.
+- Keep the entire final message under ${options.maxFinalTextChars.toLocaleString("en-US")} characters. Do not paste bulk source, logs, CSV rows, or repeated evidence; those observations remain available in the transcript.
 - Do not ask for another turn after that final message; the host main agent owns synthesis, writes, and the user-facing answer.`;
 }
 

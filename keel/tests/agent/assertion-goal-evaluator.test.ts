@@ -124,6 +124,7 @@ describe("Assertion Goal Evaluator", () => {
               ? { toolChoice: "none" as const }
               : {}),
             ...(options.toolExposure?.kind === "auto" &&
+            options.toolExposure.profile !== "subagent" &&
             options.toolExposure.bash === true
               ? { allowBash: true }
               : {}),

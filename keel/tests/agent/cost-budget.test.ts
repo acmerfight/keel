@@ -14,6 +14,7 @@ import {
   defaultStopPolicy,
   maxTurnFallbackPolicy,
 } from "../../src/agent/stop-policy.ts";
+import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
 import {
   type CostModel,
   calculateConservativeRequestCostUsd,
@@ -240,6 +241,7 @@ describe("Cost Budget", () => {
             type: "tool_call",
             id: "delegate-call",
             tool: "delegate",
+            profile: "explorer",
             mode: "foreground",
             task: "Inspect the note independently.",
           };
@@ -425,6 +427,7 @@ describe("Cost Budget", () => {
     const toolCall: Extract<ToolCall, { readonly tool: "delegate" }> = {
       id: "delegate-call",
       tool: "delegate",
+      profile: "explorer",
       mode: "foreground",
       task: "Inspect the workspace.",
     };
@@ -486,7 +489,11 @@ describe("Cost Budget", () => {
       systemPrompt: "child",
       messages: childMessages,
       signal: freshSignal(),
-      toolExposure: { kind: "auto", profile: "read-only-subagent" } as const,
+      toolExposure: {
+        kind: "auto",
+        profile: "subagent",
+        capability: resolveBuiltinSubagentProfile("explorer").snapshot,
+      } as const,
     };
     const continuationOptions: StreamOptions = {
       ...baselineOptions,

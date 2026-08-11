@@ -580,7 +580,7 @@ const delegateTool = defineTool({
   name: "delegate",
   availability: "delegation",
   description: [
-    "Delegate one independent, read-only workspace investigation to a fresh child agent. Foreground is the default. In a saved interactive session, background returns a stable agent ID immediately so independent work can continue.",
+    "Delegate one independent, read-only workspace investigation to a fresh child agent. Select explorer for codebase investigation or reviewer for correctness-focused code review; explorer is the default. Foreground is the default. In a saved interactive session, background returns a stable agent ID immediately so independent work can continue.",
     "Use when the task is context-heavy and can be investigated independently before you synthesize the final answer.",
     "The task must be self-contained, no longer than 4,000 characters, and state only the scope, expected output, and completion criteria. focusPaths are advisory workspace-relative areas, not extra authority.",
     "Do not use for small tasks, sequential critical-path work, writes, approval-requiring work, or tasks that need the parent transcript, Goal, memory, Skills, queued input, MCP, or web access.",

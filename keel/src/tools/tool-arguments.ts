@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { subagentProfileIds } from "../agent/subagent-capability.ts";
 import type { AgentId } from "../agent/subagent-lifecycle.ts";
 import {
   DEFAULT_COMMAND_TIMEOUT_MS,
@@ -14,6 +15,13 @@ const delegationModeDescription =
 
 export const delegateProviderArgumentsSchema = z
   .object({
+    profile: optionalToolArgument(
+      z
+        .enum(subagentProfileIds)
+        .describe(
+          "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
+        ),
+    ),
     mode: optionalToolArgument(
       z.enum(["foreground", "background"]).describe(delegationModeDescription),
     ),
@@ -39,6 +47,10 @@ export const delegateProviderArgumentsSchema = z
 
 export const delegateToolArgumentsSchema =
   delegateProviderArgumentsSchema.extend({
+    profile: z.preprocess(
+      (value) => (value === null ? undefined : value),
+      z.enum(subagentProfileIds).default("explorer"),
+    ),
     mode: z.preprocess(
       (value) => (value === null ? undefined : value),
       z

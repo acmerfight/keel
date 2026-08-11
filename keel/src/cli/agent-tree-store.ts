@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SessionMessage } from "../agent/session-message.ts";
+import type { SubagentCapabilitySnapshot } from "../agent/subagent-capability.ts";
+import { subagentCapabilitiesEqual } from "../agent/subagent-capability.ts";
 import {
   type AgentId,
   type PersistedSubagentCanonicalResult,
@@ -173,6 +175,16 @@ function assertUniqueAcceptance(
       `continuation run ${candidate.childRunId} changes child agent identity`,
     );
   }
+  if (
+    !subagentCapabilitiesEqual(
+      previous.accepted.capability,
+      candidate.capability,
+    )
+  ) {
+    agentTreeError(
+      `continuation run ${candidate.childRunId} changes capability snapshot`,
+    );
+  }
   if (previous.state.kind !== "terminal") {
     agentTreeError(
       `continuation run ${candidate.childRunId} follows a non-terminal run`,
@@ -197,6 +209,7 @@ export interface AgentHistoryEntry {
   readonly mode: SubagentRunMode;
   readonly providerId: string;
   readonly model: string;
+  readonly capability: SubagentCapabilitySnapshot;
   readonly systemPrompt: string;
   readonly transcriptRef: string;
   readonly acceptedAt: string;
@@ -979,6 +992,7 @@ function historyEntries(
     mode: run.accepted.mode,
     providerId: run.accepted.providerId,
     model: run.accepted.model,
+    capability: run.accepted.capability,
     systemPrompt: run.accepted.systemPrompt,
     transcriptRef: run.accepted.transcriptRef,
     acceptedAt: run.accepted.timestamp,
@@ -1005,6 +1019,7 @@ function threadRunEntries(
       mode: run.accepted.mode,
       providerId: run.accepted.providerId,
       model: run.accepted.model,
+      capability: run.accepted.capability,
       systemPrompt: run.accepted.systemPrompt,
       transcriptRef: run.accepted.transcriptRef,
       acceptedAt: run.accepted.timestamp,

@@ -1,6 +1,7 @@
 import type { Usage } from "../llm/types.ts";
 import type { SessionLedgerObserver } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
+import type { SubagentCapabilitySnapshot } from "./subagent-capability.ts";
 
 export const subagentNonCompletedStatuses = [
   "failed",
@@ -47,6 +48,7 @@ export interface SubagentAcceptedLifecycle extends SubagentRunIdentity {
   readonly mode: SubagentRunMode;
   readonly providerId: string;
   readonly model: string;
+  readonly capability: SubagentCapabilitySnapshot;
   readonly systemPrompt: string;
 }
 
