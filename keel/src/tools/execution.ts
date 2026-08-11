@@ -136,6 +136,14 @@ type AgentCancelToolCall = Extract<
   ValidToolCall,
   { readonly tool: "agent_cancel" }
 >;
+type AgentInputToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "agent_input" }
+>;
+type AgentResumeToolCall = Extract<
+  ValidToolCall,
+  { readonly tool: "agent_resume" }
+>;
 
 export type AgentWaitResultAdmission =
   | { readonly kind: "granted"; readonly maxResultChars: number }
@@ -270,6 +278,53 @@ async function executeAgentCancelTool(
     id: toolCall.agentId,
     signal: context.signal,
     maxResultChars: context.agentControlResultMaxChars,
+  });
+  return { ...result, effects: NO_TOOL_EXECUTION_EFFECTS };
+}
+
+function executeAgentInputTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: AgentInputToolCall,
+): ToolExecution {
+  if (context.agentControl === undefined) {
+    return unavailableAgentControlExecution();
+  }
+  const result = context.agentControl.input({
+    id: toolCall.agentId,
+    message: toolCall.message,
+    signal: context.signal,
+    maxResultChars: context.agentControlResultMaxChars,
+  });
+  return { ...result, effects: NO_TOOL_EXECUTION_EFFECTS };
+}
+
+async function executeAgentResumeTool(
+  context: BuiltinToolExecutionContext,
+  toolCall: AgentResumeToolCall,
+): Promise<ToolExecution> {
+  if (context.agentControl === undefined) {
+    return unavailableAgentControlExecution();
+  }
+  const admission = await context.admitAgentWaitResult();
+  if (admission.kind !== "granted") {
+    return {
+      content:
+        admission.kind === "mixed_tool_round"
+          ? "Agent resume was not started because agent_resume must be isolated from other tools so Keel can preserve one complete Main continuation."
+          : "Agent resume was not started because the remaining session budget cannot preserve a Main continuation.",
+      ok: false,
+      effects: NO_TOOL_EXECUTION_EFFECTS,
+    };
+  }
+  const result = await context.agentControl.resume({
+    id: toolCall.agentId,
+    requestId: toolCall.id,
+    message: toolCall.message,
+    signal: context.signal,
+    maxResultChars: Math.min(
+      context.agentControlResultMaxChars,
+      admission.maxResultChars,
+    ),
   });
   return { ...result, effects: NO_TOOL_EXECUTION_EFFECTS };
 }
@@ -1051,6 +1106,10 @@ function executeBuiltinToolCall(
       return executeAgentWaitTool(context, parsed.data);
     case "agent_cancel":
       return executeAgentCancelTool(context, parsed.data);
+    case "agent_input":
+      return executeAgentInputTool(context, parsed.data);
+    case "agent_resume":
+      return executeAgentResumeTool(context, parsed.data);
     case "update_plan":
       return executeUpdatePlanTool(parsed.data);
     case "update_goal":

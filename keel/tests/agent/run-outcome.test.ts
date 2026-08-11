@@ -90,6 +90,10 @@ describe("Run Outcome Reporting", () => {
         bash: { kind: "disabled" },
         toolProfile: "read-only-subagent",
         costBudgetProvider: provider,
+        injectedUserMessages: {
+          drain: () => [],
+          closeAtTerminalBoundary: () => ({ kind: "closed" }),
+        },
         stopPolicy: defaultStopPolicy(),
       }),
     );

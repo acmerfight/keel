@@ -24,6 +24,7 @@ export interface SubagentTreeAdmission {
   readonly commit: <Value>(
     admitted: readonly Value[],
   ) => readonly SubagentAdmissionLease<Value>[];
+  readonly commitOne: <Value>(admitted: Value) => SubagentAdmissionLease<Value>;
   readonly activeAgentRunCount: () => number;
   readonly totalChildRunCount: () => number;
 }
@@ -42,6 +43,17 @@ export function createSubagentTreeAdmission(
     options.maxTotalChildRuns ?? DEFAULT_MAX_TOTAL_CHILD_RUNS;
   let activeChildRuns = 0;
   let totalChildRuns = 0;
+
+  const commitOne = <Value>(value: Value): SubagentAdmissionLease<Value> => {
+    activeChildRuns++;
+    totalChildRuns++;
+    return {
+      value,
+      release: () => {
+        activeChildRuns--;
+      },
+    };
+  };
 
   const activeCapacity = (): number =>
     Math.max(0, maxActiveAgentRuns - 1 - activeChildRuns);
@@ -70,16 +82,8 @@ export function createSubagentTreeAdmission(
         })),
       };
     },
-    commit: (admitted) => {
-      activeChildRuns += admitted.length;
-      totalChildRuns += admitted.length;
-      return admitted.map((value) => ({
-        value,
-        release: () => {
-          activeChildRuns--;
-        },
-      }));
-    },
+    commit: (admitted) => admitted.map(commitOne),
+    commitOne,
     activeAgentRunCount: () => 1 + activeChildRuns,
     totalChildRunCount: () => totalChildRuns,
   };

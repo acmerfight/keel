@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { SessionLedgerObserver } from "../../agent/session-ledger.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
 import type {
-  AgentId,
+  SubagentRunId,
   SubagentTerminalStatus,
 } from "../../agent/subagent-lifecycle.ts";
 import { redactMessageForPersistence } from "../persistence-redaction.ts";
@@ -20,8 +20,9 @@ import {
   AGENT_TREE_SCHEMA_VERSION,
   type AgentRunAcceptedRecord,
   type AgentTranscriptHeaderRecord,
+  type AgentTranscriptMutationRecord,
   type AgentTranscriptTerminalRecord,
-  agentIdSchema,
+  childRunIdSchema,
   transcriptHeaderSchema,
   transcriptMutationSchema,
 } from "./model.ts";
@@ -29,12 +30,17 @@ import {
 interface ParsedTranscript {
   readonly content: string;
   readonly header: AgentTranscriptHeaderRecord;
+  readonly mutations: readonly AgentTranscriptMutationRecord[];
   readonly state: TranscriptReplayState;
 }
 
 export type TranscriptTerminalExpectation =
   | { readonly kind: "open" }
-  | { readonly kind: "terminal"; readonly status: SubagentTerminalStatus };
+  | {
+      readonly kind: "terminal";
+      readonly status: SubagentTerminalStatus;
+      readonly pendingInputCount: number;
+    };
 
 export type TranscriptInitializationExpectation =
   | { readonly kind: "optional" }
@@ -50,10 +56,10 @@ type TranscriptReplayState =
 
 export function transcriptFilePath(
   transcriptsDirectory: string,
-  childAgentId: AgentId,
+  childRunId: SubagentRunId,
 ): string {
-  const parsed = agentIdSchema.safeParse(childAgentId);
-  if (!parsed.success) agentTreeError(`invalid child agent id ${childAgentId}`);
+  const parsed = childRunIdSchema.safeParse(childRunId);
+  if (!parsed.success) agentTreeError(`invalid child run id ${childRunId}`);
   return join(transcriptsDirectory, `${parsed.data}.jsonl`);
 }
 
@@ -77,6 +83,7 @@ function transcriptHeader(
     providerId: accepted.providerId,
     model: accepted.model,
     systemPrompt: accepted.systemPrompt,
+    lineage: accepted.lineage,
   };
 }
 
@@ -105,7 +112,7 @@ export function removeTranscript(
 
 export function reconcileUnacceptedTranscripts(
   transcriptsDirectory: string,
-  acceptedChildAgentIds: ReadonlySet<string>,
+  acceptedChildRunIds: ReadonlySet<string>,
   syncDirectory: DirectorySync = syncDurableDirectory,
 ): void {
   let names: readonly string[];
@@ -118,10 +125,10 @@ export function reconcileUnacceptedTranscripts(
   }
   for (const name of names) {
     if (!name.endsWith(".jsonl")) continue;
-    const childAgentId = name.slice(0, -".jsonl".length);
+    const childRunId = name.slice(0, -".jsonl".length);
     if (
-      !agentIdSchema.safeParse(childAgentId).success ||
-      acceptedChildAgentIds.has(childAgentId)
+      !childRunIdSchema.safeParse(childRunId).success ||
+      acceptedChildRunIds.has(childRunId)
     ) {
       continue;
     }
@@ -141,6 +148,7 @@ function parseTranscript(filePath: string): ParsedTranscript {
     agentTreeError(`invalid agent transcript header ${filePath}`);
   }
   let state: TranscriptReplayState = { kind: "uninitialized" };
+  const mutations: AgentTranscriptMutationRecord[] = [];
   for (const [offset, mutationValue] of mutationValues.entries()) {
     const lineNumber = offset + 2;
     const parsed = transcriptMutationSchema.safeParse(mutationValue);
@@ -152,7 +160,9 @@ function parseTranscript(filePath: string): ParsedTranscript {
     if (state.kind === "terminal") {
       agentTreeError(`agent transcript ${filePath} changed after terminal`);
     }
-    switch (parsed.data.type) {
+    const mutation = parsed.data;
+    mutations.push(mutation);
+    switch (mutation.type) {
       case "transcript_initialize":
         if (state.kind === "initialized") {
           agentTreeError(
@@ -162,6 +172,7 @@ function parseTranscript(filePath: string): ParsedTranscript {
         state = { kind: "initialized" };
         break;
       case "transcript_append":
+      case "transcript_pending_input":
       case "transcript_replace":
         if (state.kind !== "initialized") {
           agentTreeError(
@@ -175,11 +186,11 @@ function parseTranscript(filePath: string): ParsedTranscript {
             `agent transcript ${filePath} terminated before initialization`,
           );
         }
-        state = { kind: "terminal", record: parsed.data };
+        state = { kind: "terminal", record: mutation };
         break;
     }
   }
-  return { content, header: parsedHeader.data, state };
+  return { content, header: parsedHeader.data, mutations, state };
 }
 
 function assertTranscriptIdentity(
@@ -199,6 +210,7 @@ function assertTranscriptIdentity(
     header.providerId !== accepted.providerId ||
     header.model !== accepted.model ||
     header.systemPrompt !== accepted.systemPrompt ||
+    JSON.stringify(header.lineage) !== JSON.stringify(accepted.lineage) ||
     header.focusPaths.length !== accepted.focusPaths.length ||
     header.focusPaths.some(
       (focusPath, index) => focusPath !== accepted.focusPaths[index],
@@ -230,12 +242,42 @@ export function readAgentTranscript(
   }
   if (
     parsed.state.record.status !== terminalExpectation.status ||
+    parsed.state.record.pendingInputCount !==
+      terminalExpectation.pendingInputCount ||
+    parsed.state.record.pendingInputCount !==
+      recordedPendingInputCount(parsed) ||
     parsed.state.record.complete !==
       (terminalExpectation.status !== "interrupted")
   ) {
     agentTreeError(`agent transcript ${filePath} has a conflicting terminal`);
   }
   return parsed.content;
+}
+
+export function readAgentTranscriptMessages(
+  filePath: string,
+  accepted: AgentRunAcceptedRecord,
+  terminalExpectation: TranscriptTerminalExpectation,
+  baseMessages: readonly SessionMessage[],
+): readonly SessionMessage[] {
+  readAgentTranscript(filePath, accepted, terminalExpectation);
+  const parsed = parseTranscript(filePath);
+  let messages = [...baseMessages];
+  for (const mutation of parsed.mutations) {
+    switch (mutation.type) {
+      case "transcript_initialize":
+      case "transcript_append":
+      case "transcript_pending_input":
+        messages.push(...mutation.messages);
+        break;
+      case "transcript_replace":
+        messages = [...mutation.messages];
+        break;
+      case "transcript_terminal":
+        break;
+    }
+  }
+  return messages;
 }
 
 export function createTranscriptObserver(
@@ -261,6 +303,41 @@ export function createTranscriptObserver(
     append: (messages) => append("transcript_append", messages),
     replace: (messages) => append("transcript_replace", messages),
   };
+}
+
+function recordedPendingInputCount(parsed: ParsedTranscript): number {
+  return parsed.mutations.reduce(
+    (count, mutation) =>
+      mutation.type === "transcript_pending_input"
+        ? count + mutation.messages.length
+        : count,
+    0,
+  );
+}
+
+export function appendPendingAgentInput(
+  writer: DurableJsonlWriter,
+  filePath: string,
+  messages: readonly Extract<SessionMessage, { readonly role: "user" }>[],
+): void {
+  writer.append(
+    filePath,
+    {
+      schemaVersion: AGENT_TREE_SCHEMA_VERSION,
+      type: "transcript_pending_input",
+      messages: messages.map(redactMessageForPersistence),
+    },
+    "agent transcript",
+  );
+}
+
+export function readPendingAgentInputCount(
+  filePath: string,
+  accepted: AgentRunAcceptedRecord,
+): number {
+  const parsed = parseTranscript(filePath);
+  assertTranscriptIdentity(filePath, parsed.header, accepted);
+  return recordedPendingInputCount(parsed);
 }
 
 export function ensureInterruptedTranscriptInitialized(
@@ -296,13 +373,18 @@ export function ensureTranscriptTerminal(
   filePath: string,
   accepted: AgentRunAcceptedRecord,
   status: SubagentTerminalStatus,
+  pendingInputCount: number,
   initialization: TranscriptInitializationExpectation,
 ): void {
   const parsed = parseTranscript(filePath);
   assertTranscriptIdentity(filePath, parsed.header, accepted);
+  if (recordedPendingInputCount(parsed) !== pendingInputCount) {
+    agentTreeError(`agent transcript ${filePath} has a conflicting terminal`);
+  }
   if (parsed.state.kind === "terminal") {
     if (
       parsed.state.record.status !== status ||
+      parsed.state.record.pendingInputCount !== pendingInputCount ||
       parsed.state.record.complete !== (status !== "interrupted")
     ) {
       agentTreeError(`agent transcript ${filePath} has a conflicting terminal`);
@@ -329,6 +411,7 @@ export function ensureTranscriptTerminal(
       schemaVersion: AGENT_TREE_SCHEMA_VERSION,
       type: "transcript_terminal",
       status,
+      pendingInputCount,
       complete: status !== "interrupted",
     },
     "agent transcript",

@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { CostModel } from "../core/cost.ts";
+import {
+  type CostModel,
+  calculateConservativeRequestCostUsd,
+} from "../core/cost.ts";
 import { errorMessage, isAbortThrow, KeelError } from "../core/error.ts";
 import type { LLMProvider, StreamOptions, Usage } from "../llm/types.ts";
 import type {
@@ -21,13 +24,14 @@ import {
   MIN_USEFUL_OUTPUT_TOKENS,
   type SharedCostBudgetedProvider,
 } from "./cost-budget.ts";
-import { runAgent } from "./loop.ts";
+import { type AgentInjectedUserMessageQueue, runAgent } from "./loop.ts";
 import type {
   MainModelOperationInstrumentation,
   SubagentModelOperationInstrumentation,
 } from "./model-operations.ts";
 import type { ProjectInstructions } from "./prompt.ts";
 import { buildReadOnlySubagentSystemPrompt } from "./prompt.ts";
+import { projectSessionMessageToProvider } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
 import { maxTurnFallbackPolicy } from "./stop-policy.ts";
 import type {
@@ -69,6 +73,8 @@ const MAX_ADMITTED_FINAL_TEXT_CHARS = 4_000;
 const MAX_ADMITTED_ERROR_CHARS = 2_000;
 const MAX_ADMITTED_ID_CHARS = 512;
 const MAX_ADMITTED_TRANSCRIPT_REF_CHARS = 512;
+const MAX_QUEUED_INPUT_MESSAGES = 16;
+const MAX_QUEUED_INPUT_CHARS = 64_000;
 
 type AgentTerminalStatus = SubagentTerminalStatus;
 
@@ -110,6 +116,7 @@ interface AcceptedDelegation {
   readonly run: () => Promise<SubagentCanonicalResult>;
   readonly cancelBeforeStart: () => void;
   readonly cancel: () => void;
+  readonly input: SubagentBackgroundRun["input"];
 }
 
 interface SubagentRunRecord {
@@ -165,6 +172,7 @@ interface PreparedDelegationCandidate {
   readonly systemPrompt: string;
   readonly userMessage: string;
   readonly minimumInputTokens: number;
+  readonly priorMessages?: readonly SessionMessage[];
 }
 
 interface PreparedAcceptedCandidate {
@@ -181,7 +189,35 @@ export interface SubagentSupervisor {
   readonly activeChildRunCount: () => number;
   readonly totalAcceptedCount: () => number;
   readonly runSnapshots: () => readonly SubagentRunSnapshot[];
+  readonly continuation: SubagentContinuationCapability;
 }
+
+export interface SubagentContinuationRequest {
+  readonly childAgentId: AgentId;
+  readonly previousRunId: SubagentRunId;
+  readonly toolCallId: string;
+  readonly message: string;
+  readonly focusPaths: readonly string[];
+  readonly systemPrompt: string;
+  readonly priorMessages: readonly SessionMessage[];
+  readonly signal: AbortSignal;
+}
+
+interface SubagentContinuationResult {
+  readonly ok: boolean;
+  readonly content: string;
+}
+
+export interface SubagentContinuationCapability {
+  readonly resume: (
+    request: SubagentContinuationRequest,
+  ) => Promise<SubagentContinuationResult>;
+}
+
+type SubagentInputResult =
+  | { readonly kind: "accepted" }
+  | { readonly kind: "closed" }
+  | { readonly kind: "full" };
 
 export interface SubagentBackgroundRun {
   readonly delegationId: string;
@@ -190,6 +226,7 @@ export interface SubagentBackgroundRun {
   readonly task: string;
   readonly result: Promise<SubagentCanonicalResult>;
   readonly cancel: () => void;
+  readonly input: (message: string) => SubagentInputResult;
 }
 
 export interface SubagentBackgroundRuntime {
@@ -245,6 +282,58 @@ function zeroUsage(): Usage {
     cachedInputTokens: 0,
     uncachedInputTokens: 0,
     outputTokens: 0,
+  };
+}
+
+interface SubagentInputQueue extends AgentInjectedUserMessageQueue {
+  readonly enqueue: (message: string) => SubagentInputResult;
+  readonly close: () => readonly Extract<
+    SessionMessage,
+    { readonly role: "user" }
+  >[];
+}
+
+function createSubagentInputQueue(): SubagentInputQueue {
+  type InputMessage = Extract<SessionMessage, { readonly role: "user" }>;
+  let open = true;
+  let queuedChars = 0;
+  let messages: InputMessage[] = [];
+  const drain = (): readonly InputMessage[] => {
+    const drained = messages;
+    messages = [];
+    queuedChars = 0;
+    return drained;
+  };
+  const close = (): readonly InputMessage[] => {
+    open = false;
+    return drain();
+  };
+  return {
+    enqueue: (message) => {
+      if (!open) return { kind: "closed" };
+      if (
+        messages.length >= MAX_QUEUED_INPUT_MESSAGES ||
+        queuedChars + message.length > MAX_QUEUED_INPUT_CHARS
+      ) {
+        return { kind: "full" };
+      }
+      messages.push({
+        role: "user",
+        content: message,
+        origin: { type: "runtime_subagent_input" },
+      });
+      queuedChars += message.length;
+      return { kind: "accepted" };
+    },
+    drain,
+    closeAtTerminalBoundary: () => {
+      if (messages.length > 0) {
+        return { kind: "continue", messages: drain() };
+      }
+      open = false;
+      return { kind: "closed" };
+    },
+    close,
   };
 }
 
@@ -383,6 +472,7 @@ export function projectSubagentResult(
       delegationId: admittedDelegationId,
       status: result.status,
       transcriptRef: admittedTranscriptRef,
+      pendingInputCount: result.pendingInputCount,
       truncated: isTruncated,
       ...admittedTerminalText(result, value),
     });
@@ -675,6 +765,8 @@ export function createSubagentSupervisor(
     readonly focusPaths: readonly string[];
     readonly systemPrompt: string;
     readonly userMessage: string;
+    readonly priorMessages?: readonly SessionMessage[];
+    readonly inputQueue: SubagentInputQueue;
     readonly childMaxCostUsd: number;
     readonly lifecycle: ChildLifecycle;
     readonly record: SubagentRunRecord;
@@ -750,12 +842,23 @@ export function createSubagentSupervisor(
                 childRunId: input.childRunId,
               },
             };
+      const childInput =
+        input.priorMessages === undefined
+          ? {
+              userMessageOrigin: {
+                type: "runtime_subagent_delegation" as const,
+              },
+            }
+          : {
+              userMessageOrigin: { type: "runtime_subagent_input" as const },
+              priorMessages: input.priorMessages,
+            };
       try {
         for await (const event of runAgent({
           workspace: options.workspace,
           provider: options.provider,
           userMessage: input.userMessage,
-          userMessageOrigin: { type: "runtime_subagent_delegation" },
+          ...childInput,
           systemPrompt: input.systemPrompt,
           signal: input.lifecycle.abortController.signal,
           bash: { kind: "disabled" },
@@ -769,6 +872,7 @@ export function createSubagentSupervisor(
               : {}),
           },
           costBudgetProvider: childBudget.provider,
+          injectedUserMessages: input.inputQueue,
           ...(options.hiddenWorkspacePaths !== undefined
             ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
             : {}),
@@ -816,6 +920,13 @@ export function createSubagentSupervisor(
           error: errorMessage(caught),
         };
       }
+
+      const unprocessedInput = input.inputQueue.close();
+      if (unprocessedInput.length > 0) {
+        runningPersistence?.pendingInput(unprocessedInput);
+        transcriptMessages = [...transcriptMessages, ...unprocessedInput];
+      }
+      const pendingInputCount = unprocessedInput.length;
 
       usage = childBudget.observedUsage();
       costUsd = childBudget.observedSpendUsd();
@@ -876,6 +987,7 @@ export function createSubagentSupervisor(
         turns,
         costUsd,
         transcriptRef,
+        pendingInputCount,
       };
       const result: SubagentCanonicalResult = { ...resultBase, ...terminal };
       if (runningPersistence !== undefined) {
@@ -884,6 +996,7 @@ export function createSubagentSupervisor(
           usage,
           turns,
           costUsd,
+          pendingInputCount,
         });
         commitTerminalResult(input.record, result);
         progress(result.status);
@@ -913,6 +1026,7 @@ export function createSubagentSupervisor(
       task: input.task,
       state: { kind: "queued" },
     };
+    const inputQueue = createSubagentInputQueue();
     const lifecycle = createLifecycle(
       input.mode === "background" && options.background !== undefined
         ? options.background.signal
@@ -933,6 +1047,7 @@ export function createSubagentSupervisor(
       turns: 0,
       costUsd: 0,
       transcriptRef: persistence?.transcriptRef ?? null,
+      pendingInputCount: 0,
       error: "Child was cancelled before execution started.",
     });
     const publishCancelledBeforeStart = (
@@ -948,6 +1063,7 @@ export function createSubagentSupervisor(
           usage: result.usage,
           turns: result.turns,
           costUsd: result.costUsd,
+          pendingInputCount: result.pendingInputCount,
         });
         commitTerminalResult(record, result);
       }
@@ -974,6 +1090,10 @@ export function createSubagentSupervisor(
             focusPaths: input.focusPaths,
             systemPrompt,
             userMessage,
+            ...(candidate.priorMessages !== undefined
+              ? { priorMessages: candidate.priorMessages }
+              : {}),
+            inputQueue,
             childMaxCostUsd: childBudget.maxCostUsd,
             lifecycle,
             record,
@@ -992,7 +1112,14 @@ export function createSubagentSupervisor(
     const cancel = (): void => {
       lifecycle.cancel(new Error("background subagent cancelled"));
     };
-    return { kind: "accepted", record, run, cancelBeforeStart, cancel };
+    return {
+      kind: "accepted",
+      record,
+      run,
+      cancelBeforeStart,
+      cancel,
+      input: inputQueue.enqueue,
+    };
   };
 
   const prepareBatch = (
@@ -1064,6 +1191,18 @@ export function createSubagentSupervisor(
             "Delegation rejected: background mode requires a saved interactive session owner.",
           recovery:
             "Use foreground delegation, or start a saved interactive session before requesting background mode.",
+        });
+        continue;
+      }
+      if (
+        input.mode === "background" &&
+        options.background?.signal.aborted === true
+      ) {
+        recordRejection(input, delegationId, {
+          reason:
+            "Delegation rejected: the saved interactive session owner is shutting down.",
+          recovery:
+            "Start or resume a saved interactive session before requesting background mode again.",
         });
         continue;
       }
@@ -1220,6 +1359,7 @@ export function createSubagentSupervisor(
             providerId: options.providerId,
             model: options.model,
             systemPrompt: candidate.systemPrompt,
+            lineage: { kind: "root" },
           });
           preparedAccepted.push({
             childBudget,
@@ -1295,6 +1435,7 @@ export function createSubagentSupervisor(
               task: receipt.record.task,
               result,
               cancel: receipt.cancel,
+              input: receipt.input,
             });
             return {
               delivery: "background",
@@ -1371,8 +1512,184 @@ export function createSubagentSupervisor(
     },
   };
 
+  const continuation: SubagentContinuationCapability = {
+    resume: async (request) => {
+      const delegationId = `${options.parentRunId}:${request.toolCallId}`;
+      const existing = receipts.get(delegationId);
+      if (existing?.kind === "accepted") {
+        return {
+          ok: true,
+          content: JSON.stringify({
+            agentId: existing.record.childAgentId,
+            runId: existing.record.childRunId,
+            status:
+              existing.record.state.kind === "terminal"
+                ? existing.record.state.result.status
+                : existing.record.state.kind,
+          }),
+        };
+      }
+      if (existing?.kind === "rejected") {
+        return { ok: false, content: existing.rejection.reason };
+      }
+      const reject = (reason: string): SubagentContinuationResult => {
+        receipts.set(delegationId, {
+          kind: "rejected",
+          rejection: {
+            reason,
+            recovery:
+              "Keep the prior result, then retry only after the reported admission condition changes.",
+          },
+        });
+        return { ok: false, content: reason };
+      };
+      if (options.background === undefined) {
+        return reject(
+          "Agent resume requires an attached saved-session background owner.",
+        );
+      }
+      if (options.background.signal.aborted) {
+        return reject(
+          "Agent resume rejected because the saved-session owner is shutting down.",
+        );
+      }
+      if (options.providerBlocked?.() === true) {
+        return reject(
+          "Agent resume rejected because provider access is blocked.",
+        );
+      }
+      if (options.provider.abortSignalSupport !== true) {
+        return reject(
+          "Agent resume rejected because the provider does not certify cancellation settlement.",
+        );
+      }
+      const invalidFocusPath = validateWorkspacePaths(
+        options.workspace,
+        request.focusPaths,
+      );
+      if (invalidFocusPath !== null) {
+        return reject(`Agent resume rejected: ${invalidFocusPath}`);
+      }
+      const minimumInputTokens = estimateProviderInputTokens(options.provider, {
+        systemPrompt: request.systemPrompt,
+        messages: [
+          ...request.priorMessages.map(projectSessionMessageToProvider),
+          { role: "user", content: request.message },
+        ],
+        signal: request.signal,
+        toolExposure: { kind: "auto", profile: "read-only-subagent" },
+        maxOutputTokens: MIN_USEFUL_OUTPUT_TOKENS,
+      });
+      if (minimumInputTokens === null) {
+        return reject(
+          "Agent resume rejected because the child request cost cannot be estimated.",
+        );
+      }
+      const minimumCostUsd = calculateConservativeRequestCostUsd(
+        minimumInputTokens,
+        MIN_USEFUL_OUTPUT_TOKENS,
+        options.costModel,
+      );
+      const remainingCostUsd = options.rootBudget.remainingUsd();
+      if (remainingCostUsd < minimumCostUsd) {
+        return reject(
+          "Agent resume rejected because the remaining root budget cannot admit the child request.",
+        );
+      }
+      const candidate: PreparedDelegationCandidate = {
+        input: {
+          toolCallId: request.toolCallId,
+          mode: "background",
+          task: request.message,
+          focusPaths: request.focusPaths,
+          signal: request.signal,
+        },
+        delegationId,
+        systemPrompt: request.systemPrompt,
+        userMessage: request.message,
+        minimumInputTokens,
+        priorMessages: request.priorMessages,
+      };
+      const admissionPlan = admission.plan([candidate]);
+      const admitted = admissionPlan.admitted[0];
+      if (admitted === undefined) {
+        const reason = admissionPlan.rejected[0]?.reason;
+        return reject(
+          reason === "total_limit"
+            ? "Agent resume rejected because the saved session reached its total child Run limit."
+            : "Agent resume rejected because the saved session reached its active child Run limit.",
+        );
+      }
+      const childRunId: SubagentRunId = `subagent-${randomUUID()}`;
+      let persistence: SubagentRunPersistence;
+      try {
+        persistence = options.lifecyclePersistence.accepted({
+          delegationId,
+          childAgentId: request.childAgentId,
+          childRunId,
+          parentRunId: options.parentRunId,
+          parentToolCallId: request.toolCallId,
+          task: request.message,
+          focusPaths: request.focusPaths,
+          mode: "background",
+          providerId: options.providerId,
+          model: options.model,
+          systemPrompt: request.systemPrompt,
+          lineage: {
+            kind: "continuation",
+            previousRunId: request.previousRunId,
+          },
+        });
+      } catch (caught) {
+        if (caught instanceof SubagentPersistenceError) throw caught;
+        return reject(
+          `Agent resume rejected because lifecycle acceptance failed: ${errorMessage(caught)}`,
+        );
+      }
+      const admissionLease = admission.commitOne(admitted);
+      const receipt = createAcceptedReceipt(
+        {
+          value: candidate,
+          maxCostUsd: remainingCostUsd,
+          maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
+        },
+        admissionLease,
+        request.childAgentId,
+        childRunId,
+        persistence,
+      );
+      receipts.set(delegationId, receipt);
+      publishProgress({
+        status: "queued",
+        delegationId,
+        task: request.message,
+        elapsedMs: 0,
+        deadlineMs,
+      });
+      const result = receipt.run();
+      options.background.register({
+        delegationId,
+        childAgentId: request.childAgentId,
+        childRunId,
+        task: request.message,
+        result,
+        cancel: receipt.cancel,
+        input: receipt.input,
+      });
+      return {
+        ok: true,
+        content: JSON.stringify({
+          agentId: request.childAgentId,
+          runId: childRunId,
+          status: receipt.record.state.kind,
+        }),
+      };
+    },
+  };
+
   return {
     capability,
+    continuation,
     resultContinuationBudget,
     activeAgentRunCount: admission.activeAgentRunCount,
     activeChildRunCount: () => admission.activeAgentRunCount() - 1,

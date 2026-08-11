@@ -106,6 +106,7 @@ export function appendDelegationToSystemPrompt(
     ? `
 - Set mode to background only for independent work that does not block your next useful action. Background delegation returns a stable agent ID immediately.
 - Do not poll background children. Continue useful work or answer the user; use agent_list for an explicit status request, agent_wait when a result becomes necessary, and agent_cancel when the work is no longer wanted.
+- Use agent_input only to steer a currently running child at its next safe boundary. Use agent_resume only for a terminal child when preserving that thread's context is materially better than starting an independent delegation.
 - Background completion produces one bounded status notification. The full canonical result remains behind agent_wait.`
     : "";
   return `${systemPrompt}

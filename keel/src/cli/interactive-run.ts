@@ -1276,12 +1276,14 @@ async function runActiveSessionCli(
                   },
                 },
                 entries: () => requireHistory().entries(),
+                runs: (id) => requireHistory().runs(id),
                 pendingResultDeliveries: (parentMessages) =>
                   opened?.pendingResultDeliveries(parentMessages) ?? [],
                 deliveredResult: (delivery) => {
                   requireHistory().deliveredResult(delivery);
                 },
                 transcript: (entry) => requireHistory().transcript(entry),
+                messages: (entry) => requireHistory().messages(entry),
               };
             })();
       const displaySession =

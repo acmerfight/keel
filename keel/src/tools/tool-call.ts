@@ -170,6 +170,8 @@ const recoverableAgentStateToolNames = [
   "agent_list",
   "agent_wait",
   "agent_cancel",
+  "agent_input",
+  "agent_resume",
   "update_plan",
   "update_goal",
   "memory_add",
@@ -225,6 +227,10 @@ const INVALID_AGENT_WAIT_RECOVERY =
   "Provide the exact agentId returned by delegate or agent_list.";
 const INVALID_AGENT_CANCEL_RECOVERY =
   "Provide the exact running agentId returned by delegate or agent_list.";
+const INVALID_AGENT_INPUT_RECOVERY =
+  "Provide a running agentId and one non-empty follow-up message.";
+const INVALID_AGENT_RESUME_RECOVERY =
+  "Provide a terminal agentId and one non-empty continuation message.";
 const INVALID_UPDATE_GOAL_RECOVERY =
   "Set status to completed only when the active session goal is actually achieved and no required work remains; Runtime will evaluate the assertion evidence or run the configured command verifier. Set status to blocked only with a concise reason after the required blocker audit.";
 const INVALID_MEMORY_ADD_RECOVERY =
@@ -243,6 +249,8 @@ const agentStateRecovery: Readonly<
   agent_list: INVALID_AGENT_LIST_RECOVERY,
   agent_wait: INVALID_AGENT_WAIT_RECOVERY,
   agent_cancel: INVALID_AGENT_CANCEL_RECOVERY,
+  agent_input: INVALID_AGENT_INPUT_RECOVERY,
+  agent_resume: INVALID_AGENT_RESUME_RECOVERY,
   update_plan: INVALID_UPDATE_PLAN_RECOVERY,
   update_goal: INVALID_UPDATE_GOAL_RECOVERY,
   memory_add: INVALID_MEMORY_ADD_RECOVERY,

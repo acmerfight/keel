@@ -23,6 +23,11 @@ import {
 import type { AgentMemoryToolContext } from "../../src/tools/memory.ts";
 import type { ModelToolExposure } from "../../src/tools/registry.ts";
 
+const unusedAgentMutationControl = {
+  input: () => ({ ok: false, content: "unused" }),
+  resume: async () => ({ ok: false, content: "unused" }),
+} satisfies Pick<AgentControlCapability, "input" | "resume">;
+
 const EDIT_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const SHELL_ENV_KEY = "SHELL";
 type Expect<T extends true> = T;
@@ -419,11 +424,12 @@ describe("Tool Execution", () => {
   });
 
   test(`Given a saved-session agent control capability is exposed,
-    When the model lists, waits for, and cancels an attached child,
+    When the model lists, waits for, cancels, steers, and resumes an attached child,
     Then dispatcher passes the typed stable ID and returns lifecycle facts without usage effects`, async () => {
     const observed: string[] = [];
     const signal = new AbortController().signal;
     const agentControl: AgentControlCapability = {
+      ...unusedAgentMutationControl,
       list: (request) => {
         observed.push(`list:${request.maxResultChars}`);
         return { ok: true, content: "agent-a1 running" };
@@ -438,6 +444,16 @@ describe("Tool Execution", () => {
         observed.push(`cancel:${request.id}:${request.maxResultChars}`);
         expect(request.signal).toBe(signal);
         return { ok: true, content: "agent-a1 cancelled" };
+      },
+      input: (request) => {
+        observed.push(`input:${request.id}:${request.message}`);
+        return { ok: true, content: "input queued" };
+      },
+      resume: async (request) => {
+        observed.push(
+          `resume:${request.id}:${request.requestId}:${request.message}`,
+        );
+        return { ok: true, content: "agent-a1 resumed" };
       },
     };
     const base = {
@@ -458,7 +474,7 @@ describe("Tool Execution", () => {
         }) as const,
     };
 
-    const [listed, waited, cancelled] = await Promise.all([
+    const [listed, waited, cancelled, input, resumed] = await Promise.all([
       executeToolCall({
         ...base,
         toolCall: { id: "list", tool: "agent_list" },
@@ -475,25 +491,70 @@ describe("Tool Execution", () => {
           agentId: "agent-a1",
         },
       }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "input",
+          tool: "agent_input",
+          agentId: "agent-a1",
+          message: "Inspect callers.",
+        },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "resume",
+          tool: "agent_resume",
+          agentId: "agent-a1",
+          message: "Verify the fix.",
+        },
+      }),
     ]);
 
-    expect([listed, waited, cancelled]).toEqual([
+    expect([listed, waited, cancelled, input, resumed]).toEqual([
       { ok: true, content: "agent-a1 running", effects: [] },
       { ok: true, content: "agent-a1 completed", effects: [] },
       { ok: true, content: "agent-a1 cancelled", effects: [] },
+      { ok: true, content: "input queued", effects: [] },
+      { ok: true, content: "agent-a1 resumed", effects: [] },
     ]);
-    expect(observed).toHaveLength(3);
+    expect(observed).toHaveLength(5);
     expect(observed).toEqual(
       expect.arrayContaining([
         "list:1234",
         "wait:agent-a1:1234",
         "cancel:agent-a1:1234",
+        "input:agent-a1:Inspect callers.",
+        "resume:agent-a1:resume:Verify the fix.",
       ]),
     );
+
+    const rejectedResumes = await Promise.all(
+      (["mixed_tool_round", "budget_rejected"] as const).map((kind) =>
+        executeToolCall({
+          ...base,
+          admitAgentWaitResult: async () => ({ kind }),
+          toolCall: {
+            id: `resume-${kind}`,
+            tool: "agent_resume",
+            agentId: "agent-a1",
+            message: "Verify without consuming Main's continuation.",
+          },
+        }),
+      ),
+    );
+    expect(rejectedResumes).toMatchObject([
+      { ok: false, content: expect.stringContaining("isolated") },
+      {
+        ok: false,
+        content: expect.stringContaining("preserve a Main continuation"),
+      },
+    ]);
+    expect(observed).toHaveLength(5);
   });
 
   test(`Given agent-control calls reach dispatch without a live saved-session capability,
-    When list, wait, or cancel is attempted,
+    When list, wait, cancel, input, or resume is attempted,
     Then each call fails closed without fabricating lifecycle state`, async () => {
     const base = {
       workspace: process.cwd(),
@@ -515,6 +576,24 @@ describe("Tool Execution", () => {
           id: "cancel",
           tool: "agent_cancel",
           agentId: "agent-a1",
+        },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "input",
+          tool: "agent_input",
+          agentId: "agent-a1",
+          message: "Inspect callers.",
+        },
+      }),
+      executeToolCall({
+        ...base,
+        toolCall: {
+          id: "resume",
+          tool: "agent_resume",
+          agentId: "agent-a1",
+          message: "Verify the fix.",
         },
       }),
     ]);

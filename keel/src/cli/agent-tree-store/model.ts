@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SessionMessage } from "../../agent/session-message.ts";
 import type {
   AgentId,
   PersistedSubagentCanonicalResult,
@@ -7,6 +8,7 @@ import type {
   SubagentResultDelivery,
   SubagentResultDeliveryReference,
   SubagentRunId,
+  SubagentRunLineage,
   SubagentTerminalStatus,
 } from "../../agent/subagent-lifecycle.ts";
 import {
@@ -16,15 +18,15 @@ import {
 import type { Usage } from "../../llm/types.ts";
 import { sessionMessageSchema } from "../session-message-schema.ts";
 
-export const AGENT_TREE_SCHEMA_VERSION = 2;
+export const AGENT_TREE_SCHEMA_VERSION = 4;
 export const AGENT_TREE_MAX_BYTES = 32 * 1024 * 1024;
 export const AGENT_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024;
 
-export const agentIdSchema: z.ZodType<AgentId> = z
+const agentIdSchema: z.ZodType<AgentId> = z
   .string()
   .regex(/^agent-[a-f0-9-]+$/u)
   .transform((value): AgentId => `agent-${value.slice("agent-".length)}`);
-const childRunIdSchema: z.ZodType<SubagentRunId> = z
+export const childRunIdSchema: z.ZodType<SubagentRunId> = z
   .string()
   .regex(/^subagent-[a-f0-9-]+$/u)
   .transform(
@@ -124,6 +126,7 @@ export interface AgentTranscriptTerminalRecord {
   readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
   readonly type: "transcript_terminal";
   readonly status: SubagentTerminalStatus;
+  readonly pendingInputCount: number;
   readonly complete: boolean;
 }
 
@@ -146,6 +149,7 @@ const canonicalResultBaseSchema = z
     turns: z.number().int().nonnegative(),
     costUsd: z.number().finite().nonnegative(),
     transcriptRef: z.string().min(1),
+    pendingInputCount: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -176,6 +180,15 @@ const lifecycleIdentitySchema = z
     providerId: z.string().min(1),
     model: z.string().min(1),
     systemPrompt: z.string(),
+    lineage: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("root") }).strict(),
+      z
+        .object({
+          kind: z.literal("continuation"),
+          previousRunId: childRunIdSchema,
+        })
+        .strict(),
+    ]) satisfies z.ZodType<SubagentRunLineage>,
   })
   .strict();
 
@@ -291,19 +304,38 @@ const transcriptMessagesSchema = z
   })
   .strict();
 
-export const transcriptMutationSchema = z.discriminatedUnion("type", [
-  transcriptMessagesSchema.extend({ type: z.literal("transcript_initialize") }),
-  transcriptMessagesSchema.extend({ type: z.literal("transcript_append") }),
-  transcriptMessagesSchema.extend({ type: z.literal("transcript_replace") }),
-  z
-    .object({
-      schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
-      type: z.literal("transcript_terminal"),
-      status: z.enum(subagentTerminalStatuses),
-      complete: z.boolean(),
-    })
-    .strict(),
-]);
+export type AgentTranscriptMutationRecord =
+  | {
+      readonly schemaVersion: typeof AGENT_TREE_SCHEMA_VERSION;
+      readonly type:
+        | "transcript_initialize"
+        | "transcript_append"
+        | "transcript_pending_input"
+        | "transcript_replace";
+      readonly messages: readonly SessionMessage[];
+    }
+  | AgentTranscriptTerminalRecord;
+
+export const transcriptMutationSchema: z.ZodType<AgentTranscriptMutationRecord> =
+  z.discriminatedUnion("type", [
+    transcriptMessagesSchema.extend({
+      type: z.literal("transcript_initialize"),
+    }),
+    transcriptMessagesSchema.extend({ type: z.literal("transcript_append") }),
+    transcriptMessagesSchema.extend({
+      type: z.literal("transcript_pending_input"),
+    }),
+    transcriptMessagesSchema.extend({ type: z.literal("transcript_replace") }),
+    z
+      .object({
+        schemaVersion: z.literal(AGENT_TREE_SCHEMA_VERSION),
+        type: z.literal("transcript_terminal"),
+        status: z.enum(subagentTerminalStatuses),
+        pendingInputCount: z.number().int().nonnegative(),
+        complete: z.boolean(),
+      })
+      .strict(),
+  ]);
 
 export function zeroUsage(): Usage {
   return {

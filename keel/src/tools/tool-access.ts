@@ -278,6 +278,8 @@ export function toolCallAccesses(
     case "agent_list":
     case "agent_wait":
     case "agent_cancel":
+    case "agent_input":
+    case "agent_resume":
     case "update_plan":
     case "update_goal":
     case "memory_add":

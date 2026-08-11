@@ -80,6 +80,26 @@ export const agentCancelToolArgumentsSchema = z
   })
   .strict();
 
+const agentMessageShape = {
+  agentId: agentIdToolArgumentSchema.describe(
+    "Stable agent ID returned by delegate or agent_list.",
+  ),
+  message: z
+    .string()
+    .trim()
+    .min(1)
+    .max(16_000)
+    .describe("Follow-up instruction for the selected subagent thread."),
+};
+
+export const agentInputToolArgumentsSchema = z
+  .object(agentMessageShape)
+  .strict();
+
+export const agentResumeToolArgumentsSchema = z
+  .object(agentMessageShape)
+  .strict();
+
 export const skillToolArgumentsSchema = z
   .object({
     name: z

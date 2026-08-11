@@ -96,6 +96,7 @@ import {
   type WorkflowSkill,
   WorkflowSkillError,
 } from "../skills/model.ts";
+import type { AgentControlResult } from "../tools/agent-control.ts";
 import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { isMcpToolInvocation } from "../tools/tool-call.ts";
@@ -948,28 +949,32 @@ export async function runInteractiveSession(
     sessionCostUsd += turnCostUsd;
     return currentSessionCostReport();
   };
-  const subagentSession =
+  const subagentOwner =
     backgroundAgentsEnabled &&
     options.delegation !== undefined &&
     options.agentHistory !== undefined
-      ? createInteractiveSubagentSession({
-          maxCostUsd: options.delegation.maxCostUsd,
-          initialCostUsd: sessionCostUsd,
-          history: options.agentHistory,
-          now,
-          writeStderr: options.writeStderr,
-          onBackgroundSettled: (result) => {
-            sessionUsage = addUsage(sessionUsage, result.usage);
-            sessionCostUsd += result.costUsd;
-            if (
-              options.cliArgs.maxCostUsd !== undefined &&
-              sessionCostUsd >= options.cliArgs.maxCostUsd
-            ) {
-              sessionCostBudgetLimited = true;
-            }
-          },
-        })
+      ? {
+          delegation: options.delegation,
+          session: createInteractiveSubagentSession({
+            maxCostUsd: options.delegation.maxCostUsd,
+            initialCostUsd: sessionCostUsd,
+            history: options.agentHistory,
+            now,
+            writeStderr: options.writeStderr,
+            onBackgroundSettled: (result) => {
+              sessionUsage = addUsage(sessionUsage, result.usage);
+              sessionCostUsd += result.costUsd;
+              if (
+                options.cliArgs.maxCostUsd !== undefined &&
+                sessionCostUsd >= options.cliArgs.maxCostUsd
+              ) {
+                sessionCostBudgetLimited = true;
+              }
+            },
+          }),
+        }
       : null;
+  const subagentSession = subagentOwner?.session ?? null;
   const invocationAccounting = (): InteractiveInvocationAccounting => ({
     usage: sessionUsage,
     agentLoopTurns: sessionAgentLoopTurns,
@@ -1435,16 +1440,26 @@ export async function runInteractiveSession(
         },
       );
       let finalEnd: EndEvent | undefined;
+      const detachContinuation =
+        subagentSession !== null && subagentRuntime !== undefined
+          ? subagentSession.continuation.attach(
+              subagentRuntime.supervisor.continuation,
+            )
+          : null;
       try {
-        finalEnd = await options.printAgentEvents(
-          recordAgentEventStream(stream, reportRecorder),
-        );
-      } catch (error) {
-        if (!isAbortThrow(error, turnAbortController.signal)) {
-          reportRecorder.failAgentRun();
-          restoreInterruptedTurnState();
+        try {
+          finalEnd = await options.printAgentEvents(
+            recordAgentEventStream(stream, reportRecorder),
+          );
+        } catch (error) {
+          if (!isAbortThrow(error, turnAbortController.signal)) {
+            reportRecorder.failAgentRun();
+            restoreInterruptedTurnState();
+          }
+          throw error;
         }
-        throw error;
+      } finally {
+        detachContinuation?.();
       }
       if (turnAbortController.signal.aborted) {
         abortReportedAgentRun(finalEnd);
@@ -1942,27 +1957,93 @@ export async function runInteractiveSession(
             options.writeStdout(
               formatAgentTranscript(options.agentHistory, entry),
             );
-          } else if (subagentSession === null) {
+          } else if (subagentOwner === null) {
             options.writeStderr(
-              "Error: live agent wait/cancel requires an attached saved-session owner.\n",
+              "Error: live agent control requires an attached saved-session owner.\n",
             );
           } else {
+            const { delegation, session: subagentSession } = subagentOwner;
             const commandAbortController = new AbortController();
             activeAbortController = commandAbortController;
             setComposerMode("queue");
             try {
-              const result =
-                interactiveCommand.action === "wait"
-                  ? await subagentSession.control.wait({
-                      id: entry.childAgentId,
-                      signal: commandAbortController.signal,
-                      maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
-                    })
-                  : await subagentSession.control.cancel({
-                      id: entry.childAgentId,
-                      signal: commandAbortController.signal,
-                      maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
-                    });
+              let result: AgentControlResult;
+              if (interactiveCommand.action === "wait") {
+                result = await subagentSession.control.wait({
+                  id: entry.childAgentId,
+                  signal: commandAbortController.signal,
+                  maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
+                });
+              } else if (interactiveCommand.action === "cancel") {
+                result = await subagentSession.control.cancel({
+                  id: entry.childAgentId,
+                  signal: commandAbortController.signal,
+                  maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
+                });
+              } else if (interactiveCommand.action === "input") {
+                result = subagentSession.control.input({
+                  id: entry.childAgentId,
+                  message: interactiveCommand.message,
+                  signal: commandAbortController.signal,
+                  maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
+                });
+              } else {
+                const commandResolved = resolveActiveProvider(
+                  interactiveCommand.message,
+                );
+                const commandCostModel =
+                  options.requireKnownCostModel(commandResolved);
+                const commandRuntime = createCliSubagentRuntime({
+                  workspace: options.workspace,
+                  platform: options.platform,
+                  parentRunId: `interactive-${randomUUID()}`,
+                  provider: commandResolved.provider,
+                  providerId: commandResolved.providerId,
+                  model: commandResolved.model,
+                  costModel: commandCostModel,
+                  maxCostUsd: subagentSession.sharedCostBudget.remainingUsd(),
+                  projectInstructions: options.projectInstructions,
+                  hiddenWorkspacePaths,
+                  contextCompaction: commandResolved.contextCompaction,
+                  modelMaxOutputTokens: modelMetadataMaxOutputTokens(
+                    commandResolved.modelMetadata,
+                  ),
+                  modelOperations:
+                    reportModelOperations(commandResolved, {
+                      type: "session",
+                    }) ?? undefined,
+                  transcriptStore: delegation.transcriptStore,
+                  attachedSession: {
+                    lifecyclePersistence: subagentSession.lifecyclePersistence,
+                    costBudget: subagentSession.sharedCostBudget,
+                    admission: subagentSession.sharedAdmission,
+                    providerCoordination: subagentSession.providerCoordination,
+                    background: subagentSession.background,
+                    modelOperations:
+                      reportModelOperations(commandResolved, {
+                        type: "session",
+                      }) ?? undefined,
+                  },
+                  now,
+                  onProgress: (event) => {
+                    options.writeStderr(formatSubagentProgress(event));
+                  },
+                });
+                const detach = subagentSession.continuation.attach(
+                  commandRuntime.supervisor.continuation,
+                );
+                try {
+                  result = await subagentSession.control.resume({
+                    id: entry.childAgentId,
+                    requestId: `agents-resume-${randomUUID()}`,
+                    message: interactiveCommand.message,
+                    signal: commandAbortController.signal,
+                    maxResultChars: MAX_SUBAGENT_RESULT_CHARS,
+                  });
+                } finally {
+                  detach();
+                }
+              }
               (result.ok ? options.writeStdout : options.writeStderr)(
                 `${result.content.trimEnd()}\n`,
               );

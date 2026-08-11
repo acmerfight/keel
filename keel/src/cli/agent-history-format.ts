@@ -18,7 +18,14 @@ export function resolveAgentHistoryEntry(
         entry.childAgentId === selector ||
         entry.childRunId === selector ||
         entry.delegationId === selector,
-    ) ?? null
+    ) ??
+    entries
+      .flatMap((entry) => history.runs(entry.childAgentId))
+      .find(
+        (entry) =>
+          entry.childRunId === selector || entry.delegationId === selector,
+      ) ??
+    null
   );
 }
 
@@ -53,12 +60,20 @@ export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
     `status: ${entry.status}`,
     `task: ${entry.task}`,
     `run: ${entry.childRunId}`,
+    ...(entry.lineage.kind === "continuation"
+      ? [`continuation of: ${entry.lineage.previousRunId}`]
+      : []),
     `parent run: ${entry.parentRunId}`,
     `provider/model: ${entry.providerId}/${entry.model}`,
     `turns: ${entry.accounting.turns}`,
     `cost: ${formatCost(entry.accounting.costUsd)}`,
     `usage: input=${entry.accounting.usage.inputTokens} cached=${entry.accounting.usage.cachedInputTokens} output=${entry.accounting.usage.outputTokens}`,
     `transcript: ${entry.transcriptRef}`,
+    ...(result !== null && result.pendingInputCount > 0
+      ? [
+          `pending input: ${result.pendingInputCount} queued message(s) will be available to the next Run`,
+        ]
+      : []),
     terminalText,
     "",
   ].join("\n");

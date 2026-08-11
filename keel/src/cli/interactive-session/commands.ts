@@ -72,13 +72,29 @@ interface StatusCommand {
   readonly kind: "status";
 }
 
+type AgentSelectorCommand<
+  Action extends "show" | "transcript" | "wait" | "cancel",
+> = {
+  readonly kind: "agents";
+  readonly action: Action;
+  readonly selector: string;
+};
+
+type AgentMessageCommand<Action extends "input" | "resume"> = {
+  readonly kind: "agents";
+  readonly action: Action;
+  readonly selector: string;
+  readonly message: string;
+};
+
 type AgentsCommand =
   | { readonly kind: "agents"; readonly action: "list" }
-  | {
-      readonly kind: "agents";
-      readonly action: "show" | "transcript" | "wait" | "cancel";
-      readonly selector: string;
-    };
+  | AgentSelectorCommand<"show">
+  | AgentSelectorCommand<"transcript">
+  | AgentSelectorCommand<"wait">
+  | AgentSelectorCommand<"cancel">
+  | AgentMessageCommand<"input">
+  | AgentMessageCommand<"resume">;
 
 interface SessionsCommand {
   readonly kind: "sessions";
@@ -180,6 +196,10 @@ export function formatInteractiveHelp(): string {
     "                     Wait for one attached background subagent.",
     "  /agents cancel <id|index>",
     "                     Cancel and settle one attached background subagent.",
+    "  /agents input <id|index> <message>",
+    "                     Queue input for one running attached subagent.",
+    "  /agents resume <id|index> <message>",
+    "                     Continue one terminal subagent as a new Run.",
     "  /sessions          Choose another saved session in this workspace.",
     "  /title [text]      Show or set this saved session title.",
     "  /goal [condition]  Show or start a goal with this completion condition.",
@@ -823,6 +843,21 @@ export function parseInteractiveCommand(
   if (agentsMatch !== null) {
     const args = agentsMatch[1]?.trim() ?? "";
     if (args === "") return { kind: "agents", action: "list" };
+    for (const action of ["input", "resume"] as const) {
+      const prefix = `${action} `;
+      if (!args.startsWith(prefix)) continue;
+      const body = args.slice(prefix.length).trim();
+      const messageSeparator = body.search(/\s/u);
+      if (messageSeparator > 0) {
+        return {
+          kind: "agents",
+          action,
+          selector: body.slice(0, messageSeparator),
+          message: body.slice(messageSeparator).trim(),
+        };
+      }
+      break;
+    }
     const parts = args.split(/\s+/u);
     const action = parts[0];
     const selector = parts[1];
@@ -837,7 +872,7 @@ export function parseInteractiveCommand(
       return {
         kind: "invalid",
         message:
-          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, or /agents cancel <id|index>.",
+          "Error: usage is /agents, /agents show <id|index>, /agents transcript <id|index>, /agents wait <id|index>, /agents cancel <id|index>, /agents input <id|index> <message>, or /agents resume <id|index> <message>.",
       };
     }
     return { kind: "agents", action, selector };

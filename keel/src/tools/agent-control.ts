@@ -1,6 +1,6 @@
 import type { AgentId } from "../agent/subagent-lifecycle.ts";
 
-interface AgentControlResult {
+export interface AgentControlResult {
   readonly ok: boolean;
   readonly content: string;
 }
@@ -9,6 +9,14 @@ interface AgentControlRequest {
   readonly id: AgentId;
   readonly signal: AbortSignal;
   readonly maxResultChars: number;
+}
+
+interface AgentInputRequest extends AgentControlRequest {
+  readonly message: string;
+}
+
+interface AgentResumeRequest extends AgentInputRequest {
+  readonly requestId: string;
 }
 
 interface AgentSettlementRequest {
@@ -29,4 +37,6 @@ export interface AgentControlCapability {
   readonly cancel: (
     request: AgentControlRequest,
   ) => Promise<AgentControlResult>;
+  readonly input: (request: AgentInputRequest) => AgentControlResult;
+  readonly resume: (request: AgentResumeRequest) => Promise<AgentControlResult>;
 }

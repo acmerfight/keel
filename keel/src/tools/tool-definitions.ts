@@ -3,7 +3,9 @@ import { MAX_COMMAND_TIMEOUT_MS } from "../core/command-timeout.ts";
 import { MODEL_SELECTED_SKILL_ACTIVATIONS_PER_TURN } from "../skills/model.ts";
 import {
   agentCancelToolArgumentsSchema,
+  agentInputToolArgumentsSchema,
   agentListToolArgumentsSchema,
+  agentResumeToolArgumentsSchema,
   agentWaitToolArgumentsSchema,
   applyPatchToolArgumentsSchema,
   bashToolArgumentsSchema,
@@ -634,11 +636,38 @@ const agentCancelTool = defineTool({
   risk: { kind: "agent-state" },
 });
 
+const agentInputTool = defineTool({
+  name: "agent_input",
+  availability: "agent-control",
+  description:
+    "Queue one follow-up instruction for a currently running attached subagent. The Run consumes it at the next safe turn boundary; if the Run terminates first, its result reports pendingInputCount and the durable input remains in the thread context for agent_resume.",
+  args: toolArgs(agentInputToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  display: { formatLabel: (args) => `agent_input ${args.agentId}` },
+  risk: { kind: "agent-state" },
+});
+
+const agentResumeTool = defineTool({
+  name: "agent_resume",
+  availability: "agent-control",
+  description:
+    "Continue one terminal subagent thread by stable agent ID. This starts one new admitted background Run under the same Agent ID and preserves all prior Run results. Call it in an isolated tool round so Keel can preserve a complete Main continuation.",
+  args: toolArgs(agentResumeToolArgumentsSchema),
+  permission: { kind: "none" },
+  output: { kind: "text" },
+  resultAdmission: "subagent",
+  display: { formatLabel: (args) => `agent_resume ${args.agentId}` },
+  risk: { kind: "agent-state" },
+});
+
 export const builtinToolRegistry = {
   delegate: delegateTool,
   agent_list: agentListTool,
   agent_wait: agentWaitTool,
   agent_cancel: agentCancelTool,
+  agent_input: agentInputTool,
+  agent_resume: agentResumeTool,
   update_plan: updatePlanTool,
   update_goal: updateGoalTool,
   memory_add: memoryAddTool,

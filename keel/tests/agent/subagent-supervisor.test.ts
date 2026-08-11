@@ -8,14 +8,18 @@ import {
   type SharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
 import {
+  type AgentId,
   type SubagentLifecyclePersistence,
   SubagentPersistenceError,
+  type SubagentRunId,
   type SubagentTerminalSnapshot,
 } from "../../src/agent/subagent-lifecycle.ts";
 import {
   createSubagentSupervisor,
+  projectSubagentResult,
   type SubagentBackgroundRun,
   type SubagentBackgroundRuntime,
+  type SubagentContinuationRequest,
   type SubagentProgressEvent,
   type SubagentSupervisor,
 } from "../../src/agent/subagent-supervisor.ts";
@@ -96,9 +100,11 @@ function durableLifecycleSink(): SubagentLifecyclePersistence {
       return {
         transcriptRef: "agent-transcript:test/background",
         transcript,
+        pendingInput: () => {},
         running: () => ({
           transcriptRef: "agent-transcript:test/background",
           transcript,
+          pendingInput: () => {},
           accounting: () => {},
           terminal: () => {},
         }),
@@ -399,6 +405,503 @@ describe("Subagent Supervisor", () => {
     }
   });
 
+  test(`Given a running background child receives bounded follow-up input before its provider returns,
+    When the child reaches that terminal boundary,
+    Then the same Run consumes the accepted input and rejects overflow without creating another Run`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-child-input-"));
+    const firstRequestEntered = Promise.withResolvers<void>();
+    const releaseFirstRequest = Promise.withResolvers<void>();
+    const registeredRuns: SubagentBackgroundRun[] = [];
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        id: "live-child-input",
+        abortSignalSupport: true,
+        estimateInputTokens: () => 100,
+        async *stream(options) {
+          providerCalls++;
+          if (providerCalls === 1) {
+            firstRequestEntered.resolve();
+            await releaseFirstRequest.promise;
+            yield { type: "text", text: "Initial answer." };
+          } else {
+            expect(options.messages.at(-1)).toEqual({
+              role: "user",
+              content: "Additional context 16.",
+            });
+            yield { type: "text", text: "The callers are sound too." };
+          }
+          completeAttempt(options, requestUsage);
+          yield { type: "stop", reason: "stop", usage: requestUsage };
+        },
+      },
+      background: {
+        signal: new AbortController().signal,
+        register: (run) => registeredRuns.push(run),
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+    });
+
+    try {
+      await fixture.supervisor.capability.delegate({
+        toolCallId: "live-input",
+        mode: "background",
+        task: "Inspect the boundary.",
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+      await firstRequestEntered.promise;
+      const run = registeredRuns[0];
+      if (run === undefined) throw new Error("missing background Run");
+      for (let index = 1; index <= 16; index++) {
+        expect(run.input(`Additional context ${index}.`)).toEqual({
+          kind: "accepted",
+        });
+      }
+      expect(run.input("This exceeds the queue bound.")).toEqual({
+        kind: "full",
+      });
+      releaseFirstRequest.resolve();
+
+      await expect(run.result).resolves.toMatchObject({
+        childRunId: run.childRunId,
+        status: "completed",
+        finalText: "The callers are sound too.",
+        turns: 2,
+      });
+      expect(registeredRuns).toHaveLength(1);
+      expect(providerCalls).toBe(2);
+      expect(run.input("Too late.")).toEqual({ kind: "closed" });
+    } finally {
+      releaseFirstRequest.resolve();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a terminal child thread has prior provider context,
+    When the continuation capability resumes it,
+    Then one admitted background Run keeps the Agent ID, gets a new Run ID, and receives the prior context plus follow-up`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-child-resume-"));
+    const childAgentId: AgentId = "agent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const previousRunId: SubagentRunId =
+      "subagent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const accepted: Parameters<SubagentLifecyclePersistence["accepted"]>[0][] =
+      [];
+    const registeredRuns: SubagentBackgroundRun[] = [];
+    const sink = durableLifecycleSink();
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        id: "continued-child",
+        abortSignalSupport: true,
+        estimateInputTokens: () => 100,
+        async *stream(options) {
+          expect(options.messages).toMatchObject([
+            { role: "user", content: "Inspect the boundary." },
+            { role: "assistant", content: "The boundary is sound." },
+            { role: "user", content: "Now inspect its callers." },
+          ]);
+          yield { type: "text", text: "The callers are sound too." };
+          completeAttempt(options, requestUsage);
+          yield { type: "stop", reason: "stop", usage: requestUsage };
+        },
+      },
+      background: {
+        signal: new AbortController().signal,
+        register: (run) => registeredRuns.push(run),
+      },
+      lifecyclePersistence: {
+        accepted: (lifecycle) => {
+          accepted.push(lifecycle);
+          return sink.accepted(lifecycle);
+        },
+        rejected: sink.rejected,
+      },
+    });
+
+    try {
+      const request = {
+        childAgentId,
+        previousRunId,
+        toolCallId: "resume-child",
+        message: "Now inspect its callers.",
+        focusPaths: [],
+        systemPrompt: "Read-only child instructions.",
+        priorMessages: [
+          {
+            role: "user" as const,
+            content: "Inspect the boundary.",
+            origin: { type: "runtime_subagent_delegation" as const },
+          },
+          {
+            role: "assistant" as const,
+            content: "The boundary is sound.",
+            toolCalls: [],
+          },
+        ],
+        signal: new AbortController().signal,
+      };
+      const firstReceipt =
+        await fixture.supervisor.continuation.resume(request);
+      expect(firstReceipt).toMatchObject({
+        ok: true,
+        content: expect.stringContaining(`"agentId":"${childAgentId}"`),
+      });
+      const resumed = registeredRuns[0];
+      if (resumed === undefined) throw new Error("missing resumed Run");
+      await expect(
+        fixture.supervisor.continuation.resume(request),
+      ).resolves.toMatchObject({
+        ok: true,
+        content: expect.stringContaining(`"runId":"${resumed.childRunId}"`),
+      });
+      expect(registeredRuns).toHaveLength(1);
+      expect(resumed.childAgentId).toBe(childAgentId);
+      expect(resumed.childRunId).not.toBe(previousRunId);
+      expect(accepted).toMatchObject([
+        {
+          childAgentId,
+          childRunId: resumed.childRunId,
+          lineage: { kind: "continuation", previousRunId },
+        },
+      ]);
+      await expect(resumed.result).resolves.toMatchObject({
+        status: "completed",
+        finalText: "The callers are sound too.",
+      });
+      await expect(
+        fixture.supervisor.continuation.resume(request),
+      ).resolves.toMatchObject({
+        ok: true,
+        content: expect.stringContaining('"status":"completed"'),
+      });
+      expect(registeredRuns).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a terminal child cannot satisfy continuation ownership, provider, workspace, budget, or capacity rules,
+    When resume admission is attempted,
+    Then it rejects before provider work and repeats the same durable receipt for the same request`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-resume-admission-"));
+    const childAgentId: AgentId = "agent-aaaaaaaa";
+    const previousRunId: SubagentRunId = "subagent-aaaaaaaa";
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      ...singleFinalProvider("must not run"),
+      async *stream() {
+        providerCalls++;
+        yield { type: "text", text: "must not run" };
+      },
+    };
+    const background: SubagentBackgroundRuntime = {
+      signal: new AbortController().signal,
+      register: () => {
+        throw new Error("rejected resume must not register a Run");
+      },
+    };
+    const request = (
+      toolCallId: string,
+      overrides: Partial<SubagentContinuationRequest> = {},
+    ): SubagentContinuationRequest => ({
+      childAgentId,
+      previousRunId,
+      toolCallId,
+      message: "Inspect callers.",
+      focusPaths: [],
+      systemPrompt: "Read-only child instructions.",
+      priorMessages: [],
+      signal: new AbortController().signal,
+      ...overrides,
+    });
+    const rejectedContent = async (
+      fixture: ReturnType<typeof supervisorFixture>,
+      continuation: SubagentContinuationRequest,
+    ): Promise<string> => {
+      const result = await fixture.supervisor.continuation.resume(continuation);
+      expect(result.ok).toBe(false);
+      return result.content;
+    };
+
+    try {
+      const detached = supervisorFixture({
+        workspace,
+        provider,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(await rejectedContent(detached, request("detached"))).toContain(
+        "saved-session background owner",
+      );
+
+      const closedOwner = new AbortController();
+      closedOwner.abort(new Error("saved session owner exited"));
+      let closedOwnerAcceptances = 0;
+      const closed = supervisorFixture({
+        workspace,
+        provider,
+        background: {
+          signal: closedOwner.signal,
+          register: () => {
+            throw new Error("closed owner must not register a Run");
+          },
+        },
+        lifecyclePersistence: {
+          accepted: (lifecycle) => {
+            closedOwnerAcceptances++;
+            return durableLifecycleSink().accepted(lifecycle);
+          },
+          rejected: () => {},
+        },
+      });
+      expect(await rejectedContent(closed, request("closed-owner"))).toContain(
+        "owner is shutting down",
+      );
+      await expect(
+        closed.supervisor.capability.delegate({
+          toolCallId: "closed-owner-delegate",
+          mode: "background",
+          task: "Must not outlive the closed owner.",
+          focusPaths: [],
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: expect.stringContaining("owner is shutting down"),
+      });
+      expect(closedOwnerAcceptances).toBe(0);
+
+      const blocked = supervisorFixture({
+        workspace,
+        provider,
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+        providerBlocked: () => true,
+      });
+      const blockedRequest = request("provider-blocked");
+      const firstBlocked = await rejectedContent(blocked, blockedRequest);
+      expect(firstBlocked).toContain("provider access is blocked");
+      expect(await rejectedContent(blocked, blockedRequest)).toBe(firstBlocked);
+
+      const unsettled = supervisorFixture({
+        workspace,
+        provider: singleFinalProvider("must not run"),
+        providerAbortSignalSupport: false,
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(
+        await rejectedContent(unsettled, request("abort-unsupported")),
+      ).toContain("does not certify cancellation settlement");
+
+      const invalidPath = supervisorFixture({
+        workspace,
+        provider,
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(
+        await rejectedContent(
+          invalidPath,
+          request("invalid-path", { focusPaths: ["../outside"] }),
+        ),
+      ).toContain("outside the workspace");
+
+      const unknownEstimate = supervisorFixture({
+        workspace,
+        provider: { ...provider, estimateInputTokens: () => Number.NaN },
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(
+        await rejectedContent(unknownEstimate, request("unknown-estimate")),
+      ).toContain("cost cannot be estimated");
+
+      const noBudget = supervisorFixture({
+        workspace,
+        provider,
+        rootMaxCostUsd: 0.000001,
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(await rejectedContent(noBudget, request("no-budget"))).toContain(
+        "remaining root budget",
+      );
+
+      const activeLimit = supervisorFixture({
+        workspace,
+        provider,
+        maxActiveAgentRuns: 1,
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(
+        await rejectedContent(activeLimit, request("active-limit")),
+      ).toContain("active child Run limit");
+
+      const totalLimit = supervisorFixture({
+        workspace,
+        provider,
+        maxTotalChildRuns: 0,
+        background,
+        lifecyclePersistence: durableLifecycleSink(),
+      });
+      expect(
+        await rejectedContent(totalLimit, request("total-limit")),
+      ).toContain("total child Run limit");
+      expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given continuation lifecycle acceptance cannot be stored durably,
+    When resume attempts to create the new Run,
+    Then ordinary storage errors become a stable rejection while indeterminate writes remain fatal`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-resume-storage-"));
+    const request: SubagentContinuationRequest = {
+      childAgentId: "agent-aaaaaaaa",
+      previousRunId: "subagent-aaaaaaaa",
+      toolCallId: "resume-storage",
+      message: "Inspect callers.",
+      focusPaths: [],
+      systemPrompt: "Read-only child instructions.",
+      priorMessages: [],
+      signal: new AbortController().signal,
+    };
+    const background: SubagentBackgroundRuntime = {
+      signal: new AbortController().signal,
+      register: () => {
+        throw new Error("failed persistence must not register a Run");
+      },
+    };
+
+    try {
+      const ordinary = supervisorFixture({
+        workspace,
+        provider: singleFinalProvider("must not run"),
+        background,
+        lifecyclePersistence: {
+          accepted: () => {
+            throw new Error("disk unavailable");
+          },
+          rejected: () => {},
+        },
+      });
+      await expect(
+        ordinary.supervisor.continuation.resume(request),
+      ).resolves.toMatchObject({
+        ok: false,
+        content: expect.stringContaining("disk unavailable"),
+      });
+
+      const indeterminate = supervisorFixture({
+        workspace,
+        provider: singleFinalProvider("must not run"),
+        background,
+        lifecyclePersistence: {
+          accepted: () => {
+            throw new SubagentPersistenceError("write outcome is unknown");
+          },
+          rejected: () => {},
+        },
+      });
+      await expect(
+        indeterminate.supervisor.continuation.resume({
+          ...request,
+          toolCallId: "resume-indeterminate",
+        }),
+      ).rejects.toThrow("write outcome is unknown");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given provider failure races queued follow-up input,
+    When the child cannot reach another safe turn boundary,
+    Then the terminal result exposes one pending durable input for the next Run`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-input-failure-"));
+    const providerEntered = Promise.withResolvers<void>();
+    const releaseProvider = Promise.withResolvers<void>();
+    const appendedContents: string[] = [];
+    const registeredRuns: SubagentBackgroundRun[] = [];
+    const transcript = {
+      initialize: () => {},
+      append: (messages: readonly { readonly content: string }[]) => {
+        appendedContents.push(...messages.map((message) => message.content));
+      },
+      replace: () => {},
+    };
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        id: "failed-child-input",
+        estimateInputTokens: () => 100,
+        async *stream() {
+          providerEntered.resolve();
+          await releaseProvider.promise;
+          yield { type: "text", text: "Partial answer before failure." };
+          throw new Error("provider failed before input boundary");
+        },
+      },
+      background: {
+        signal: new AbortController().signal,
+        register: (run) => registeredRuns.push(run),
+      },
+      lifecyclePersistence: {
+        accepted: () => ({
+          transcriptRef: "agent-transcript:test/failed-input",
+          transcript,
+          pendingInput: (messages) => {
+            appendedContents.push(
+              ...messages.map((message) => message.content),
+            );
+          },
+          running: () => ({
+            transcriptRef: "agent-transcript:test/failed-input",
+            transcript,
+            pendingInput: (messages) => {
+              appendedContents.push(
+                ...messages.map((message) => message.content),
+              );
+            },
+            accounting: () => {},
+            terminal: () => {},
+          }),
+          terminal: () => {},
+        }),
+        rejected: () => {},
+      },
+    });
+
+    try {
+      await fixture.supervisor.capability.delegate({
+        toolCallId: "failed-input",
+        mode: "background",
+        task: "Inspect the boundary.",
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+      await providerEntered.promise;
+      const run = registeredRuns[0];
+      if (run === undefined) throw new Error("missing background Run");
+      expect(run.input("Also inspect callers.")).toEqual({ kind: "accepted" });
+      releaseProvider.resolve();
+      const result = await run.result;
+      expect(result).toMatchObject({
+        status: "failed",
+        error: "provider failed before input boundary",
+        pendingInputCount: 1,
+      });
+      expect(projectSubagentResult(result)).toContain('"pendingInputCount":1');
+      expect(appendedContents).toContain("Also inspect callers.");
+    } finally {
+      releaseProvider.resolve();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a saved-session lifecycle sink is configured,
     When a child is admitted and completes,
     Then durable acceptance precedes provider work and the canonical result precedes terminal progress`, async () => {
@@ -434,11 +937,13 @@ describe("Subagent Supervisor", () => {
           return {
             transcriptRef: "agent-transcript:test/agent-1",
             transcript,
+            pendingInput: () => {},
             running: () => {
               events.push("running");
               return {
                 transcriptRef: "agent-transcript:test/agent-1",
                 transcript,
+                pendingInput: () => {},
                 accounting: () => {
                   events.push("accounting");
                 },
@@ -509,6 +1014,7 @@ describe("Subagent Supervisor", () => {
             append: () => {},
             replace: () => {},
           },
+          pendingInput: () => {},
           running: () => {
             throw new SubagentPersistenceError("durable writer failed");
           },
@@ -672,9 +1178,11 @@ describe("Subagent Supervisor", () => {
           return {
             transcriptRef: "agent-transcript:test/cancelled-before-start",
             transcript,
+            pendingInput: () => {},
             running: () => ({
               transcriptRef: "agent-transcript:test/cancelled-before-start",
               transcript,
+              pendingInput: () => {},
               accounting: () => {},
               terminal,
             }),
@@ -721,6 +1229,7 @@ describe("Subagent Supervisor", () => {
           },
           turns: 0,
           costUsd: 0,
+          pendingInputCount: 0,
         },
       ]);
       expect(fixture.supervisor.activeChildRunCount()).toBe(0);
