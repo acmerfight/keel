@@ -15,9 +15,11 @@ import {
   builtinToolAuthorityAllows,
   isToolName,
   modelToolExposureAccounting,
+  modelToolExposuresEqual,
   normalizeProviderToolCall,
   openAICompatibleTools,
   providerToolCallFromParsedArguments,
+  resolveModelToolExposure,
   type ToolName,
   toolCallArguments,
   toolCallCanonicalArguments,
@@ -889,7 +891,7 @@ describe("tool registry", () => {
     const providerDelegateCall = {
       id: "call_delegate",
       tool: "delegate",
-      profile: "explorer",
+      profile: null,
       mode: null,
       task: "Inspect one module.",
     } as const;
@@ -1219,8 +1221,8 @@ describe("tool registry", () => {
   });
 
   test(`Given a reviewer capability snapshot governs a child,
-    When its provider schema and dispatcher authority are derived,
-    Then both expose the same bounded read tools and reject mutation`, () => {
+    When its provider schema, dispatcher authority, and accounting identity are derived,
+    Then they preserve the bounded profile without collapsing it into main`, () => {
     const reviewerCapability =
       resolveBuiltinSubagentProfile("reviewer").snapshot;
     const exposure: ModelToolExposure = {
@@ -1245,6 +1247,14 @@ describe("tool registry", () => {
       allowSkill: false,
       toolChoice: "auto",
     });
+    const reviewerAccounting = resolveModelToolExposure(exposure);
+    const mainAccounting = resolveModelToolExposure({ kind: "auto" });
+    expect(modelToolExposuresEqual(reviewerAccounting, mainAccounting)).toBe(
+      false,
+    );
+    expect(modelToolExposuresEqual(mainAccounting, reviewerAccounting)).toBe(
+      false,
+    );
   });
 
   test(`Given background ownership exists only in a saved interactive session,
