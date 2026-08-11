@@ -50,7 +50,7 @@ import {
   revokeMcpProjectApprovalGrant,
 } from "./mcp-project-approvals.ts";
 import { sanitizeStatusLineText } from "./output.ts";
-import { approvalProjectRoot } from "./project-root.ts";
+import { projectRoot } from "./project-root.ts";
 import {
   providerProfile,
   selectedModelFromProfile,
@@ -471,11 +471,11 @@ async function runMcpApprovals(
   cliArgs: McpApprovalsCliArgs,
   runtime: CliRuntime,
 ): Promise<number> {
-  const projectRoot = approvalProjectRoot(runtime.cwd());
+  const resolvedProjectRoot = projectRoot(runtime.cwd());
   if (cliArgs.mode === "approvals-list") {
     runtime.writeStdout(
       formatMcpProjectApprovalList(
-        await listMcpProjectApprovalGrants(runtime, projectRoot),
+        await listMcpProjectApprovalGrants(runtime, resolvedProjectRoot),
       ),
     );
     return 0;
@@ -483,7 +483,7 @@ async function runMcpApprovals(
   if (cliArgs.mode === "approvals-revoke") {
     const revoked = await revokeMcpProjectApprovalGrant(
       runtime,
-      projectRoot,
+      resolvedProjectRoot,
       cliArgs.index,
     );
     if (revoked === null) {
@@ -497,7 +497,7 @@ async function runMcpApprovals(
   }
   runtime.writeStdout(
     formatMcpProjectApprovalClearResult(
-      await clearMcpProjectApprovalGrants(runtime, projectRoot),
+      await clearMcpProjectApprovalGrants(runtime, resolvedProjectRoot),
     ),
   );
   return 0;

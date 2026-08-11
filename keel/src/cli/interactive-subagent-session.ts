@@ -329,6 +329,12 @@ export function createInteractiveSubagentSession(
         childAgentId: entry.childAgentId,
         previousRunId: entry.childRunId,
         capability: entry.capability,
+        threadCapabilityCeiling: entry.threadCapabilityCeiling,
+        execution: {
+          providerId: entry.providerId,
+          model: entry.model,
+          effort: entry.effort,
+        },
         toolCallId: request.requestId,
         message: request.message,
         focusPaths: entry.focusPaths,

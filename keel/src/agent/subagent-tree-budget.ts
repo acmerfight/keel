@@ -1,15 +1,8 @@
-import {
-  type CostModel,
-  calculateConservativeRequestCostUsd,
-} from "../core/cost.ts";
 import type {
   ProviderContinuationLease,
   ProviderMessage,
 } from "../llm/types.ts";
-import {
-  MIN_USEFUL_OUTPUT_TOKENS,
-  type SharedCostBudgetedProvider,
-} from "./cost-budget.ts";
+import type { SharedCostBudgetedProvider } from "./cost-budget.ts";
 
 const DEFAULT_MAX_AGGREGATE_RESULT_CHARS = 24_000;
 export const MAX_SUBAGENT_RESULT_CHARS = 6_000;
@@ -21,7 +14,7 @@ function maximumUtf8ToolResult(maxCodeUnits: number): string {
 
 export interface SubagentTreeBudgetCandidate<Value> {
   readonly value: Value;
-  readonly minimumInputTokens: number;
+  readonly minimumCostUsd: number;
 }
 
 export interface SubagentChildBudgetLease<Value> {
@@ -77,7 +70,6 @@ export interface SubagentResultContinuationBudget {
 
 interface CreateSubagentTreeBudgetOptions {
   readonly rootBudget: SharedCostBudgetedProvider;
-  readonly costModel: CostModel;
 }
 
 export interface SubagentTreeBudget {
@@ -147,11 +139,7 @@ export function createSubagentTreeBudget(
     leaseBatch: (input) => {
       const pricedCandidates = input.children.map((candidate) => ({
         candidate,
-        minimumCostUsd: calculateConservativeRequestCostUsd(
-          candidate.minimumInputTokens,
-          MIN_USEFUL_OUTPUT_TOKENS,
-          options.costModel,
-        ),
+        minimumCostUsd: candidate.minimumCostUsd,
       }));
       const minimumAdditionalRequestCostUsd = pricedCandidates.reduce(
         (total, priced) => total + priced.minimumCostUsd,

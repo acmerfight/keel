@@ -514,7 +514,7 @@ describe("Eval Compare", () => {
       // Then
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("line 1 is not a schemaVersion 3");
+      expect(result.stderr).toContain("line 1 is not a schemaVersion 4");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

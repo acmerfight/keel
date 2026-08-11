@@ -83,6 +83,8 @@ function transcriptHeader(
     mode: accepted.mode,
     providerId: accepted.providerId,
     model: accepted.model,
+    effort: accepted.effort,
+    threadCapabilityCeiling: accepted.threadCapabilityCeiling,
     systemPrompt: accepted.systemPrompt,
     capability: accepted.capability,
     lineage: accepted.lineage,
@@ -211,7 +213,12 @@ function assertTranscriptIdentity(
     header.createdAt !== accepted.timestamp ||
     header.providerId !== accepted.providerId ||
     header.model !== accepted.model ||
+    header.effort !== accepted.effort ||
     header.systemPrompt !== accepted.systemPrompt ||
+    !subagentCapabilitiesEqual(
+      header.threadCapabilityCeiling,
+      accepted.threadCapabilityCeiling,
+    ) ||
     !subagentCapabilitiesEqual(header.capability, accepted.capability) ||
     JSON.stringify(header.lineage) !== JSON.stringify(accepted.lineage) ||
     header.focusPaths.length !== accepted.focusPaths.length ||

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { evalResultLineSchema } from "../../src/eval/result-schema.ts";
 
 const resultBase = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   timestamp: "2026-08-09T00:00:00.000Z",
   keelVersion: "0.0.1",
   taskId: "delegation-boundary",
@@ -56,7 +56,8 @@ describe("eval result schema delegation boundary", () => {
       expect(contradictoryResult.error.issues).toContainEqual(
         expect.objectContaining({
           path: ["delegationSelection", "satisfied"],
-          message: "must match policy and distinct child count",
+          message:
+            "must match policy, distinct child count, and expected execution",
         }),
       );
     }

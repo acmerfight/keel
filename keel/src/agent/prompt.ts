@@ -5,7 +5,7 @@ import {
   type SkillDescriptor,
   type WorkflowSkill,
 } from "../skills/model.ts";
-import type { SubagentProfileId } from "./subagent-capability.ts";
+import type { SubagentProfileName } from "./subagent-capability.ts";
 
 export interface ProjectInstructions {
   readonly relativePath: string;
@@ -25,7 +25,7 @@ interface BuildReadOnlySubagentSystemPromptOptions {
   readonly platform: string;
   readonly projectInstructions?: ProjectInstructions;
   readonly focusPaths: readonly string[];
-  readonly profile: SubagentProfileId;
+  readonly profile: SubagentProfileName;
   readonly roleInstructions: string;
   readonly maxFinalTextChars: number;
 }

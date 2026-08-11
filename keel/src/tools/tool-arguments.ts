@@ -1,7 +1,11 @@
 import { z } from "zod";
 
-import { subagentProfileIds } from "../agent/subagent-capability.ts";
+import {
+  type SubagentProfileName,
+  subagentProfileIds,
+} from "../agent/subagent-capability.ts";
 import type { AgentId } from "../agent/subagent-lifecycle.ts";
+import type { SubagentProfileCatalog } from "../agent/subagent-profile.ts";
 import {
   DEFAULT_COMMAND_TIMEOUT_MS,
   MAX_COMMAND_TIMEOUT_MS,
@@ -13,43 +17,93 @@ import { optionalToolArgument } from "./tool-schema.ts";
 const delegationModeDescription =
   "Run in the foreground by default, or as an attached background child in a saved interactive session.";
 
-export const delegateProviderArgumentsSchema = z
-  .object({
-    profile: optionalToolArgument(
-      z
-        .enum(subagentProfileIds)
-        .describe(
-          "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
-        ),
-    ),
-    mode: optionalToolArgument(
-      z.enum(["foreground", "background"]).describe(delegationModeDescription),
-    ),
-    task: z
-      .string()
-      .trim()
-      .min(1)
-      .max(4_000)
-      .describe(
-        "Self-contained read-only investigation task with scope, expected output, and completion criteria.",
+const repoSubagentProfilePattern = /^repo:[a-z][a-z0-9-]{0,31}$/u;
+const subagentProfileNameSchema = z
+  .string()
+  .refine(
+    (value): value is SubagentProfileName =>
+      subagentProfileIds.some((profile) => profile === value) ||
+      repoSubagentProfilePattern.test(value),
+    { message: "must name a built-in or repo subagent profile" },
+  );
+
+const foregroundDelegationModes = ["foreground"] as const;
+const delegationModes = ["foreground", "background"] as const;
+
+function profileDescription(catalog: SubagentProfileCatalog): string {
+  if (
+    catalog.length === 2 &&
+    catalog[0]?.name === "explorer" &&
+    catalog[1]?.name === "reviewer"
+  ) {
+    return "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.";
+  }
+  const choices = catalog
+    .map((entry) => `${entry.name} (${entry.base} base)`)
+    .join(", ");
+  return `Select an exact governed child profile from this catalog: ${choices}. Defaults to explorer.`;
+}
+
+function catalogProfileSchema(
+  catalog: SubagentProfileCatalog,
+): z.ZodType<SubagentProfileName> {
+  const [first, ...remaining] = catalog;
+  const names: [SubagentProfileName, ...SubagentProfileName[]] = [
+    first.name,
+    ...remaining.map((entry) => entry.name),
+  ];
+  return z.enum(names);
+}
+
+function delegateProviderSchema(
+  profile: z.ZodType<SubagentProfileName>,
+  catalogDescription: string,
+  modes: readonly ["foreground", ...("foreground" | "background")[]],
+) {
+  return z
+    .object({
+      profile: optionalToolArgument(profile.describe(catalogDescription)),
+      mode: optionalToolArgument(
+        z
+          .enum(modes)
+          .describe(
+            modes.length === 1
+              ? "Run as a foreground child and return its result here."
+              : delegationModeDescription,
+          ),
       ),
-    focusPaths: optionalToolArgument(
-      z
-        .array(z.string().trim().min(1).max(500))
+      task: z
+        .string()
+        .trim()
         .min(1)
-        .max(20)
+        .max(4_000)
         .describe(
-          "Optional workspace-relative files or directories that should receive most of the child agent's attention.",
+          "Self-contained read-only investigation task with scope, expected output, and completion criteria.",
         ),
-    ),
-  })
-  .strict();
+      focusPaths: optionalToolArgument(
+        z
+          .array(z.string().trim().min(1).max(500))
+          .min(1)
+          .max(20)
+          .describe(
+            "Optional workspace-relative files or directories that should receive most of the child agent's attention.",
+          ),
+      ),
+    })
+    .strict();
+}
+
+export const delegateProviderArgumentsSchema = delegateProviderSchema(
+  z.enum(["explorer", "reviewer"]),
+  "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
+  ["foreground", "background"],
+);
 
 export const delegateToolArgumentsSchema =
   delegateProviderArgumentsSchema.extend({
     profile: z.preprocess(
       (value) => (value === null ? undefined : value),
-      z.enum(subagentProfileIds).default("explorer"),
+      subagentProfileNameSchema.default("explorer"),
     ),
     mode: z.preprocess(
       (value) => (value === null ? undefined : value),
@@ -60,14 +114,43 @@ export const delegateToolArgumentsSchema =
     ),
   });
 
-export const foregroundDelegateProviderArgumentsSchema =
-  delegateProviderArgumentsSchema.extend({
-    mode: optionalToolArgument(
+export const foregroundDelegateProviderArgumentsSchema = delegateProviderSchema(
+  z.enum(["explorer", "reviewer"]),
+  "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
+  ["foreground"],
+);
+
+export function delegateProviderArgumentsSchemaForCatalog(
+  catalog: SubagentProfileCatalog,
+  mode: "foreground" | "background",
+) {
+  return delegateProviderSchema(
+    catalogProfileSchema(catalog),
+    profileDescription(catalog),
+    mode === "foreground" ? foregroundDelegationModes : delegationModes,
+  );
+}
+
+export function delegateToolArgumentsSchemaForCatalog(
+  catalog: SubagentProfileCatalog,
+  mode: "foreground" | "background",
+) {
+  return delegateProviderArgumentsSchemaForCatalog(catalog, mode).extend({
+    profile: z.preprocess(
+      (value) => (value === null ? undefined : value),
+      catalogProfileSchema(catalog).default("explorer"),
+    ),
+    mode: z.preprocess(
+      (value) => (value === null ? undefined : value),
       z
-        .enum(["foreground"])
-        .describe("Run as a foreground child and return its result here."),
+        .enum(
+          mode === "foreground" ? foregroundDelegationModes : delegationModes,
+        )
+        .default("foreground")
+        .describe(delegationModeDescription),
     ),
   });
+}
 
 export const agentListToolArgumentsSchema = z.object({}).strict();
 

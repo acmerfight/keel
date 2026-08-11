@@ -121,6 +121,8 @@ describe("subagent static type contracts", () => {
         readonly type: "subagent";
         readonly delegationId: string;
         readonly childRunId: string;
+        readonly profile: "explorer";
+        readonly effort: null;
       };
       readonly purpose: "agent_turn";
       readonly recoveryFor: null;

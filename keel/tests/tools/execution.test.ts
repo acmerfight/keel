@@ -12,7 +12,10 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { SubagentPersistenceError } from "../../src/agent/subagent-lifecycle.ts";
-import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
+import {
+  builtinSubagentProfileCatalog,
+  resolveBuiltinSubagentProfile,
+} from "../../src/agent/subagent-profile.ts";
 import type { McpRuntime } from "../../src/mcp/runtime-types.ts";
 import type { AgentControlCapability } from "../../src/tools/agent-control.ts";
 import { createDelegationExecutor } from "../../src/tools/delegation.ts";
@@ -323,7 +326,10 @@ describe("Tool Execution", () => {
     Then rejection gives Main an actionable recovery, empty usage stays unattributed, and cancelled usage remains observable`, async () => {
     const authority: ModelToolExposure = {
       kind: "auto",
-      delegation: "foreground",
+      delegation: {
+        mode: "foreground",
+        profileCatalog: builtinSubagentProfileCatalog,
+      },
     };
     const base: Pick<
       ExecuteToolCallOptions,
@@ -419,7 +425,13 @@ describe("Tool Execution", () => {
         workspace: process.cwd(),
         signal: new AbortController().signal,
         bash: { kind: "disabled" },
-        builtinToolAuthority: { kind: "auto", delegation: "foreground" },
+        builtinToolAuthority: {
+          kind: "auto",
+          delegation: {
+            mode: "foreground",
+            profileCatalog: builtinSubagentProfileCatalog,
+          },
+        },
         toolCall: {
           id: "delegate_persistence_failure",
           tool: "delegate",
@@ -473,7 +485,10 @@ describe("Tool Execution", () => {
       bash: { kind: "disabled" } as const,
       builtinToolAuthority: {
         kind: "auto",
-        delegation: "background",
+        delegation: {
+          mode: "background",
+          profileCatalog: builtinSubagentProfileCatalog,
+        },
         agentControl: true,
       } as const,
       agentControl,
@@ -634,7 +649,13 @@ describe("Tool Execution", () => {
       },
       signal,
       bash: { kind: "disabled" },
-      builtinToolAuthority: { kind: "auto", delegation: "foreground" },
+      builtinToolAuthority: {
+        kind: "auto",
+        delegation: {
+          mode: "foreground",
+          profileCatalog: builtinSubagentProfileCatalog,
+        },
+      },
       delegation: createDelegationExecutor(async (input) => ({
         delivery: "fresh",
         ok: true,

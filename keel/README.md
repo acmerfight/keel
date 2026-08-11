@@ -63,6 +63,44 @@ keel config show
 keel sessions
 ```
 
+## Subagent Profiles
+
+Subagents are off by default. Enable explicit, cost-bounded delegation when a
+task benefits from an independent read-only investigation:
+
+```bash
+keel --agent-policy explicit --max-cost 0.05 \
+  "Use subagents to review the parser and its tests."
+```
+
+Keel includes `explorer` and `reviewer` profiles. A project can add narrower
+profiles in `.agents/subagents.json`; project profiles are exposed to the model
+as `repo:<name>`:
+
+```json
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "focused-review": {
+      "base": "reviewer",
+      "model": "deepseek-v4-pro",
+      "effort": "max",
+      "tools": ["read", "grep", "git_diff"],
+      "maxTurns": 4,
+      "deadlineMs": 30000,
+      "maxResultChars": 1200
+    }
+  }
+}
+```
+
+Every project profile must be a subset of its built-in base. It can select a
+registered model and supported effort and can reduce tools, turns, deadline,
+and result size; it cannot add write, Bash, Skills, MCP, or delegation
+authority. Invalid or expanding configuration stops before any child starts.
+Accepted saved-session Runs persist their exact execution and capability
+snapshots, so later project-config changes affect only new delegations.
+
 ## Project Memory
 
 Project memory is a small, explicit store for durable facts that should survive

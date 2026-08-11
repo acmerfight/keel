@@ -1,4 +1,5 @@
-import type { SubagentProfileId } from "../agent/subagent-capability.ts";
+import type { SubagentProfileName } from "../agent/subagent-capability.ts";
+import type { SubagentProfileCatalog } from "../agent/subagent-profile.ts";
 import type { ProviderContinuationLease, Usage } from "../llm/types.ts";
 
 interface DeliveredDelegationToolResultBase {
@@ -50,7 +51,7 @@ export function projectDelegationRejection(
 
 export interface DelegationRequest {
   readonly toolCallId: string;
-  readonly profile: SubagentProfileId;
+  readonly profile: SubagentProfileName;
   readonly mode: "foreground" | "background";
   readonly task: string;
   readonly focusPaths: readonly string[];
@@ -91,6 +92,7 @@ export interface DelegationBatch {
 
 export interface DelegationCapability {
   readonly mode: "foreground" | "background";
+  readonly profileCatalog: SubagentProfileCatalog;
   readonly available: () => boolean;
   readonly delegate: (
     input: DelegationRequest,

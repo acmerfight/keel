@@ -1144,7 +1144,10 @@ export async function* runAgentTurn(
               : {}),
             ...(delegationAvailable
               ? {
-                  delegation: delegation.mode,
+                  delegation: {
+                    mode: delegation.mode,
+                    profileCatalog: delegation.profileCatalog,
+                  },
                 }
               : {}),
             ...agentControlExposure,

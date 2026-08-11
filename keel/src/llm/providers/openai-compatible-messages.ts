@@ -27,6 +27,9 @@ export function createChatCompletionsBody(
             options.maxOutputTokens,
         }
       : {}),
+    ...(options.reasoningEffort !== undefined
+      ? { reasoning_effort: options.reasoningEffort }
+      : {}),
     ...(toolExposure.kind === "none" ? {} : { tools, tool_choice: "auto" }),
     messages: [
       { role: "system", content: options.systemPrompt },

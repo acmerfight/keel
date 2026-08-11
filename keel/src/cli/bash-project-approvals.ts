@@ -4,7 +4,7 @@ import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import type { BashProjectApprovalGrant } from "../permissions/bash.ts";
 import { escapeApprovalText } from "./bash-approval-text.ts";
-import { approvalProjectRoot } from "./project-root.ts";
+import { projectRoot } from "./project-root.ts";
 import { sessionHome } from "./session-store.ts";
 
 interface BashProjectApprovalRuntime {
@@ -105,7 +105,7 @@ function writeApprovalsFile(
   }
 }
 
-export const bashApprovalProjectRoot = approvalProjectRoot;
+export const bashApprovalProjectRoot = projectRoot;
 
 function copyGrant(grant: BashProjectApprovalGrant): BashProjectApprovalGrant {
   return {

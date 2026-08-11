@@ -49,6 +49,8 @@ describe("Eval Runner", () => {
         type: "subagent",
         delegationId: "main:delegate-1",
         childRunId: "subagent-1",
+        profile: "explorer",
+        effort: null,
       },
     };
     const treatmentReport = {
@@ -161,6 +163,8 @@ writeFileSync(args[transcriptIndex + 1], '{"schemaVersion":1,"type":"transcript"
       type: "subagent" as const,
       delegationId: "main:delegate-1",
       childRunId: "subagent-1",
+      profile: "explorer",
+      effort: null,
     };
 
     // When
@@ -958,6 +962,8 @@ process.exitCode = 1;
         type: "subagent",
         delegationId: "main:delegate-1",
         childRunId: "subagent-1",
+        profile: "explorer",
+        effort: null,
       },
     };
     const reports = {
@@ -1086,6 +1092,107 @@ process.exitCode = 1;
             status: "observed",
             childRuns: 0,
             satisfied: true,
+          },
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a standard eval requires one exact subagent execution,
+    When one verified trial uses that profile tuple and another uses the wrong effort,
+    Then the exact trial passes selection and the mismatched trial fails the suite gate`, async () => {
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const delegationExpectation = {
+      profile: "repo:focused-review",
+      providerId: "deepseek",
+      model: "deepseek-v4-pro",
+      effort: "max",
+    } as const;
+    for (const prompt of ["exact-execution", "wrong-effort"] as const) {
+      await createTask(suiteDir, prompt, {
+        prompt,
+        verify: "exit 0\n",
+        solution: "exit 0\n",
+        maxCostUsd: 0.1,
+        agentPolicy: "explicit",
+        delegationPolicy: "require_one",
+        delegationExpectation,
+      });
+    }
+    const childOperation = {
+      ...VALID_REPORT.modelOperations[0],
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      purpose: "subagent_turn",
+      attribution: {
+        type: "subagent",
+        delegationId: "main:delegate-1",
+        childRunId: "subagent-1",
+        profile: "repo:focused-review",
+        effort: "max",
+      },
+    };
+    const reports = {
+      "exact-execution": {
+        ...VALID_REPORT,
+        modelOperations: [childOperation],
+        modelOperationCount: 1,
+      },
+      "wrong-effort": {
+        ...VALID_REPORT,
+        modelOperations: [
+          {
+            ...childOperation,
+            attribution: { ...childOperation.attribution, effort: "high" },
+          },
+        ],
+        modelOperationCount: 1,
+      },
+    };
+    const cliEntry = join(root, "delegation-execution-cli.mjs");
+    await writeFile(
+      cliEntry,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        "const args = process.argv.slice(2);",
+        "const reportIndex = args.indexOf('--report');",
+        `const reports = ${JSON.stringify(reports)};`,
+        "writeFileSync(args[reportIndex + 1], JSON.stringify(reports[args.at(-1)]));",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(await readResultLines(outFile)).toMatchObject([
+        {
+          taskId: "exact-execution",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            expectedExecution: delegationExpectation,
+            matchingChildRuns: 1,
+            satisfied: true,
+          },
+        },
+        {
+          taskId: "wrong-effort",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            expectedExecution: delegationExpectation,
+            matchingChildRuns: 0,
+            satisfied: false,
           },
         },
       ]);

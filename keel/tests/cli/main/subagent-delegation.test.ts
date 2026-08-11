@@ -310,6 +310,8 @@ describe("CLI Main - Subagent Delegation", () => {
                     type: z.literal("subagent"),
                     delegationId: z.string(),
                     childRunId: z.string(),
+                    profile: z.string(),
+                    effort: z.enum(["high", "max"]).nullable(),
                   })
                   .optional(),
               })
@@ -645,6 +647,8 @@ describe("CLI Main - Subagent Delegation", () => {
                     type: z.literal("subagent"),
                     delegationId: z.string(),
                     childRunId: z.string(),
+                    profile: z.string(),
+                    effort: z.enum(["high", "max"]).nullable(),
                   })
                   .optional(),
               })
@@ -668,11 +672,15 @@ describe("CLI Main - Subagent Delegation", () => {
             type: "subagent",
             delegationId: expect.stringMatching(/^main-[^:]+:delegate_once$/u),
             childRunId: expect.stringMatching(/^subagent-/u),
+            profile: "explorer",
+            effort: null,
           },
           {
             type: "subagent",
             delegationId: expect.stringMatching(/^main-[^:]+:delegate_once$/u),
             childRunId: expect.stringMatching(/^subagent-/u),
+            profile: "explorer",
+            effort: null,
           },
         ],
       );

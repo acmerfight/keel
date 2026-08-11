@@ -33,6 +33,7 @@ import {
 } from "./result-schema.ts";
 import {
   type DelegationPairEvalTask,
+  type EvalDelegationExpectation,
   type EvalDelegationPolicy,
   type EvalTask,
   loadEvalTasks,
@@ -188,26 +189,53 @@ function readRunReport(reportPath: string): RunReport | null {
   }
 }
 
-function childRunCount(report: RunReport): number {
-  return new Set(
-    report.modelOperations.flatMap((operation) =>
-      operation.attribution?.type === "subagent"
-        ? [
-            `${operation.attribution.delegationId}\0${operation.attribution.childRunId}`,
-          ]
-        : [],
-    ),
-  ).size;
+function executionMatches(
+  operation: RunReport["modelOperations"][number],
+  expectation: EvalDelegationExpectation,
+): boolean {
+  return (
+    operation.attribution?.type === "subagent" &&
+    operation.attribution.profile === expectation.profile &&
+    operation.attribution.effort === expectation.effort &&
+    operation.provider === expectation.providerId &&
+    operation.model === expectation.model
+  );
 }
 
 function delegationSelection(
   policy: EvalDelegationPolicy,
   report: RunReport | undefined,
+  expectation?: EvalDelegationExpectation,
 ): EvalDelegationSelection {
   if (report === undefined) return { status: "unavailable", policy };
-  const childRuns = childRunCount(report);
-  const satisfied = delegationPolicySatisfied(policy, childRuns);
-  return { status: "observed", policy, childRuns, satisfied };
+  const runs = new Map<string, boolean>();
+  for (const operation of report.modelOperations) {
+    const attribution = operation.attribution;
+    if (attribution?.type !== "subagent") continue;
+    const key = `${attribution.delegationId}\0${attribution.childRunId}`;
+    const matches =
+      expectation === undefined || executionMatches(operation, expectation);
+    runs.set(key, (runs.get(key) ?? true) && matches);
+  }
+  const childRuns = runs.size;
+  const policySatisfied = delegationPolicySatisfied(policy, childRuns);
+  if (expectation === undefined) {
+    return {
+      status: "observed",
+      policy,
+      childRuns,
+      satisfied: policySatisfied,
+    };
+  }
+  const matchingChildRuns = [...runs.values()].filter(Boolean).length;
+  return {
+    status: "observed",
+    policy,
+    childRuns,
+    expectedExecution: expectation,
+    matchingChildRuns,
+    satisfied: policySatisfied && matchingChildRuns === childRuns,
+  };
 }
 
 function readableTranscriptResult(transcriptPath: string | undefined): {
@@ -576,7 +604,7 @@ function trialResultLine<Task extends EvalTask>(
   result: TrialResult,
 ): EvalResultLine {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     timestamp: new Date().toISOString(),
     keelVersion: version,
     taskId: task.id,
@@ -864,7 +892,11 @@ export async function runEvalCommand(args: EvalCommandArgs): Promise<number> {
       );
       const trialSelection =
         task.agentPolicy !== "off" && task.delegationPolicy !== undefined
-          ? delegationSelection(task.delegationPolicy, result.report)
+          ? delegationSelection(
+              task.delegationPolicy,
+              result.report,
+              task.delegationExpectation,
+            )
           : undefined;
       const pass =
         taskVerified(result) &&

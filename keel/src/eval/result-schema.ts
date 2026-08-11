@@ -2,8 +2,10 @@ import { z } from "zod";
 import { runReportSchema } from "./report-schema.ts";
 import {
   type DelegationPairEvalTask,
+  type EvalDelegationExpectation,
   type EvalDelegationPolicy,
   type EvalTask,
+  evalDelegationExpectationSchema,
   evalDelegationPolicies,
   type MemoryPairEvalTask,
   type StandardEvalTask,
@@ -58,12 +60,21 @@ export type EvalResultVerdict =
     };
 
 export type EvalDelegationSelection =
-  | {
+  | ({
       readonly status: "observed";
       readonly policy: EvalDelegationPolicy;
       readonly childRuns: number;
       readonly satisfied: boolean;
-    }
+    } & (
+      | {
+          readonly expectedExecution?: never;
+          readonly matchingChildRuns?: never;
+        }
+      | {
+          readonly expectedExecution: EvalDelegationExpectation;
+          readonly matchingChildRuns: number;
+        }
+    ))
   | {
       readonly status: "unavailable";
       readonly policy: EvalDelegationPolicy;
@@ -132,7 +143,7 @@ export type EvalResultConditionForTask<Task extends EvalTask> =
         : never;
 
 const evalResultLineBaseSchema = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(4),
   timestamp: z.string(),
   keelVersion: z.string(),
   taskId: z.string(),
@@ -164,19 +175,31 @@ const evalResultVerdictSchema = z.union([
   }),
 ]);
 
-const observedDelegationSelectionSchema = z.object({
+const observedDelegationSelectionBaseShape = {
   status: z.literal("observed"),
   policy: z.enum(evalDelegationPolicies),
   childRuns: z.number().int().nonnegative(),
   satisfied: z.boolean(),
-});
+};
+const observedDelegationSelectionSchema = z.union([
+  z.object({
+    ...observedDelegationSelectionBaseShape,
+    expectedExecution: z.never().optional(),
+    matchingChildRuns: z.never().optional(),
+  }),
+  z.object({
+    ...observedDelegationSelectionBaseShape,
+    expectedExecution: evalDelegationExpectationSchema,
+    matchingChildRuns: z.number().int().nonnegative(),
+  }),
+]);
 const unavailableDelegationSelectionSchema = z.object({
   status: z.literal("unavailable"),
   policy: z.enum(evalDelegationPolicies),
   childRuns: z.never().optional(),
   satisfied: z.never().optional(),
 });
-const delegationSelectionSchema = z.discriminatedUnion("status", [
+const delegationSelectionSchema = z.union([
   observedDelegationSelectionSchema,
   unavailableDelegationSelectionSchema,
 ]);
@@ -209,15 +232,19 @@ export const evalResultLineSchema = evalResultLineBaseSchema
   .and(evalResultConditionSchema)
   .superRefine((line, ctx) => {
     const selection = line.delegationSelection;
-    if (
-      selection?.status === "observed" &&
-      selection.satisfied !==
-        delegationPolicySatisfied(selection.policy, selection.childRuns)
-    ) {
+    if (selection?.status === "observed") {
+      const executionSatisfied =
+        selection.expectedExecution === undefined ||
+        selection.matchingChildRuns === selection.childRuns;
+      const expectedSatisfied =
+        delegationPolicySatisfied(selection.policy, selection.childRuns) &&
+        executionSatisfied;
+      if (selection.satisfied === expectedSatisfied) return;
       ctx.addIssue({
         code: "custom",
         path: ["delegationSelection", "satisfied"],
-        message: "must match policy and distinct child count",
+        message:
+          "must match policy, distinct child count, and expected execution",
       });
     }
   });

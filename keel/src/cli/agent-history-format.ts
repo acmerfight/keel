@@ -1,3 +1,4 @@
+import { subagentCapabilityBaseProfile } from "../agent/subagent-capability.ts";
 import type { PersistedSubagentCanonicalResult } from "../agent/subagent-lifecycle.ts";
 import type {
   AgentHistoryEntry,
@@ -65,8 +66,11 @@ export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
       : []),
     `parent run: ${entry.parentRunId}`,
     `profile: ${entry.capability.profile}`,
+    `base profile: ${subagentCapabilityBaseProfile(entry.capability)}`,
     `capability snapshot: ${entry.capability.id}`,
-    `provider/model: ${entry.providerId}/${entry.model}`,
+    `provider/model/effort: ${entry.providerId}/${entry.model}/${entry.effort ?? "default"}`,
+    `tools: ${entry.capability.builtinTools.join(", ")}`,
+    `limits: turns=${entry.capability.maxTurns} deadlineMs=${entry.capability.deadlineMs} resultChars=${entry.capability.maxFinalTextChars}`,
     `turns: ${entry.accounting.turns}`,
     `cost: ${formatCost(entry.accounting.costUsd)}`,
     `usage: input=${entry.accounting.usage.inputTokens} cached=${entry.accounting.usage.cachedInputTokens} output=${entry.accounting.usage.outputTokens}`,

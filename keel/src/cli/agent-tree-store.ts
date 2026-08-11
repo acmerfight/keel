@@ -3,7 +3,10 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SessionMessage } from "../agent/session-message.ts";
 import type { SubagentCapabilitySnapshot } from "../agent/subagent-capability.ts";
-import { subagentCapabilitiesEqual } from "../agent/subagent-capability.ts";
+import {
+  compareSubagentCapability,
+  subagentCapabilitiesEqual,
+} from "../agent/subagent-capability.ts";
 import {
   type AgentId,
   type PersistedSubagentCanonicalResult,
@@ -20,6 +23,7 @@ import {
   type SubagentTerminalSnapshot,
   type SubagentTerminalStatus,
 } from "../agent/subagent-lifecycle.ts";
+import type { ProviderId } from "../core/provider-id.ts";
 import {
   agentTreeError,
   createDurableJsonlWriter,
@@ -137,6 +141,15 @@ function assertUniqueAcceptance(
   runs: Iterable<IdentifiedAgentRun>,
   candidate: AgentRunAcceptedRecord,
 ): void {
+  const ceilingRelation = compareSubagentCapability(
+    candidate.capability,
+    candidate.threadCapabilityCeiling,
+  );
+  if (ceilingRelation.kind === "expansion") {
+    agentTreeError(
+      `run ${candidate.childRunId} expands thread capability ${ceilingRelation.dimension}`,
+    );
+  }
   const existing = [...runs];
   const threadRuns = existing.filter(
     (run) => run.accepted.childAgentId === candidate.childAgentId,
@@ -177,12 +190,35 @@ function assertUniqueAcceptance(
   }
   if (
     !subagentCapabilitiesEqual(
-      previous.accepted.capability,
-      candidate.capability,
+      previous.accepted.threadCapabilityCeiling,
+      candidate.threadCapabilityCeiling,
     )
   ) {
     agentTreeError(
-      `continuation run ${candidate.childRunId} changes capability snapshot`,
+      `continuation run ${candidate.childRunId} changes thread capability ceiling`,
+    );
+  }
+  if (previous.accepted.capability.profile !== candidate.capability.profile) {
+    agentTreeError(
+      `continuation run ${candidate.childRunId} changes profile identity`,
+    );
+  }
+  const continuationRelation = compareSubagentCapability(
+    candidate.capability,
+    previous.accepted.capability,
+  );
+  if (continuationRelation.kind === "expansion") {
+    agentTreeError(
+      `continuation run ${candidate.childRunId} expands ${continuationRelation.dimension}`,
+    );
+  }
+  if (
+    previous.accepted.providerId !== candidate.providerId ||
+    previous.accepted.model !== candidate.model ||
+    previous.accepted.effort !== candidate.effort
+  ) {
+    agentTreeError(
+      `continuation run ${candidate.childRunId} changes execution snapshot`,
     );
   }
   if (previous.state.kind !== "terminal") {
@@ -207,8 +243,10 @@ export interface AgentHistoryEntry {
   readonly task: string;
   readonly focusPaths: readonly string[];
   readonly mode: SubagentRunMode;
-  readonly providerId: string;
+  readonly providerId: ProviderId;
   readonly model: string;
+  readonly effort: AgentRunAcceptedRecord["effort"];
+  readonly threadCapabilityCeiling: SubagentCapabilitySnapshot;
   readonly capability: SubagentCapabilitySnapshot;
   readonly systemPrompt: string;
   readonly transcriptRef: string;
@@ -992,6 +1030,8 @@ function historyEntries(
     mode: run.accepted.mode,
     providerId: run.accepted.providerId,
     model: run.accepted.model,
+    effort: run.accepted.effort,
+    threadCapabilityCeiling: run.accepted.threadCapabilityCeiling,
     capability: run.accepted.capability,
     systemPrompt: run.accepted.systemPrompt,
     transcriptRef: run.accepted.transcriptRef,
@@ -1019,6 +1059,8 @@ function threadRunEntries(
       mode: run.accepted.mode,
       providerId: run.accepted.providerId,
       model: run.accepted.model,
+      effort: run.accepted.effort,
+      threadCapabilityCeiling: run.accepted.threadCapabilityCeiling,
       capability: run.accepted.capability,
       systemPrompt: run.accepted.systemPrompt,
       transcriptRef: run.accepted.transcriptRef,
@@ -1089,7 +1131,7 @@ export function createAgentTreeHistory(options: {
         ...lifecycle,
         task: redactTextForPersistence(lifecycle.task),
         focusPaths: lifecycle.focusPaths.map(redactTextForPersistence),
-        providerId: redactTextForPersistence(lifecycle.providerId),
+        providerId: lifecycle.providerId,
         model: redactTextForPersistence(lifecycle.model),
         systemPrompt: redactTextForPersistence(lifecycle.systemPrompt),
       };

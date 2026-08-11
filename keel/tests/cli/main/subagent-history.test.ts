@@ -1,4 +1,11 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +61,342 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Durable Subagent History", () => {
+  test(`Given a project defines a narrower reviewer profile with a registered model and effort,
+    When main delegates it and the user resumes the thread after removing the project config,
+    Then every child Run uses the original narrower capability and execution snapshots`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-repo-profile-"));
+    const keelHome = join(workspace, ".keel-home");
+    const sessionId = "repo-agent-profile";
+    await mkdir(join(workspace, ".git"));
+    await mkdir(join(workspace, ".agents"));
+    await writeFile(
+      join(workspace, ".agents", "subagents.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: {
+          "focused-review": {
+            base: "reviewer",
+            model: "deepseek-v4-pro",
+            effort: "max",
+            tools: ["read", "grep", "git_diff"],
+            maxTurns: 4,
+            deadlineMs: 30_000,
+            maxResultChars: 1_200,
+          },
+        },
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "module.ts"),
+      "export const answer = 42;\n",
+      "utf8",
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_repo_review", "delegate", {
+                  profile: "repo:focused-review",
+                  task: "Review module.ts using the focused project profile.",
+                  focusPaths: ["module.ts"],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              [
+                sseToolCall("focused_read", "read", { path: "module.ts" }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(sseTextReplyWithUsage("R".repeat(2_000)));
+            return;
+          case 4:
+            response.end(sseTextReplyWithUsage("Focused review completed."));
+            return;
+          case 5:
+            response.end(
+              [
+                sseToolCall("continued_read", "read", { path: "module.ts" }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 6:
+            response.end(
+              sseTextReplyWithUsage("The focused review remains complete."),
+            );
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("Use the repo:focused-review subagent profile.\n");
+    const run = createRuntime(
+      [
+        "--session",
+        sessionId,
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "--no-skills",
+      ],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: keelHome,
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      expect(await runCliMain(run.runtime), run.stderr()).toBe(0);
+      const inspectInput = new PassThrough();
+      inspectInput.end("/agents show 1\n");
+      const inspect = createRuntime(
+        [
+          "--resume",
+          sessionId,
+          "--provider",
+          "fake",
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+          "--no-skills",
+        ],
+        {
+          cwd: workspace,
+          input: inspectInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+          },
+        },
+      );
+      const exitCode = await runCliMain(inspect.runtime);
+
+      // Then
+      expect(exitCode, inspect.stderr()).toBe(0);
+      expect(requests).toHaveLength(4);
+      expect(JSON.stringify(requests[0])).toContain("repo:focused-review");
+      expect(requests[1]).toMatchObject({
+        model: "deepseek-v4-pro",
+        reasoning_effort: "max",
+      });
+      expect(toolNames(requests[1]).toSorted()).toEqual(
+        ["read", "grep", "git_diff"].toSorted(),
+      );
+      expect(inspect.stdout()).toContain("profile: repo:focused-review");
+      expect(inspect.stdout()).toContain("base profile: reviewer");
+      expect(inspect.stdout()).toContain(
+        "provider/model/effort: deepseek/deepseek-v4-pro/max",
+      );
+      expect(inspect.stdout()).toContain("tools: read, grep, git_diff");
+      expect(inspect.stdout()).toContain(
+        "limits: turns=4 deadlineMs=30000 resultChars=1200",
+      );
+      expect(inspect.stdout()).toContain(`result: ${"R".repeat(1_197)}...`);
+      expect(inspect.stdout()).not.toContain("R".repeat(1_201));
+      expect(inspect.stdout()).toContain("status: completed");
+
+      await rm(join(workspace, ".agents", "subagents.json"));
+      const resumeInput = new PassThrough();
+      resumeInput.end(
+        "/agents resume 1 Re-check module.ts.\n/agents wait 1\n/agents show 1\n",
+      );
+      const resume = createRuntime(
+        [
+          "--resume",
+          sessionId,
+          "--provider",
+          "fake",
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+          "--no-skills",
+        ],
+        {
+          cwd: workspace,
+          input: resumeInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+
+      expect(await runCliMain(resume.runtime), resume.stderr()).toBe(0);
+      expect(requests).toHaveLength(6);
+      expect(requests[4]).toMatchObject({
+        model: "deepseek-v4-pro",
+        reasoning_effort: "max",
+      });
+      expect(toolNames(requests[4]).toSorted()).toEqual(
+        ["read", "grep", "git_diff"].toSorted(),
+      );
+      expect(resume.stdout()).toContain("profile: repo:focused-review");
+      expect(resume.stdout()).toContain(
+        "provider/model/effort: deepseek/deepseek-v4-pro/max",
+      );
+      expect(resume.stdout()).toContain(
+        "limits: turns=4 deadlineMs=30000 resultChars=1200",
+      );
+      expect(resume.stdout()).toContain("The focused review remains complete.");
+      expect(resume.stdout()).toContain("continuation of:");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project profile tries to add a tool outside its built-in base,
+    When Keel loads the enabled subagent runtime,
+    Then it fails closed before making any provider request`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-repo-expansion-"));
+    const keelHome = join(workspace, ".keel-home");
+    await mkdir(join(workspace, ".git"));
+    await mkdir(join(workspace, ".agents"));
+    await writeFile(
+      join(workspace, ".agents", "subagents.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: {
+          unsafe: {
+            base: "explorer",
+            tools: ["read", "git_diff"],
+          },
+        },
+      }),
+      "utf8",
+    );
+    let providerRequests = 0;
+    const server = createServer((request, response) => {
+      providerRequests++;
+      request.resume();
+      response.writeHead(500);
+      response.end("must not be called");
+    });
+    await listen(server);
+    const run = createRuntime(
+      [
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "--no-skills",
+        "Inspect module.ts",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(providerRequests).toBe(0);
+      expect(run.stderr()).toContain(
+        'project subagent profile "repo:unsafe" expands explorer builtinTools',
+      );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a project profile requests an effort its selected model does not support,
+    When Keel loads the enabled subagent runtime,
+    Then it rejects the profile instead of silently ignoring the effort`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-repo-effort-"));
+    const keelHome = join(workspace, ".keel-home");
+    await mkdir(join(workspace, ".git"));
+    await mkdir(join(workspace, ".agents"));
+    await writeFile(
+      join(workspace, ".agents", "subagents.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: {
+          unsupported: {
+            base: "explorer",
+            effort: "max",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const run = createRuntime(
+      [
+        "--provider",
+        "fake",
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "Inspect module.ts",
+      ],
+      { cwd: workspace, env: { KEEL_HOME: keelHome } },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(run.stderr()).toContain(
+        'project subagent effort "max" is unsupported by fake/fake',
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a saved session asks for a reviewer subagent,
     When main delegates the review and the user later inspects that agent,
     Then the child has reviewer-only tools and /agents shows its durable capability snapshot`, async () => {

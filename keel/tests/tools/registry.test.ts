@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { resolveBuiltinSubagentProfile } from "../../src/agent/subagent-profile.ts";
+import { narrowSubagentCapabilityLimits } from "../../src/agent/subagent-capability.ts";
+import {
+  builtinSubagentProfileCatalog,
+  resolveBuiltinSubagentProfile,
+} from "../../src/agent/subagent-profile.ts";
 import { WorkflowSkillError } from "../../src/skills/model.ts";
 import { executeToolCall } from "../../src/tools/execution.ts";
 import type {
@@ -119,7 +123,10 @@ function allBuiltinProviderTools(): readonly OpenAICompatibleToolDefinition[] {
   const candidates = [
     ...openAICompatibleTools({
       kind: "auto",
-      delegation: "background",
+      delegation: {
+        mode: "background",
+        profileCatalog: builtinSubagentProfileCatalog,
+      },
       agentControl: true,
       bash: true,
       skill: true,
@@ -1207,7 +1214,10 @@ describe("tool registry", () => {
         skill: true,
         memory: "reviewed",
         mcp: emptyMcpExposure,
-        delegation: "background",
+        delegation: {
+          mode: "background",
+          profileCatalog: builtinSubagentProfileCatalog,
+        },
         agentControl: true,
       }).map((tool) => tool.function.name),
     ).toEqual(fullyEnabledMainToolNames);
@@ -1248,6 +1258,13 @@ describe("tool registry", () => {
       toolChoice: "auto",
     });
     const reviewerAccounting = resolveModelToolExposure(exposure);
+    const narrowerAccounting = resolveModelToolExposure({
+      kind: "auto",
+      profile: "subagent",
+      capability: narrowSubagentCapabilityLimits(reviewerCapability, {
+        maxTurns: reviewerCapability.maxTurns - 1,
+      }),
+    });
     const mainAccounting = resolveModelToolExposure({ kind: "auto" });
     expect(modelToolExposuresEqual(reviewerAccounting, mainAccounting)).toBe(
       false,
@@ -1255,6 +1272,9 @@ describe("tool registry", () => {
     expect(modelToolExposuresEqual(mainAccounting, reviewerAccounting)).toBe(
       false,
     );
+    expect(
+      modelToolExposuresEqual(reviewerAccounting, narrowerAccounting),
+    ).toBe(false);
   });
 
   test(`Given background ownership exists only in a saved interactive session,
@@ -1262,11 +1282,17 @@ describe("tool registry", () => {
     Then foreground runs cannot request background mode and control tools stay session-scoped`, () => {
     const foreground = openAICompatibleTools({
       kind: "auto",
-      delegation: "foreground",
+      delegation: {
+        mode: "foreground",
+        profileCatalog: builtinSubagentProfileCatalog,
+      },
     });
     const attached = openAICompatibleTools({
       kind: "auto",
-      delegation: "background",
+      delegation: {
+        mode: "background",
+        profileCatalog: builtinSubagentProfileCatalog,
+      },
       agentControl: true,
     });
 

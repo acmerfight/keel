@@ -187,7 +187,7 @@ import {
   formatUndoCheckpointWarning,
   sanitizeStatusLineText,
 } from "./output.ts";
-import { approvalProjectRoot } from "./project-root.ts";
+import { projectRoot } from "./project-root.ts";
 import {
   accountModelOperations,
   createAgentEventReportRecorder,
@@ -634,7 +634,7 @@ export async function runInteractiveSession(
       lifecycle: options.mcp.lifecycle,
       permission: createMcpPermissionPolicy({
         runtime: options.mcp.approvalRuntime,
-        projectRoot: approvalProjectRoot(options.workspace),
+        projectRoot: projectRoot(options.workspace),
         prompt: options.mcp.canPrompt
           ? {
               kind: "interactive",
@@ -785,6 +785,28 @@ export async function runInteractiveSession(
           model: operationResolved.model,
           costModel: options.requireKnownCostModel(operationResolved),
         };
+  const resolveSubagentExecution = (
+    userMessage: string,
+    selection: ProviderSelection,
+  ) => {
+    const child = options.resolveProvider(userMessage, selection);
+    const childModelMaxOutputTokens = modelMetadataMaxOutputTokens(
+      child.modelMetadata,
+    );
+    return {
+      provider: child.provider,
+      providerId: child.providerId,
+      model: child.model,
+      costModel: options.requireKnownCostModel(child),
+      modelMetadata: child.modelMetadata ?? { status: "unknown" as const },
+      ...(child.contextCompaction !== undefined
+        ? { contextCompaction: child.contextCompaction }
+        : {}),
+      ...(childModelMaxOutputTokens !== undefined
+        ? { modelMaxOutputTokens: childModelMaxOutputTokens }
+        : {}),
+    };
+  };
   const restoreDrainedInput = (lines: readonly QueuedLine[]) => {
     if (lines.length === 0) {
       return;
@@ -1286,6 +1308,9 @@ export async function runInteractiveSession(
               providerId: resolved.providerId,
               model: resolved.model,
               costModel: turnCostModel,
+              modelMetadata: resolved.modelMetadata ?? {
+                status: "unknown" as const,
+              },
               maxCostUsd: remainingCostUsd,
               projectInstructions: options.projectInstructions,
               hiddenWorkspacePaths,
@@ -1311,6 +1336,8 @@ export async function runInteractiveSession(
               onProgress: (event) => {
                 options.writeStderr(formatSubagentProgress(event));
               },
+              resolveProvider: (selection) =>
+                resolveSubagentExecution(request.userMessage, selection),
             })
           : undefined;
       const stream = observeAgentStateEvents(
@@ -2001,6 +2028,9 @@ export async function runInteractiveSession(
                   providerId: commandResolved.providerId,
                   model: commandResolved.model,
                   costModel: commandCostModel,
+                  modelMetadata: commandResolved.modelMetadata ?? {
+                    status: "unknown" as const,
+                  },
                   maxCostUsd: subagentSession.sharedCostBudget.remainingUsd(),
                   projectInstructions: options.projectInstructions,
                   hiddenWorkspacePaths,
@@ -2028,6 +2058,11 @@ export async function runInteractiveSession(
                   onProgress: (event) => {
                     options.writeStderr(formatSubagentProgress(event));
                   },
+                  resolveProvider: (selection) =>
+                    resolveSubagentExecution(
+                      interactiveCommand.message,
+                      selection,
+                    ),
                 });
                 const detach = subagentSession.continuation.attach(
                   commandRuntime.supervisor.continuation,
