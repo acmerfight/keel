@@ -130,12 +130,22 @@ export interface SubagentDelegationProfileAuthority {
   ) => ResolvedSubagentProfile | undefined;
 }
 
+interface SubagentDelegationParentProfile {
+  readonly name: SubagentProfileName;
+  readonly base: SubagentProfileId;
+  readonly execution: SubagentExecutionSnapshot;
+  readonly roleInstructions: string;
+}
+
 export function narrowSubagentDelegationProfiles(
   registry: SubagentProfileRegistry,
+  parentProfile: SubagentDelegationParentProfile,
   ceiling: ReadOnlySubagentCapabilitySnapshot,
-): SubagentDelegationProfileAuthority | undefined {
+): SubagentDelegationProfileAuthority {
   const profiles = registry.all().flatMap((profile) => {
-    if (profile.base === "writer") return [];
+    if (profile.name === parentProfile.name || profile.base === "writer") {
+      return [];
+    }
     const capability = narrowSubagentCapabilityToCeiling(
       profile.capability,
       ceiling,
@@ -145,10 +155,10 @@ export function narrowSubagentDelegationProfiles(
     }
     return [{ ...profile, capability }];
   });
-  const first = profiles[0];
-  if (first === undefined) return undefined;
+  const first = { ...parentProfile, capability: ceiling };
+  const allProfiles = [first, ...profiles];
   const resolved = new Map(
-    profiles.map((profile) => [profile.name, profile] as const),
+    allProfiles.map((profile) => [profile.name, profile] as const),
   );
   const catalogEntry = (
     profile: ResolvedSubagentProfile,
@@ -162,7 +172,7 @@ export function narrowSubagentDelegationProfiles(
     })),
   });
   return {
-    catalog: [catalogEntry(first), ...profiles.slice(1).map(catalogEntry)],
+    catalog: [catalogEntry(first), ...profiles.map(catalogEntry)],
     resolve: (name) => resolved.get(name),
   };
 }

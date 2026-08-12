@@ -130,12 +130,12 @@ function delegateSkillsSchema(catalog: SubagentProfileCatalog) {
 function validateProfileSkillLease(
   catalog: SubagentProfileCatalog,
   input: {
-    readonly profile?: SubagentProfileName | undefined;
+    readonly profile: SubagentProfileName;
     readonly skills?: readonly string[] | undefined;
   },
   context: z.RefinementCtx,
 ): void {
-  const profileName = input.profile ?? catalog[0].name;
+  const profileName = input.profile;
   const profile = catalog.find((entry) => entry.name === profileName);
   const allowed = new Set(profile?.skills ?? []);
   if ((input.skills ?? []).every((skill) => allowed.has(skill))) return;
@@ -149,12 +149,12 @@ function validateProfileSkillLease(
 function validateProfileMcpLease(
   catalog: SubagentProfileCatalog,
   input: {
-    readonly profile?: SubagentProfileName | undefined;
+    readonly profile: SubagentProfileName;
     readonly mcp?: readonly SubagentMcpToolSelector[] | undefined;
   },
   context: z.RefinementCtx,
 ): void {
-  const profileName = input.profile ?? catalog[0].name;
+  const profileName = input.profile;
   const profile = catalog.find((entry) => entry.name === profileName);
   const allowed = new Set((profile?.mcp ?? []).map(mcpSelectorKey));
   if ((input.mcp ?? []).every((tool) => allowed.has(mcpSelectorKey(tool)))) {
@@ -170,7 +170,7 @@ function validateProfileMcpLease(
 function validateProfileLeases(
   catalog: SubagentProfileCatalog,
   input: {
-    readonly profile?: SubagentProfileName | undefined;
+    readonly profile: SubagentProfileName;
     readonly skills?: readonly string[] | undefined;
     readonly mcp?: readonly SubagentMcpToolSelector[] | undefined;
   },
@@ -291,8 +291,6 @@ export function delegateProviderArgumentsSchemaForCatalog(
     profileDescription(catalog),
     mode === "foreground" ? foregroundDelegationModes : delegationModes,
     catalog,
-  ).superRefine((input, context) =>
-    validateProfileLeases(catalog, input, context),
   );
 }
 

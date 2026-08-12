@@ -53,6 +53,8 @@ import {
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   type SubagentCapabilitySnapshot,
   type SubagentMcpToolSelector,
+  type SubagentProfileId,
+  type SubagentProfileName,
   selectSubagentCapabilityMcpTools,
   selectSubagentCapabilitySkills,
   skillDescriptorFromSubagentSnapshot,
@@ -248,6 +250,7 @@ type PreparedDelegationCandidate = PreparedDelegationCandidateBase &
         readonly workspaceAccess: "read_only";
         readonly capability: ReadOnlySubagentCapabilitySnapshot;
         readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+        readonly delegationProfiles?: SubagentDelegationProfileAuthority;
       }
     | {
         readonly workspaceAccess: "isolated_write";
@@ -260,6 +263,7 @@ type PreparedAcceptedWorkspace =
   | {
       readonly kind: "read_only";
       readonly capability: ReadOnlySubagentCapabilitySnapshot;
+      readonly delegationProfiles?: SubagentDelegationProfileAuthority;
     }
   | {
       readonly kind: "isolated_write";
@@ -378,7 +382,7 @@ interface CreateSubagentSupervisorOptionsBase {
   readonly admission?: SubagentTreeAdmission;
   readonly projectInstructions?: ProjectInstructions;
   readonly hiddenWorkspacePaths?: readonly string[];
-  readonly modelMaxOutputTokens?: number;
+  readonly modelMaxOutputTokens?: number | undefined;
   readonly modelOperations?: MainModelOperationInstrumentation;
   readonly transcriptStore: AbortableToolOutputArtifactStore;
   readonly now: () => number;
@@ -1143,20 +1147,28 @@ export function createSubagentSupervisor(
       systemPrompt,
       capability.skills.map(skillDescriptorFromSubagentSnapshot),
     );
-  const childDelegationCatalog = (
+  const childDelegationProfiles = (
     mode: "foreground" | "background",
-    capability: SubagentCapabilitySnapshot,
+    profile: {
+      readonly name: SubagentProfileName;
+      readonly base: SubagentProfileId;
+      readonly execution: SubagentExecutionSnapshot;
+      readonly roleInstructions: string;
+    },
+    capability: ReadOnlySubagentCapabilitySnapshot,
   ) =>
     options.parent.kind === "main" &&
     options.parent.childDelegation === "foreground_read_only" &&
-    mode === "foreground" &&
-    !subagentCapabilityIsWriter(capability)
-      ? narrowSubagentDelegationProfiles(options.profileRegistry, capability)
-          ?.catalog
+    mode === "foreground"
+      ? narrowSubagentDelegationProfiles(
+          options.profileRegistry,
+          profile,
+          capability,
+        )
       : undefined;
   const childToolExposure = (
     capability: SubagentCapabilitySnapshot,
-    delegationCatalog: ReturnType<typeof childDelegationCatalog>,
+    delegationProfiles: ReturnType<typeof childDelegationProfiles>,
   ): ModelToolExposure => {
     const common = {
       kind: "auto" as const,
@@ -1174,7 +1186,7 @@ export function createSubagentSupervisor(
     if (subagentCapabilityIsWriter(capability)) {
       return { ...common, capability };
     }
-    if (delegationCatalog === undefined) {
+    if (delegationProfiles === undefined) {
       return { ...common, capability };
     }
     return {
@@ -1182,7 +1194,7 @@ export function createSubagentSupervisor(
       capability,
       delegation: {
         mode: "foreground" as const,
-        profileCatalog: delegationCatalog,
+        profileCatalog: delegationProfiles.catalog,
       },
     };
   };
@@ -1294,6 +1306,7 @@ export function createSubagentSupervisor(
         readonly workspace: {
           readonly kind: "read_only";
           readonly capability: ReadOnlySubagentCapabilitySnapshot;
+          readonly delegationProfiles?: SubagentDelegationProfileAuthority;
         };
       })
     | (ExecuteAcceptedInputBase & {
@@ -1370,58 +1383,34 @@ export function createSubagentSupervisor(
           ? options.backgroundModelOperations
           : options.modelOperations;
       const nestedDelegationProfiles =
-        options.parent.kind === "main" &&
-        options.parent.childDelegation === "foreground_read_only" &&
-        input.mode === "foreground" &&
         input.workspace.kind === "read_only"
-          ? narrowSubagentDelegationProfiles(
-              options.profileRegistry,
-              input.workspace.capability,
-            )
+          ? input.workspace.delegationProfiles
           : undefined;
       const nestedSupervisor =
         nestedDelegationProfiles === undefined
           ? undefined
-          : createSubagentSupervisor({
-              workspace: options.workspace,
-              platform: options.platform,
-              parent: {
-                kind: "subagent",
-                runId: input.childRunId,
-                delegationProfiles: nestedDelegationProfiles,
-              },
-              rootBudget: childBudget,
-              sharedCostBudget: options.sharedCostBudget,
-              profileRegistry: options.profileRegistry,
-              resolveExecution: options.resolveExecution,
-              admission,
-              ...(options.projectInstructions !== undefined
-                ? { projectInstructions: options.projectInstructions }
-                : {}),
-              ...(options.hiddenWorkspacePaths !== undefined
-                ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
-                : {}),
-              ...(input.execution.modelMaxOutputTokens !== undefined
-                ? {
-                    modelMaxOutputTokens: input.execution.modelMaxOutputTokens,
-                  }
-                : {}),
-              ...(childInstrumentation !== undefined
-                ? { modelOperations: childInstrumentation }
-                : {}),
-              transcriptStore: options.transcriptStore,
-              now: options.now,
-              onProgress: options.onProgress,
-              ...(options.settlementGraceMs !== undefined
-                ? { settlementGraceMs: options.settlementGraceMs }
-                : {}),
-              ...(options.providerBlocked !== undefined
-                ? { providerBlocked: options.providerBlocked }
-                : {}),
-              ...(options.lifecyclePersistence !== undefined
-                ? { lifecyclePersistence: options.lifecyclePersistence }
-                : {}),
-            });
+          : (() => {
+              const {
+                admission: _admission,
+                background: _background,
+                backgroundModelOperations: _backgroundModelOperations,
+                parent: _parent,
+                rootBudget: _rootBudget,
+                writeWorkspace: _writeWorkspace,
+                ...inheritedOptions
+              } = options;
+              return createSubagentSupervisor({
+                ...inheritedOptions,
+                parent: {
+                  kind: "subagent",
+                  runId: input.childRunId,
+                  delegationProfiles: nestedDelegationProfiles,
+                },
+                rootBudget: childBudget,
+                admission,
+                modelMaxOutputTokens: input.execution.modelMaxOutputTokens,
+              });
+            })();
       const childModelOperations:
         | SubagentModelOperationInstrumentation
         | undefined =
@@ -1547,8 +1536,7 @@ export function createSubagentSupervisor(
             loopAccountingObserved = true;
             usage = accounting.usage;
             turns = accounting.turns;
-            costUsd =
-              accounting.cost?.spentUsd ?? childBudget.observedSpendUsd();
+            costUsd = accounting.costUsd;
             runningPersistence?.accounting({
               usage,
               turns: accounting.turns,
@@ -1564,7 +1552,6 @@ export function createSubagentSupervisor(
             loopAccountingObserved = true;
             usage = event.usage;
             turns = event.turns;
-            costUsd = event.cost?.spentUsd ?? childBudget.observedSpendUsd();
             terminal = terminalOutcomeFromStopReason(
               event.stopReason,
               childFinalText(transcriptMessages, capability.maxFinalTextChars),
@@ -1918,13 +1905,6 @@ export function createSubagentSupervisor(
         });
         continue;
       }
-      if (options.parent.kind === "subagent" && input.mode !== "foreground") {
-        recordRejection(input, delegationId, {
-          reason: "Delegation rejected: nested delegation is foreground-only.",
-          recovery: "Retry the focused read-only subtask in foreground mode.",
-        });
-        continue;
-      }
       if (
         input.mode === "background" &&
         options.background?.signal.aborted === true
@@ -1997,6 +1977,9 @@ export function createSubagentSupervisor(
         continue;
       }
       const capability = profileSelection.selection.capability;
+      const delegationProfiles = subagentCapabilityIsWriter(capability)
+        ? undefined
+        : childDelegationProfiles(input.mode, profile, capability);
       if (profileSelection.workspaceAccess === "isolated_write") {
         if (input.mode !== "foreground") {
           recordRejection(input, delegationId, {
@@ -2042,9 +2025,7 @@ export function createSubagentSupervisor(
         maxFinalTextChars: capability.maxFinalTextChars,
         workspaceAccess: profileSelection.workspaceAccess,
         delegation:
-          childDelegationCatalog(input.mode, capability) === undefined
-            ? "none"
-            : "foreground_read_only",
+          delegationProfiles === undefined ? "none" : "foreground_read_only",
       });
       const userMessage = childTaskMessage(
         delegationId,
@@ -2055,10 +2036,7 @@ export function createSubagentSupervisor(
         systemPrompt: effectiveChildSystemPrompt(systemPrompt, capability),
         messages: [{ role: "user", content: userMessage }],
         signal: input.signal,
-        toolExposure: childToolExposure(
-          capability,
-          childDelegationCatalog(input.mode, capability),
-        ),
+        toolExposure: childToolExposure(capability, delegationProfiles),
       };
       const minimumInputTokens = estimateProviderInputTokens(
         execution.provider,
@@ -2103,6 +2081,7 @@ export function createSubagentSupervisor(
           workspaceAccess: profileSelection.workspaceAccess,
           capability: profileSelection.selection.capability,
           threadCapabilityCeiling: profileSelection.threadCapabilityCeiling,
+          ...(delegationProfiles !== undefined ? { delegationProfiles } : {}),
         });
       }
     }
@@ -2199,6 +2178,7 @@ export function createSubagentSupervisor(
               readonly kind: "read_only";
               readonly capability: ReadOnlySubagentCapabilitySnapshot;
               readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+              readonly delegationProfiles?: SubagentDelegationProfileAuthority;
             }
           | {
               readonly kind: "isolated_write";
@@ -2233,6 +2213,9 @@ export function createSubagentSupervisor(
             kind: "read_only",
             capability: candidate.capability,
             threadCapabilityCeiling: candidate.threadCapabilityCeiling,
+            ...(candidate.delegationProfiles !== undefined
+              ? { delegationProfiles: candidate.delegationProfiles }
+              : {}),
           };
         }
         const acceptedSystemPrompt =
@@ -2374,6 +2357,11 @@ export function createSubagentSupervisor(
             workspace: {
               kind: "read_only",
               capability: workspaceAuthority.capability,
+              ...(workspaceAuthority.delegationProfiles !== undefined
+                ? {
+                    delegationProfiles: workspaceAuthority.delegationProfiles,
+                  }
+                : {}),
             },
             ...(persistence !== undefined ? { persistence } : {}),
           });

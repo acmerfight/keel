@@ -268,7 +268,7 @@ interface RunAgentTurnOptionsBase {
     accounting: Pick<
       Extract<AgentEvent, { readonly type: "end" }>,
       "usage" | "turns" | "cost"
-    >,
+    > & { readonly costUsd: number },
   ) => void;
 }
 
@@ -1093,6 +1093,7 @@ export async function* runAgentTurn(
       options.onAgentLoopAccountingUpdated?.({
         usage: state.accounting.totalUsage,
         turns: completedTurns,
+        costUsd: state.accounting.totalCostUsd,
         ...(cost !== undefined ? { cost } : {}),
       });
       return cost;
@@ -1177,7 +1178,6 @@ export async function* runAgentTurn(
               kind: "auto",
               profile: "subagent",
               capability: options.subagentCapability,
-              ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
             }
           : {
               kind: "auto",
@@ -1363,10 +1363,7 @@ export async function* runAgentTurn(
         wrapUpTurn.usage,
         costTracking,
       );
-      const finalCost = buildCostReport(
-        state.accounting.totalCostUsd,
-        costTracking,
-      );
+      const finalCost = publishAccountingUpdate();
       yield {
         type: "end",
         usage: state.accounting.totalUsage,
