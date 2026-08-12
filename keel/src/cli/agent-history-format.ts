@@ -34,6 +34,27 @@ function formatCost(costUsd: number): string {
   return `$${costUsd.toFixed(6)}`;
 }
 
+function formatWorkspace(
+  result: PersistedSubagentCanonicalResult | null,
+): readonly string[] {
+  const workspace = result?.workspace;
+  if (workspace === undefined || workspace === null) return [];
+  return [
+    `workspace: isolated write (${workspace.disposition})`,
+    `workspace base: ${workspace.baseCommit}`,
+    `workspace branch: ${workspace.branch}`,
+    `workspace worktree: ${workspace.worktreePath ?? "removed"}`,
+    `workspace patch: ${workspace.patchRef ?? "unavailable"}`,
+    ...(workspace.patchSha256 === null
+      ? []
+      : [`workspace patch sha256: ${workspace.patchSha256}`]),
+    `workspace summary: ${workspace.summary}`,
+    ...(workspace.error === null
+      ? []
+      : [`workspace error: ${workspace.error}`]),
+  ];
+}
+
 export function formatAgentHistoryList(history: AgentTreeHistory): string {
   const entries = history.entries();
   return [
@@ -79,6 +100,7 @@ export function formatAgentHistoryDetail(entry: AgentHistoryEntry): string {
     `cost: ${formatCost(entry.accounting.costUsd)}`,
     `usage: input=${entry.accounting.usage.inputTokens} cached=${entry.accounting.usage.cachedInputTokens} output=${entry.accounting.usage.outputTokens}`,
     `transcript: ${entry.transcriptRef}`,
+    ...formatWorkspace(result),
     ...(result !== null && result.pendingInputCount > 0
       ? [
           `pending input: ${result.pendingInputCount} queued message(s) will be available to the next Run`,

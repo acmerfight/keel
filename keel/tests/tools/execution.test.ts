@@ -33,6 +33,7 @@ const unusedAgentMutationControl = {
 } satisfies Pick<AgentControlCapability, "input" | "resume">;
 
 const explorerCapability = resolveBuiltinSubagentProfile("explorer").snapshot;
+const writerCapability = resolveBuiltinSubagentProfile("writer").snapshot;
 
 const EDIT_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const SHELL_ENV_KEY = "SHELL";
@@ -296,6 +297,87 @@ describe("Tool Execution", () => {
         .slice(1)
         .every((result) => result.content.includes("unavailable")),
     ).toBe(true);
+  });
+
+  test(`Given dispatcher input mismatches child capability and workspace lease,
+    When either a writer omits its lease or a read-only child carries one,
+    Then both executions fail closed before touching the workspace`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-execution-lease-"));
+    await writeFile(join(workspace, "existing.txt"), "safe\n");
+    let leaseVerified = false;
+
+    try {
+      const writerWithoutLease = await executeToolCall({
+        workspace,
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+        builtinToolAuthority: {
+          kind: "auto",
+          profile: "subagent",
+          capability: writerCapability,
+        },
+        toolCall: {
+          id: "writer_without_lease",
+          tool: "write",
+          path: "forbidden.txt",
+          content: "must not exist\n",
+        },
+      });
+      const readerWithLease = await executeToolCall({
+        workspace,
+        workspaceLease: {
+          verify: () => {
+            leaseVerified = true;
+          },
+        },
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+        builtinToolAuthority: {
+          kind: "auto",
+          profile: "subagent",
+          capability: explorerCapability,
+        },
+        toolCall: {
+          id: "reader_with_lease",
+          tool: "read",
+          path: "existing.txt",
+        },
+      });
+      const mainWithLease = await executeToolCall({
+        workspace,
+        workspaceLease: {
+          verify: () => {
+            leaseVerified = true;
+          },
+        },
+        signal: new AbortController().signal,
+        bash: { kind: "disabled" },
+        toolCall: {
+          id: "main_with_lease",
+          tool: "read",
+          path: "existing.txt",
+        },
+      });
+
+      expect(writerWithoutLease).toMatchObject({ ok: false, effects: [] });
+      expect(readerWithLease).toMatchObject({ ok: false, effects: [] });
+      expect(mainWithLease).toMatchObject({ ok: false, effects: [] });
+      expect(writerWithoutLease.content).toContain(
+        "workspace authority does not match its lease",
+      );
+      expect(readerWithLease.content).toContain(
+        "workspace authority does not match its lease",
+      );
+      expect(mainWithLease.content).toContain(
+        "workspace authority does not match its lease",
+      );
+      expect(leaseVerified).toBe(false);
+      await expect(
+        readFile(join(workspace, "forbidden.txt")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test(`Given a delegation call reaches dispatcher without its host capability,

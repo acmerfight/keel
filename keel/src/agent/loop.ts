@@ -110,12 +110,16 @@ import type {
   SessionMessage,
 } from "./session-message.ts";
 import type { AgentStopPolicy } from "./stop-policy.ts";
-import type { SubagentCapabilitySnapshot } from "./subagent-capability.ts";
+import type {
+  ReadOnlySubagentCapabilitySnapshot,
+  WriterSubagentCapabilitySnapshot,
+} from "./subagent-capability.ts";
 import {
   maxSubagentResultCharsForBatch,
   type SubagentResultContinuationBudget,
   type SubagentResultContinuationLease,
 } from "./subagent-tree-budget.ts";
+import type { SubagentWriteWorkspaceLease } from "./subagent-workspace.ts";
 import {
   DEFAULT_TOOL_OUTPUT_ARTIFACT_AGGREGATE_PREVIEW_CHARS,
   DEFAULT_TOOL_OUTPUT_ARTIFACT_MAX_AGGREGATE_INLINE_CHARS,
@@ -189,7 +193,6 @@ interface SubagentRunAgentOptionsBase {
   readonly mcp?: AgentMcpRuntime;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "subagent";
-  readonly subagentCapability: SubagentCapabilitySnapshot;
   readonly delegation?: never;
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
@@ -200,7 +203,20 @@ interface SubagentRunAgentOptionsBase {
   readonly injectedUserMessages: AgentInjectedUserMessageQueue;
 }
 
+export type SubagentWorkspaceRunOptions =
+  | {
+      readonly workspaceAccess: "read_only";
+      readonly subagentCapability: ReadOnlySubagentCapabilitySnapshot;
+      readonly workspaceLease?: never;
+    }
+  | {
+      readonly workspaceAccess: "isolated_write";
+      readonly subagentCapability: WriterSubagentCapabilitySnapshot;
+      readonly workspaceLease: SubagentWriteWorkspaceLease;
+    };
+
 type SubagentRunAgentOptions = SubagentRunAgentOptionsBase &
+  SubagentWorkspaceRunOptions &
   (
     | {
         readonly userMessageOrigin: {
@@ -279,12 +295,11 @@ type MainRunAgentTurnOptions = MainAgentControlOptions & {
   readonly modelOperations?: MainModelOperationInstrumentation;
 };
 
-interface SubagentRunAgentTurnOptions {
+interface SubagentRunAgentTurnOptionsBase {
   readonly memory?: never;
   readonly mcp?: AgentMcpRuntime;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "subagent";
-  readonly subagentCapability: SubagentCapabilitySnapshot;
   readonly delegation?: never;
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
@@ -297,6 +312,9 @@ interface SubagentRunAgentTurnOptions {
   readonly modelOperations?: SubagentModelOperationInstrumentation;
 }
 
+type SubagentRunAgentTurnOptions = SubagentRunAgentTurnOptionsBase &
+  SubagentWorkspaceRunOptions;
+
 export type RunAgentTurnOptions = RunAgentTurnOptionsBase &
   (MainRunAgentTurnOptions | SubagentRunAgentTurnOptions);
 
@@ -304,10 +322,9 @@ function agentTurnExecutionOptions(
   options: RunAgentOptions,
 ): MainRunAgentTurnOptions | SubagentRunAgentTurnOptions {
   if (options.toolProfile === "subagent") {
-    return {
+    const childOptions: SubagentRunAgentTurnOptionsBase = {
       bash: options.bash,
       toolProfile: options.toolProfile,
-      subagentCapability: options.subagentCapability,
       costBudgetProvider: options.costBudgetProvider,
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.skillActivation !== undefined
@@ -320,6 +337,18 @@ function agentTurnExecutionOptions(
         ? { modelOperations: options.modelOperations }
         : {}),
     };
+    return options.workspaceAccess === "isolated_write"
+      ? {
+          ...childOptions,
+          workspaceAccess: options.workspaceAccess,
+          subagentCapability: options.subagentCapability,
+          workspaceLease: options.workspaceLease,
+        }
+      : {
+          ...childOptions,
+          workspaceAccess: options.workspaceAccess,
+          subagentCapability: options.subagentCapability,
+        };
   }
   return {
     bash: options.bash,
@@ -1454,6 +1483,10 @@ export async function* runAgentTurn(
         signal,
         bash,
         builtinToolAuthority: toolExposure,
+        ...(options.toolProfile === "subagent" &&
+        options.workspaceAccess === "isolated_write"
+          ? { workspaceLease: options.workspaceLease }
+          : {}),
         ...(turnDelegation.executor !== undefined
           ? { delegation: turnDelegation.executor }
           : {}),

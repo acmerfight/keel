@@ -580,10 +580,10 @@ const delegateTool = defineTool({
   name: "delegate",
   availability: "delegation",
   description: [
-    "Delegate one independent, read-only workspace investigation to a fresh child agent. Select explorer for codebase investigation or reviewer for correctness-focused code review; explorer is the default. Foreground is the default. In a saved interactive session, background returns a stable agent ID immediately so independent work can continue.",
-    "Use when the task is context-heavy and can be investigated independently before you synthesize the final answer.",
+    "Delegate one independent workspace task to a fresh child agent using an exact profile from the advertised catalog; explorer is the default. Foreground is the default. Only profiles whose current lease permits background may use attached background mode.",
+    "Use when the task is context-heavy and independent, or when the current policy and advertised catalog expose a profile for the user's requested outcome.",
     "The task must be self-contained, no longer than 4,000 characters, and state only the scope, expected output, and completion criteria. focusPaths are advisory workspace-relative areas, not extra authority. skills and mcp are optional exact task leases chosen only from the selected profile's advertised ceilings.",
-    "Do not use for small tasks, sequential critical-path work, writes, interactive approval-requiring work, or tasks that need the parent transcript, Goal, memory, parent-active Skills, queued input, or web access. Child MCP calls require an exact saved project approval and cannot prompt.",
+    "Do not use for small or sequential critical-path work unless the current policy explicitly describes a supported exception. No child receives the parent transcript, Goal, memory, parent-active capabilities, queued input, web, or interactive approvals.",
     "Use background only for genuinely independent work. Do not poll it: continue useful work, then use agent_wait when its result is needed. A pure delegate batch can admit up to four concurrent children, subject to the shared root budget and total child limit. Foreground results return in tool-call source order after every admitted sibling settles. Inspect child evidence and remain the sole author of the final answer.",
   ].join("\n"),
   args: toolArgs(delegateToolArgumentsSchema),

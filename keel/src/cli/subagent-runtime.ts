@@ -34,6 +34,7 @@ import {
   type SubagentTreeProviderCoordination,
 } from "../agent/subagent-tree-provider.ts";
 import type { AbortableToolOutputArtifactStore } from "../agent/tool-output-artifacts.ts";
+import type { DelegatingAgentPolicy } from "../core/agent-policy.ts";
 import type { CostModel } from "../core/cost.ts";
 import type { ModelMetadata } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
@@ -60,11 +61,13 @@ import type {
 } from "../skills/model.ts";
 import { WorkflowSkillError } from "../skills/model.ts";
 import { loadRepoSubagentProfiles } from "./subagent-profile-config.ts";
+import { createCliSubagentWriteWorkspaceRuntime } from "./subagent-workspace.ts";
 import { workflowSkillWorkspacePaths } from "./workflow-skills.ts";
 
 interface CreateCliSubagentRuntimeOptionsBase {
   readonly workspace: string;
-  readonly platform: string;
+  readonly workspaceLeasesRoot: string;
+  readonly platform: NodeJS.Platform;
   readonly parentRunId: string;
   readonly provider: LLMProvider;
   readonly providerId: ProviderId;
@@ -72,6 +75,7 @@ interface CreateCliSubagentRuntimeOptionsBase {
   readonly costModel: CostModel;
   readonly modelMetadata: ModelMetadata;
   readonly maxCostUsd: number;
+  readonly policy: DelegatingAgentPolicy;
   readonly projectInstructions: ProjectInstructions | undefined;
   readonly hiddenWorkspacePaths: readonly string[];
   readonly skillCatalog?: SkillCatalog;
@@ -594,6 +598,7 @@ export async function createCliSubagentRuntime(
       model: options.model,
     },
     repoProfiles,
+    writer: options.policy === "explicit" ? "enabled" : "disabled",
     ...(mcpRuntime !== undefined ? { mcpRuntime } : {}),
     ...(skillCatalog !== undefined
       ? {
@@ -660,6 +665,15 @@ export async function createCliSubagentRuntime(
       rootBudget,
       sharedCostBudget,
       profileRegistry,
+      ...(options.policy === "explicit"
+        ? {
+            writeWorkspace: createCliSubagentWriteWorkspaceRuntime({
+              workspace: options.workspace,
+              leasesRoot: options.workspaceLeasesRoot,
+              platform: options.platform,
+            }),
+          }
+        : {}),
       resolveExecution,
       ...(options.attachedSession !== undefined
         ? { admission: options.attachedSession.admission }

@@ -11,6 +11,7 @@ import {
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   subagentBuiltinToolNames,
   subagentProfileIds,
+  WRITER_MAX_TURNS,
 } from "../agent/subagent-capability.ts";
 import type { RepoSubagentProfileDefinition } from "../agent/subagent-profile.ts";
 import { reasoningEfforts } from "../core/model-metadata.ts";
@@ -19,7 +20,11 @@ import { projectRoot } from "./project-root.ts";
 const SUBAGENT_PROFILE_CONFIG_RELATIVE_PATH = join(".agents", "subagents.json");
 const MAX_SUBAGENT_PROFILE_CONFIG_BYTES = 128 * 1024;
 const MAX_REPO_SUBAGENT_PROFILES = 32;
-const MAX_REPO_PROFILE_TURNS = Math.max(EXPLORER_MAX_TURNS, REVIEWER_MAX_TURNS);
+const MAX_REPO_PROFILE_TURNS = Math.max(
+  EXPLORER_MAX_TURNS,
+  REVIEWER_MAX_TURNS,
+  WRITER_MAX_TURNS,
+);
 
 const profileKeySchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u);
 const profileToolsSchema = z

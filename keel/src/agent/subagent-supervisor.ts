@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   type CostModel,
   calculateConservativeRequestCostUsd,
@@ -26,7 +27,11 @@ import {
   type SharedCostBudgetAccount,
   type SharedCostBudgetedProvider,
 } from "./cost-budget.ts";
-import { type AgentInjectedUserMessageQueue, runAgent } from "./loop.ts";
+import {
+  type AgentInjectedUserMessageQueue,
+  runAgent,
+  type SubagentWorkspaceRunOptions,
+} from "./loop.ts";
 import type {
   MainModelOperationInstrumentation,
   SubagentModelOperationInstrumentation,
@@ -34,7 +39,7 @@ import type {
 import type { ProjectInstructions } from "./prompt.ts";
 import {
   appendWorkflowSkillCatalogToSystemPrompt,
-  buildReadOnlySubagentSystemPrompt,
+  buildSubagentSystemPrompt,
 } from "./prompt.ts";
 import { projectSessionMessageToProvider } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
@@ -42,6 +47,7 @@ import { maxTurnFallbackPolicy } from "./stop-policy.ts";
 import {
   compareSubagentCapability,
   narrowSubagentCapabilityToCeiling,
+  type ReadOnlySubagentCapabilitySnapshot,
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   type SubagentCapabilitySnapshot,
   type SubagentMcpToolSelector,
@@ -50,11 +56,14 @@ import {
   skillDescriptorFromSubagentSnapshot,
   subagentCapabilityBaseProfile,
   subagentCapabilityFingerprint,
+  subagentCapabilityIsWriter,
   subagentCapabilityWithMcpTools,
   subagentCapabilityWithSkills,
+  type WriterSubagentCapabilitySnapshot,
 } from "./subagent-capability.ts";
 import type {
   AgentId,
+  SubagentAcceptedLifecycle,
   SubagentCanonicalResult,
   SubagentLifecyclePersistence,
   SubagentRunId,
@@ -84,6 +93,12 @@ import {
   type SubagentTreeBudgetLeaseResult,
 } from "./subagent-tree-budget.ts";
 import type {
+  SubagentWriteWorkspaceLease,
+  SubagentWriteWorkspaceResult,
+  SubagentWriteWorkspaceRuntime,
+  SubagentWriteWorkspaceSettlement,
+} from "./subagent-workspace.ts";
+import type {
   AbortableToolOutputArtifactStore,
   ToolOutputArtifactSaveResult,
 } from "./tool-output-artifacts.ts";
@@ -93,6 +108,8 @@ const MAIN_CONTINUATION_MAX_OUTPUT_TOKENS = 4_096;
 const MAX_ADMITTED_ERROR_CHARS = 2_000;
 const MAX_ADMITTED_ID_CHARS = 512;
 const MAX_ADMITTED_TRANSCRIPT_REF_CHARS = 512;
+const MAX_ADMITTED_WORKSPACE_SUMMARY_CHARS = 1_000;
+const MAX_ADMITTED_WORKSPACE_ERROR_CHARS = 1_000;
 const MAX_QUEUED_INPUT_MESSAGES = 16;
 const MAX_QUEUED_INPUT_CHARS = 64_000;
 
@@ -207,24 +224,66 @@ interface RejectedDelegation {
 
 type DelegationReceipt = AcceptedDelegation | RejectedDelegation;
 
-interface PreparedDelegationCandidate {
+interface PreparedDelegationCandidateBase {
   readonly input: DelegationRequest;
   readonly delegationId: string;
-  readonly capability: SubagentCapabilitySnapshot;
-  readonly threadCapabilityCeiling: SubagentCapabilitySnapshot;
   readonly execution: SubagentExecutionRuntime;
+  readonly roleInstructions: string;
   readonly systemPrompt: string;
   readonly userMessage: string;
   readonly minimumCostUsd: number;
   readonly priorMessages?: readonly SessionMessage[];
 }
 
-interface PreparedAcceptedCandidate {
+type PreparedDelegationCandidate = PreparedDelegationCandidateBase &
+  (
+    | {
+        readonly workspaceAccess: "read_only";
+        readonly capability: ReadOnlySubagentCapabilitySnapshot;
+        readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+      }
+    | {
+        readonly workspaceAccess: "isolated_write";
+        readonly capability: WriterSubagentCapabilitySnapshot;
+        readonly threadCapabilityCeiling: WriterSubagentCapabilitySnapshot;
+      }
+  );
+
+type PreparedAcceptedWorkspace =
+  | {
+      readonly kind: "read_only";
+      readonly capability: ReadOnlySubagentCapabilitySnapshot;
+    }
+  | {
+      readonly kind: "isolated_write";
+      readonly capability: WriterSubagentCapabilitySnapshot;
+      readonly lease: SubagentWriteWorkspaceLease;
+    };
+
+type PreparedWriteWorkspace = Extract<
+  ReturnType<SubagentWriteWorkspaceRuntime["prepare"]>,
+  { readonly kind: "prepared" }
+>["workspace"];
+
+interface PreparedAcceptedCandidateBase {
   readonly childBudget: SubagentChildBudgetLease<PreparedDelegationCandidate>;
   readonly childAgentId: AgentId;
   readonly childRunId: SubagentRunId;
-  readonly persistence?: SubagentRunPersistence;
+  readonly systemPrompt: string;
 }
+
+type PreparedAcceptedCandidate = PreparedAcceptedCandidateBase &
+  (
+    | {
+        readonly kind: "runnable";
+        readonly workspace: PreparedAcceptedWorkspace;
+        readonly persistence?: SubagentRunPersistence;
+      }
+    | {
+        readonly kind: "terminal";
+        readonly result: SubagentCanonicalResult;
+      }
+  );
 
 export interface SubagentSupervisor {
   readonly capability: DelegationCapability;
@@ -290,6 +349,7 @@ interface CreateSubagentSupervisorOptionsBase {
   readonly rootBudget: SharedCostBudgetedProvider;
   readonly sharedCostBudget: SharedCostBudgetAccount;
   readonly profileRegistry: SubagentProfileRegistry;
+  readonly writeWorkspace?: SubagentWriteWorkspaceRuntime;
   readonly resolveExecution: (
     execution: SubagentExecutionSnapshot,
   ) => SubagentExecutionRuntime;
@@ -468,6 +528,47 @@ function validateWorkspacePaths(
   return null;
 }
 
+function selectRequestedCapability<
+  Capability extends SubagentCapabilitySnapshot,
+>(
+  capability: Capability,
+  skills: readonly string[],
+  mcp: readonly SubagentMcpToolSelector[],
+):
+  | { readonly kind: "selected"; readonly capability: Capability }
+  | { readonly kind: "skills_rejected" }
+  | { readonly kind: "mcp_rejected" } {
+  const skillCapability = selectSubagentCapabilitySkills(capability, skills);
+  if (skillCapability === null) return { kind: "skills_rejected" };
+  const selected = selectSubagentCapabilityMcpTools(skillCapability, mcp);
+  return selected === null
+    ? { kind: "mcp_rejected" }
+    : { kind: "selected", capability: selected };
+}
+
+function childHiddenWorkspacePaths(
+  parentWorkspace: string,
+  childWorkspace: string,
+  paths: readonly string[],
+): readonly string[] {
+  if (paths.length === 0) return [];
+  const parentRoot = resolve(parentWorkspace);
+  return paths.flatMap((path) => {
+    const absolute = isAbsolute(path)
+      ? resolve(path)
+      : resolve(parentRoot, path);
+    const fromParent = relative(parentRoot, absolute);
+    if (
+      fromParent === ".." ||
+      fromParent.startsWith(`..${sep}`) ||
+      isAbsolute(fromParent)
+    ) {
+      return [];
+    }
+    return [resolve(childWorkspace, fromParent)];
+  });
+}
+
 function admittedText(
   text: string,
   maxChars: number,
@@ -493,6 +594,83 @@ function admittedTerminalText(
   return result.status === "completed"
     ? { finalText: value, error: null }
     : { finalText: null, error: value };
+}
+
+interface ProjectedWriteWorkspace {
+  readonly kind: "isolated_write";
+  readonly baseCommit: string;
+  readonly branch: string;
+  readonly disposition: SubagentWriteWorkspaceResult["disposition"];
+  readonly worktreePath: string | null;
+  readonly patchRef: string | null;
+  readonly patchSha256: string | null;
+  readonly patchSourceTruncated: boolean;
+  readonly summary?: string;
+  readonly error?: string;
+  readonly worktreePathOmitted?: true;
+}
+
+interface WriteWorkspaceProjection {
+  readonly value: ProjectedWriteWorkspace | null;
+  readonly truncated: boolean;
+}
+
+function writeWorkspaceProjections(
+  workspace: SubagentWriteWorkspaceResult | null,
+): readonly WriteWorkspaceProjection[] {
+  if (workspace === null) return [{ value: null, truncated: false }];
+  const summary = admittedText(
+    workspace.summary,
+    MAX_ADMITTED_WORKSPACE_SUMMARY_CHARS,
+  );
+  const workspaceError =
+    workspace.error === null
+      ? null
+      : admittedText(workspace.error, MAX_ADMITTED_WORKSPACE_ERROR_CHARS);
+  const core = {
+    kind: workspace.kind,
+    baseCommit: workspace.baseCommit,
+    branch: workspace.branch,
+    disposition: workspace.disposition,
+    patchRef: workspace.patchRef,
+    patchSha256: workspace.patchSha256,
+    patchSourceTruncated: workspace.patchSourceTruncated,
+  } satisfies Omit<
+    ProjectedWriteWorkspace,
+    "error" | "summary" | "worktreePath" | "worktreePathOmitted"
+  >;
+  const withPath = {
+    ...core,
+    worktreePath: workspace.worktreePath,
+  } satisfies ProjectedWriteWorkspace;
+  const projections: WriteWorkspaceProjection[] = [
+    {
+      value: {
+        ...withPath,
+        summary: summary.value,
+        ...(workspaceError === null ? {} : { error: workspaceError.value }),
+      },
+      truncated: summary.truncated || workspaceError?.truncated === true,
+    },
+  ];
+  if (workspaceError !== null) {
+    projections.push({
+      value: { ...withPath, error: workspaceError.value },
+      truncated: true,
+    });
+  }
+  projections.push({ value: withPath, truncated: true });
+  if (workspace.worktreePath !== null) {
+    projections.push({
+      value: {
+        ...core,
+        worktreePath: null,
+        worktreePathOmitted: true,
+      },
+      truncated: true,
+    });
+  }
+  return projections;
 }
 
 export function projectSubagentResult(
@@ -521,6 +699,7 @@ export function projectSubagentResult(
     admittedDelegationId: string,
     value: string,
     admittedTranscriptRef: string | null,
+    workspace: ProjectedWriteWorkspace | null,
     isTruncated: boolean,
   ): string =>
     JSON.stringify({
@@ -528,39 +707,46 @@ export function projectSubagentResult(
       status: result.status,
       transcriptRef: admittedTranscriptRef,
       pendingInputCount: result.pendingInputCount,
+      workspace,
       truncated: isTruncated,
       ...admittedTerminalText(result, value),
     });
-  const serialized = serialize(
-    delegationId.value,
-    admittedResultText.value,
-    transcriptRef,
-    truncated,
-  );
-  if (serialized.length <= maxResultChars) return serialized;
-
-  let low = 0;
-  let high = Math.min(rawText.length, textLimit);
-  let fitted = serialize(delegationId.value, "", null, true);
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const candidate = serialize(
+  const workspaceProjections = writeWorkspaceProjections(result.workspace);
+  for (const workspace of workspaceProjections) {
+    const serialized = serialize(
       delegationId.value,
-      admittedText(rawText, middle).value,
-      null,
-      true,
+      admittedResultText.value,
+      transcriptRef,
+      workspace.value,
+      truncated || workspace.truncated,
     );
-    if (candidate.length <= maxResultChars) {
-      fitted = candidate;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-  if (fitted.length <= maxResultChars) return fitted;
+    if (serialized.length <= maxResultChars) return serialized;
 
-  low = 0;
-  high = Math.min(result.delegationId.length, MAX_ADMITTED_ID_CHARS);
+    let low = 0;
+    let high = Math.min(rawText.length, textLimit);
+    let fitted = serialize(delegationId.value, "", null, workspace.value, true);
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = serialize(
+        delegationId.value,
+        admittedText(rawText, middle).value,
+        null,
+        workspace.value,
+        true,
+      );
+      if (candidate.length <= maxResultChars) {
+        fitted = candidate;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    if (fitted.length <= maxResultChars) return fitted;
+  }
+
+  const minimumWorkspace = workspaceProjections.at(-1)?.value ?? null;
+  let low = 0;
+  let high = Math.min(result.delegationId.length, MAX_ADMITTED_ID_CHARS);
   let identityFitted = "0".slice(0, maxResultChars);
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
@@ -568,6 +754,7 @@ export function projectSubagentResult(
       admittedText(result.delegationId, middle).value,
       "",
       null,
+      minimumWorkspace,
       true,
     );
     if (candidate.length <= maxResultChars) {
@@ -674,6 +861,163 @@ function cloneCanonicalResult(
   return {
     ...result,
     usage: { ...result.usage },
+    workspace: result.workspace === null ? null : { ...result.workspace },
+  };
+}
+
+function failedWriteWorkspaceLocation(
+  reference: SubagentWriteWorkspaceLease["reference"],
+  worktreePath: string | null,
+):
+  | { readonly worktreePath: null; readonly workspaceRoot: null }
+  | { readonly worktreePath: string; readonly workspaceRoot: string } {
+  return worktreePath === null
+    ? { worktreePath: null, workspaceRoot: null }
+    : { worktreePath, workspaceRoot: reference.workspaceRoot };
+}
+
+async function finalizeWriteWorkspace(input: {
+  readonly lease: SubagentWriteWorkspaceLease;
+  readonly settlement: SubagentWriteWorkspaceSettlement;
+  readonly toolCallId: string;
+  readonly store: AbortableToolOutputArtifactStore;
+  readonly signal: AbortSignal;
+}): Promise<{
+  readonly result: SubagentWriteWorkspaceResult;
+  readonly terminalFailure: string | null;
+}> {
+  const reference = input.lease.reference;
+  const base = {
+    kind: reference.kind,
+    leaseId: reference.leaseId,
+    baseCommit: reference.baseCommit,
+    branch: reference.branch,
+  };
+  if (input.settlement.disposition === "preserved") {
+    const storedPatch = await input.store.save({
+      toolCallId: input.toolCallId,
+      toolName: "delegate",
+      content: input.settlement.patch.content,
+      sourceStatus: input.settlement.patch.sourceTruncated
+        ? "source-truncated"
+        : "complete",
+      purpose: "settlement",
+      signal: input.signal,
+    });
+    if (storedPatch.status === "stored") {
+      return {
+        result: {
+          ...base,
+          disposition: "preserved",
+          worktreePath: input.settlement.worktreePath,
+          workspaceRoot: reference.workspaceRoot,
+          patchRef: storedPatch.ref,
+          patchSha256: storedPatch.contentSha256,
+          patchSourceTruncated: input.settlement.patch.sourceTruncated,
+          summary: input.settlement.patch.summary,
+          error: null,
+        },
+        terminalFailure: null,
+      };
+    }
+    const error = `Child patch artifact could not be stored: ${storedPatch.reason}`;
+    return {
+      result: {
+        ...base,
+        disposition: "preserved",
+        worktreePath: input.settlement.worktreePath,
+        workspaceRoot: reference.workspaceRoot,
+        patchRef: null,
+        patchSha256: null,
+        patchSourceTruncated: input.settlement.patch.sourceTruncated,
+        summary: input.settlement.patch.summary,
+        error,
+      },
+      terminalFailure: error,
+    };
+  }
+  let patchFields:
+    | {
+        readonly patchRef: null;
+        readonly patchSha256: null;
+        readonly patchSourceTruncated: boolean;
+      }
+    | {
+        readonly patchRef: string;
+        readonly patchSha256: string;
+        readonly patchSourceTruncated: boolean;
+      } = {
+    patchRef: null,
+    patchSha256: null,
+    patchSourceTruncated: false,
+  };
+  let artifactFailure = "";
+  if (input.settlement.patch !== null) {
+    const storedPatch = await input.store.save({
+      toolCallId: input.toolCallId,
+      toolName: "delegate",
+      content: input.settlement.patch.content,
+      sourceStatus: input.settlement.patch.sourceTruncated
+        ? "source-truncated"
+        : "complete",
+      purpose: "settlement",
+      signal: input.signal,
+    });
+    patchFields =
+      storedPatch.status === "stored"
+        ? {
+            patchRef: storedPatch.ref,
+            patchSha256: storedPatch.contentSha256,
+            patchSourceTruncated: input.settlement.patch.sourceTruncated,
+          }
+        : {
+            patchRef: null,
+            patchSha256: null,
+            patchSourceTruncated: input.settlement.patch.sourceTruncated,
+          };
+    if (storedPatch.status === "failed") {
+      artifactFailure = ` Patch artifact storage also failed: ${storedPatch.reason}`;
+    }
+  }
+  const error = `${input.settlement.error}${artifactFailure}`;
+  return {
+    result: {
+      ...base,
+      disposition: "cleanup_failed",
+      ...failedWriteWorkspaceLocation(reference, input.settlement.worktreePath),
+      ...patchFields,
+      summary:
+        input.settlement.patch?.summary ?? "workspace requires inspection",
+      error,
+    },
+    terminalFailure: error,
+  };
+}
+
+function cancelUnusedWriteWorkspace(
+  lease: SubagentWriteWorkspaceLease,
+): SubagentWriteWorkspaceResult {
+  const settlement = lease.settle();
+  const reference = lease.reference;
+  const base = {
+    kind: reference.kind,
+    leaseId: reference.leaseId,
+    baseCommit: reference.baseCommit,
+    branch: reference.branch,
+  };
+  const error =
+    settlement.disposition === "cleanup_failed"
+      ? settlement.error
+      : "Unused child worktree changed before execution and was preserved without an artifact.";
+  return {
+    ...base,
+    disposition: "cleanup_failed",
+    ...failedWriteWorkspaceLocation(reference, settlement.worktreePath),
+    patchRef: null,
+    patchSha256: null,
+    patchSourceTruncated: settlement.patch?.sourceTruncated ?? false,
+    summary: settlement.patch?.summary ?? "workspace requires inspection",
+    error,
   };
 }
 
@@ -835,7 +1179,7 @@ export function createSubagentSupervisor(
     };
   };
 
-  const executeAccepted = async (input: {
+  type ExecuteAcceptedInputBase = {
     readonly mode: "foreground" | "background";
     readonly delegationId: string;
     readonly childAgentId: AgentId;
@@ -846,14 +1190,33 @@ export function createSubagentSupervisor(
     readonly systemPrompt: string;
     readonly userMessage: string;
     readonly priorMessages?: readonly SessionMessage[];
-    readonly capability: SubagentCapabilitySnapshot;
     readonly execution: SubagentExecutionRuntime;
     readonly inputQueue: SubagentInputQueue;
     readonly childMaxCostUsd: number;
     readonly lifecycle: ChildLifecycle;
     readonly record: SubagentRunRecord;
     readonly persistence?: SubagentRunPersistence;
-  }): Promise<SubagentCanonicalResult> => {
+  };
+
+  type ExecuteAcceptedInput =
+    | (ExecuteAcceptedInputBase & {
+        readonly workspace: {
+          readonly kind: "read_only";
+          readonly capability: ReadOnlySubagentCapabilitySnapshot;
+        };
+      })
+    | (ExecuteAcceptedInputBase & {
+        readonly workspace: {
+          readonly kind: "isolated_write";
+          readonly capability: WriterSubagentCapabilitySnapshot;
+          readonly lease: SubagentWriteWorkspaceLease;
+        };
+      });
+
+  const executeAccepted = async (
+    input: ExecuteAcceptedInput,
+  ): Promise<SubagentCanonicalResult> => {
+    const capability = input.workspace.capability;
     const progress = (
       status: Exclude<SubagentProgressEvent["status"], "tool" | "turn">,
     ): void => {
@@ -862,7 +1225,7 @@ export function createSubagentSupervisor(
         delegationId: input.delegationId,
         task: input.task,
         elapsedMs: elapsedSince(input.lifecycle.startedAt),
-        deadlineMs: input.capability.deadlineMs,
+        deadlineMs: capability.deadlineMs,
       });
     };
     const toolProgress = (tool: string): void => {
@@ -872,7 +1235,7 @@ export function createSubagentSupervisor(
         task: input.task,
         tool,
         elapsedMs: elapsedSince(input.lifecycle.startedAt),
-        deadlineMs: input.capability.deadlineMs,
+        deadlineMs: capability.deadlineMs,
       });
     };
     const turnProgress = (turn: number): void => {
@@ -882,7 +1245,7 @@ export function createSubagentSupervisor(
         task: input.task,
         turn,
         elapsedMs: elapsedSince(input.lifecycle.startedAt),
-        deadlineMs: input.capability.deadlineMs,
+        deadlineMs: capability.deadlineMs,
       });
     };
     try {
@@ -928,7 +1291,7 @@ export function createSubagentSupervisor(
                 type: "subagent",
                 delegationId: input.delegationId,
                 childRunId: input.childRunId,
-                profile: input.capability.profile,
+                profile: capability.profile,
                 effort: input.execution.snapshot.effort,
               },
             };
@@ -945,31 +1308,54 @@ export function createSubagentSupervisor(
             };
       const skillActivation =
         options.profileRegistry.skillRuntime.kind === "enabled"
-          ? options.profileRegistry.skillRuntime.createActivation(
-              input.capability,
-            )
+          ? options.profileRegistry.skillRuntime.createActivation(capability)
           : undefined;
       const childMcpRuntime =
         options.profileRegistry.mcpRuntime.kind === "enabled"
           ? options.profileRegistry.mcpRuntime.createRuntime(
-              input.capability,
+              capability,
               input.execution.snapshot,
             )
           : undefined;
+      const childWorkspace =
+        input.workspace.kind === "isolated_write"
+          ? input.workspace.lease.reference.workspaceRoot
+          : options.workspace;
+      let childWorkspaceAuthority: SubagentWorkspaceRunOptions;
+      if (input.workspace.kind === "isolated_write") {
+        childWorkspaceAuthority = {
+          workspaceAccess: "isolated_write",
+          workspaceLease: input.workspace.lease,
+          subagentCapability: input.workspace.capability,
+        };
+      } else {
+        childWorkspaceAuthority = {
+          workspaceAccess: "read_only",
+          subagentCapability: input.workspace.capability,
+        };
+      }
+      const hiddenWorkspacePaths =
+        input.workspace.kind === "isolated_write"
+          ? childHiddenWorkspacePaths(
+              options.workspace,
+              childWorkspace,
+              options.hiddenWorkspacePaths ?? [],
+            )
+          : options.hiddenWorkspacePaths;
       try {
         for await (const event of runAgent({
-          workspace: options.workspace,
+          workspace: childWorkspace,
           provider: input.execution.provider,
           userMessage: input.userMessage,
           ...childInput,
           systemPrompt: effectiveChildSystemPrompt(
             input.systemPrompt,
-            input.capability,
+            capability,
           ),
           signal: input.lifecycle.abortController.signal,
           bash: { kind: "disabled" },
           toolProfile: "subagent",
-          subagentCapability: input.capability,
+          ...childWorkspaceAuthority,
           ...(skillActivation !== undefined ? { skillActivation } : {}),
           ...(childMcpRuntime !== undefined
             ? {
@@ -982,7 +1368,7 @@ export function createSubagentSupervisor(
                 },
               }
             : {}),
-          stopPolicy: maxTurnFallbackPolicy(input.capability.maxTurns),
+          stopPolicy: maxTurnFallbackPolicy(capability.maxTurns),
           costTracking: {
             model: input.execution.costModel,
             maxCostUsd: input.childMaxCostUsd,
@@ -994,8 +1380,8 @@ export function createSubagentSupervisor(
           },
           costBudgetProvider: childBudget.provider,
           injectedUserMessages: input.inputQueue,
-          ...(options.hiddenWorkspacePaths !== undefined
-            ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
+          ...(hiddenWorkspacePaths !== undefined
+            ? { hiddenWorkspacePaths }
             : {}),
           ...(input.execution.contextCompaction !== undefined
             ? { contextCompaction: input.execution.contextCompaction }
@@ -1026,10 +1412,7 @@ export function createSubagentSupervisor(
             turns = event.turns;
             terminal = terminalOutcomeFromStopReason(
               event.stopReason,
-              childFinalText(
-                transcriptMessages,
-                input.capability.maxFinalTextChars,
-              ),
+              childFinalText(transcriptMessages, capability.maxFinalTextChars),
             );
           }
         }
@@ -1108,6 +1491,24 @@ export function createSubagentSupervisor(
           transcriptRef = saved.ref;
         }
       }
+      let workspace: SubagentWriteWorkspaceResult | null = null;
+      if (input.workspace.kind === "isolated_write") {
+        const finalizedWorkspace = await finalizeWriteWorkspace({
+          lease: input.workspace.lease,
+          settlement: input.workspace.lease.settle(),
+          toolCallId: input.toolCallId,
+          store: options.transcriptStore,
+          signal: input.lifecycle.settlementAbortController.signal,
+        });
+        workspace = finalizedWorkspace.result;
+        if (finalizedWorkspace.terminalFailure !== null) {
+          terminal = {
+            status: "failed",
+            finalText: null,
+            error: finalizedWorkspace.terminalFailure,
+          };
+        }
+      }
       if (input.lifecycle.deadlineExpired()) {
         terminal = {
           status: "timed_out",
@@ -1131,6 +1532,7 @@ export function createSubagentSupervisor(
         costUsd,
         transcriptRef,
         pendingInputCount,
+        workspace,
       };
       const result: SubagentCanonicalResult = { ...resultBase, ...terminal };
       if (runningPersistence !== undefined) {
@@ -1140,6 +1542,7 @@ export function createSubagentSupervisor(
           turns,
           costUsd,
           pendingInputCount,
+          workspace,
         });
         commitTerminalResult(input.record, result);
         progress(result.status);
@@ -1159,16 +1562,12 @@ export function createSubagentSupervisor(
     childAgentId: AgentId,
     childRunId: SubagentRunId,
     persistence: SubagentRunPersistence | undefined,
+    workspace: PreparedAcceptedWorkspace,
+    systemPrompt: string,
   ): AcceptedDelegation => {
     const candidate = childBudget.value;
-    const {
-      input,
-      delegationId,
-      capability,
-      execution,
-      systemPrompt,
-      userMessage,
-    } = candidate;
+    const { input, delegationId, capability, execution, userMessage } =
+      candidate;
     const record: SubagentRunRecord = {
       delegationId,
       childAgentId,
@@ -1187,22 +1586,33 @@ export function createSubagentSupervisor(
       lifecycle.cleanup();
       admissionLease.release();
     };
-    const cancelledBeforeStart = (): SubagentCanonicalResult => ({
-      delegationId,
-      childAgentId,
-      childRunId,
-      status: "cancelled",
-      task: input.task,
-      finalText: null,
-      usage: zeroUsage(),
-      turns: 0,
-      costUsd: 0,
-      transcriptRef: persistence?.transcriptRef ?? null,
-      pendingInputCount: 0,
-      error: "Child was cancelled before execution started.",
-    });
+    const cancelledBeforeStart = (): SubagentCanonicalResult & {
+      readonly error: string;
+    } => {
+      const workspaceResult =
+        workspace.kind === "isolated_write"
+          ? cancelUnusedWriteWorkspace(workspace.lease)
+          : null;
+      return {
+        delegationId,
+        childAgentId,
+        childRunId,
+        status: "cancelled",
+        task: input.task,
+        finalText: null,
+        usage: zeroUsage(),
+        turns: 0,
+        costUsd: 0,
+        transcriptRef: persistence?.transcriptRef ?? null,
+        pendingInputCount: 0,
+        workspace: workspaceResult,
+        error:
+          workspaceResult?.error ??
+          "Child was cancelled before execution started.",
+      };
+    };
     const publishCancelledBeforeStart = (
-      result: SubagentCanonicalResult,
+      result: SubagentCanonicalResult & { readonly error: string },
     ): void => {
       if (persistence === undefined) {
         commitTerminalResult(record, result);
@@ -1210,11 +1620,12 @@ export function createSubagentSupervisor(
         persistence.terminal({
           status: "cancelled",
           finalText: null,
-          error: "Child was cancelled before execution started.",
+          error: result.error,
           usage: result.usage,
           turns: result.turns,
           costUsd: result.costUsd,
           pendingInputCount: result.pendingInputCount,
+          workspace: result.workspace,
         });
         commitTerminalResult(record, result);
       }
@@ -1230,8 +1641,8 @@ export function createSubagentSupervisor(
     let promise: Promise<SubagentCanonicalResult> | undefined;
     const run = (): Promise<SubagentCanonicalResult> => {
       promise ??= Promise.resolve()
-        .then(() =>
-          executeAccepted({
+        .then(() => {
+          const acceptedInput = {
             mode: input.mode,
             delegationId,
             childAgentId,
@@ -1239,7 +1650,6 @@ export function createSubagentSupervisor(
             toolCallId: input.toolCallId,
             task: input.task,
             focusPaths: input.focusPaths,
-            capability,
             execution,
             systemPrompt,
             userMessage,
@@ -1251,8 +1661,12 @@ export function createSubagentSupervisor(
             lifecycle,
             record,
             ...(persistence !== undefined ? { persistence } : {}),
-          }),
-        )
+          };
+          if (workspace.kind === "isolated_write") {
+            return executeAccepted({ ...acceptedInput, workspace });
+          }
+          return executeAccepted({ ...acceptedInput, workspace });
+        })
         .finally(releaseResources);
       return promise;
     };
@@ -1371,11 +1785,26 @@ export function createSubagentSupervisor(
         });
         continue;
       }
-      const skillCapability = selectSubagentCapabilitySkills(
-        profile.capability,
-        input.skills ?? [],
-      );
-      if (skillCapability === null) {
+      const profileSelection = subagentCapabilityIsWriter(profile.capability)
+        ? {
+            workspaceAccess: "isolated_write" as const,
+            threadCapabilityCeiling: profile.capability,
+            selection: selectRequestedCapability(
+              profile.capability,
+              input.skills ?? [],
+              input.mcp,
+            ),
+          }
+        : {
+            workspaceAccess: "read_only" as const,
+            threadCapabilityCeiling: profile.capability,
+            selection: selectRequestedCapability(
+              profile.capability,
+              input.skills ?? [],
+              input.mcp,
+            ),
+          };
+      if (profileSelection.selection.kind === "skills_rejected") {
         recordRejection(input, delegationId, {
           reason: `Delegation rejected: profile ${JSON.stringify(input.profile)} does not allow every requested workflow Skill.`,
           recovery:
@@ -1383,17 +1812,34 @@ export function createSubagentSupervisor(
         });
         continue;
       }
-      const capability = selectSubagentCapabilityMcpTools(
-        skillCapability,
-        input.mcp ?? [],
-      );
-      if (capability === null) {
+      if (profileSelection.selection.kind === "mcp_rejected") {
         recordRejection(input, delegationId, {
           reason: `Delegation rejected: profile ${JSON.stringify(input.profile)} does not allow every requested MCP tool.`,
           recovery:
             "Select only MCP tools advertised for that exact profile, or omit the MCP lease.",
         });
         continue;
+      }
+      const capability = profileSelection.selection.capability;
+      if (profileSelection.workspaceAccess === "isolated_write") {
+        if (input.mode !== "foreground") {
+          recordRejection(input, delegationId, {
+            reason:
+              "Delegation rejected: writer is foreground-only in this slice.",
+            recovery:
+              "Retry as one foreground writer, or use a read-only profile for attached background work.",
+          });
+          continue;
+        }
+        if (inputs.length !== 1) {
+          recordRejection(input, delegationId, {
+            reason:
+              "Delegation rejected: a writer must be the only child in its tool round.",
+            recovery:
+              "Delegate exactly one foreground writer, then inspect its patch before starting other child work.",
+          });
+          continue;
+        }
       }
       const execution = options.resolveExecution(profile.execution);
       if (execution.provider.abortSignalSupport !== true) {
@@ -1405,8 +1851,11 @@ export function createSubagentSupervisor(
         });
         continue;
       }
-      const systemPrompt = buildReadOnlySubagentSystemPrompt({
-        workspace: options.workspace,
+      const systemPrompt = buildSubagentSystemPrompt({
+        workspace:
+          profileSelection.workspaceAccess === "isolated_write"
+            ? "<isolated child worktree assigned at admission>"
+            : options.workspace,
         platform: options.platform,
         ...(options.projectInstructions !== undefined
           ? { projectInstructions: options.projectInstructions }
@@ -1415,6 +1864,7 @@ export function createSubagentSupervisor(
         profile: capability.profile,
         roleInstructions: profile.roleInstructions,
         maxFinalTextChars: capability.maxFinalTextChars,
+        workspaceAccess: profileSelection.workspaceAccess,
       });
       const userMessage = childTaskMessage(
         delegationId,
@@ -1443,12 +1893,11 @@ export function createSubagentSupervisor(
         });
         continue;
       }
-      candidates.push({
+      const candidateBase = {
         input,
         delegationId,
-        capability,
-        threadCapabilityCeiling: profile.capability,
         execution,
+        roleInstructions: profile.roleInstructions,
         systemPrompt,
         userMessage,
         minimumCostUsd: calculateConservativeRequestCostUsd(
@@ -1456,7 +1905,22 @@ export function createSubagentSupervisor(
           MIN_USEFUL_OUTPUT_TOKENS,
           execution.costModel,
         ),
-      });
+      };
+      if (profileSelection.workspaceAccess === "isolated_write") {
+        candidates.push({
+          ...candidateBase,
+          workspaceAccess: profileSelection.workspaceAccess,
+          capability: profileSelection.selection.capability,
+          threadCapabilityCeiling: profileSelection.threadCapabilityCeiling,
+        });
+      } else {
+        candidates.push({
+          ...candidateBase,
+          workspaceAccess: profileSelection.workspaceAccess,
+          capability: profileSelection.selection.capability,
+          threadCapabilityCeiling: profileSelection.threadCapabilityCeiling,
+        });
+      }
     }
 
     const admissionPlan = admission.plan(candidates);
@@ -1546,8 +2010,64 @@ export function createSubagentSupervisor(
         const candidate = childBudget.value;
         const childAgentId: AgentId = `agent-${randomUUID()}`;
         const childRunId: SubagentRunId = `subagent-${randomUUID()}`;
+        let workspaceAuthority:
+          | {
+              readonly kind: "read_only";
+              readonly capability: ReadOnlySubagentCapabilitySnapshot;
+              readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+            }
+          | {
+              readonly kind: "isolated_write";
+              readonly capability: WriterSubagentCapabilitySnapshot;
+              readonly threadCapabilityCeiling: WriterSubagentCapabilitySnapshot;
+              readonly prepared: PreparedWriteWorkspace;
+            };
+        if (candidate.workspaceAccess === "isolated_write") {
+          const preparation = options.writeWorkspace?.prepare({
+            childRunId,
+            signal: candidate.input.signal,
+          });
+          if (preparation === undefined || preparation.kind === "rejected") {
+            recordRejection(candidate.input, candidate.delegationId, {
+              reason:
+                preparation?.reason ??
+                "Writer delegation rejected because workspace isolation is unavailable.",
+              recovery:
+                preparation?.recovery ??
+                "Continue in Main without delegating the write.",
+            });
+            continue;
+          }
+          workspaceAuthority = {
+            kind: "isolated_write",
+            capability: candidate.capability,
+            threadCapabilityCeiling: candidate.threadCapabilityCeiling,
+            prepared: preparation.workspace,
+          };
+        } else {
+          workspaceAuthority = {
+            kind: "read_only",
+            capability: candidate.capability,
+            threadCapabilityCeiling: candidate.threadCapabilityCeiling,
+          };
+        }
+        const acceptedSystemPrompt =
+          workspaceAuthority.kind === "isolated_write"
+            ? buildSubagentSystemPrompt({
+                workspace: workspaceAuthority.prepared.reference.workspaceRoot,
+                platform: options.platform,
+                ...(options.projectInstructions !== undefined
+                  ? { projectInstructions: options.projectInstructions }
+                  : {}),
+                focusPaths: candidate.input.focusPaths,
+                profile: candidate.capability.profile,
+                roleInstructions: candidate.roleInstructions,
+                maxFinalTextChars: candidate.capability.maxFinalTextChars,
+                workspaceAccess: "isolated_write",
+              })
+            : candidate.systemPrompt;
         try {
-          const persistence = options.lifecyclePersistence?.accepted({
+          const acceptedLifecycleBase = {
             delegationId: candidate.delegationId,
             childAgentId,
             childRunId,
@@ -1555,23 +2075,127 @@ export function createSubagentSupervisor(
             parentToolCallId: candidate.input.toolCallId,
             task: candidate.input.task,
             focusPaths: candidate.input.focusPaths,
-            mode: candidate.input.mode,
             providerId: candidate.execution.snapshot.providerId,
             model: candidate.execution.snapshot.model,
             effort: candidate.execution.snapshot.effort,
-            threadCapabilityCeiling: candidate.threadCapabilityCeiling,
-            capability: candidate.capability,
-            systemPrompt: candidate.systemPrompt,
+            systemPrompt: acceptedSystemPrompt,
             lineage: { kind: "root" },
-          });
+          } as const;
+          let acceptedLifecycle: SubagentAcceptedLifecycle;
+          if (workspaceAuthority.kind === "isolated_write") {
+            acceptedLifecycle = {
+              ...acceptedLifecycleBase,
+              mode: "foreground",
+              threadCapabilityCeiling:
+                workspaceAuthority.threadCapabilityCeiling,
+              capability: workspaceAuthority.capability,
+              workspace: workspaceAuthority.prepared.reference,
+            };
+          } else {
+            acceptedLifecycle = {
+              ...acceptedLifecycleBase,
+              mode: candidate.input.mode,
+              threadCapabilityCeiling:
+                workspaceAuthority.threadCapabilityCeiling,
+              capability: workspaceAuthority.capability,
+              workspace: null,
+            };
+          }
+          const persistence =
+            options.lifecyclePersistence?.accepted(acceptedLifecycle);
+          if (workspaceAuthority.kind === "isolated_write") {
+            const activation = workspaceAuthority.prepared.activate();
+            if (activation.kind === "failed") {
+              if (persistence === undefined) {
+                recordRejection(candidate.input, candidate.delegationId, {
+                  reason: `Writer delegation rejected during isolated workspace activation: ${activation.error}`,
+                  recovery: activation.recovery,
+                });
+                continue;
+              }
+              const reference = workspaceAuthority.prepared.reference;
+              const workspaceResult: SubagentWriteWorkspaceResult = {
+                kind: reference.kind,
+                leaseId: reference.leaseId,
+                baseCommit: reference.baseCommit,
+                branch: reference.branch,
+                disposition: "cleanup_failed",
+                ...failedWriteWorkspaceLocation(
+                  reference,
+                  activation.worktreePath,
+                ),
+                patchRef: null,
+                patchSha256: null,
+                patchSourceTruncated: false,
+                summary: "writer workspace activation failed",
+                error: activation.error,
+              };
+              const result: SubagentCanonicalResult = {
+                delegationId: candidate.delegationId,
+                childAgentId,
+                childRunId,
+                status: "failed",
+                task: candidate.input.task,
+                finalText: null,
+                usage: zeroUsage(),
+                turns: 0,
+                costUsd: 0,
+                transcriptRef: persistence.transcriptRef,
+                pendingInputCount: 0,
+                workspace: workspaceResult,
+                error: `Writer workspace activation failed: ${activation.error}`,
+              };
+              persistence.running().terminal({
+                status: result.status,
+                finalText: result.finalText,
+                error: result.error,
+                usage: result.usage,
+                turns: result.turns,
+                costUsd: result.costUsd,
+                pendingInputCount: result.pendingInputCount,
+                workspace: result.workspace,
+              });
+              preparedAccepted.push({
+                kind: "terminal",
+                childBudget,
+                childAgentId,
+                childRunId,
+                systemPrompt: acceptedSystemPrompt,
+                result,
+              });
+              continue;
+            }
+            preparedAccepted.push({
+              kind: "runnable",
+              childBudget,
+              childAgentId,
+              childRunId,
+              systemPrompt: acceptedSystemPrompt,
+              workspace: {
+                kind: "isolated_write",
+                capability: workspaceAuthority.capability,
+                lease: activation.lease,
+              },
+              ...(persistence !== undefined ? { persistence } : {}),
+            });
+            continue;
+          }
           preparedAccepted.push({
+            kind: "runnable",
             childBudget,
             childAgentId,
             childRunId,
+            systemPrompt: acceptedSystemPrompt,
+            workspace: {
+              kind: "read_only",
+              capability: workspaceAuthority.capability,
+            },
             ...(persistence !== undefined ? { persistence } : {}),
           });
         } catch (caught) {
-          if (caught instanceof SubagentPersistenceError) throw caught;
+          if (caught instanceof SubagentPersistenceError) {
+            throw caught;
+          }
           receipts.set(candidate.delegationId, {
             kind: "rejected",
             rejection: {
@@ -1587,18 +2211,43 @@ export function createSubagentSupervisor(
         const accepted = admissionLease.value;
         const childBudget = accepted.childBudget;
         const candidate = childBudget.value;
-        const receipt = createAcceptedReceipt(
-          childBudget,
-          admissionLease,
-          accepted.childAgentId,
-          accepted.childRunId,
-          accepted.persistence,
-        );
+        const terminalInputQueue = createSubagentInputQueue();
+        if (accepted.kind === "terminal") terminalInputQueue.close();
+        const receipt: AcceptedDelegation =
+          accepted.kind === "terminal"
+            ? {
+                kind: "accepted",
+                record: {
+                  delegationId: candidate.delegationId,
+                  childAgentId: accepted.childAgentId,
+                  childRunId: accepted.childRunId,
+                  task: candidate.input.task,
+                  state: {
+                    kind: "terminal",
+                    result: cloneCanonicalResult(accepted.result),
+                  },
+                },
+                run: async () => cloneCanonicalResult(accepted.result),
+                cancelBeforeStart: () => {},
+                cancel: () => {},
+                input: terminalInputQueue.enqueue,
+              }
+            : createAcceptedReceipt(
+                childBudget,
+                admissionLease,
+                accepted.childAgentId,
+                accepted.childRunId,
+                accepted.persistence,
+                accepted.workspace,
+                accepted.systemPrompt,
+              );
+        if (accepted.kind === "terminal") admissionLease.release();
         receipts.set(candidate.delegationId, receipt);
         freshAcceptedIds.add(candidate.delegationId);
         ownedAccepted.push(receipt);
         publishProgress({
-          status: "queued",
+          status:
+            accepted.kind === "terminal" ? accepted.result.status : "queued",
           delegationId: candidate.delegationId,
           task: candidate.input.task,
           elapsedMs: 0,
@@ -1769,6 +2418,16 @@ export function createSubagentSupervisor(
       if (invalidFocusPath !== null) {
         return reject(`Agent resume rejected: ${invalidFocusPath}`);
       }
+      if (subagentCapabilityIsWriter(request.capability)) {
+        return reject(
+          "Agent resume rejected because writer continuations are not supported by the single foreground workspace slice.",
+        );
+      }
+      if (subagentCapabilityIsWriter(request.threadCapabilityCeiling)) {
+        return reject(
+          "Agent resume rejected because writer continuations are not supported by the single foreground workspace slice.",
+        );
+      }
       const baseProfile = subagentCapabilityBaseProfile(request.capability);
       const currentPolicy = options.profileRegistry.resolveBuiltin(baseProfile);
       const currentSkills =
@@ -1868,16 +2527,15 @@ export function createSubagentSupervisor(
           task: request.message,
           focusPaths: request.focusPaths,
           skills: capability.skills.map((skill) => skill.qualifiedName),
-          mcp: capability.mcpTools.map((tool) => ({
-            server: tool.serverId,
-            tool: tool.rawToolName,
-          })),
+          mcp: request.mcp,
           signal: request.signal,
         },
         delegationId,
+        workspaceAccess: "read_only",
         capability,
         threadCapabilityCeiling: request.threadCapabilityCeiling,
         execution,
+        roleInstructions: currentPolicy.roleInstructions,
         systemPrompt: request.systemPrompt,
         userMessage: request.message,
         minimumCostUsd,
@@ -1910,6 +2568,7 @@ export function createSubagentSupervisor(
           effort: execution.snapshot.effort,
           threadCapabilityCeiling: request.threadCapabilityCeiling,
           capability,
+          workspace: null,
           systemPrompt: request.systemPrompt,
           lineage: {
             kind: "continuation",
@@ -1933,6 +2592,8 @@ export function createSubagentSupervisor(
         request.childAgentId,
         childRunId,
         persistence,
+        { kind: "read_only", capability },
+        request.systemPrompt,
       );
       receipts.set(delegationId, receipt);
       publishProgress({

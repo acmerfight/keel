@@ -297,6 +297,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       systemPrompt: "Read-only child instructions.",
       threadCapabilityCeiling: explorerCapability,
       capability: explorerCapability,
+      workspace: null,
       lineage: { kind: "root" },
     });
     first.transcript.initialize([
@@ -318,6 +319,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
       finalText: "The boundary is sound.",
       error: null,
       pendingInputCount: 0,
+      workspace: null,
       usage: {
         inputTokens: 1,
         cachedInputTokens: 0,

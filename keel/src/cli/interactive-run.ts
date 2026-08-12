@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { SessionMessage } from "../agent/session-message.ts";
 import { errorMessage, isAbortThrow } from "../core/error.ts";
@@ -134,6 +135,7 @@ import {
   type SessionModelSelection,
   type SessionState,
   SessionStoreError,
+  sessionHome,
   sessionStoredMessages,
 } from "./session-store.ts";
 import {
@@ -1501,6 +1503,7 @@ async function runActiveSessionCli(
       const interactiveSessionOptions: InteractiveSessionOptions = {
         cliArgs,
         workspace,
+        workspaceLeasesRoot: join(sessionHome(runtime), "worktrees"),
         reportRecorder,
         ...(invocation !== undefined
           ? {

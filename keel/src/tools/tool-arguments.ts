@@ -43,11 +43,12 @@ const delegationModes = ["foreground", "background"] as const;
 
 function profileDescription(catalog: SubagentProfileCatalog): string {
   if (
-    catalog.length === 2 &&
+    catalog.length === 3 &&
     catalog[0]?.name === "explorer" &&
-    catalog[1]?.name === "reviewer"
+    catalog[1]?.name === "reviewer" &&
+    catalog[2]?.name === "writer"
   ) {
-    return "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.";
+    return "Use explorer for codebase investigation, reviewer for evidence-based code review, or writer for one isolated foreground file change. Defaults to explorer.";
   }
   const choices = catalog
     .map((entry) => {
@@ -214,7 +215,7 @@ function delegateProviderSchema(
         .min(1)
         .max(4_000)
         .describe(
-          "Self-contained read-only investigation task with scope, expected output, and completion criteria.",
+          "Self-contained delegated task with scope, expected output, and completion criteria.",
         ),
       focusPaths: optionalToolArgument(
         z
@@ -245,8 +246,8 @@ const delegatedMcpLeaseSchema = z
   });
 
 export const delegateProviderArgumentsSchema = delegateProviderSchema(
-  z.enum(["explorer", "reviewer"]),
-  "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
+  z.enum(["explorer", "reviewer", "writer"]),
+  "Use explorer for codebase investigation, reviewer for evidence-based code review, or writer for one isolated foreground file change. Defaults to explorer.",
   ["foreground", "background"],
   builtinSubagentProfileCatalog,
 );
@@ -275,8 +276,8 @@ export const delegateToolArgumentsSchema =
   });
 
 export const foregroundDelegateProviderArgumentsSchema = delegateProviderSchema(
-  z.enum(["explorer", "reviewer"]),
-  "Use explorer for codebase investigation or reviewer for evidence-based code review. Defaults to explorer.",
+  z.enum(["explorer", "reviewer", "writer"]),
+  "Use explorer for codebase investigation, reviewer for evidence-based code review, or writer for one isolated foreground file change. Defaults to explorer.",
   ["foreground"],
   builtinSubagentProfileCatalog,
 );

@@ -384,6 +384,7 @@ function canonicalResultSha256(
     turns: result.turns,
     costUsd: result.costUsd,
     pendingInputCount: result.pendingInputCount,
+    workspace: result.workspace,
   } satisfies Omit<
     PersistedSubagentCanonicalResult,
     "status" | "finalText" | "error"
@@ -461,6 +462,40 @@ function assertDeliveryIdentity(
   }
 }
 
+function assertWorkspaceResultIdentity(
+  accepted: AgentRunAcceptedRecord,
+  workspace:
+    | PersistedSubagentCanonicalResult["workspace"]
+    | SubagentTerminalSnapshot["workspace"],
+): void {
+  if (accepted.workspace === null) {
+    if (workspace !== null) {
+      agentTreeError(
+        `read-only agent ${accepted.childAgentId} recorded writer workspace state`,
+      );
+    }
+    return;
+  }
+  if (workspace === null) {
+    agentTreeError(
+      `writer agent ${accepted.childAgentId} is missing its workspace state`,
+    );
+  }
+  if (
+    workspace.leaseId !== accepted.workspace.leaseId ||
+    workspace.baseCommit !== accepted.workspace.baseCommit ||
+    workspace.branch !== accepted.workspace.branch ||
+    (workspace.worktreePath !== null &&
+      workspace.worktreePath !== accepted.workspace.worktreePath) ||
+    (workspace.workspaceRoot !== null &&
+      workspace.workspaceRoot !== accepted.workspace.workspaceRoot)
+  ) {
+    agentTreeError(
+      `writer agent ${accepted.childAgentId} workspace result mismatches acceptance`,
+    );
+  }
+}
+
 function replayAgentRuns(
   mutations: readonly AgentTreeMutationRecord[],
   sessionId: string,
@@ -526,6 +561,7 @@ function replayAgentRuns(
           );
         }
         assertResultIdentity(run, mutation.result);
+        assertWorkspaceResultIdentity(run.accepted, mutation.result.workspace);
         if (
           run.state.kind === "queued" &&
           mutation.result.status !== "cancelled" &&
@@ -644,10 +680,27 @@ function replayAgentRuns(
   return runs;
 }
 
+function workspaceResultForPersistence(
+  workspace: NonNullable<SubagentTerminalSnapshot["workspace"]>,
+): NonNullable<PersistedSubagentCanonicalResult["workspace"]> {
+  if (workspace.error === null) {
+    return {
+      ...workspace,
+      summary: redactTextForPersistence(workspace.summary),
+    };
+  }
+  return {
+    ...workspace,
+    summary: redactTextForPersistence(workspace.summary),
+    error: redactTextForPersistence(workspace.error),
+  };
+}
+
 function canonicalResult(
   accepted: AgentRunAcceptedRecord,
   snapshot: SubagentTerminalSnapshot,
 ): PersistedSubagentCanonicalResult {
+  assertWorkspaceResultIdentity(accepted, snapshot.workspace);
   const outcome =
     snapshot.status === "completed"
       ? {
@@ -670,6 +723,10 @@ function canonicalResult(
     turns: snapshot.turns,
     costUsd: snapshot.costUsd,
     pendingInputCount: snapshot.pendingInputCount,
+    workspace:
+      snapshot.workspace === null
+        ? null
+        : workspaceResultForPersistence(snapshot.workspace),
     ...outcome,
   };
 }
@@ -951,6 +1008,16 @@ function repairInterruptedRuns(input: {
       transcriptPath,
       run.accepted,
     );
+    const interruptedWorkspace =
+      run.accepted.workspace === null
+        ? null
+        : {
+            worktreeExists: existsSync(run.accepted.workspace.worktreePath),
+            workspaceRootExists: existsSync(
+              run.accepted.workspace.workspaceRoot,
+            ),
+            reference: run.accepted.workspace,
+          };
     appendCanonicalTerminal({
       sessionId: input.sessionId,
       filePath: input.filePath,
@@ -965,6 +1032,44 @@ function repairInterruptedRuns(input: {
         error:
           "Child was interrupted when its foreground session owner exited.",
         pendingInputCount,
+        workspace:
+          interruptedWorkspace === null
+            ? null
+            : interruptedWorkspace.worktreeExists
+              ? {
+                  kind: interruptedWorkspace.reference.kind,
+                  leaseId: interruptedWorkspace.reference.leaseId,
+                  baseCommit: interruptedWorkspace.reference.baseCommit,
+                  branch: interruptedWorkspace.reference.branch,
+                  disposition: "cleanup_failed",
+                  worktreePath: interruptedWorkspace.reference.worktreePath,
+                  workspaceRoot: interruptedWorkspace.workspaceRootExists
+                    ? interruptedWorkspace.reference.workspaceRoot
+                    : null,
+                  patchRef: null,
+                  patchSha256: null,
+                  patchSourceTruncated: false,
+                  summary:
+                    "writer workspace requires inspection after interrupted owner",
+                  error:
+                    "Writer owner exited before workspace settlement; inspect the reported worktree manually.",
+                }
+              : {
+                  kind: interruptedWorkspace.reference.kind,
+                  leaseId: interruptedWorkspace.reference.leaseId,
+                  baseCommit: interruptedWorkspace.reference.baseCommit,
+                  branch: interruptedWorkspace.reference.branch,
+                  disposition: "cleanup_failed",
+                  worktreePath: null,
+                  workspaceRoot: null,
+                  patchRef: null,
+                  patchSha256: null,
+                  patchSourceTruncated: false,
+                  summary:
+                    "planned writer workspace was not materialized or no longer exists",
+                  error:
+                    "Writer owner exited before workspace activation was confirmed; no worktree is present at the persisted path.",
+                },
         ...accounting,
       },
     });
@@ -1144,13 +1249,13 @@ export function createAgentTreeHistory(options: {
       try {
         writer.append(filePath, acceptedRecord, "agent tree");
       } catch (caught) {
+        if (caught instanceof IndeterminateJsonlWriteError) {
+          persistenceFailure(caught);
+        }
         try {
           removeTranscript(transcriptPath, writer.syncDirectory);
         } catch (cleanupFailure) {
           persistenceFailure(cleanupFailure);
-        }
-        if (caught instanceof IndeterminateJsonlWriteError) {
-          persistenceFailure(caught);
         }
         throw caught;
       }

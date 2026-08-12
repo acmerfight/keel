@@ -292,6 +292,7 @@ describe("Interactive Session - Interrupts", () => {
     const session = runInteractiveSessionWithMemory({
       cliArgs: { bashMode: "disabled" },
       workspace: process.cwd(),
+      workspaceLeasesRoot: process.cwd(),
       platform: process.platform,
       skills: { kind: "empty" },
       activeSession: {

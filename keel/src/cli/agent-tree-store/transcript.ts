@@ -67,7 +67,7 @@ export function transcriptFilePath(
 function transcriptHeader(
   accepted: AgentRunAcceptedRecord,
 ): AgentTranscriptHeaderRecord {
-  return {
+  const headerBase = {
     schemaVersion: AGENT_TREE_SCHEMA_VERSION,
     type: "transcript",
     kind: "subagent",
@@ -80,14 +80,27 @@ function transcriptHeader(
     parentToolCallId: accepted.parentToolCallId,
     task: accepted.task,
     focusPaths: [...accepted.focusPaths],
-    mode: accepted.mode,
     providerId: accepted.providerId,
     model: accepted.model,
     effort: accepted.effort,
-    threadCapabilityCeiling: accepted.threadCapabilityCeiling,
     systemPrompt: accepted.systemPrompt,
-    capability: accepted.capability,
     lineage: accepted.lineage,
+  } as const;
+  if (accepted.workspace === null) {
+    return {
+      ...headerBase,
+      mode: accepted.mode,
+      threadCapabilityCeiling: accepted.threadCapabilityCeiling,
+      capability: accepted.capability,
+      workspace: null,
+    };
+  }
+  return {
+    ...headerBase,
+    mode: accepted.mode,
+    threadCapabilityCeiling: accepted.threadCapabilityCeiling,
+    capability: accepted.capability,
+    workspace: { ...accepted.workspace },
   };
 }
 

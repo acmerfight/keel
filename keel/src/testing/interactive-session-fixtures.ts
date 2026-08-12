@@ -70,7 +70,10 @@ const EMPTY_TEST_SKILLS = {
 } satisfies InteractiveSkillRuntime;
 
 export function runInteractiveSessionWithoutMemory(
-  options: Omit<InteractiveSessionOptions, "activeSession" | "skills"> & {
+  options: Omit<
+    InteractiveSessionOptions,
+    "activeSession" | "skills" | "workspaceLeasesRoot"
+  > & {
     readonly session: InteractiveSessionFixture;
     readonly skills?: InteractiveSkillRuntime;
     readonly initialSessionTitle?: string;
@@ -125,6 +128,7 @@ export function runInteractiveSessionWithoutMemory(
         };
   return runProductionInteractiveSession({
     ...sessionOptions,
+    workspaceLeasesRoot: join(sessionOptions.workspace, ".keel-test-worktrees"),
     activeSession,
     skills,
   });
