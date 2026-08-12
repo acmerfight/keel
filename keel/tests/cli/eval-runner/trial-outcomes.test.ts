@@ -944,6 +944,7 @@ process.exitCode = 1;
       ["duplicate-overflow", "at_most_one"],
       ["missing-required", "require_one"],
       ["parallel", "require_multiple"],
+      ["parallel-any", "require_any"],
       ["parallel-single", "require_multiple"],
     ] as const;
     for (const [prompt, delegationPolicy] of taskCases) {
@@ -1001,6 +1002,22 @@ process.exitCode = 1;
       },
       "missing-required": VALID_REPORT,
       parallel: {
+        ...VALID_REPORT,
+        modelOperations: [
+          { ...childOperation, ordinal: 1 },
+          {
+            ...childOperation,
+            ordinal: 2,
+            attribution: {
+              ...childOperation.attribution,
+              childRunId: "subagent-2",
+            },
+          },
+        ],
+        modelOperationCount: 2,
+        providerRequestAttemptCount: 2,
+      },
+      "parallel-any": {
         ...VALID_REPORT,
         modelOperations: [
           { ...childOperation, ordinal: 1 },
@@ -1075,6 +1092,15 @@ process.exitCode = 1;
         },
         {
           taskId: "parallel",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 2,
+            satisfied: true,
+          },
+        },
+        {
+          taskId: "parallel-any",
           taskOutcome: "verified",
           delegationSelection: {
             status: "observed",
