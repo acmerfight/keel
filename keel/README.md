@@ -79,9 +79,13 @@ profile. A writer runs only as a single foreground child from a clean Git
 checkout, edits its own branch/worktree, and returns an inspectable patch
 artifact without modifying or merging the user's checkout. Writer profiles are
 exposed only by `--agent-policy explicit`; their worktree and branch remain
-preserved at the reported path for explicit inspection or cleanup. A project can add
-narrower profiles in `.agents/subagents.json`; project profiles are exposed to
-the model as `repo:<name>`:
+preserved at the reported path for explicit inspection or cleanup. Under
+explicit policy, a foreground read-only child may delegate a focused read-only
+subtask one level deeper. The grandchild cannot delegate again, run in the
+background, use Bash, or select a writer profile; both levels share the root
+budget, provider limits, cancellation tree, admission, and durable session
+history. A project can add narrower profiles in `.agents/subagents.json`;
+project profiles are exposed to the model as `repo:<name>`:
 
 ```json
 {

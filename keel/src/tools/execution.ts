@@ -200,7 +200,13 @@ async function executeDelegateTool(
   });
   const effects: readonly DelegationToolExecutionEffect[] =
     result.delivery === "fresh"
-      ? [{ kind: "delegation", usage: result.usage }]
+      ? [
+          {
+            kind: "delegation",
+            usage: result.usage,
+            costUsd: result.costUsd,
+          },
+        ]
       : NO_TOOL_EXECUTION_EFFECTS;
   if (result.delivery === "rejected") {
     return {

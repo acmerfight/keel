@@ -52,6 +52,17 @@ export function addRequestAccounting(
   };
 }
 
+export function addMeasuredRequestAccounting(
+  accounting: RunAccounting,
+  requestUsage: Usage,
+  costUsd: number,
+): RunAccounting {
+  return {
+    totalUsage: addUsage(accounting.totalUsage, requestUsage),
+    totalCostUsd: accounting.totalCostUsd + costUsd,
+  };
+}
+
 export function buildCostReport(
   spentUsd: number,
   costTracking: CostTrackingOptions | undefined,

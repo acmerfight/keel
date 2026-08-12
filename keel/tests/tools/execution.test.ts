@@ -459,6 +459,7 @@ describe("Tool Execution", () => {
           delivery: "fresh",
           ok: false,
           content: "child cancelled",
+          costUsd: 0.25,
           usage: {
             inputTokens: 5,
             cachedInputTokens: 1,
@@ -486,6 +487,7 @@ describe("Tool Execution", () => {
       effects: [
         {
           kind: "delegation",
+          costUsd: 0.25,
           usage: {
             inputTokens: 5,
             cachedInputTokens: 1,
@@ -745,6 +747,7 @@ describe("Tool Execution", () => {
         delivery: "fresh",
         ok: true,
         content: `${input.task}:${input.focusPaths.join(",")}`,
+        costUsd: 0.5,
         usage: {
           inputTokens: 10,
           cachedInputTokens: 2,
@@ -759,6 +762,7 @@ describe("Tool Execution", () => {
       effects: [
         {
           kind: "delegation",
+          costUsd: 0.5,
           usage: {
             inputTokens: 10,
             cachedInputTokens: 2,

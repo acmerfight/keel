@@ -72,6 +72,7 @@ interface ExternalToolResultExecutionEffect {
 export interface DelegationToolExecutionEffect {
   readonly kind: "delegation";
   readonly usage: Usage;
+  readonly costUsd: number;
 }
 
 type ToolExecutionEffect =

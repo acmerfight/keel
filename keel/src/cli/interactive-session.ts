@@ -523,6 +523,7 @@ export async function runInteractiveSession(
             options.delegation.policy,
             {
               background: backgroundAgentsEnabled,
+              nestedReadOnly: options.delegation.policy === "explicit",
               writer: options.delegation.policy === "explicit",
             },
           )

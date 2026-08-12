@@ -335,7 +335,11 @@ function supervisorFixture(
     supervisor: createSubagentSupervisor({
       workspace: options.workspace,
       platform: process.platform,
-      parentRunId: "main-run",
+      parent: {
+        kind: "main",
+        runId: "main-run",
+        childDelegation: "none",
+      },
       rootBudget,
       sharedCostBudget,
       ...(options.writeWorkspace !== undefined
@@ -3583,9 +3587,9 @@ describe("Subagent Supervisor", () => {
         delivery: "rejected",
         ok: false,
         reason:
-          "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
+          "Delegation rejected: the available tree budget cannot fund this child while preserving one admitted aggregate parent continuation.",
         recovery:
-          "Do not retry with the same session budget. Continue the investigation in Main, or ask the user to start a new run with a higher --max-cost.",
+          "Do not retry with the same session budget. Continue in the current agent, or ask the user to start a new run with a higher --max-cost.",
         maxResultChars: 6_000,
       });
       expect(invalidEstimate).toEqual({
@@ -3658,7 +3662,11 @@ describe("Subagent Supervisor", () => {
     const supervisor = createSubagentSupervisor({
       workspace,
       platform: process.platform,
-      parentRunId: "shape-sensitive-main",
+      parent: {
+        kind: "main",
+        runId: "shape-sensitive-main",
+        childDelegation: "none",
+      },
       rootBudget,
       sharedCostBudget,
       profileRegistry: createSubagentProfileRegistry({
@@ -3704,9 +3712,9 @@ describe("Subagent Supervisor", () => {
         delivery: "rejected",
         ok: false,
         reason:
-          "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
+          "Delegation rejected: the available tree budget cannot fund this child while preserving one admitted aggregate parent continuation.",
         recovery:
-          "Do not retry with the same session budget. Continue the investigation in Main, or ask the user to start a new run with a higher --max-cost.",
+          "Do not retry with the same session budget. Continue in the current agent, or ask the user to start a new run with a higher --max-cost.",
         maxResultChars: 6_000,
       });
       expect(supervisor.totalAcceptedCount()).toBe(0);

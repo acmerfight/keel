@@ -33,6 +33,7 @@ import type {
   DelegationBatchEntry,
   DelegationCapability,
   DelegationExecutor,
+  ForegroundDelegationCapability,
 } from "../tools/delegation.ts";
 import { createDelegationExecutor } from "../tools/delegation.ts";
 import {
@@ -63,6 +64,7 @@ import {
   isUntrustedMcpContentToolCall,
 } from "../tools/tool-call.ts";
 import {
+  addMeasuredRequestAccounting,
   addRequestAccounting,
   buildCostBudgetLimitedReport,
   buildCostReport,
@@ -193,7 +195,6 @@ interface SubagentRunAgentOptionsBase {
   readonly mcp?: AgentMcpRuntime;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "subagent";
-  readonly delegation?: never;
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
   readonly costBudgetProvider: LLMProvider;
@@ -208,11 +209,13 @@ export type SubagentWorkspaceRunOptions =
       readonly workspaceAccess: "read_only";
       readonly subagentCapability: ReadOnlySubagentCapabilitySnapshot;
       readonly workspaceLease?: never;
+      readonly delegation?: ForegroundDelegationCapability;
     }
   | {
       readonly workspaceAccess: "isolated_write";
       readonly subagentCapability: WriterSubagentCapabilitySnapshot;
       readonly workspaceLease: SubagentWriteWorkspaceLease;
+      readonly delegation?: never;
     };
 
 type SubagentRunAgentOptions = SubagentRunAgentOptionsBase &
@@ -300,7 +303,6 @@ interface SubagentRunAgentTurnOptionsBase {
   readonly mcp?: AgentMcpRuntime;
   readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
   readonly toolProfile: "subagent";
-  readonly delegation?: never;
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
   readonly costBudgetProvider: LLMProvider;
@@ -348,6 +350,9 @@ function agentTurnExecutionOptions(
           ...childOptions,
           workspaceAccess: options.workspaceAccess,
           subagentCapability: options.subagentCapability,
+          ...(options.delegation !== undefined
+            ? { delegation: options.delegation }
+            : {}),
         };
   }
   return {
@@ -535,7 +540,7 @@ function scheduledToolCalls(
 }
 
 const NON_ISOLATED_DELEGATION_RESULT =
-  "Delegation rejected: delegate calls may share a tool round only with other delegate calls so the host can preserve one aggregate main continuation budget.";
+  "Delegation rejected: delegate calls may share a tool round only with other delegate calls so the host can preserve one aggregate parent continuation budget.";
 
 interface TurnDelegation {
   readonly executor: DelegationExecutor | undefined;
@@ -1167,12 +1172,27 @@ export async function* runAgentTurn(
       );
     const preparedToolExposure: ModelToolExposure =
       options.toolProfile === "subagent"
-        ? {
-            kind: "auto",
-            profile: "subagent",
-            capability: options.subagentCapability,
-            ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
-          }
+        ? options.workspaceAccess === "isolated_write"
+          ? {
+              kind: "auto",
+              profile: "subagent",
+              capability: options.subagentCapability,
+              ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
+            }
+          : {
+              kind: "auto",
+              profile: "subagent",
+              capability: options.subagentCapability,
+              ...(delegationAvailable
+                ? {
+                    delegation: {
+                      mode: "foreground",
+                      profileCatalog: delegation.profileCatalog,
+                    },
+                  }
+                : {}),
+              ...(mcpExposure !== null ? { mcp: mcpExposure } : {}),
+            }
         : {
             kind: "auto",
             ...(options.toolProfile !== undefined
@@ -1615,10 +1635,10 @@ export async function* runAgentTurn(
       pendingToolExecutions.push(completed);
       const delegation = toolExecutionEffect(completed.execution, "delegation");
       if (delegation !== undefined) {
-        state.accounting = addRequestAccounting(
+        state.accounting = addMeasuredRequestAccounting(
           state.accounting,
           delegation.usage,
-          costTracking,
+          delegation.costUsd,
         );
         publishAccountingUpdate();
       }

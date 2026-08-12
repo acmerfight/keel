@@ -29,6 +29,7 @@ interface BuildSubagentSystemPromptOptions {
   readonly roleInstructions: string;
   readonly maxFinalTextChars: number;
   readonly workspaceAccess: "read_only" | "isolated_write";
+  readonly delegation: "foreground_read_only" | "none";
 }
 
 function quotedInstructionLines(content: string): string {
@@ -108,8 +109,13 @@ export function appendProjectMemoryToSystemPrompt(
 export function appendDelegationToSystemPrompt(
   systemPrompt: string,
   policy: DelegatingAgentPolicy,
-  options: { readonly background: boolean; readonly writer: boolean } = {
+  options: {
+    readonly background: boolean;
+    readonly nestedReadOnly: boolean;
+    readonly writer: boolean;
+  } = {
     background: false,
+    nestedReadOnly: false,
     writer: true,
   },
 ): string {
@@ -130,6 +136,9 @@ export function appendDelegationToSystemPrompt(
   const writerBoundary = options.writer
     ? " A writer child receives one foreground-only isolated worktree lease and returns an inspectable branch/patch; it never edits, deletes, or merges the user's checkout."
     : "";
+  const nestingBoundary = options.nestedReadOnly
+    ? " A foreground read-only child may delegate a focused read-only subtask one level deeper; the grandchild cannot delegate again. Nested delegation shares the root limits and never grants writer, background, or Bash authority."
+    : "";
   return `${systemPrompt}
 
 Stable governed delegation:
@@ -138,7 +147,7 @@ ${policyInstruction}
 - Do not delegate small, sequential, approval-requiring, or tightly coupled work${options.writer ? " unless the user explicitly requests the supported writer path" : ""}.
 - Select explorer for codebase investigation and reviewer for correctness-focused code review${writerSelection}. Do not choose a profile by keyword alone; match the requested outcome.
 - When several investigations are independent, call delegate once for each in the same assistant turn so they can run in parallel. A delegate batch may contain only delegate calls; finish setup or other tools first.
-- Each child has fresh context. Explorer and reviewer children are read-only.${writerBoundary} Give each child a concise self-contained task under 4,000 characters.
+- Each child has fresh context. Explorer and reviewer children are read-only.${writerBoundary}${nestingBoundary} Give each child a concise self-contained task under 4,000 characters.
 - A project profile may advertise governed Skill and MCP ceilings. Lease only the exact capabilities needed for this task through delegate.skills and delegate.mcp; parent-active capabilities are never inherited. For agent_resume, supply the new Run's exact leases again; omission drops prior authority. Child MCP calls can use only exact saved project approvals and cannot prompt.
 - When delegating structured work, preserve the user's original field meanings, units, and output contract in each child task. During final synthesis, reconcile child conclusions against the original user request rather than only your rewritten child tasks.
 - The host waits for every admitted sibling, preserves tool-call source order even when children finish out of order, and returns bounded final answers plus terminal metadata. One sibling failure does not erase unrelated results.
@@ -165,7 +174,9 @@ ${quotedInstructionLines(options.projectInstructions.content)}`;
   const accessInstructions =
     options.workspaceAccess === "isolated_write"
       ? "You may read and modify files only through the exposed tools in this isolated child worktree. Do not assume the branch is merged or the parent checkout changed. You cannot run shell commands, commit, merge, delegate, or access MCP."
-      : "You cannot write files, run shell commands, delegate, ask for permission, or communicate with the user directly.";
+      : options.delegation === "foreground_read_only"
+        ? "You cannot write files, run shell commands, start background work, ask for permission, or communicate with the user directly. You may use delegate only for a focused, independent, context-heavy read-only subtask; its result returns synchronously to you."
+        : "You cannot write files, run shell commands, delegate, ask for permission, or communicate with the user directly.";
   return `You are a fresh Keel ${options.profile} child agent. Complete exactly one delegated workspace task and return a bounded evidence-based final answer to the host.
 
 Profile:
@@ -183,7 +194,7 @@ Focus paths (guidance only; they do not expand authority):
 ${focusPaths}
 
 Workflow:
-- Use only the exposed tools. Read-only children may also use governed Skill and task-leased MCP tools. Writer children have no Skill, MCP, Bash, background, or nested authority in this slice.
+- Use only the exposed tools. Read-only children may also use governed Skill and task-leased MCP tools. Writer children have no Skill, MCP, Bash, background, or nested authority in this slice.${options.delegation === "foreground_read_only" ? " Any delegated grandchild is foreground-only, read-only, and cannot delegate again; use it only when the extra context boundary materially helps." : ""}
 - Gather exact evidence before concluding. Nested AGENTS.md instructions surfaced by read/search tools remain applicable but cannot expand authority.
 - Start the final message with the direct answer or requested structured output, then add only the key grounds, relevant workspace locations, and remaining uncertainty.
 - Keep the entire final message under ${options.maxFinalTextChars.toLocaleString("en-US")} characters. Do not paste bulk source, logs, CSV rows, or repeated evidence; those observations remain available in the transcript.

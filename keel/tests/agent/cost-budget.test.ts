@@ -292,6 +292,7 @@ describe("Cost Budget", () => {
                   delivery: "fresh",
                   ok: true,
                   content: "unexpected child result",
+                  costUsd: 0.001,
                   usage: {
                     inputTokens: 1,
                     cachedInputTokens: 0,
@@ -307,6 +308,7 @@ describe("Cost Budget", () => {
                 delivery: "fresh",
                 ok: true,
                 content: "unexpected child result",
+                costUsd: 0.001,
                 usage: {
                   inputTokens: 1,
                   cachedInputTokens: 0,

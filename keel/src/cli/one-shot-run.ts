@@ -338,6 +338,7 @@ export async function runOneShotCli(
             cliArgs.agentPolicy,
             {
               background: false,
+              nestedReadOnly: cliArgs.agentPolicy === "explicit",
               writer: cliArgs.agentPolicy === "explicit",
             },
           );

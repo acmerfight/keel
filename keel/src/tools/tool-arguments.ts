@@ -63,7 +63,7 @@ function profileDescription(catalog: SubagentProfileCatalog): string {
       return `${entry.name} (${entry.base} base; ${skills}; ${mcp})`;
     })
     .join(", ");
-  return `Select an exact governed child profile from this catalog: ${choices}. Defaults to explorer.`;
+  return `Select an exact governed child profile from this catalog: ${choices}. Defaults to ${catalog[0].name}.`;
 }
 
 function catalogSkillNames(catalog: SubagentProfileCatalog): readonly string[] {
@@ -135,7 +135,7 @@ function validateProfileSkillLease(
   },
   context: z.RefinementCtx,
 ): void {
-  const profileName = input.profile ?? "explorer";
+  const profileName = input.profile ?? catalog[0].name;
   const profile = catalog.find((entry) => entry.name === profileName);
   const allowed = new Set(profile?.skills ?? []);
   if ((input.skills ?? []).every((skill) => allowed.has(skill))) return;
@@ -154,7 +154,7 @@ function validateProfileMcpLease(
   },
   context: z.RefinementCtx,
 ): void {
-  const profileName = input.profile ?? "explorer";
+  const profileName = input.profile ?? catalog[0].name;
   const profile = catalog.find((entry) => entry.name === profileName);
   const allowed = new Set((profile?.mcp ?? []).map(mcpSelectorKey));
   if ((input.mcp ?? []).every((tool) => allowed.has(mcpSelectorKey(tool)))) {
@@ -309,7 +309,7 @@ export function delegateToolArgumentsSchemaForCatalog(
     .extend({
       profile: z.preprocess(
         (value) => (value === null ? undefined : value),
-        catalogProfileSchema(catalog).default("explorer"),
+        catalogProfileSchema(catalog).default(catalog[0].name),
       ),
       mode: z.preprocess(
         (value) => (value === null ? undefined : value),
