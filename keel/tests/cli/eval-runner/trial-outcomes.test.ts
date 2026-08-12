@@ -933,7 +933,7 @@ process.exitCode = 1;
     }
   });
 
-  test(`Given fixed delegation-policy tasks require one, require any, forbid, or bound child identities,
+  test(`Given fixed delegation-policy tasks require one, multiple, any, forbid, or bound child identities,
     When the eval runner scores reports with child attribution,
     Then task outcomes remain verified while independent selection observations fail the gate`, async () => {
     const { root, suiteDir, outFile } = await createEvalDir();
@@ -943,7 +943,8 @@ process.exitCode = 1;
       ["duplicate", "at_most_one"],
       ["duplicate-overflow", "at_most_one"],
       ["missing-required", "require_one"],
-      ["parallel", "require_any"],
+      ["parallel", "require_multiple"],
+      ["parallel-single", "require_multiple"],
     ] as const;
     for (const [prompt, delegationPolicy] of taskCases) {
       await createTask(suiteDir, prompt, {
@@ -1015,6 +1016,11 @@ process.exitCode = 1;
         modelOperationCount: 2,
         providerRequestAttemptCount: 2,
       },
+      "parallel-single": {
+        ...VALID_REPORT,
+        modelOperations: [{ ...childOperation, ordinal: 1 }],
+        modelOperationCount: 1,
+      },
     };
     const cliEntry = join(root, "delegation-policy-cli.mjs");
     await writeFile(
@@ -1074,6 +1080,15 @@ process.exitCode = 1;
             status: "observed",
             childRuns: 2,
             satisfied: true,
+          },
+        },
+        {
+          taskId: "parallel-single",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 1,
+            satisfied: false,
           },
         },
         {

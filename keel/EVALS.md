@@ -114,7 +114,7 @@ Each standard trial appends one JSON line:
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "timestamp": "2026-06-13T02:11:09.123Z",
   "keelVersion": "0.0.1",
   "taskId": "fix-typo",
@@ -127,7 +127,7 @@ Each standard trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 20,
+    "schemaVersion": 21,
     "tasks": [
       {
         "ordinal": 1,
@@ -321,8 +321,9 @@ an `--agent-policy <explicit|auto>` treatment. Odd trials run control first and
 even trials run treatment first to reduce fixed order bias, while JSONL stays
 in control/treatment order. The control harness must complete; its semantic
 task failure remains a valid observation. The treatment must verify and
-separately satisfy `require_one`, `require_any`, `forbid`, or `at_most_one`
-using distinct child identities from the run report. Selection never changes
+separately satisfy `require_one`, `require_multiple` (at least two distinct
+child Runs), `require_any`, `forbid`, or `at_most_one` using distinct child
+identities from the run report. Selection never changes
 `taskOutcome`. The frozen Slice 1.5 corpus, transcript rubric, provider/model,
 trial count,
 budgets, and Continue/Pause/Stop gate live in
@@ -334,6 +335,8 @@ The host-owned completion handoff and continuation-budget reliability gate live
 in [`evals/experiments/subagent-slice-1-6/README.md`](evals/experiments/subagent-slice-1-6/README.md).
 The stable explicit-policy graduation window lives in
 [`evals/experiments/subagent-slice-2-3/README.md`](evals/experiments/subagent-slice-2-3/README.md).
+The explicit/auto product-graduation and sequential-negative window lives in
+[`evals/experiments/subagent-slice-6-2/README.md`](evals/experiments/subagent-slice-6-2/README.md).
 
 ## Writing good tasks
 

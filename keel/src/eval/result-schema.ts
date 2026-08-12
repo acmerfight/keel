@@ -89,6 +89,8 @@ export function delegationPolicySatisfied(
   switch (policy) {
     case "require_one":
       return childRuns === 1;
+    case "require_multiple":
+      return childRuns >= 2;
     case "require_any":
       return childRuns >= 1;
     case "forbid":

@@ -6,7 +6,10 @@ import { z } from "zod";
 import type { DelegatingAgentPolicy } from "../../../src/core/agent-policy.ts";
 import { evalResultLineSchema } from "../../../src/eval/result-schema.ts";
 import { runEvalCommand } from "../../../src/eval/run.ts";
-import type { EvalDelegationExpectation } from "../../../src/eval/task.ts";
+import type {
+  EvalDelegationExpectation,
+  EvalDelegationPolicy,
+} from "../../../src/eval/task.ts";
 
 export {
   isAbsolute,
@@ -49,11 +52,7 @@ export type TaskFixture = TaskFixtureBase &
             readonly delegationExpectation?: never;
           }
         | {
-            readonly delegationPolicy:
-              | "require_one"
-              | "require_any"
-              | "forbid"
-              | "at_most_one";
+            readonly delegationPolicy: EvalDelegationPolicy;
             readonly delegationExpectation?: EvalDelegationExpectation;
           }
       ))
@@ -81,11 +80,7 @@ export interface DelegationPairTaskFixture {
   readonly allowBash: boolean;
   readonly maxCostUsd: number;
   readonly agentPolicy: DelegatingAgentPolicy;
-  readonly delegationPolicy:
-    | "require_one"
-    | "require_any"
-    | "forbid"
-    | "at_most_one";
+  readonly delegationPolicy: EvalDelegationPolicy;
 }
 
 export async function createEvalDir(): Promise<{
