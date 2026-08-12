@@ -328,14 +328,9 @@ export function narrowSubagentCapabilityLimits(
   return { ...snapshot, ...narrowedLimits };
 }
 
-export function narrowSubagentCapabilityToCeiling(
-  snapshot: ReadOnlySubagentCapabilitySnapshot,
-  ceiling: SubagentCapabilitySnapshot,
-): ReadOnlySubagentCapabilitySnapshot;
-export function narrowSubagentCapabilityToCeiling(
-  snapshot: WriterSubagentCapabilitySnapshot,
-  ceiling: SubagentCapabilitySnapshot,
-): WriterSubagentCapabilitySnapshot;
+export function narrowSubagentCapabilityToCeiling<
+  Capability extends SubagentCapabilitySnapshot,
+>(snapshot: Capability, ceiling: SubagentCapabilitySnapshot): Capability;
 export function narrowSubagentCapabilityToCeiling(
   snapshot: SubagentCapabilitySnapshot,
   ceiling: SubagentCapabilitySnapshot,

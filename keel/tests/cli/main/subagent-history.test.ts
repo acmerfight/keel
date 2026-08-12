@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -11,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { runCliProcess } from "../../../src/testing/cli-harness.ts";
 import {
@@ -61,6 +63,274 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Durable Subagent History", () => {
+  test(`Given a completed writer Thread preserves an isolated patch,
+    When the user explicitly resumes that writer with one follow-up,
+    Then the same Agent creates a new foreground Run on the same worktree while the old Run and parent stay unchanged`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-writer-resume-"));
+    const keelHome = await mkdtemp(join(tmpdir(), "keel-writer-resume-home-"));
+    const sessionId = "writer-resume";
+    await writeFile(join(workspace, "message.txt"), "before\n", "utf8");
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.name", "Keel Test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["config", "user.email", "keel@example.test"], {
+      cwd: workspace,
+    });
+    execFileSync("git", ["add", "message.txt"], { cwd: workspace });
+    execFileSync("git", ["commit", "--quiet", "-m", "initial"], {
+      cwd: workspace,
+    });
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_writer", "delegate", {
+                  profile: "writer",
+                  task: "Change message.txt from before to first.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+          case 6:
+            response.end(
+              [
+                sseToolCall(`writer_read_${requests.length}`, "read", {
+                  path: "message.txt",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(
+              [
+                sseToolCall("writer_first_edit", "edit", {
+                  path: "message.txt",
+                  edits: [{ oldText: "before", newText: "first" }],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 4:
+            response.end(sseTextReplyWithUsage("Made the first change."));
+            return;
+          case 5:
+            response.end(sseTextReplyWithUsage("The first patch is ready."));
+            return;
+          case 7:
+            response.end(
+              [
+                sseToolCall("writer_follow_up_edit", "edit", {
+                  path: "message.txt",
+                  edits: [{ oldText: "first", newText: "second" }],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 8:
+            response.end(sseTextReplyWithUsage("Made the follow-up change."));
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+
+    try {
+      const firstInput = new PassThrough();
+      firstInput.end("Use a writer subagent to update message.txt.\n");
+      const first = createRuntime(
+        [
+          "--session",
+          sessionId,
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+          "--no-skills",
+        ],
+        {
+          cwd: workspace,
+          input: firstInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+      expect(await runCliMain(first.runtime), first.stderr()).toBe(0);
+      const firstMainContinuation = requestSchema.parse(requests[4]);
+      const firstResult = z
+        .object({
+          workspace: z.object({
+            branch: z.string(),
+            worktreePath: z.string(),
+            patchSha256: z.string(),
+          }),
+        })
+        .passthrough()
+        .parse(
+          JSON.parse(
+            firstMainContinuation.messages?.findLast(
+              (message) => message.role === "tool",
+            )?.content ?? "null",
+          ),
+        );
+      const inspectInput = new PassThrough();
+      inspectInput.end("/agents show 1\n");
+      const inspect = createRuntime(
+        [
+          "--resume",
+          sessionId,
+          "--provider",
+          "fake",
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+          "--no-skills",
+        ],
+        {
+          cwd: workspace,
+          input: inspectInput,
+          env: { KEEL_HOME: keelHome, KEEL_FORCE_INTERACTIVE: "1" },
+        },
+      );
+      expect(await runCliMain(inspect.runtime), inspect.stderr()).toBe(0);
+      const firstIdentity = z
+        .object({ agentId: z.string(), runId: z.string() })
+        .parse({
+          agentId: /^Agent 1: (agent-[a-f0-9-]+)$/mu.exec(
+            inspect.stdout(),
+          )?.[1],
+          runId: /^run: (subagent-[a-f0-9-]+)$/mu.exec(inspect.stdout())?.[1],
+        });
+
+      // When
+      const followUpInput = new PassThrough();
+      followUpInput.end(
+        `/agents resume 1 Change message.txt from first to second.\n/agents show 1\n/agents show ${firstIdentity.runId}\n`,
+      );
+      const followUp = createRuntime(
+        [
+          "--resume",
+          sessionId,
+          "--agent-policy",
+          "explicit",
+          "--max-cost",
+          "0.05",
+          "--no-skills",
+        ],
+        {
+          cwd: workspace,
+          input: followUpInput,
+          env: {
+            KEEL_HOME: keelHome,
+            KEEL_FORCE_INTERACTIVE: "1",
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+          },
+        },
+      );
+      expect(await runCliMain(followUp.runtime), followUp.stderr()).toBe(0);
+
+      // Then
+      expect(requests).toHaveLength(8);
+      const resumedResult = z
+        .object({
+          agentId: z.literal(firstIdentity.agentId),
+          runId: z.string().refine((value) => value !== firstIdentity.runId),
+          workspace: z.object({
+            branch: z.literal(firstResult.workspace.branch),
+            worktreePath: z.literal(firstResult.workspace.worktreePath),
+            patchSha256: z
+              .string()
+              .refine((value) => value !== firstResult.workspace.patchSha256),
+          }),
+        })
+        .passthrough()
+        .parse(
+          JSON.parse(
+            followUp
+              .stdout()
+              .split("\n")
+              .find((line) => line.startsWith("{")) ?? "null",
+          ),
+        );
+      expect(JSON.stringify(requests[5])).toContain("Made the first change.");
+      expect(JSON.stringify(requests[5])).toContain(
+        "Change message.txt from first to second.",
+      );
+      expect(await readFile(join(workspace, "message.txt"), "utf8")).toBe(
+        "before\n",
+      );
+      expect(
+        execFileSync("git", ["status", "--porcelain"], {
+          cwd: workspace,
+          encoding: "utf8",
+        }),
+      ).toBe("");
+      expect(
+        await readFile(
+          join(firstResult.workspace.worktreePath, "message.txt"),
+          "utf8",
+        ),
+      ).toBe("second\n");
+      expect(
+        execFileSync("git", ["worktree", "list", "--porcelain"], {
+          cwd: workspace,
+          encoding: "utf8",
+        }).match(/^worktree /gmu),
+      ).toHaveLength(2);
+      expect(followUp.stdout()).toContain(`Agent 1: ${firstIdentity.agentId}`);
+      expect(followUp.stdout()).toContain(
+        `continuation of: ${firstIdentity.runId}`,
+      );
+      expect(followUp.stdout()).toContain(
+        `workspace branch: ${firstResult.workspace.branch}`,
+      );
+      expect(followUp.stdout()).toContain(
+        `workspace worktree: ${firstResult.workspace.worktreePath}`,
+      );
+      expect(followUp.stdout()).toContain(`run: ${resumedResult.runId}`);
+      expect(followUp.stdout()).toContain("result: Made the first change.");
+      expect(followUp.stderr()).not.toContain("Background subagent");
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a project defines a narrower reviewer profile with a Skill ceiling, registered model, and effort,
     When main delegates it and the user resumes the thread after removing the profile and changing the Skill,
     Then execution stays stable while the changed Skill authority is removed from the resumed Run`, async () => {

@@ -108,7 +108,7 @@ describe("CLI subagent workspace lease", () => {
     }
   });
 
-  test(`Given parent cancellation arrives before writer preparation or activation,
+  test(`Given parent cancellation arrives before writer preparation, activation, or continuation,
     When the workspace runtime checks each boundary,
     Then it rejects without materializing a child worktree`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-writer-cancelled-"));
@@ -129,6 +129,23 @@ describe("CLI subagent workspace lease", () => {
       expect(
         runtime.prepare({
           childRunId: "subagent-11111111-1111-4111-8111-111111111111",
+          signal: alreadyCancelled.signal,
+        }),
+      ).toMatchObject({
+        kind: "rejected",
+        reason: expect.stringContaining("already cancelled"),
+      });
+      expect(
+        runtime.reacquire({
+          childRunId: "subagent-12121212-1212-4212-8212-121212121212",
+          previous: {
+            kind: "isolated_write",
+            leaseId: "subagent-11111111-1111-4111-8111-111111111111",
+            baseCommit: "a".repeat(40),
+            branch: "keel/subagent/11111111-1111-4111-8111-111111111111",
+            worktreePath: join(leasesRoot, "missing"),
+            workspaceRoot: join(leasesRoot, "missing"),
+          },
           signal: alreadyCancelled.signal,
         }),
       ).toMatchObject({
@@ -1151,6 +1168,160 @@ describe("CLI subagent workspace lease", () => {
       });
       await rm(workspace, { recursive: true, force: true });
       await rm(leasesRoot, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a completed writer preserves changes on its isolated branch,
+    When a new Run reacquires that workspace and the branch later drifts,
+    Then the new lease keeps the same Git identity and later reacquisition fails without resetting it`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-writer-reacquire-"));
+    const leasesRoot = await mkdtemp(
+      join(tmpdir(), "keel-writer-reacquire-home-"),
+    );
+    const foreignRepository = await mkdtemp(
+      join(tmpdir(), "keel-writer-reacquire-foreign-"),
+    );
+    await writeFile(join(workspace, "message.txt"), "before\n");
+    await writeFile(join(foreignRepository, "foreign.txt"), "foreign\n");
+    initializeRepository(workspace);
+    initializeRepository(foreignRepository);
+    const runtime = createCliSubagentWriteWorkspaceRuntime({
+      workspace,
+      leasesRoot,
+      platform: process.platform,
+    });
+    const firstPreparation = runtime.prepare({
+      childRunId: "subagent-51515151-5151-4151-8151-515151515151",
+      signal: new AbortController().signal,
+    });
+    expect(firstPreparation.kind).toBe("prepared");
+    if (firstPreparation.kind !== "prepared") return;
+    const firstAcquisition = firstPreparation.workspace.activate();
+    expect(firstAcquisition.kind).toBe("acquired");
+    if (firstAcquisition.kind !== "acquired") return;
+    const firstReference = firstAcquisition.lease.reference;
+
+    try {
+      await writeFile(
+        join(firstReference.workspaceRoot, "message.txt"),
+        "first\n",
+      );
+      expect(firstAcquisition.lease.settle()).toMatchObject({
+        disposition: "preserved",
+        patch: { content: expect.stringContaining("+first") },
+      });
+      expect(
+        runtime.reacquire({
+          childRunId: "subagent-50505050-5050-4050-8050-505050505050",
+          previous: {
+            ...firstReference,
+            worktreePath: workspace,
+            workspaceRoot: workspace,
+          },
+          signal: new AbortController().signal,
+        }),
+      ).toMatchObject({
+        kind: "rejected",
+        reason: expect.stringContaining("outside the canonical lease root"),
+      });
+      expect(
+        runtime.reacquire({
+          childRunId: "subagent-50515151-5051-4051-8051-505151505151",
+          previous: {
+            ...firstReference,
+            workspaceRoot: join(firstReference.workspaceRoot, "substituted"),
+          },
+          signal: new AbortController().signal,
+        }),
+      ).toMatchObject({
+        kind: "rejected",
+        reason: expect.stringContaining(
+          "identity differs from the previous Run",
+        ),
+      });
+
+      const gitFile = join(firstReference.worktreePath, ".git");
+      const originalGitFile = await readFile(gitFile, "utf8");
+      try {
+        await writeFile(
+          gitFile,
+          `gitdir: ${join(foreignRepository, ".git")}\n`,
+        );
+        expect(
+          runtime.reacquire({
+            childRunId: "subagent-50525252-5052-4052-8052-505252505252",
+            previous: firstReference,
+            signal: new AbortController().signal,
+          }),
+        ).toMatchObject({
+          kind: "rejected",
+          reason: expect.stringContaining(
+            "not linked to the parent repository",
+          ),
+        });
+      } finally {
+        await writeFile(gitFile, originalGitFile);
+      }
+
+      const secondAcquisition = runtime.reacquire({
+        childRunId: "subagent-52525252-5252-4252-8252-525252525252",
+        previous: firstReference,
+        signal: new AbortController().signal,
+      });
+      expect(secondAcquisition.kind).toBe("acquired");
+      if (secondAcquisition.kind !== "acquired") return;
+      expect(secondAcquisition.lease.reference).toEqual({
+        ...firstReference,
+        leaseId: "subagent-52525252-5252-4252-8252-525252525252",
+      });
+      await writeFile(
+        join(secondAcquisition.lease.reference.workspaceRoot, "message.txt"),
+        "second\n",
+      );
+      expect(secondAcquisition.lease.settle()).toMatchObject({
+        disposition: "preserved",
+        patch: { content: expect.stringContaining("+second") },
+      });
+
+      execFileSync("git", ["checkout", "--quiet", "--detach"], {
+        cwd: firstReference.worktreePath,
+      });
+      const driftedReacquisition = runtime.reacquire({
+        childRunId: "subagent-53535353-5353-4353-8353-535353535353",
+        previous: secondAcquisition.lease.reference,
+        signal: new AbortController().signal,
+      });
+      expect(driftedReacquisition).toMatchObject({
+        kind: "rejected",
+        reason: expect.stringContaining("leased branch changed"),
+      });
+      expect(
+        execFileSync("git", ["branch", "--show-current"], {
+          cwd: firstReference.worktreePath,
+          encoding: "utf8",
+        }),
+      ).toBe("");
+      expect(
+        await readFile(
+          join(firstReference.workspaceRoot, "message.txt"),
+          "utf8",
+        ),
+      ).toBe("second\n");
+      expect(await readFile(join(workspace, "message.txt"), "utf8")).toBe(
+        "before\n",
+      );
+    } finally {
+      execFileSync(
+        "git",
+        ["worktree", "remove", "--force", firstReference.worktreePath],
+        { cwd: workspace },
+      );
+      execFileSync("git", ["branch", "-D", firstReference.branch], {
+        cwd: workspace,
+      });
+      await rm(workspace, { recursive: true, force: true });
+      await rm(leasesRoot, { recursive: true, force: true });
+      await rm(foreignRepository, { recursive: true, force: true });
     }
   });
 });

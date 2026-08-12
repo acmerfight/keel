@@ -63,6 +63,7 @@ function activeEntry(
     systemPrompt: "Read-only child instructions.",
     threadCapabilityCeiling: explorerCapability,
     capability: explorerCapability,
+    workspace: null,
     transcriptRef: `agent-transcript:saved-session/${childAgentId}`,
     acceptedAt: "2026-08-10T00:00:00.000Z",
     lineage: { kind: "root" },

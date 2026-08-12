@@ -94,6 +94,7 @@ import {
 } from "./subagent-tree-budget.ts";
 import type {
   SubagentWriteWorkspaceLease,
+  SubagentWriteWorkspaceReference,
   SubagentWriteWorkspaceResult,
   SubagentWriteWorkspaceRuntime,
   SubagentWriteWorkspaceSettlement,
@@ -170,6 +171,7 @@ export type SubagentProgressEvent =
 
 interface AcceptedDelegation {
   readonly kind: "accepted";
+  readonly mode: "foreground" | "background";
   readonly record: SubagentRunRecord;
   readonly run: () => Promise<SubagentCanonicalResult>;
   readonly cancelBeforeStart: () => void;
@@ -226,6 +228,7 @@ type DelegationReceipt = AcceptedDelegation | RejectedDelegation;
 
 interface PreparedDelegationCandidateBase {
   readonly input: DelegationRequest;
+  readonly toolName: "delegate" | "agent_resume";
   readonly delegationId: string;
   readonly execution: SubagentExecutionRuntime;
   readonly roleInstructions: string;
@@ -295,11 +298,9 @@ export interface SubagentSupervisor {
   readonly continuation: SubagentContinuationCapability;
 }
 
-export interface SubagentContinuationRequest {
+interface SubagentContinuationRequestBase {
   readonly childAgentId: AgentId;
   readonly previousRunId: SubagentRunId;
-  readonly capability: SubagentCapabilitySnapshot;
-  readonly threadCapabilityCeiling: SubagentCapabilitySnapshot;
   readonly execution: SubagentExecutionSnapshot;
   readonly toolCallId: string;
   readonly message: string;
@@ -310,6 +311,22 @@ export interface SubagentContinuationRequest {
   readonly priorMessages: readonly SessionMessage[];
   readonly signal: AbortSignal;
 }
+
+export type SubagentContinuationRequest = SubagentContinuationRequestBase &
+  (
+    | {
+        readonly workspaceAccess: "read_only";
+        readonly capability: ReadOnlySubagentCapabilitySnapshot;
+        readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+        readonly workspace: null;
+      }
+    | {
+        readonly workspaceAccess: "isolated_write";
+        readonly capability: WriterSubagentCapabilitySnapshot;
+        readonly threadCapabilityCeiling: WriterSubagentCapabilitySnapshot;
+        readonly workspace: SubagentWriteWorkspaceReference;
+      }
+  );
 
 interface SubagentContinuationResult {
   readonly ok: boolean;
@@ -684,6 +701,8 @@ export function projectSubagentResult(
       ? SUBAGENT_MAX_FINAL_TEXT_CHARS
       : MAX_ADMITTED_ERROR_CHARS;
   const delegationId = admittedText(result.delegationId, MAX_ADMITTED_ID_CHARS);
+  const agentId = admittedText(result.childAgentId, MAX_ADMITTED_ID_CHARS);
+  const runId = admittedText(result.childRunId, MAX_ADMITTED_ID_CHARS);
   const admittedResultText = admittedText(rawText, textLimit);
   const transcriptRefText =
     result.transcriptRef === null
@@ -693,6 +712,8 @@ export function projectSubagentResult(
     transcriptRefText?.truncated === false ? transcriptRefText.value : null;
   const truncated =
     delegationId.truncated ||
+    agentId.truncated ||
+    runId.truncated ||
     admittedResultText.truncated ||
     (result.transcriptRef !== null && transcriptRef === null);
   const serialize = (
@@ -704,6 +725,8 @@ export function projectSubagentResult(
   ): string =>
     JSON.stringify({
       delegationId: admittedDelegationId,
+      agentId: agentId.value,
+      runId: runId.value,
       status: result.status,
       transcriptRef: admittedTranscriptRef,
       pendingInputCount: result.pendingInputCount,
@@ -880,6 +903,7 @@ async function finalizeWriteWorkspace(input: {
   readonly lease: SubagentWriteWorkspaceLease;
   readonly settlement: SubagentWriteWorkspaceSettlement;
   readonly toolCallId: string;
+  readonly toolName: "delegate" | "agent_resume";
   readonly store: AbortableToolOutputArtifactStore;
   readonly signal: AbortSignal;
 }): Promise<{
@@ -896,7 +920,7 @@ async function finalizeWriteWorkspace(input: {
   if (input.settlement.disposition === "preserved") {
     const storedPatch = await input.store.save({
       toolCallId: input.toolCallId,
-      toolName: "delegate",
+      toolName: input.toolName,
       content: input.settlement.patch.content,
       sourceStatus: input.settlement.patch.sourceTruncated
         ? "source-truncated"
@@ -955,7 +979,7 @@ async function finalizeWriteWorkspace(input: {
   if (input.settlement.patch !== null) {
     const storedPatch = await input.store.save({
       toolCallId: input.toolCallId,
-      toolName: "delegate",
+      toolName: input.toolName,
       content: input.settlement.patch.content,
       sourceStatus: input.settlement.patch.sourceTruncated
         ? "source-truncated"
@@ -1185,6 +1209,7 @@ export function createSubagentSupervisor(
     readonly childAgentId: AgentId;
     readonly childRunId: SubagentRunId;
     readonly toolCallId: string;
+    readonly toolName: "delegate" | "agent_resume";
     readonly task: string;
     readonly focusPaths: readonly string[];
     readonly systemPrompt: string;
@@ -1462,7 +1487,7 @@ export function createSubagentSupervisor(
         try {
           saved = await options.transcriptStore.save({
             toolCallId: input.toolCallId,
-            toolName: "delegate",
+            toolName: input.toolName,
             content: transcriptContent({
               delegationId: input.delegationId,
               childRunId: input.childRunId,
@@ -1497,6 +1522,7 @@ export function createSubagentSupervisor(
           lease: input.workspace.lease,
           settlement: input.workspace.lease.settle(),
           toolCallId: input.toolCallId,
+          toolName: input.toolName,
           store: options.transcriptStore,
           signal: input.lifecycle.settlementAbortController.signal,
         });
@@ -1566,8 +1592,14 @@ export function createSubagentSupervisor(
     systemPrompt: string,
   ): AcceptedDelegation => {
     const candidate = childBudget.value;
-    const { input, delegationId, capability, execution, userMessage } =
-      candidate;
+    const {
+      input,
+      delegationId,
+      capability,
+      execution,
+      toolName,
+      userMessage,
+    } = candidate;
     const record: SubagentRunRecord = {
       delegationId,
       childAgentId,
@@ -1648,6 +1680,7 @@ export function createSubagentSupervisor(
             childAgentId,
             childRunId,
             toolCallId: input.toolCallId,
+            toolName,
             task: input.task,
             focusPaths: input.focusPaths,
             execution,
@@ -1681,6 +1714,7 @@ export function createSubagentSupervisor(
     };
     return {
       kind: "accepted",
+      mode: input.mode,
       record,
       run,
       cancelBeforeStart,
@@ -1895,6 +1929,7 @@ export function createSubagentSupervisor(
       }
       const candidateBase = {
         input,
+        toolName: "delegate" as const,
         delegationId,
         execution,
         roleInstructions: profile.roleInstructions,
@@ -2217,6 +2252,7 @@ export function createSubagentSupervisor(
           accepted.kind === "terminal"
             ? {
                 kind: "accepted",
+                mode: candidate.input.mode,
                 record: {
                   delegationId: candidate.delegationId,
                   childAgentId: accepted.childAgentId,
@@ -2277,7 +2313,7 @@ export function createSubagentSupervisor(
             resultAdmission.maxResultChars,
           );
         }
-        if (input.mode === "background") {
+        if (receipt.mode === "background") {
           const result = receipt.run();
           if (freshAcceptedIds.delete(delegationId)) {
             options.background?.register({
@@ -2370,6 +2406,13 @@ export function createSubagentSupervisor(
       const delegationId = `${options.parentRunId}:${request.toolCallId}`;
       const existing = receipts.get(delegationId);
       if (existing?.kind === "accepted") {
+        if (existing.mode === "foreground") {
+          const result = await existing.run();
+          return {
+            ok: result.status === "completed",
+            content: projectSubagentResult(result),
+          };
+        }
         return {
           ok: true,
           content: JSON.stringify({
@@ -2418,16 +2461,6 @@ export function createSubagentSupervisor(
       if (invalidFocusPath !== null) {
         return reject(`Agent resume rejected: ${invalidFocusPath}`);
       }
-      if (subagentCapabilityIsWriter(request.capability)) {
-        return reject(
-          "Agent resume rejected because writer continuations are not supported by the single foreground workspace slice.",
-        );
-      }
-      if (subagentCapabilityIsWriter(request.threadCapabilityCeiling)) {
-        return reject(
-          "Agent resume rejected because writer continuations are not supported by the single foreground workspace slice.",
-        );
-      }
       const baseProfile = subagentCapabilityBaseProfile(request.capability);
       const currentPolicy = options.profileRegistry.resolveBuiltin(baseProfile);
       const currentSkills =
@@ -2446,31 +2479,66 @@ export function createSubagentSupervisor(
         subagentCapabilityWithSkills(currentPolicy.capability, currentSkills),
         currentMcpTools,
       );
-      const currentlyAllowedCapability = narrowSubagentCapabilityToCeiling(
-        request.capability,
-        currentCapabilityCeiling,
-      );
-      const skillCapability = selectSubagentCapabilitySkills(
-        currentlyAllowedCapability,
-        request.skills,
-      );
-      if (skillCapability === null) {
+      const selectCapability = <Capability extends SubagentCapabilitySnapshot>(
+        previous: Capability,
+      ) => {
+        const currentlyAllowed = narrowSubagentCapabilityToCeiling(
+          previous,
+          currentCapabilityCeiling,
+        );
+        const withSkills = selectSubagentCapabilitySkills(
+          currentlyAllowed,
+          request.skills,
+        );
+        if (withSkills === null) return { kind: "skills_rejected" } as const;
+        const capability = selectSubagentCapabilityMcpTools(
+          withSkills,
+          request.mcp,
+        );
+        return capability === null
+          ? ({ kind: "mcp_rejected" } as const)
+          : ({ kind: "selected", capability } as const);
+      };
+      const selection =
+        request.workspaceAccess === "isolated_write"
+          ? (() => {
+              const selected = selectCapability(request.capability);
+              return selected.kind === "selected"
+                ? {
+                    kind: "isolated_write" as const,
+                    capability: selected.capability,
+                    previousWorkspace: request.workspace,
+                    threadCapabilityCeiling: request.threadCapabilityCeiling,
+                  }
+                : selected;
+            })()
+          : (() => {
+              const selected = selectCapability(request.capability);
+              return selected.kind === "selected"
+                ? {
+                    kind: "read_only" as const,
+                    capability: selected.capability,
+                    threadCapabilityCeiling: request.threadCapabilityCeiling,
+                  }
+                : selected;
+            })();
+      if (selection.kind === "skills_rejected") {
         return reject(
           "Agent resume rejected because its task Skill lease is outside the previous Run, Thread ceiling, or current policy.",
         );
       }
-      const capability = selectSubagentCapabilityMcpTools(
-        skillCapability,
-        request.mcp,
-      );
-      if (capability === null) {
+      if (selection.kind === "mcp_rejected") {
         return reject(
           "Agent resume rejected because its task MCP lease is outside the previous Run, Thread ceiling, or current policy.",
         );
       }
+      const capability = selection.capability;
       const capabilityRelations = [
         compareSubagentCapability(capability, request.capability),
-        compareSubagentCapability(capability, request.threadCapabilityCeiling),
+        compareSubagentCapability(
+          capability,
+          selection.threadCapabilityCeiling,
+        ),
         compareSubagentCapability(capability, currentCapabilityCeiling),
       ];
       const expansion = capabilityRelations.find(
@@ -2519,21 +2587,22 @@ export function createSubagentSupervisor(
           "Agent resume rejected because the remaining root budget cannot admit the child request.",
         );
       }
-      const candidate: PreparedDelegationCandidate = {
+      const candidateBase = {
         input: {
           toolCallId: request.toolCallId,
           profile: capability.profile,
-          mode: "background",
+          mode:
+            selection.kind === "isolated_write"
+              ? ("foreground" as const)
+              : ("background" as const),
           task: request.message,
           focusPaths: request.focusPaths,
           skills: capability.skills.map((skill) => skill.qualifiedName),
           mcp: request.mcp,
           signal: request.signal,
         },
+        toolName: "agent_resume" as const,
         delegationId,
-        workspaceAccess: "read_only",
-        capability,
-        threadCapabilityCeiling: request.threadCapabilityCeiling,
         execution,
         roleInstructions: currentPolicy.roleInstructions,
         systemPrompt: request.systemPrompt,
@@ -2541,6 +2610,22 @@ export function createSubagentSupervisor(
         minimumCostUsd,
         priorMessages: request.priorMessages,
       };
+      const candidate: PreparedDelegationCandidate =
+        selection.kind === "isolated_write"
+          ? {
+              ...candidateBase,
+              input: { ...candidateBase.input, mode: "foreground" },
+              workspaceAccess: selection.kind,
+              capability: selection.capability,
+              threadCapabilityCeiling: selection.threadCapabilityCeiling,
+            }
+          : {
+              ...candidateBase,
+              input: { ...candidateBase.input, mode: "background" },
+              workspaceAccess: selection.kind,
+              capability: selection.capability,
+              threadCapabilityCeiling: selection.threadCapabilityCeiling,
+            };
       const admissionPlan = admission.plan([candidate]);
       const admitted = admissionPlan.admitted[0];
       if (admitted === undefined) {
@@ -2552,9 +2637,48 @@ export function createSubagentSupervisor(
         );
       }
       const childRunId: SubagentRunId = `subagent-${randomUUID()}`;
+      let workspaceSelection:
+        | {
+            readonly kind: "read_only";
+            readonly capability: ReadOnlySubagentCapabilitySnapshot;
+            readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+          }
+        | {
+            readonly kind: "isolated_write";
+            readonly capability: WriterSubagentCapabilitySnapshot;
+            readonly threadCapabilityCeiling: WriterSubagentCapabilitySnapshot;
+            readonly lease: SubagentWriteWorkspaceLease;
+          };
+      if (selection.kind === "isolated_write") {
+        if (options.writeWorkspace === undefined) {
+          return reject(
+            "Agent resume rejected because writer workspace isolation is unavailable.",
+          );
+        }
+        const reacquisition = options.writeWorkspace.reacquire({
+          childRunId,
+          previous: selection.previousWorkspace,
+          signal: request.signal,
+        });
+        if (reacquisition.kind === "rejected") {
+          return reject(reacquisition.reason);
+        }
+        workspaceSelection = {
+          kind: "isolated_write",
+          capability: selection.capability,
+          threadCapabilityCeiling: selection.threadCapabilityCeiling,
+          lease: reacquisition.lease,
+        };
+      } else {
+        workspaceSelection = {
+          kind: "read_only",
+          capability: selection.capability,
+          threadCapabilityCeiling: selection.threadCapabilityCeiling,
+        };
+      }
       let persistence: SubagentRunPersistence;
       try {
-        persistence = options.lifecyclePersistence.accepted({
+        const acceptedBase = {
           delegationId,
           childAgentId: request.childAgentId,
           childRunId,
@@ -2562,19 +2686,34 @@ export function createSubagentSupervisor(
           parentToolCallId: request.toolCallId,
           task: request.message,
           focusPaths: request.focusPaths,
-          mode: "background",
           providerId: execution.snapshot.providerId,
           model: execution.snapshot.model,
           effort: execution.snapshot.effort,
-          threadCapabilityCeiling: request.threadCapabilityCeiling,
-          capability,
-          workspace: null,
           systemPrompt: request.systemPrompt,
           lineage: {
-            kind: "continuation",
+            kind: "continuation" as const,
             previousRunId: request.previousRunId,
           },
-        });
+        };
+        persistence = options.lifecyclePersistence.accepted(
+          workspaceSelection.kind === "isolated_write"
+            ? {
+                ...acceptedBase,
+                mode: "foreground",
+                threadCapabilityCeiling:
+                  workspaceSelection.threadCapabilityCeiling,
+                capability: workspaceSelection.capability,
+                workspace: workspaceSelection.lease.reference,
+              }
+            : {
+                ...acceptedBase,
+                mode: "background",
+                threadCapabilityCeiling:
+                  workspaceSelection.threadCapabilityCeiling,
+                capability: workspaceSelection.capability,
+                workspace: null,
+              },
+        );
       } catch (caught) {
         if (caught instanceof SubagentPersistenceError) throw caught;
         return reject(
@@ -2582,6 +2721,17 @@ export function createSubagentSupervisor(
         );
       }
       const admissionLease = admission.commitOne(admitted);
+      const acceptedWorkspace: PreparedAcceptedWorkspace =
+        workspaceSelection.kind === "isolated_write"
+          ? {
+              kind: "isolated_write",
+              capability: workspaceSelection.capability,
+              lease: workspaceSelection.lease,
+            }
+          : {
+              kind: "read_only",
+              capability: workspaceSelection.capability,
+            };
       const receipt = createAcceptedReceipt(
         {
           value: candidate,
@@ -2592,7 +2742,7 @@ export function createSubagentSupervisor(
         request.childAgentId,
         childRunId,
         persistence,
-        { kind: "read_only", capability },
+        acceptedWorkspace,
         request.systemPrompt,
       );
       receipts.set(delegationId, receipt);
@@ -2604,6 +2754,13 @@ export function createSubagentSupervisor(
         deadlineMs: capability.deadlineMs,
       });
       const result = receipt.run();
+      if (workspaceSelection.kind === "isolated_write") {
+        const settled = await result;
+        return {
+          ok: settled.status === "completed",
+          content: projectSubagentResult(settled),
+        };
+      }
       options.background.register({
         delegationId,
         childAgentId: request.childAgentId,

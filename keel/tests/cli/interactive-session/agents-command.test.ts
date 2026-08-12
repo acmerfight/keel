@@ -59,6 +59,7 @@ function entry(options: {
     systemPrompt: "Read-only child instructions.",
     threadCapabilityCeiling: reviewerCapability,
     capability: reviewerCapability,
+    workspace: null,
     transcriptRef: `agent-transcript:test/${options.childAgentId}`,
     acceptedAt: "2023-11-14T22:13:20.000Z",
     lineage: { kind: "root" },
@@ -131,8 +132,17 @@ describe("Interactive /agents command", () => {
     };
     const preserved: AgentHistoryEntry = {
       ...base,
+      mode: "foreground",
       threadCapabilityCeiling: writerCapability,
       capability: writerCapability,
+      workspace: {
+        kind: "isolated_write",
+        leaseId: base.childRunId,
+        baseCommit: workspaceBase.baseCommit,
+        branch: workspaceBase.branch,
+        worktreePath: "/tmp/keel-writer",
+        workspaceRoot: "/tmp/keel-writer",
+      },
       result: {
         ...base.result,
         workspace: {
@@ -150,8 +160,17 @@ describe("Interactive /agents command", () => {
       ...base,
       index: 2,
       childRunId: "subagent-22222222-2222-4222-8222-222222222222",
+      mode: "foreground",
       threadCapabilityCeiling: writerCapability,
       capability: writerCapability,
+      workspace: {
+        kind: "isolated_write",
+        leaseId: "subagent-22222222-2222-4222-8222-222222222222",
+        baseCommit: workspaceBase.baseCommit,
+        branch: workspaceBase.branch,
+        worktreePath: "/tmp/keel-writer-failed",
+        workspaceRoot: "/tmp/keel-writer-failed",
+      },
       result: {
         ...base.result,
         workspace: {

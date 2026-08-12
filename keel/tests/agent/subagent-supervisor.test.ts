@@ -9,6 +9,7 @@ import {
   type SharedCostBudgetedProvider,
 } from "../../src/agent/cost-budget.ts";
 import type { ProjectInstructions } from "../../src/agent/prompt.ts";
+import { subagentCapabilityIsWriter } from "../../src/agent/subagent-capability.ts";
 import {
   type AgentId,
   type SubagentCanonicalResult,
@@ -115,6 +116,23 @@ function settledWriteWorkspaceRuntime(input: {
   readonly onPrepare?: () => void;
   readonly onSettle?: () => void;
 }): SubagentWriteWorkspaceRuntime {
+  const prepared = (reference: SubagentWriteWorkspaceReference) => ({
+    kind: "prepared" as const,
+    workspace: {
+      reference,
+      activate: () => ({
+        kind: "acquired" as const,
+        lease: {
+          reference,
+          verify: () => {},
+          settle: () => {
+            input.onSettle?.();
+            return input.settlement(reference);
+          },
+        },
+      }),
+    },
+  });
   return {
     prepare: ({ childRunId }) => {
       input.onPrepare?.();
@@ -126,26 +144,21 @@ function settledWriteWorkspaceRuntime(input: {
         worktreePath: join(input.workspace, "writer-worktree"),
         workspaceRoot: join(input.workspace, "writer-worktree"),
       };
-      return {
-        kind: "prepared",
-        workspace: {
-          reference,
-          activate: () => ({
-            kind: "acquired",
-            lease: {
-              reference,
-              verify: () => {},
-              settle: () => {
-                input.onSettle?.();
-                return input.settlement(reference);
-              },
-            },
-          }),
-        },
-      };
+      return prepared(reference);
+    },
+    reacquire: ({ childRunId, previous }) => {
+      const reacquired = prepared({ ...previous, leaseId: childRunId });
+      return reacquired.workspace.activate();
     },
   };
 }
+
+const unusedWriteWorkspaceReacquisition: SubagentWriteWorkspaceRuntime["reacquire"] =
+  () => ({
+    kind: "rejected",
+    reason: "writer continuation is outside this test",
+    recovery: "Use the continuation-owned fixture.",
+  });
 
 function durableLifecycleSink(): SubagentLifecyclePersistence {
   return {
@@ -809,8 +822,10 @@ describe("Subagent Supervisor", () => {
       const request: SubagentContinuationRequest = {
         childAgentId,
         previousRunId,
+        workspaceAccess: "read_only",
         capability: explorerCapability,
         threadCapabilityCeiling: explorerCapability,
+        workspace: null,
         execution: {
           providerId: "fake",
           model: "test-model",
@@ -896,14 +911,20 @@ describe("Subagent Supervisor", () => {
         throw new Error("rejected resume must not register a Run");
       },
     };
+    type ReadOnlyContinuationRequest = Extract<
+      SubagentContinuationRequest,
+      { readonly workspaceAccess: "read_only" }
+    >;
     const request = (
       toolCallId: string,
-      overrides: Partial<SubagentContinuationRequest> = {},
-    ): SubagentContinuationRequest => ({
+      overrides: Partial<ReadOnlyContinuationRequest> = {},
+    ): ReadOnlyContinuationRequest => ({
       childAgentId,
       previousRunId,
+      workspaceAccess: "read_only",
       capability: explorerCapability,
       threadCapabilityCeiling: explorerCapability,
+      workspace: null,
       execution: {
         providerId: "fake",
         model: "test-model",
@@ -1012,24 +1033,6 @@ describe("Subagent Supervisor", () => {
           request("invalid-path", { focusPaths: ["../outside"] }),
         ),
       ).toContain("outside the workspace");
-      expect(
-        await rejectedContent(
-          invalidPath,
-          request("writer-capability", {
-            capability: writerCapability,
-            threadCapabilityCeiling: writerCapability,
-          }),
-        ),
-      ).toContain("writer continuations are not supported");
-      expect(
-        await rejectedContent(
-          invalidPath,
-          request("writer-thread-ceiling", {
-            threadCapabilityCeiling: writerCapability,
-          }),
-        ),
-      ).toContain("writer continuations are not supported");
-
       const invalidSkillLease = supervisorFixture({
         workspace,
         provider,
@@ -1091,6 +1094,231 @@ describe("Subagent Supervisor", () => {
     }
   });
 
+  test(`Given a terminal writer lacks a valid task lease, workspace adapter, or reacquisition,
+    When Main resumes that Thread,
+    Then continuation rejects before durable acceptance or provider work`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-writer-resume-rejected-"),
+    );
+    let providerCalls = 0;
+    let acceptances = 0;
+    const baseWorkspaceRuntime = settledWriteWorkspaceRuntime({
+      workspace,
+      settlement: (reference) => ({
+        disposition: "preserved",
+        worktreePath: reference.worktreePath,
+        patch: {
+          content: "",
+          sourceTruncated: false,
+          summary: "clean at base commit",
+        },
+      }),
+    });
+    const background: SubagentBackgroundRuntime = {
+      signal: new AbortController().signal,
+      register: () => {
+        throw new Error("rejected writer must not register");
+      },
+    };
+    const lifecyclePersistence: SubagentLifecyclePersistence = {
+      accepted: (lifecycle) => {
+        acceptances++;
+        return durableLifecycleSink().accepted(lifecycle);
+      },
+      rejected: () => {},
+    };
+    type WriterContinuationRequest = Extract<
+      SubagentContinuationRequest,
+      { readonly workspaceAccess: "isolated_write" }
+    >;
+    const request = (
+      toolCallId: string,
+      overrides: Partial<WriterContinuationRequest> = {},
+    ): WriterContinuationRequest => ({
+      childAgentId: "agent-80808080-8080-4808-8808-808080808080",
+      previousRunId: "subagent-80808080-8080-4808-8808-808080808080",
+      workspaceAccess: "isolated_write",
+      capability: writerCapability,
+      threadCapabilityCeiling: writerCapability,
+      workspace: {
+        kind: "isolated_write",
+        leaseId: "subagent-80808080-8080-4808-8808-808080808080",
+        baseCommit: "a".repeat(40),
+        branch: "keel/subagent/80808080-8080-4808-8808-808080808080",
+        worktreePath: join(workspace, "preserved-writer"),
+        workspaceRoot: join(workspace, "preserved-writer"),
+      },
+      execution: {
+        providerId: "fake",
+        model: "test-model",
+        effort: null,
+      },
+      toolCallId,
+      message: "Adjust the preserved patch.",
+      skills: [],
+      mcp: [],
+      focusPaths: [],
+      systemPrompt: "Writer instructions.",
+      priorMessages: [],
+      signal: new AbortController().signal,
+      ...overrides,
+    });
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      background,
+      lifecyclePersistence,
+      writeWorkspace: {
+        ...baseWorkspaceRuntime,
+        reacquire: () => ({
+          kind: "rejected",
+          reason: "preserved writer branch drifted",
+          recovery: "Inspect the preserved branch.",
+        }),
+      },
+    });
+
+    try {
+      await expect(
+        fixture.supervisor.continuation.resume(
+          request("resume-writer-unleased-skill", {
+            skills: ["repo:unleased"],
+          }),
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        content: expect.stringContaining("task Skill lease is outside"),
+      });
+
+      const unavailable = supervisorFixture({
+        workspace,
+        provider: fixture.rootBudget.provider,
+        background,
+        lifecyclePersistence,
+      });
+      await expect(
+        unavailable.supervisor.continuation.resume(
+          request("resume-writer-without-workspace-adapter"),
+        ),
+      ).resolves.toEqual({
+        ok: false,
+        content:
+          "Agent resume rejected because writer workspace isolation is unavailable.",
+      });
+
+      const result = await fixture.supervisor.continuation.resume(
+        request("resume-drifted-writer"),
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        content: "preserved writer branch drifted",
+      });
+      expect(acceptances).toBe(0);
+      expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a writer follow-up fails after preserving its patch,
+    When the same foreground resume receipt is replayed,
+    Then the failure is returned unchanged without rerunning and the artifacts retain resume provenance`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-writer-resume-replay-"),
+    );
+    await mkdir(join(workspace, "writer-worktree"));
+    let providerCalls = 0;
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        id: "failed-writer-follow-up",
+        estimateInputTokens: () => 100,
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "Partial writer output." };
+          throw new Error("writer follow-up provider failed");
+        },
+      },
+      background: {
+        signal: new AbortController().signal,
+        register: () => {
+          throw new Error("foreground writer follow-up must not register");
+        },
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+      writeWorkspace: settledWriteWorkspaceRuntime({
+        workspace,
+        settlement: (reference) => ({
+          disposition: "preserved",
+          worktreePath: reference.worktreePath,
+          patch: {
+            content: "diff --git a/file b/file\n",
+            sourceTruncated: false,
+            summary: "M file",
+          },
+        }),
+      }),
+    });
+    const request: SubagentContinuationRequest = {
+      childAgentId: "agent-90909090-9090-4909-8909-909090909090",
+      previousRunId: "subagent-90909090-9090-4909-8909-909090909090",
+      workspaceAccess: "isolated_write",
+      capability: writerCapability,
+      threadCapabilityCeiling: writerCapability,
+      workspace: {
+        kind: "isolated_write",
+        leaseId: "subagent-90909090-9090-4909-8909-909090909090",
+        baseCommit: "a".repeat(40),
+        branch: "keel/subagent/90909090-9090-4909-8909-909090909090",
+        worktreePath: join(workspace, "writer-worktree"),
+        workspaceRoot: join(workspace, "writer-worktree"),
+      },
+      execution: {
+        providerId: "fake",
+        model: "test-model",
+        effort: null,
+      },
+      toolCallId: "resume-failed-writer",
+      message: "Adjust the preserved patch.",
+      skills: [],
+      mcp: [],
+      focusPaths: [],
+      systemPrompt: "Writer instructions.",
+      priorMessages: [],
+      signal: new AbortController().signal,
+    };
+
+    try {
+      const first = await fixture.supervisor.continuation.resume(request);
+      const callsAfterFirst = providerCalls;
+      const replay = await fixture.supervisor.continuation.resume(request);
+
+      expect(first).toMatchObject({
+        ok: false,
+        content: expect.stringContaining("writer follow-up provider failed"),
+      });
+      expect(first.content).toContain('"disposition":"preserved"');
+      expect(replay).toEqual(first);
+      expect(providerCalls).toBe(callsAfterFirst);
+      expect(fixture.artifacts.inputs).toContainEqual(
+        expect.objectContaining({
+          toolCallId: "resume-failed-writer",
+          toolName: "agent_resume",
+          content: "diff --git a/file b/file\n",
+        }),
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a terminal child previously leased an MCP tool whose configuration is no longer current,
     When Main requests the same MCP lease on resume,
     Then continuation rejects before provider work instead of restoring stale authority`, async () => {
@@ -1127,7 +1355,12 @@ describe("Subagent Supervisor", () => {
       },
     });
     const profile = profileRegistry.resolve("repo:remote");
-    if (profile === undefined) throw new Error("missing MCP test profile");
+    if (
+      profile === undefined ||
+      subagentCapabilityIsWriter(profile.capability)
+    ) {
+      throw new Error("missing read-only MCP test profile");
+    }
     const fixture = supervisorFixture({
       workspace,
       provider,
@@ -1145,8 +1378,10 @@ describe("Subagent Supervisor", () => {
       const result = await fixture.supervisor.continuation.resume({
         childAgentId: "agent-aaaaaaaa",
         previousRunId: "subagent-aaaaaaaa",
+        workspaceAccess: "read_only",
         capability: profile.capability,
         threadCapabilityCeiling: profile.capability,
+        workspace: null,
         execution: profile.execution,
         toolCallId: "resume-stale-mcp",
         message: "Search again.",
@@ -1175,8 +1410,10 @@ describe("Subagent Supervisor", () => {
     const request: SubagentContinuationRequest = {
       childAgentId: "agent-aaaaaaaa",
       previousRunId: "subagent-aaaaaaaa",
+      workspaceAccess: "read_only",
       capability: explorerCapability,
       threadCapabilityCeiling: explorerCapability,
+      workspace: null,
       execution: {
         providerId: "fake",
         model: "test-model",
@@ -1440,6 +1677,7 @@ describe("Subagent Supervisor", () => {
         },
       },
       writeWorkspace: {
+        reacquire: unusedWriteWorkspaceReacquisition,
         prepare: ({ childRunId }) => {
           const reference = {
             kind: "isolated_write" as const,
@@ -1609,6 +1847,7 @@ describe("Subagent Supervisor", () => {
       provider: singleFinalProvider("must not run"),
       lifecyclePersistence: durableLifecycleSink(),
       writeWorkspace: {
+        reacquire: unusedWriteWorkspaceReacquisition,
         prepare: ({ childRunId }) => {
           const reference: SubagentWriteWorkspaceReference = {
             kind: "isolated_write",
@@ -1713,6 +1952,7 @@ describe("Subagent Supervisor", () => {
         },
       },
       writeWorkspace: {
+        reacquire: unusedWriteWorkspaceReacquisition,
         prepare: ({ childRunId }) => {
           const reference: SubagentWriteWorkspaceReference = {
             kind: "isolated_write",

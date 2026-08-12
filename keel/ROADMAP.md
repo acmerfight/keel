@@ -206,7 +206,10 @@ What a user can do today:
   config changes. The first writer slice adds one explicit-policy, foreground
   writer in a clean, isolated branch/worktree; its preparation is durable before
   Git side effects, its patch and location are reported, and it never edits,
-  deletes, or merges the user's checkout. #590 remains the governing epic;
+  deletes, or merges the user's checkout. A completed writer Thread can now run
+  an explicit foreground follow-up as the same Agent and a new immutable Run on
+  that exact verified branch/worktree, preserving prior Run facts and the parent
+  checkout. #590 remains the governing epic;
   bounded nesting or default-on autonomous delegation still require their own
   slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
@@ -254,7 +257,8 @@ Known limits that shape the priorities below:
   picker. Saved-session subagents have independent durable tree state and
   `/agents` inspection; attached background children support live list, wait,
   and cancel while the current owner remains alive. Crash-safe parent delivery
-  and follow-up input/resume remain absent.
+  and terminal follow-up/resume are implemented; cross-process live takeover
+  remains absent by design.
   Forks do not copy bash approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
@@ -338,7 +342,8 @@ Known limits that shape the priorities below:
    Main turns and are inspectable, waitable, and cancellable through `/agents`;
    result delivery is crash-safe, and stable child threads support follow-up
    input plus terminal resume as new immutable Runs. One explicit foreground
-   writer can now make an isolated, inspectable change from a clean checkout.
+   writer can make an isolated, inspectable change from a clean checkout, then
+   continue on the same verified worktree in a new immutable Run.
    Remaining subagent work is broader governed write workflows and bounded
    nesting rather than basic lifecycle persistence or Skill/MCP derivation.
    Real coding is conversational:
@@ -442,9 +447,10 @@ Codex/Claude Code — or directly moves the eval numbers.
   background runs remain live only under the current owner, `/agents` can list,
   wait, or cancel them, and stale nonterminal runs recover as interrupted.
   Canonical result delivery is crash-safe, and stable child threads support
-  follow-up input plus terminal resume as new immutable Runs. The first explicit
-  foreground writer is isolated and inspectable; remaining work is broader
-  governed write workflows and bounded nesting.
+  follow-up input plus terminal resume as new immutable Runs. An explicit
+  foreground writer is isolated and inspectable and can continue on its exact
+  verified worktree; remaining work is broader governed write workflows and
+  bounded nesting.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
@@ -501,9 +507,10 @@ Not needed to switch; revisit once P0/P1 are done.
   bounded catalogs. Child MCP uses fresh discovery plus exact saved approvals;
   Main-active tools and temporary interactive approvals are not inherited. An
   explicit-policy `writer` profile now provides one foreground isolated
-  branch/worktree and a bounded inspectable patch without auto-merge or
-  auto-cleanup. Broader writes, bounded nesting, and any default-on decision
-  remain gated by later epic slices and same-budget value evidence.
+  branch/worktree, a bounded inspectable patch, and explicit same-Thread
+  foreground follow-up as a new immutable Run without auto-merge or auto-cleanup.
+  Broader writes, bounded nesting, and any default-on decision remain gated by
+  later epic slices and same-budget value evidence.
 - Plan mode
 - IDE integration
 - Skill marketplace

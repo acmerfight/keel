@@ -1424,6 +1424,120 @@ describe("Agent Tree Store", () => {
     }
   });
 
+  test(`Given a terminal writer Run owns one preserved workspace identity,
+    When the same Thread accepts a continuation or a caller substitutes another worktree,
+    Then only the same workspace with a fresh Run lease is accepted and the old Run remains immutable`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-agent-writer-continuation-"),
+    );
+    const keelHome = join(workspace, ".keel-home");
+    let now = 1_700_000_000_000;
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => now++,
+    };
+    const sessionId = "writer-continuation-identity";
+    const childAgentId: AgentId = "agent-69696969-6969-4696-8696-696969696969";
+    const firstRunId: SubagentRunId =
+      "subagent-69696969-6969-4696-8696-696969696969";
+    const secondRunId: SubagentRunId =
+      "subagent-70707070-7070-4707-8707-707070707070";
+    const firstReference = {
+      kind: "isolated_write" as const,
+      leaseId: firstRunId,
+      baseCommit: "e".repeat(40),
+      branch: "keel/subagent/69696969-6969-4696-8696-696969696969",
+      worktreePath: join(keelHome, "worktrees", firstRunId),
+      workspaceRoot: join(keelHome, "worktrees", firstRunId),
+    };
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      const first = history.persistence.accepted({
+        ...acceptedLifecycle(childAgentId, firstRunId),
+        mode: "foreground",
+        threadCapabilityCeiling: writerCapability,
+        capability: writerCapability,
+        workspace: firstReference,
+      });
+      first.transcript.initialize([]);
+      first.running().terminal({
+        status: "completed",
+        finalText: "First patch complete.",
+        error: null,
+        pendingInputCount: 0,
+        usage: {
+          inputTokens: 2,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 2,
+          outputTokens: 1,
+        },
+        turns: 1,
+        costUsd: 0.0001,
+        workspace: {
+          ...firstReference,
+          disposition: "preserved",
+          patchRef: "tool-output:test/first-writer-patch",
+          patchSha256: "f".repeat(64),
+          patchSourceTruncated: false,
+          summary: "M message.txt",
+          error: null,
+        },
+      });
+      const immutableFirstResult = history.runs(childAgentId)[0]?.result;
+      const continuation = {
+        ...acceptedLifecycle(childAgentId, secondRunId),
+        delegationId: "parent:writer-follow-up",
+        parentToolCallId: "writer-follow-up",
+        task: "Adjust the preserved patch.",
+        mode: "foreground" as const,
+        threadCapabilityCeiling: writerCapability,
+        capability: writerCapability,
+        workspace: { ...firstReference, leaseId: secondRunId },
+        lineage: {
+          kind: "continuation" as const,
+          previousRunId: firstRunId,
+        },
+      };
+
+      expect(() =>
+        history.persistence.accepted({
+          ...continuation,
+          childRunId: "subagent-71717171-7171-4717-8717-717171717171",
+          delegationId: "parent:wrong-writer-worktree",
+          parentToolCallId: "wrong-writer-worktree",
+          workspace: {
+            ...continuation.workspace,
+            leaseId: "subagent-71717171-7171-4717-8717-717171717171",
+            worktreePath: join(keelHome, "worktrees", "other"),
+            workspaceRoot: join(keelHome, "worktrees", "other"),
+          },
+        }),
+      ).toThrow("changes writer workspace identity");
+
+      history.persistence.accepted(continuation);
+
+      expect(history.entries()).toMatchObject([
+        {
+          childAgentId,
+          childRunId: secondRunId,
+          status: "queued",
+          workspace: {
+            ...firstReference,
+            leaseId: secondRunId,
+          },
+          lineage: { kind: "continuation", previousRunId: firstRunId },
+        },
+      ]);
+      expect(history.runs(childAgentId)[0]?.result).toEqual(
+        immutableFirstResult,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given untrusted accepted lifecycle records contradict writer authority,
     When the JSONL schema validates the disk boundary,
     Then every capability, mode, and workspace mismatch is rejected`, () => {
