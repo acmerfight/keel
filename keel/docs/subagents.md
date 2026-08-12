@@ -62,16 +62,21 @@ and Git state, MCP/network identity, and machine-readable reports.
 
 ## Reports and durable inspection
 
-`keel --report <file>` schema 21 is an invocation-level accounting report.
+`keel --report <file>` schema 22 is an invocation-level accounting report.
 Subagent provider operations use `purpose: "subagent_turn"` and carry
 `attribution` with the delegation ID, child Run ID, profile, and effort. Their
 usage, attempts, and cost roll into root totals, which lets evals count distinct
 child Runs without treating multiple turns by one child as multiple children.
+One-shot reports also expose an invocation-owned `subagents` lifecycle snapshot.
+Graduation evals count only terminal `completed` Runs; a failed, limited,
+cancelled, interrupted, queued, or running child cannot satisfy a positive
+selection gate merely because it attempted a provider operation.
 
 The report is not the durable lifecycle database and does not claim that a
-child conclusion is correct. In saved sessions, `/agents` and the independent
-agent-tree/transcript ledgers remain canonical for Run lineage, status,
-terminal result, delivery, workspace artifacts, and recovery.
+child conclusion is correct. Saved interactive reports mark this snapshot
+`unavailable`; `/agents` and the independent agent-tree/transcript ledgers
+remain canonical for Run lineage, status, terminal result, delivery, workspace
+artifacts, and recovery.
 
 ## Evaluation and limitations
 

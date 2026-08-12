@@ -55,6 +55,16 @@ describe("Eval Runner", () => {
     };
     const treatmentReport = {
       ...VALID_REPORT,
+      subagents: {
+        status: "observed" as const,
+        runs: [
+          {
+            delegationId: "main:delegate-1",
+            childRunId: "subagent-1",
+            status: "completed" as const,
+          },
+        ],
+      },
       modelOperations: [childOperation],
     };
     const cliEntry = join(root, "delegation-pair-cli.mjs");
@@ -942,6 +952,7 @@ process.exitCode = 1;
       ["sequential", "forbid"],
       ["duplicate", "at_most_one"],
       ["duplicate-overflow", "at_most_one"],
+      ["failed-multiple", "require_multiple"],
       ["missing-required", "require_one"],
       ["parallel", "require_multiple"],
       ["parallel-any", "require_any"],
@@ -968,15 +979,27 @@ process.exitCode = 1;
         effort: null,
       },
     };
+    const observedChildRuns = (
+      ...runs: readonly (readonly [string, "completed" | "failed"])[]
+    ) => ({
+      status: "observed" as const,
+      runs: runs.map(([childRunId, status]) => ({
+        delegationId: "main:delegate-1",
+        childRunId,
+        status,
+      })),
+    });
     const reports = {
       positive: {
         ...VALID_REPORT,
+        subagents: observedChildRuns(["subagent-1", "completed"]),
         modelOperations: [{ ...childOperation, ordinal: 1 }],
         modelOperationCount: 1,
       },
       sequential: VALID_REPORT,
       duplicate: {
         ...VALID_REPORT,
+        subagents: observedChildRuns(["subagent-1", "completed"]),
         modelOperations: [
           { ...childOperation, ordinal: 1 },
           { ...childOperation, ordinal: 2 },
@@ -986,6 +1009,10 @@ process.exitCode = 1;
       },
       "duplicate-overflow": {
         ...VALID_REPORT,
+        subagents: observedChildRuns(
+          ["subagent-1", "completed"],
+          ["subagent-2", "completed"],
+        ),
         modelOperations: [
           { ...childOperation, ordinal: 1 },
           {
@@ -1000,9 +1027,34 @@ process.exitCode = 1;
         modelOperationCount: 2,
         providerRequestAttemptCount: 2,
       },
+      "failed-multiple": {
+        ...VALID_REPORT,
+        subagents: observedChildRuns(
+          ["subagent-1", "failed"],
+          ["subagent-2", "failed"],
+        ),
+        modelOperations: [
+          { ...childOperation, ordinal: 1, outcome: "terminal_error" },
+          {
+            ...childOperation,
+            ordinal: 2,
+            outcome: "terminal_error",
+            attribution: {
+              ...childOperation.attribution,
+              childRunId: "subagent-2",
+            },
+          },
+        ],
+        modelOperationCount: 2,
+        providerRequestAttemptCount: 2,
+      },
       "missing-required": VALID_REPORT,
       parallel: {
         ...VALID_REPORT,
+        subagents: observedChildRuns(
+          ["subagent-1", "completed"],
+          ["subagent-2", "completed"],
+        ),
         modelOperations: [
           { ...childOperation, ordinal: 1 },
           {
@@ -1019,6 +1071,10 @@ process.exitCode = 1;
       },
       "parallel-any": {
         ...VALID_REPORT,
+        subagents: observedChildRuns(
+          ["subagent-1", "completed"],
+          ["subagent-2", "completed"],
+        ),
         modelOperations: [
           { ...childOperation, ordinal: 1 },
           {
@@ -1035,6 +1091,7 @@ process.exitCode = 1;
       },
       "parallel-single": {
         ...VALID_REPORT,
+        subagents: observedChildRuns(["subagent-1", "completed"]),
         modelOperations: [{ ...childOperation, ordinal: 1 }],
         modelOperationCount: 1,
       },
@@ -1078,6 +1135,15 @@ process.exitCode = 1;
           delegationSelection: {
             status: "observed",
             childRuns: 2,
+            satisfied: false,
+          },
+        },
+        {
+          taskId: "failed-multiple",
+          taskOutcome: "verified",
+          delegationSelection: {
+            status: "observed",
+            childRuns: 0,
             satisfied: false,
           },
         },
@@ -1178,11 +1244,31 @@ process.exitCode = 1;
     const reports = {
       "exact-execution": {
         ...VALID_REPORT,
+        subagents: {
+          status: "observed",
+          runs: [
+            {
+              delegationId: "main:delegate-1",
+              childRunId: "subagent-1",
+              status: "completed",
+            },
+          ],
+        },
         modelOperations: [childOperation],
         modelOperationCount: 1,
       },
       "wrong-effort": {
         ...VALID_REPORT,
+        subagents: {
+          status: "observed",
+          runs: [
+            {
+              delegationId: "main:delegate-1",
+              childRunId: "subagent-1",
+              status: "completed",
+            },
+          ],
+        },
         modelOperations: [
           {
             ...childOperation,

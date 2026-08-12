@@ -5,6 +5,7 @@ import {
   calculateConservativeRequestCostUsd,
 } from "../core/cost.ts";
 import { errorMessage, isAbortThrow, KeelError } from "../core/error.ts";
+import type { SubagentTerminalStatus } from "../core/subagent-status.ts";
 import type { LLMProvider, StreamOptions, Usage } from "../llm/types.ts";
 import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import type {
@@ -74,7 +75,6 @@ import type {
   SubagentRunningPersistence,
   SubagentRunPersistence,
   SubagentTerminalOutcome,
-  SubagentTerminalStatus,
 } from "./subagent-lifecycle.ts";
 import { SubagentPersistenceError } from "./subagent-lifecycle.ts";
 import type {

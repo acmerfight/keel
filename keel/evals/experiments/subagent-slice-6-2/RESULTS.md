@@ -67,3 +67,11 @@ delegation is not justified, and #590's final value checkbox remains open.
 
 Raw JSONL, all 18 main transcripts, five complete child transcript artifacts,
 command metadata, and SHA-256 checksums are retained under [`artifacts/v1/`](artifacts/v1/).
+
+An empty-context review after the window found that the generic eval selector
+could infer a completed child from an attributed provider operation even when
+that child later failed or was aborted. Report schema 22 now carries the
+invocation-owned child lifecycle snapshot, and selection counts only terminal
+`completed` Runs. V1 was not selectively rerun: its five retained child
+artifacts are complete, and the already-failed graduation decision cannot be
+turned into a pass by this harness correction.

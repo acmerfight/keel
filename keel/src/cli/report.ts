@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { errorMessage, KeelError, type KeelErrorCode } from "../core/error.ts";
+import type { SubagentTerminalStatus } from "../core/subagent-status.ts";
 import type { UndoProtectionSummary } from "../core/undo-protection.ts";
 import type {
   ActiveSkillStatus,
@@ -28,6 +29,7 @@ import type { SkillPolicyReport } from "./skill-user-config.ts";
 interface RunReportInputBase {
   readonly tasks: readonly RunReportTask[];
   readonly modelOperations: readonly RunReportModelOperation[];
+  readonly subagents: RunReportSubagents;
   readonly durationMs: number;
   readonly contextCompactions: readonly RunReportContextCompaction[];
   readonly skillActivations: readonly SkillActivationRecord[];
@@ -38,6 +40,22 @@ interface RunReportInputBase {
   readonly memory: RunReportMemory;
   readonly goalOutcome?: RunReportGoalOutcome;
 }
+
+interface RunReportSubagentRun {
+  readonly delegationId: string;
+  readonly childRunId: string;
+  readonly status: "queued" | "running" | SubagentTerminalStatus;
+}
+
+export type RunReportSubagents =
+  | {
+      readonly status: "observed";
+      readonly runs: readonly RunReportSubagentRun[];
+    }
+  | {
+      readonly status: "unavailable";
+      readonly runs?: never;
+    };
 
 type RunReportInput = RunReportInputBase & {
   readonly outcome:
@@ -177,10 +195,11 @@ interface RunReportFailure {
 }
 
 interface RunReportBase {
-  readonly schemaVersion: 21;
+  readonly schemaVersion: 22;
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
+  readonly subagents: RunReportSubagents;
   readonly modelOperationCount: number;
   readonly providerRequestAttemptCount: number;
   readonly modelsUsed: readonly {
@@ -256,13 +275,14 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
         : 0
       : Math.max(0, accounting.costUsd - (outcome.maxCostUsd ?? Infinity));
   const reportBase: RunReportBase = {
-    schemaVersion: 21,
+    schemaVersion: 22,
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,
       0,
     ),
     modelOperations: accounting.modelOperations,
+    subagents: input.subagents,
     modelOperationCount: accounting.modelOperationCount,
     providerRequestAttemptCount: accounting.providerRequestAttemptCount,
     modelsUsed: accounting.modelsUsed,

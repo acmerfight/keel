@@ -20,6 +20,7 @@ function modelOperationReportLines(
     "{ inputTokens: 1, cachedInputTokens: 0, uncachedInputTokens: 1, outputTokens: 1 }";
   return [
     `  modelOperations: [{ ordinal: 1, owner: { type: 'agent_run', taskOrdinal: 1, agentRunOrdinal: 1 }, purpose: 'agent_turn', provider: '${provider}', model: '${model}', outcome: 'completed', providerRequestAttempts: [{ ordinal: 1, outcome: 'completed', usage: ${usage}, costUsd: 0 }], usage: ${usage}, costUsd: 0 }],`,
+    "  subagents: { status: 'observed', runs: [] },",
     "  modelOperationCount: 1,",
     "  providerRequestAttemptCount: 1,",
   ];
@@ -60,7 +61,7 @@ describe("Eval Runner", () => {
         "const reportIndex = args.indexOf('--report');",
         "writeFileSync('agent-args.json', JSON.stringify(args), 'utf8');",
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 21,",
+        "  schemaVersion: 22,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
         "  humanInterventionCount: 0,",
         ...modelOperationReportLines("qwen", "qwen3.7-plus"),
@@ -144,7 +145,7 @@ describe("Eval Runner", () => {
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 21,",
+        "  schemaVersion: 22,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
         "  humanInterventionCount: 0,",
         ...modelOperationReportLines("fake", "fake"),
@@ -225,7 +226,7 @@ describe("Eval Runner", () => {
         "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
         'writeFileSync(args[transcriptIndex + 1], \'{"schemaVersion":1,"type":"transcript","provider":"fake","model":"fake","systemPrompt":"test"}\\n\', \'utf8\');',
         "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-        "  schemaVersion: 21,",
+        "  schemaVersion: 22,",
         "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
         "  humanInterventionCount: 0,",
         ...modelOperationReportLines("fake", "fake"),
@@ -315,7 +316,7 @@ describe("Eval Runner", () => {
           "mkdirSync(dirname(args[transcriptIndex + 1]), { recursive: true });",
           transcriptAction,
           "writeFileSync(args[reportIndex + 1], JSON.stringify({",
-          "  schemaVersion: 21,",
+          "  schemaVersion: 22,",
           "  tasks: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentRuns: [{ ordinal: 1, trigger: 'user_prompt', humanInterventionCount: 0, agentLoopTurns: 1, providerRetries: [], contextCompactions: [], stopReason: 'completed' }], outcome: 'completed' }],",
           "  humanInterventionCount: 0,",
           ...modelOperationReportLines("fake", "fake"),

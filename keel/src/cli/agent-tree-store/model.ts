@@ -25,11 +25,6 @@ import type {
   SubagentResultDeliveryReference,
   SubagentRunId,
   SubagentRunLineage,
-  SubagentTerminalStatus,
-} from "../../agent/subagent-lifecycle.ts";
-import {
-  subagentNonCompletedStatuses,
-  subagentTerminalStatuses,
 } from "../../agent/subagent-lifecycle.ts";
 import type {
   SubagentWriteWorkspaceReference,
@@ -37,6 +32,11 @@ import type {
 } from "../../agent/subagent-workspace.ts";
 import { reasoningEfforts } from "../../core/model-metadata.ts";
 import { providerIds } from "../../core/provider-id.ts";
+import {
+  type SubagentTerminalStatus,
+  subagentNonCompletedStatuses,
+  subagentTerminalStatuses,
+} from "../../core/subagent-status.ts";
 import type { Usage } from "../../llm/types.ts";
 import {
   isWorkflowSkillResourcePath,

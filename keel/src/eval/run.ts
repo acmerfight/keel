@@ -208,14 +208,29 @@ function delegationSelection(
   expectation?: EvalDelegationExpectation,
 ): EvalDelegationSelection {
   if (report === undefined) return { status: "unavailable", policy };
-  const runs = new Map<string, boolean>();
+  if (report.subagents.status === "unavailable") {
+    return { status: "unavailable", policy };
+  }
+  const runs = new Map<
+    string,
+    { readonly seen: boolean; readonly matches: boolean }
+  >(
+    report.subagents.runs
+      .filter((run) => run.status === "completed")
+      .map((run) => [
+        `${run.delegationId}\0${run.childRunId}`,
+        { seen: false, matches: true },
+      ]),
+  );
   for (const operation of report.modelOperations) {
     const attribution = operation.attribution;
     if (attribution?.type !== "subagent") continue;
     const key = `${attribution.delegationId}\0${attribution.childRunId}`;
+    const run = runs.get(key);
+    if (run === undefined) continue;
     const matches =
       expectation === undefined || executionMatches(operation, expectation);
-    runs.set(key, (runs.get(key) ?? true) && matches);
+    runs.set(key, { seen: true, matches: run.matches && matches });
   }
   const childRuns = runs.size;
   const policySatisfied = delegationPolicySatisfied(policy, childRuns);
@@ -227,7 +242,9 @@ function delegationSelection(
       satisfied: policySatisfied,
     };
   }
-  const matchingChildRuns = [...runs.values()].filter(Boolean).length;
+  const matchingChildRuns = [...runs.values()].filter(
+    (run) => run.seen && run.matches,
+  ).length;
   return {
     status: "observed",
     policy,

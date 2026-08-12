@@ -342,7 +342,7 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 21. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 22. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
 context-compaction records, and stop reason. A human intervention is one user
@@ -359,9 +359,13 @@ including first-response and stream-inactivity timeouts.
 
 Subagent provider operations have `purpose: "subagent_turn"` and attribution
 with their delegation ID, child Run ID, profile, and effort. Their attempts,
-usage, and cost roll into root totals. The report supports invocation-level
-accounting; saved-session `/agents` history remains canonical for child
-lineage, lifecycle, delivery, transcript, and workspace state.
+usage, and cost roll into root totals. For one-shot runs, `subagents.status` is
+`observed` and `subagents.runs` records each invocation-owned child as queued,
+running, or terminal; consumers must use terminal `completed` status rather
+than infer child success from model operations. Saved interactive reports use
+`subagents.status: "unavailable"` because `/agents` history, not one invocation,
+remains canonical for child lineage, lifecycle, delivery, transcript, and
+workspace state.
 
 If a terminal runtime/provider failure occurs after report instrumentation is
 ready, Keel still exits non-zero but best-effort writes the same current schema.

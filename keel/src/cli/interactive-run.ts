@@ -1675,6 +1675,7 @@ async function runActiveSessionCli(
             {
               tasks: reportRecorder.tasks(),
               modelOperations: reportRecorder.modelOperations(),
+              subagents: { status: "unavailable" },
               outcome: {
                 status: "failed",
                 error,
@@ -1820,6 +1821,7 @@ async function runActiveSessionCli(
         writeRunReport(cliArgs.reportFile, {
           tasks: interactiveResult.report.tasks,
           modelOperations: interactiveResult.report.modelOperations,
+          subagents: { status: "unavailable" },
           outcome: {
             status: "completed",
             end:

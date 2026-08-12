@@ -3,10 +3,8 @@ import { dirname, join } from "node:path";
 import type { SessionLedgerObserver } from "../../agent/session-ledger.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
 import { subagentCapabilitiesEqual } from "../../agent/subagent-capability.ts";
-import type {
-  SubagentRunId,
-  SubagentTerminalStatus,
-} from "../../agent/subagent-lifecycle.ts";
+import type { SubagentRunId } from "../../agent/subagent-lifecycle.ts";
+import type { SubagentTerminalStatus } from "../../core/subagent-status.ts";
 import { redactMessageForPersistence } from "../persistence-redaction.ts";
 import {
   agentTreeError,

@@ -1056,6 +1056,16 @@ describe("CLI Main - Subagent Delegation", () => {
 
       const report = z
         .object({
+          subagents: z.object({
+            status: z.literal("observed"),
+            runs: z.array(
+              z.object({
+                delegationId: z.string(),
+                childRunId: z.string(),
+                status: z.string(),
+              }),
+            ),
+          }),
           modelOperations: z.array(
             z
               .object({
@@ -1075,6 +1085,14 @@ describe("CLI Main - Subagent Delegation", () => {
         })
         .passthrough()
         .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      expect(report.subagents.runs).toHaveLength(2);
+      expect(report.subagents.runs.map((run) => run.status)).toEqual([
+        "completed",
+        "completed",
+      ]);
+      expect(
+        new Set(report.subagents.runs.map((run) => run.childRunId)).size,
+      ).toBe(2);
       const childOperations = report.modelOperations.filter(
         (operation) => operation.purpose === "subagent_turn",
       );

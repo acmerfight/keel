@@ -204,7 +204,7 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 21,
+  schemaVersion: 22,
   tasks: [
     {
       ordinal: 1,
@@ -255,6 +255,7 @@ export const VALID_REPORT = {
       costUsd: 0,
     },
   ],
+  subagents: { status: "observed", runs: [] },
   modelOperationCount: 1,
   providerRequestAttemptCount: 1,
   modelsUsed: [{ provider: "fake", model: "fake" }],

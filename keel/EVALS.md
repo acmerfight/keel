@@ -127,7 +127,7 @@ Each standard trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 21,
+    "schemaVersion": 22,
     "tasks": [
       {
         "ordinal": 1,
@@ -168,6 +168,7 @@ Each standard trial appends one JSON line:
         "costUsd": 0.000234
       }
     ],
+    "subagents": { "status": "observed", "runs": [] },
     "modelOperationCount": 1,
     "providerRequestAttemptCount": 1,
     "modelsUsed": [{ "provider": "deepseek", "model": "deepseek-v4-flash" }],
@@ -215,6 +216,11 @@ Each standard trial appends one JSON line:
   policy and child count. Control and task outcome never carry that judgment. A
   paired trial appends two lines in stable control/treatment or
   disabled/enabled order.
+  Selection counts only child Runs whose invocation snapshot is terminal with
+  `status: "completed"`; failed, limited, cancelled, interrupted, queued, and
+  running children do not satisfy a positive delegation gate. If the CLI report
+  cannot own a trustworthy invocation snapshot, selection is `unavailable`
+  rather than inferred from provider operations.
   Each line carries the ordinary report, so model operations, child
   attribution, usage, cost, and timing remain inspectable without a second
   result format.
