@@ -85,3 +85,9 @@ promoted or made default. If the task verifies but no value signal improves,
 the runtime remains unchanged and the result is recorded as evidence against
 broader rollout. No outcome in this window authorizes default-on delegation or
 wider nesting.
+
+## Scored result
+
+V1 ran once from the frozen candidate and failed the selection/value gate while
+all 18 task arms verified. The complete result and retained evidence are in
+[`RESULTS.md`](RESULTS.md).

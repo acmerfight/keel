@@ -82,6 +82,12 @@ task prompt, model, root budget, and pristine workspace. Task success,
 interventions, selection, turns, tokens, wall time, cost, repeated Main work,
 and failures are reported separately.
 
+The first frozen window kept correctness at 18/18 arms, but did not graduate
+the broader product: explicit treatments delegated in 3/3 yet selected multiple
+children in only 2/3 and improved none of the frozen value medians; auto
+selected no child in the parallel task. The full failed window is retained
+rather than repaired sample by sample.
+
 Subagents are not assumed to be cheaper or faster for every task. The supported
 explicit path is useful when the user chooses independent investigation or
 review; `auto` remains opt-in and default-off. Broader nesting or write modes

@@ -185,7 +185,8 @@ What a user can do today:
   [autonomous-selection result](evals/experiments/subagent-slice-1-5/RESULTS.md),
   [explicit-intent result](evals/experiments/subagent-explicit-intent-v1/RESULTS.md),
   [Slice 1.6 completion result](evals/experiments/subagent-slice-1-6/RESULTS.md),
-  and [stable-policy result](evals/experiments/subagent-slice-2-3/RESULTS.md).
+  [stable-policy result](evals/experiments/subagent-slice-2-3/RESULTS.md), and
+  [product-graduation result](evals/experiments/subagent-slice-6-2/RESULTS.md).
   Saved interactive sessions also keep an independent append-only agent tree
   and incremental child transcripts. `/agents` lists durable runs and inspects
   live or durable facts and transcripts. A saved-session owner can keep an
@@ -212,9 +213,11 @@ What a user can do today:
   checkout. Explicit foreground read-only delegation now supports one governed
   nested level: depth-one children may delegate read-only foreground work, while
   depth-two children are leaves and the whole tree shares admission, budget,
-  provider, cancellation, and durable history. #590 remains the governing epic;
-  broader nested modes and default-on autonomous delegation still require their
-  own slices and gates.
+  provider, cancellation, and durable history. The first Slice 6.2 graduation
+  window kept all 18 arms correct but failed its selection/value gate: explicit
+  used 2, 2, and 1 children without improving a frozen value median, while auto
+  selected none. #590 therefore remains open; broader nested modes and
+  default-on autonomous delegation are not justified by current evidence.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -350,9 +353,11 @@ Known limits that shape the priorities below:
    continue on the same verified worktree in a new immutable Run.
    A foreground read-only child under explicit policy can now delegate one
    foreground read-only level deeper with shared tree resources and durable
-   lineage. Remaining subagent work is broader governed write workflows,
-   broader nesting modes, and product-graduation eval rather than basic
-   lifecycle persistence or Skill/MCP derivation.
+   lineage. The first frozen product-graduation window preserved correctness
+   but did not prove stable multiple-child selection or measurable value.
+   Remaining work is general decomposition/synthesis quality and new frozen
+   value evidence; broader write or nesting modes remain gated rather than
+   following automatically from lifecycle reliability.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -458,8 +463,8 @@ Codex/Claude Code — or directly moves the eval numbers.
   foreground writer is isolated and inspectable and can continue on its exact
   verified worktree. Explicit foreground read-only nesting is bounded at depth
   two and reuses the same tree admission, budget, provider, cancellation, and
-  persistence boundaries; remaining work is broader governed write workflows
-  and broader nesting modes.
+  persistence boundaries. The first product-graduation window did not prove
+  measurable value, so broader governed write and nesting modes remain gated.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
@@ -520,8 +525,10 @@ Not needed to switch; revisit once P0/P1 are done.
   foreground follow-up as a new immutable Run without auto-merge or auto-cleanup.
   Explicit-policy foreground read-only children may delegate one read-only
   foreground level deeper; depth-two children are leaves and share root tree
-  resources. Broader writes, background/writer/auto nesting, and any default-on
-  decision remain gated by later epic slices and same-budget value evidence.
+  resources. The first same-budget graduation window kept correctness but
+  failed stable multiple-child selection and value gates. Broader writes,
+  background/writer/auto nesting, and any default-on decision therefore remain
+  gated rather than scheduled follow-ons.
 - Plan mode
 - IDE integration
 - Skill marketplace
