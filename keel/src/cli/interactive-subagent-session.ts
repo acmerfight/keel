@@ -325,11 +325,9 @@ export function createInteractiveSubagentSession(
             "Agent resume is unavailable outside an admitted model runtime.",
         };
       }
-      const result = await continuationCapability.resume({
+      const continuationBase = {
         childAgentId: entry.childAgentId,
         previousRunId: entry.childRunId,
-        capability: entry.capability,
-        threadCapabilityCeiling: entry.threadCapabilityCeiling,
         execution: {
           providerId: entry.providerId,
           model: entry.model,
@@ -343,7 +341,24 @@ export function createInteractiveSubagentSession(
         systemPrompt: entry.systemPrompt,
         priorMessages: options.history.messages(entry),
         signal: request.signal,
-      });
+      };
+      const result = await continuationCapability.resume(
+        entry.workspace === null
+          ? {
+              ...continuationBase,
+              workspaceAccess: "read_only",
+              capability: entry.capability,
+              threadCapabilityCeiling: entry.threadCapabilityCeiling,
+              workspace: null,
+            }
+          : {
+              ...continuationBase,
+              workspaceAccess: "isolated_write",
+              capability: entry.capability,
+              threadCapabilityCeiling: entry.threadCapabilityCeiling,
+              workspace: entry.workspace,
+            },
+      );
       return {
         ok: result.ok,
         content: boundedControlText(result.content, request.maxResultChars),

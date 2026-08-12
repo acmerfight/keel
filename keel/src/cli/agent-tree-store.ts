@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SessionMessage } from "../agent/session-message.ts";
-import type { SubagentCapabilitySnapshot } from "../agent/subagent-capability.ts";
+import type {
+  ReadOnlySubagentCapabilitySnapshot,
+  WriterSubagentCapabilitySnapshot,
+} from "../agent/subagent-capability.ts";
 import {
   compareSubagentCapability,
   subagentCapabilitiesEqual,
@@ -17,12 +20,12 @@ import {
   type SubagentResultDeliveryReference,
   type SubagentRunId,
   type SubagentRunLineage,
-  type SubagentRunMode,
   type SubagentRunningPersistence,
   type SubagentRunPersistence,
   type SubagentTerminalSnapshot,
   type SubagentTerminalStatus,
 } from "../agent/subagent-lifecycle.ts";
+import type { SubagentWriteWorkspaceReference } from "../agent/subagent-workspace.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import {
   agentTreeError,
@@ -203,6 +206,21 @@ function assertUniqueAcceptance(
       `continuation run ${candidate.childRunId} changes profile identity`,
     );
   }
+  if (
+    previous.accepted.workspace !== null &&
+    (candidate.workspace === null ||
+      candidate.workspace.baseCommit !==
+        previous.accepted.workspace.baseCommit ||
+      candidate.workspace.branch !== previous.accepted.workspace.branch ||
+      candidate.workspace.worktreePath !==
+        previous.accepted.workspace.worktreePath ||
+      candidate.workspace.workspaceRoot !==
+        previous.accepted.workspace.workspaceRoot)
+  ) {
+    agentTreeError(
+      `continuation run ${candidate.childRunId} changes writer workspace identity`,
+    );
+  }
   const continuationRelation = compareSubagentCapability(
     candidate.capability,
     previous.accepted.capability,
@@ -233,7 +251,7 @@ function assertUniqueAcceptance(
   }
 }
 
-export interface AgentHistoryEntry {
+interface AgentHistoryEntryBase {
   readonly index: number;
   readonly delegationId: string;
   readonly childAgentId: AgentId;
@@ -242,12 +260,9 @@ export interface AgentHistoryEntry {
   readonly parentToolCallId: string;
   readonly task: string;
   readonly focusPaths: readonly string[];
-  readonly mode: SubagentRunMode;
   readonly providerId: ProviderId;
   readonly model: string;
   readonly effort: AgentRunAcceptedRecord["effort"];
-  readonly threadCapabilityCeiling: SubagentCapabilitySnapshot;
-  readonly capability: SubagentCapabilitySnapshot;
   readonly systemPrompt: string;
   readonly transcriptRef: string;
   readonly acceptedAt: string;
@@ -256,6 +271,22 @@ export interface AgentHistoryEntry {
   readonly accounting: SubagentAccountingSnapshot;
   readonly result: PersistedSubagentCanonicalResult | null;
 }
+
+export type AgentHistoryEntry = AgentHistoryEntryBase &
+  (
+    | {
+        readonly mode: "foreground" | "background";
+        readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+        readonly capability: ReadOnlySubagentCapabilitySnapshot;
+        readonly workspace: null;
+      }
+    | {
+        readonly mode: "foreground";
+        readonly threadCapabilityCeiling: WriterSubagentCapabilitySnapshot;
+        readonly capability: WriterSubagentCapabilitySnapshot;
+        readonly workspace: SubagentWriteWorkspaceReference;
+      }
+  );
 
 export interface AgentTreeHistory {
   readonly sessionId: string;
@@ -1123,27 +1154,46 @@ function historyEntries(
   for (const run of runs.values()) {
     latestRuns.set(run.accepted.childAgentId, run);
   }
-  return [...latestRuns.values()].map((run, offset) => ({
+  return [...latestRuns.values()].map((run, offset) =>
+    historyEntry(run, offset),
+  );
+}
+
+function historyEntry(run: MutableAgentRun, offset: number): AgentHistoryEntry {
+  const accepted = run.accepted;
+  const common = {
     index: offset + 1,
-    delegationId: run.accepted.delegationId,
-    childAgentId: run.accepted.childAgentId,
-    childRunId: run.accepted.childRunId,
-    parentRunId: run.accepted.parentRunId,
-    parentToolCallId: run.accepted.parentToolCallId,
-    task: run.accepted.task,
-    focusPaths: [...run.accepted.focusPaths],
-    mode: run.accepted.mode,
-    providerId: run.accepted.providerId,
-    model: run.accepted.model,
-    effort: run.accepted.effort,
-    threadCapabilityCeiling: run.accepted.threadCapabilityCeiling,
-    capability: run.accepted.capability,
-    systemPrompt: run.accepted.systemPrompt,
-    transcriptRef: run.accepted.transcriptRef,
-    acceptedAt: run.accepted.timestamp,
-    lineage: run.accepted.lineage,
+    delegationId: accepted.delegationId,
+    childAgentId: accepted.childAgentId,
+    childRunId: accepted.childRunId,
+    parentRunId: accepted.parentRunId,
+    parentToolCallId: accepted.parentToolCallId,
+    task: accepted.task,
+    focusPaths: [...accepted.focusPaths],
+    providerId: accepted.providerId,
+    model: accepted.model,
+    effort: accepted.effort,
+    systemPrompt: accepted.systemPrompt,
+    transcriptRef: accepted.transcriptRef,
+    acceptedAt: accepted.timestamp,
+    lineage: accepted.lineage,
     ...historyEntryState(run),
-  }));
+  };
+  return accepted.workspace === null
+    ? {
+        ...common,
+        mode: accepted.mode,
+        threadCapabilityCeiling: accepted.threadCapabilityCeiling,
+        capability: accepted.capability,
+        workspace: null,
+      }
+    : {
+        ...common,
+        mode: accepted.mode,
+        threadCapabilityCeiling: accepted.threadCapabilityCeiling,
+        capability: accepted.capability,
+        workspace: { ...accepted.workspace },
+      };
 }
 
 function threadRunEntries(
@@ -1152,27 +1202,7 @@ function threadRunEntries(
 ): readonly AgentHistoryEntry[] {
   return [...runs.values()]
     .filter((run) => run.accepted.childAgentId === childAgentId)
-    .map((run, offset) => ({
-      index: offset + 1,
-      delegationId: run.accepted.delegationId,
-      childAgentId: run.accepted.childAgentId,
-      childRunId: run.accepted.childRunId,
-      parentRunId: run.accepted.parentRunId,
-      parentToolCallId: run.accepted.parentToolCallId,
-      task: run.accepted.task,
-      focusPaths: [...run.accepted.focusPaths],
-      mode: run.accepted.mode,
-      providerId: run.accepted.providerId,
-      model: run.accepted.model,
-      effort: run.accepted.effort,
-      threadCapabilityCeiling: run.accepted.threadCapabilityCeiling,
-      capability: run.accepted.capability,
-      systemPrompt: run.accepted.systemPrompt,
-      transcriptRef: run.accepted.transcriptRef,
-      acceptedAt: run.accepted.timestamp,
-      lineage: run.accepted.lineage,
-      ...historyEntryState(run),
-    }));
+    .map(historyEntry);
 }
 
 function requireUnsettledRun(

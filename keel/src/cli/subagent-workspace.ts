@@ -674,5 +674,81 @@ export function createCliSubagentWriteWorkspaceRuntime(options: {
         };
       }
     },
+    reacquire: ({ childRunId, previous, signal }) => {
+      if (signal.aborted) {
+        return {
+          kind: "rejected",
+          reason:
+            "Writer continuation rejected because the parent is already cancelled.",
+          recovery:
+            "Start a new foreground continuation after cancellation settles.",
+        };
+      }
+      try {
+        const parsedChildRunId = childRunIdSchema.parse(childRunId);
+        const parentWorkspace = realpathSync(options.workspace);
+        const parentRepoRoot = realpathSync(
+          expectGit(options.platform, parentWorkspace, [
+            "rev-parse",
+            "--show-toplevel",
+          ]).trim(),
+        );
+        const canonicalLeasesRoot = realpathSync(options.leasesRoot);
+        const canonicalWorktreePath = realpathSync(previous.worktreePath);
+        if (
+          canonicalWorktreePath !== previous.worktreePath ||
+          dirname(canonicalWorktreePath) !== canonicalLeasesRoot ||
+          pathIsWithin(parentRepoRoot, canonicalWorktreePath)
+        ) {
+          throw new Error(
+            "persisted child worktree is outside the canonical lease root",
+          );
+        }
+        const parentCommonDirRequest = expectGit(
+          options.platform,
+          parentRepoRoot,
+          ["rev-parse", "--git-common-dir"],
+        ).trim();
+        const parentCommonDir = realpathSync(
+          resolve(parentRepoRoot, parentCommonDirRequest),
+        );
+        const linkedGitDir = worktreeGitDir(canonicalWorktreePath);
+        if (!pathIsWithin(join(parentCommonDir, "worktrees"), linkedGitDir)) {
+          throw new Error(
+            "persisted child worktree is not linked to the parent repository",
+          );
+        }
+        expectGit(options.platform, parentRepoRoot, [
+          "cat-file",
+          "-e",
+          `${previous.baseCommit}^{commit}`,
+        ]);
+        const lease = createLease({
+          platform: options.platform,
+          leaseId: parsedChildRunId,
+          parentWorkspace,
+          parentRepoRoot,
+          baseCommit: previous.baseCommit,
+          branch: previous.branch,
+          worktreePath: canonicalWorktreePath,
+        });
+        if (
+          lease.reference.worktreePath !== previous.worktreePath ||
+          lease.reference.workspaceRoot !== previous.workspaceRoot
+        ) {
+          throw new Error(
+            "reacquired writer workspace identity differs from the previous Run",
+          );
+        }
+        lease.verify(lease.reference.workspaceRoot);
+        return { kind: "acquired", lease };
+      } catch (caught) {
+        return {
+          kind: "rejected",
+          reason: `Writer continuation rejected before child file access: ${errorMessage(caught)}`,
+          recovery: `Inspect ${previous.worktreePath} and refs/heads/${previous.branch}; Keel did not reset, replace, or rebuild the preserved writer workspace.`,
+        };
+      }
+    },
   };
 }

@@ -652,7 +652,7 @@ const agentResumeTool = defineTool({
   name: "agent_resume",
   availability: "agent-control",
   description:
-    "Continue one terminal subagent thread by stable agent ID. This starts one new admitted background Run under the same Agent ID and preserves all prior Run results. skills and mcp are exact optional task leases for this new Run and may only retain authority authorized by the previous Run, Thread ceiling, and current policy. Child MCP calls require an exact saved project approval and cannot prompt. Call it in an isolated tool round so Keel can preserve a complete Main continuation.",
+    "Continue one terminal subagent thread by stable agent ID while preserving all prior Run results. Read-only continuations start one new admitted background Run; writer continuations run in the foreground on their preserved isolated workspace. skills and mcp are exact optional task leases for this new Run and may only retain authority authorized by the previous Run, Thread ceiling, and current policy. Child MCP calls require an exact saved project approval and cannot prompt. Call it in an isolated tool round so Keel can preserve a complete Main continuation.",
   args: toolArgs(agentResumeToolArgumentsSchema),
   permission: { kind: "none" },
   output: { kind: "text" },

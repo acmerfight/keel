@@ -60,11 +60,27 @@ type SubagentWriteWorkspacePreparation =
       readonly recovery: string;
     };
 
+type SubagentWriteWorkspaceReacquisition =
+  | {
+      readonly kind: "acquired";
+      readonly lease: SubagentWriteWorkspaceLease;
+    }
+  | {
+      readonly kind: "rejected";
+      readonly reason: string;
+      readonly recovery: string;
+    };
+
 export interface SubagentWriteWorkspaceRuntime {
   readonly prepare: (input: {
     readonly childRunId: string;
     readonly signal: AbortSignal;
   }) => SubagentWriteWorkspacePreparation;
+  readonly reacquire: (input: {
+    readonly childRunId: string;
+    readonly previous: SubagentWriteWorkspaceReference;
+    readonly signal: AbortSignal;
+  }) => SubagentWriteWorkspaceReacquisition;
 }
 
 interface SubagentWriteWorkspaceResultBase {

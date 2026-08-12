@@ -33,7 +33,7 @@ export class SubagentPersistenceError extends Error {}
 
 export type AgentId = `agent-${string}`;
 export type SubagentRunId = `subagent-${string}`;
-export type SubagentRunMode = "foreground" | "background";
+type SubagentRunMode = "foreground" | "background";
 
 export type SubagentRunLineage =
   | { readonly kind: "root" }
