@@ -63,6 +63,190 @@ function withTimeout<T>(
 }
 
 describe("CLI Main - Durable Subagent History", () => {
+  test(`Given an explicit foreground child delegates one read-only grandchild in a saved session,
+    When the session is reopened through the agent history commands,
+    Then both runs are durable and the grandchild points to its parent child run`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-nested-history-"));
+    const keelHome = join(workspace, ".keel-home");
+    const sessionId = "nested-agent-history";
+    await writeFile(
+      join(workspace, "module.ts"),
+      "export const nestedAnswer = 42;\n",
+      "utf8",
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_parent", "delegate", {
+                  profile: "reviewer",
+                  task: "Coordinate the read-only module.ts review.",
+                  focusPaths: ["module.ts"],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              [
+                sseToolCall("delegate_nested", "delegate", {
+                  task: "Read module.ts and report the exported value.",
+                  focusPaths: ["module.ts"],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(
+              [
+                sseToolCall("nested_read", "read", { path: "module.ts" }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 4:
+            response.end(
+              sseTextReplyWithUsage("module.ts exports nestedAnswer = 42."),
+            );
+            return;
+          case 5:
+            response.end(
+              sseTextReplyWithUsage("The nested review confirmed 42."),
+            );
+            return;
+          case 6:
+            response.end(sseTextReplyWithUsage("The review is complete."));
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const input = new PassThrough();
+    input.end("Use a subagent and let it delegate the module.ts check.\n");
+    const run = createRuntime(
+      [
+        "--session",
+        sessionId,
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "--no-skills",
+      ],
+      {
+        cwd: workspace,
+        input,
+        env: {
+          KEEL_HOME: keelHome,
+          KEEL_FORCE_INTERACTIVE: "1",
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      expect(await runCliMain(run.runtime), run.stderr()).toBe(0);
+
+      // When
+      const inspectInput = new PassThrough();
+      inspectInput.end("/agents\n/agents show 1\n/agents show 2\n");
+      const inspect = createRuntime(
+        ["--resume", sessionId, "--provider", "fake", "--no-skills"],
+        {
+          cwd: workspace,
+          input: inspectInput,
+          env: { KEEL_HOME: keelHome, KEEL_FORCE_INTERACTIVE: "1" },
+        },
+      );
+      const exitCode = await runCliMain(inspect.runtime);
+
+      // Then
+      expect(exitCode, inspect.stderr()).toBe(0);
+      expect(requests).toHaveLength(6);
+      const parentSection = inspect.stdout().split(/^Agent /mu)[1];
+      const nestedSection = inspect.stdout().split(/^Agent /mu)[2];
+      expect(parentSection).toBeDefined();
+      expect(nestedSection).toBeDefined();
+      const parentRunId = /^run: (subagent-[a-f0-9-]+)$/mu.exec(
+        parentSection ?? "",
+      )?.[1];
+      expect(parentRunId).toBeDefined();
+      expect(nestedSection).toContain(`parent run: ${parentRunId}`);
+      expect(inspect.stdout()).toContain(
+        "Read module.ts and report the exported value.",
+      );
+      expect(toolNames(requests[1])).toContain("delegate");
+      expect(toolNames(requests[2])).not.toContain("delegate");
+
+      const eventRecords = (
+        await readFile(
+          join(keelHome, "sessions", sessionId, "agents", "events.jsonl"),
+          "utf8",
+        )
+      )
+        .trim()
+        .split("\n")
+        .map((line) =>
+          z.object({ type: z.string() }).passthrough().parse(JSON.parse(line)),
+        );
+      const accepted = eventRecords.filter(
+        (record) => record.type === "agent_run_accepted",
+      );
+      expect(accepted).toHaveLength(2);
+      expect(accepted[1]).toMatchObject({ parentRunId });
+      const results = eventRecords
+        .filter((record) => record.type === "agent_result")
+        .map(
+          (record) =>
+            z
+              .object({
+                result: z.object({
+                  childRunId: z.string(),
+                  usage: z.object({
+                    inputTokens: z.number(),
+                    outputTokens: z.number(),
+                  }),
+                }),
+              })
+              .passthrough()
+              .parse(record).result,
+        );
+      expect(results).toHaveLength(2);
+      expect(
+        results.find((result) => result.childRunId === parentRunId)?.usage,
+      ).toMatchObject({ inputTokens: 40, outputTokens: 12 });
+      expect(
+        results.find((result) => result.childRunId !== parentRunId)?.usage,
+      ).toMatchObject({ inputTokens: 20, outputTokens: 6 });
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a completed writer Thread preserves an isolated patch,
     When the user explicitly resumes that writer with one follow-up,
     Then the same Agent creates a new foreground Run on the same worktree while the old Run and parent stay unchanged`, async () => {
@@ -558,6 +742,7 @@ describe("CLI Main - Durable Subagent History", () => {
       });
       expect(toolNames(requests[1]).toSorted()).toEqual(
         [
+          "delegate",
           "read",
           "grep",
           "git_diff",
@@ -983,7 +1168,15 @@ describe("CLI Main - Durable Subagent History", () => {
       expect(exitCode, inspect.stderr()).toBe(0);
       expect(requests).toHaveLength(4);
       expect(toolNames(requests[1]).toSorted()).toEqual(
-        ["read", "ls", "glob", "grep", "git_status", "git_diff"].toSorted(),
+        [
+          "delegate",
+          "read",
+          "ls",
+          "glob",
+          "grep",
+          "git_status",
+          "git_diff",
+        ].toSorted(),
       );
       expect(inspect.stdout()).toContain("profile: reviewer");
       expect(inspect.stdout()).toContain(

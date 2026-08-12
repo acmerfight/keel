@@ -4,6 +4,7 @@ import type { ProviderId } from "../core/provider-id.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
 import type { SkillActivationCapability } from "../skills/model.ts";
 import type {
+  ReadOnlySubagentCapabilitySnapshot,
   RepoSubagentCapabilitySnapshot,
   RepoSubagentCapabilitySnapshotId,
   RepoSubagentProfileName,
@@ -18,6 +19,7 @@ import type {
 import {
   compareSubagentCapability,
   EXPLORER_MAX_TURNS,
+  narrowSubagentCapabilityToCeiling,
   REVIEWER_MAX_TURNS,
   SUBAGENT_DEADLINE_MS,
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
@@ -119,6 +121,60 @@ export interface SubagentProfileRegistry {
   ) => ResolvedSubagentProfile | undefined;
   readonly resolveBuiltin: (name: SubagentProfileId) => ResolvedSubagentProfile;
   readonly all: () => readonly ResolvedSubagentProfile[];
+}
+
+export interface SubagentDelegationProfileAuthority {
+  readonly catalog: SubagentProfileCatalog;
+  readonly resolve: (
+    name: SubagentProfileName,
+  ) => ResolvedSubagentProfile | undefined;
+}
+
+interface SubagentDelegationParentProfile {
+  readonly name: SubagentProfileName;
+  readonly base: SubagentProfileId;
+  readonly execution: SubagentExecutionSnapshot;
+  readonly roleInstructions: string;
+}
+
+export function narrowSubagentDelegationProfiles(
+  registry: SubagentProfileRegistry,
+  parentProfile: SubagentDelegationParentProfile,
+  ceiling: ReadOnlySubagentCapabilitySnapshot,
+): SubagentDelegationProfileAuthority {
+  const profiles = registry.all().flatMap((profile) => {
+    if (profile.name === parentProfile.name || profile.base === "writer") {
+      return [];
+    }
+    const capability = narrowSubagentCapabilityToCeiling(
+      profile.capability,
+      ceiling,
+    );
+    if (compareSubagentCapability(capability, ceiling).kind === "expansion") {
+      return [];
+    }
+    return [{ ...profile, capability }];
+  });
+  const first = { ...parentProfile, capability: ceiling };
+  const allProfiles = [first, ...profiles];
+  const resolved = new Map(
+    allProfiles.map((profile) => [profile.name, profile] as const),
+  );
+  const catalogEntry = (
+    profile: ResolvedSubagentProfile,
+  ): SubagentProfileCatalogEntry => ({
+    name: profile.name,
+    base: profile.base,
+    skills: profile.capability.skills.map((skill) => skill.qualifiedName),
+    mcp: profile.capability.mcpTools.map((tool) => ({
+      server: tool.serverId,
+      tool: tool.rawToolName,
+    })),
+  });
+  return {
+    catalog: [catalogEntry(first), ...profiles.map(catalogEntry)],
+    resolve: (name) => resolved.get(name),
+  };
 }
 
 class SubagentProfileDefinitionError extends Error {}

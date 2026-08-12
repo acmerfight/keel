@@ -209,9 +209,12 @@ What a user can do today:
   deletes, or merges the user's checkout. A completed writer Thread can now run
   an explicit foreground follow-up as the same Agent and a new immutable Run on
   that exact verified branch/worktree, preserving prior Run facts and the parent
-  checkout. #590 remains the governing epic;
-  bounded nesting or default-on autonomous delegation still require their own
-  slices and gates.
+  checkout. Explicit foreground read-only delegation now supports one governed
+  nested level: depth-one children may delegate read-only foreground work, while
+  depth-two children are leaves and the whole tree shares admission, budget,
+  provider, cancellation, and durable history. #590 remains the governing epic;
+  broader nested modes and default-on autonomous delegation still require their
+  own slices and gates.
 - `keel --report <file>` — write a machine-readable one-shot or interactive
   session report with report-local Tasks and Agent Runs, completed main-loop
   turns, human interventions attributed to the active Task and Agent Run,
@@ -311,9 +314,10 @@ Known limits that shape the priorities below:
   threads, built-in plus project-narrowed profiles, and per-Run governed Skill
   and MCP catalogs derived from profile/task leases. One explicit foreground
   writer now returns an inspectable isolated branch/worktree; broader write
-  workflows, nesting, and any default-on decision remain subject to the issue's
-  reliability and same-budget value gates. Marketplaces and IDE integration
-  remain deferred.
+  workflows and any default-on decision remain subject to the issue's
+  reliability and same-budget value gates. Explicit foreground read-only
+  nesting is bounded at depth two; background, writer, Bash, and auto nesting
+  remain outside that slice. Marketplaces and IDE integration remain deferred.
 - MCP covers remote Streamable HTTP servers only. stdio is deferred as a later
   transport over the same runtime and policy core, and Keel is a client only.
   Remaining work is calibrating progressive tool selection on real tasks.
@@ -344,8 +348,11 @@ Known limits that shape the priorities below:
    input plus terminal resume as new immutable Runs. One explicit foreground
    writer can make an isolated, inspectable change from a clean checkout, then
    continue on the same verified worktree in a new immutable Run.
-   Remaining subagent work is broader governed write workflows and bounded
-   nesting rather than basic lifecycle persistence or Skill/MCP derivation.
+   A foreground read-only child under explicit policy can now delegate one
+   foreground read-only level deeper with shared tree resources and durable
+   lineage. Remaining subagent work is broader governed write workflows,
+   broader nesting modes, and product-graduation eval rather than basic
+   lifecycle persistence or Skill/MCP derivation.
    Real coding is conversational:
    follow-ups, corrections, "now also fix the tests" —
    including while a run is in progress. Daily use also generates the real-task
@@ -449,8 +456,10 @@ Codex/Claude Code — or directly moves the eval numbers.
   Canonical result delivery is crash-safe, and stable child threads support
   follow-up input plus terminal resume as new immutable Runs. An explicit
   foreground writer is isolated and inspectable and can continue on its exact
-  verified worktree; remaining work is broader governed write workflows and
-  bounded nesting.
+  verified worktree. Explicit foreground read-only nesting is bounded at depth
+  two and reuses the same tree admission, budget, provider, cancellation, and
+  persistence boundaries; remaining work is broader governed write workflows
+  and broader nesting modes.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports
@@ -509,8 +518,10 @@ Not needed to switch; revisit once P0/P1 are done.
   explicit-policy `writer` profile now provides one foreground isolated
   branch/worktree, a bounded inspectable patch, and explicit same-Thread
   foreground follow-up as a new immutable Run without auto-merge or auto-cleanup.
-  Broader writes, bounded nesting, and any default-on decision remain gated by
-  later epic slices and same-budget value evidence.
+  Explicit-policy foreground read-only children may delegate one read-only
+  foreground level deeper; depth-two children are leaves and share root tree
+  resources. Broader writes, background/writer/auto nesting, and any default-on
+  decision remain gated by later epic slices and same-budget value evidence.
 - Plan mode
 - IDE integration
 - Skill marketplace

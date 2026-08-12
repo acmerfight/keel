@@ -661,7 +661,12 @@ export async function createCliSubagentRuntime(
     supervisor: createSubagentSupervisor({
       workspace: options.workspace,
       platform: options.platform,
-      parentRunId: options.parentRunId,
+      parent: {
+        kind: "main",
+        runId: options.parentRunId,
+        childDelegation:
+          options.policy === "explicit" ? "foreground_read_only" : "none",
+      },
       rootBudget,
       sharedCostBudget,
       profileRegistry,

@@ -14,6 +14,7 @@ export type DelegationToolResult =
   | (DeliveredDelegationToolResultBase & {
       readonly delivery: "fresh";
       readonly usage: Usage;
+      readonly costUsd: number;
     })
   | (DeliveredDelegationToolResultBase & {
       readonly delivery: "background";
@@ -106,3 +107,7 @@ export interface DelegationCapability {
     entries: readonly DelegationBatchEntry[],
   ) => DelegationBatch;
 }
+
+export type ForegroundDelegationCapability = DelegationCapability & {
+  readonly mode: "foreground";
+};

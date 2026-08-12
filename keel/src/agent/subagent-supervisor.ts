@@ -13,11 +13,13 @@ import type {
   DelegationCapability,
   DelegationRequest,
   DelegationToolResult,
+  ForegroundDelegationCapability,
 } from "../tools/delegation.ts";
 import {
   createDelegationExecutor,
   projectDelegationRejection,
 } from "../tools/delegation.ts";
+import type { ModelToolExposure } from "../tools/tool-call.ts";
 import { resolveWorkspaceTarget } from "../tools/workspace-path.ts";
 import type { ContextCompactionOptions } from "./context-compaction.ts";
 import {
@@ -51,6 +53,8 @@ import {
   SUBAGENT_MAX_FINAL_TEXT_CHARS,
   type SubagentCapabilitySnapshot,
   type SubagentMcpToolSelector,
+  type SubagentProfileId,
+  type SubagentProfileName,
   selectSubagentCapabilityMcpTools,
   selectSubagentCapabilitySkills,
   skillDescriptorFromSubagentSnapshot,
@@ -74,9 +78,11 @@ import type {
 } from "./subagent-lifecycle.ts";
 import { SubagentPersistenceError } from "./subagent-lifecycle.ts";
 import type {
+  SubagentDelegationProfileAuthority,
   SubagentExecutionSnapshot,
   SubagentProfileRegistry,
 } from "./subagent-profile.ts";
+import { narrowSubagentDelegationProfiles } from "./subagent-profile.ts";
 import {
   createSubagentTreeAdmission,
   type SubagentAdmissionLease,
@@ -244,6 +250,7 @@ type PreparedDelegationCandidate = PreparedDelegationCandidateBase &
         readonly workspaceAccess: "read_only";
         readonly capability: ReadOnlySubagentCapabilitySnapshot;
         readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+        readonly delegationProfiles?: SubagentDelegationProfileAuthority;
       }
     | {
         readonly workspaceAccess: "isolated_write";
@@ -256,6 +263,7 @@ type PreparedAcceptedWorkspace =
   | {
       readonly kind: "read_only";
       readonly capability: ReadOnlySubagentCapabilitySnapshot;
+      readonly delegationProfiles?: SubagentDelegationProfileAuthority;
     }
   | {
       readonly kind: "isolated_write";
@@ -288,8 +296,10 @@ type PreparedAcceptedCandidate = PreparedAcceptedCandidateBase &
       }
   );
 
-export interface SubagentSupervisor {
-  readonly capability: DelegationCapability;
+export interface SubagentSupervisor<
+  Capability extends DelegationCapability = DelegationCapability,
+> {
+  readonly capability: Capability;
   readonly resultContinuationBudget: SubagentResultContinuationBudget;
   readonly activeAgentRunCount: () => number;
   readonly activeChildRunCount: () => number;
@@ -362,7 +372,6 @@ export interface SubagentBackgroundRuntime {
 interface CreateSubagentSupervisorOptionsBase {
   readonly workspace: string;
   readonly platform: string;
-  readonly parentRunId: string;
   readonly rootBudget: SharedCostBudgetedProvider;
   readonly sharedCostBudget: SharedCostBudgetAccount;
   readonly profileRegistry: SubagentProfileRegistry;
@@ -373,7 +382,7 @@ interface CreateSubagentSupervisorOptionsBase {
   readonly admission?: SubagentTreeAdmission;
   readonly projectInstructions?: ProjectInstructions;
   readonly hiddenWorkspacePaths?: readonly string[];
-  readonly modelMaxOutputTokens?: number;
+  readonly modelMaxOutputTokens?: number | undefined;
   readonly modelOperations?: MainModelOperationInstrumentation;
   readonly transcriptStore: AbortableToolOutputArtifactStore;
   readonly now: () => number;
@@ -384,6 +393,22 @@ interface CreateSubagentSupervisorOptionsBase {
   readonly providerBlocked?: () => boolean;
 }
 
+interface MainSubagentSupervisorParentOptions {
+  readonly parent: {
+    readonly kind: "main";
+    readonly runId: string;
+    readonly childDelegation: "foreground_read_only" | "none";
+  };
+}
+
+interface NestedSubagentSupervisorParentOptions {
+  readonly parent: {
+    readonly kind: "subagent";
+    readonly runId: SubagentRunId;
+    readonly delegationProfiles: SubagentDelegationProfileAuthority;
+  };
+}
+
 export interface SubagentExecutionRuntime {
   readonly snapshot: SubagentExecutionSnapshot;
   readonly provider: LLMProvider;
@@ -392,21 +417,31 @@ export interface SubagentExecutionRuntime {
   readonly modelMaxOutputTokens?: number;
 }
 
+type SubagentSupervisorLifecycleOptions =
+  | {
+      readonly background?: never;
+      readonly backgroundModelOperations?: never;
+      readonly lifecyclePersistence?: SubagentLifecyclePersistence;
+    }
+  | {
+      readonly background: SubagentBackgroundRuntime;
+      readonly backgroundModelOperations:
+        | MainModelOperationInstrumentation
+        | undefined;
+      readonly lifecyclePersistence: SubagentLifecyclePersistence;
+    };
+
 type CreateSubagentSupervisorOptions = CreateSubagentSupervisorOptionsBase &
   (
-    | {
-        readonly background?: never;
-        readonly backgroundModelOperations?: never;
-        readonly lifecyclePersistence?: SubagentLifecyclePersistence;
-      }
-    | {
-        readonly background: SubagentBackgroundRuntime;
-        readonly backgroundModelOperations:
-          | MainModelOperationInstrumentation
-          | undefined;
-        readonly lifecyclePersistence: SubagentLifecyclePersistence;
-      }
-  );
+    | MainSubagentSupervisorParentOptions
+    | NestedSubagentSupervisorParentOptions
+  ) &
+  SubagentSupervisorLifecycleOptions;
+
+type CreateNestedSubagentSupervisorOptions =
+  CreateSubagentSupervisorOptionsBase &
+    NestedSubagentSupervisorParentOptions &
+    SubagentSupervisorLifecycleOptions;
 
 function zeroUsage(): Usage {
   return {
@@ -499,14 +534,14 @@ function admissionRejection(
         reason:
           "Delegation rejected: the root-inclusive active agent limit is reached.",
         recovery:
-          "Wait for or cancel a running child, or continue the investigation in Main before delegating again.",
+          "Wait for or cancel a running child, or continue in the current agent before delegating again.",
       };
     case "total_limit":
       return {
         reason:
           "Delegation rejected: the total child limit for this root run is reached.",
         recovery:
-          "Continue the investigation in Main because this root run cannot admit another child.",
+          "Continue in the current agent because this root run cannot admit another child.",
       };
   }
 }
@@ -1078,6 +1113,12 @@ function commitTerminalResult(
 }
 
 export function createSubagentSupervisor(
+  options: CreateNestedSubagentSupervisorOptions,
+): SubagentSupervisor<ForegroundDelegationCapability>;
+export function createSubagentSupervisor(
+  options: CreateSubagentSupervisorOptions,
+): SubagentSupervisor;
+export function createSubagentSupervisor(
   options: CreateSubagentSupervisorOptions,
 ): SubagentSupervisor {
   const receipts = new Map<string, DelegationReceipt>();
@@ -1106,20 +1147,57 @@ export function createSubagentSupervisor(
       systemPrompt,
       capability.skills.map(skillDescriptorFromSubagentSnapshot),
     );
-  const childToolExposure = (capability: SubagentCapabilitySnapshot) => ({
-    kind: "auto" as const,
-    profile: "subagent" as const,
-    capability,
-    ...(capability.mcpTools.length > 0
-      ? {
-          mcp: {
-            snapshotId: subagentCapabilityFingerprint(capability),
-            catalogAvailable: true,
-            tools: [],
-          },
-        }
-      : {}),
-  });
+  const childDelegationProfiles = (
+    mode: "foreground" | "background",
+    profile: {
+      readonly name: SubagentProfileName;
+      readonly base: SubagentProfileId;
+      readonly execution: SubagentExecutionSnapshot;
+      readonly roleInstructions: string;
+    },
+    capability: ReadOnlySubagentCapabilitySnapshot,
+  ) =>
+    options.parent.kind === "main" &&
+    options.parent.childDelegation === "foreground_read_only" &&
+    mode === "foreground"
+      ? narrowSubagentDelegationProfiles(
+          options.profileRegistry,
+          profile,
+          capability,
+        )
+      : undefined;
+  const childToolExposure = (
+    capability: SubagentCapabilitySnapshot,
+    delegationProfiles: ReturnType<typeof childDelegationProfiles>,
+  ): ModelToolExposure => {
+    const common = {
+      kind: "auto" as const,
+      profile: "subagent" as const,
+      ...(capability.mcpTools.length > 0
+        ? {
+            mcp: {
+              snapshotId: subagentCapabilityFingerprint(capability),
+              catalogAvailable: true,
+              tools: [],
+            },
+          }
+        : {}),
+    };
+    if (subagentCapabilityIsWriter(capability)) {
+      return { ...common, capability };
+    }
+    if (delegationProfiles === undefined) {
+      return { ...common, capability };
+    }
+    return {
+      ...common,
+      capability,
+      delegation: {
+        mode: "foreground" as const,
+        profileCatalog: delegationProfiles.catalog,
+      },
+    };
+  };
   const resultContinuationBudget: SubagentResultContinuationBudget = {
     lease: (toolCallIds) => {
       const resultAdmission = treeBudget.planResults(
@@ -1228,6 +1306,7 @@ export function createSubagentSupervisor(
         readonly workspace: {
           readonly kind: "read_only";
           readonly capability: ReadOnlySubagentCapabilitySnapshot;
+          readonly delegationProfiles?: SubagentDelegationProfileAuthority;
         };
       })
     | (ExecuteAcceptedInputBase & {
@@ -1282,6 +1361,7 @@ export function createSubagentSupervisor(
       let usage = zeroUsage();
       let turns = 0;
       let costUsd = 0;
+      let loopAccountingObserved = false;
       let terminal: SubagentTerminalOutcome = {
         status: "failed",
         finalText: null,
@@ -1302,6 +1382,35 @@ export function createSubagentSupervisor(
         input.mode === "background"
           ? options.backgroundModelOperations
           : options.modelOperations;
+      const nestedDelegationProfiles =
+        input.workspace.kind === "read_only"
+          ? input.workspace.delegationProfiles
+          : undefined;
+      const nestedSupervisor =
+        nestedDelegationProfiles === undefined
+          ? undefined
+          : (() => {
+              const {
+                admission: _admission,
+                background: _background,
+                backgroundModelOperations: _backgroundModelOperations,
+                parent: _parent,
+                rootBudget: _rootBudget,
+                writeWorkspace: _writeWorkspace,
+                ...inheritedOptions
+              } = options;
+              return createSubagentSupervisor({
+                ...inheritedOptions,
+                parent: {
+                  kind: "subagent",
+                  runId: input.childRunId,
+                  delegationProfiles: nestedDelegationProfiles,
+                },
+                rootBudget: childBudget,
+                admission,
+                modelMaxOutputTokens: input.execution.modelMaxOutputTokens,
+              });
+            })();
       const childModelOperations:
         | SubagentModelOperationInstrumentation
         | undefined =
@@ -1357,6 +1466,9 @@ export function createSubagentSupervisor(
         childWorkspaceAuthority = {
           workspaceAccess: "read_only",
           subagentCapability: input.workspace.capability,
+          ...(nestedSupervisor !== undefined
+            ? { delegation: nestedSupervisor.capability }
+            : {}),
         };
       }
       const hiddenWorkspacePaths =
@@ -1421,11 +1533,14 @@ export function createSubagentSupervisor(
             transcriptMessages = messages;
           },
           onAgentLoopAccountingUpdated: (accounting) => {
+            loopAccountingObserved = true;
+            usage = accounting.usage;
             turns = accounting.turns;
+            costUsd = accounting.costUsd;
             runningPersistence?.accounting({
-              usage: accounting.usage,
+              usage,
               turns: accounting.turns,
-              costUsd: childBudget.observedSpendUsd(),
+              costUsd,
             });
             turnProgress(turns);
           },
@@ -1434,6 +1549,8 @@ export function createSubagentSupervisor(
             toolProgress(event.toolCall.tool);
           }
           if (event.type === "end") {
+            loopAccountingObserved = true;
+            usage = event.usage;
             turns = event.turns;
             terminal = terminalOutcomeFromStopReason(
               event.stopReason,
@@ -1479,8 +1596,10 @@ export function createSubagentSupervisor(
       }
       const pendingInputCount = unprocessedInput.length;
 
-      usage = childBudget.observedUsage();
-      costUsd = childBudget.observedSpendUsd();
+      if (!loopAccountingObserved) {
+        usage = childBudget.observedUsage();
+        costUsd = childBudget.observedSpendUsd();
+      }
       let transcriptRef = input.persistence?.transcriptRef ?? null;
       if (input.persistence === undefined) {
         let saved: ToolOutputArtifactSaveResult;
@@ -1730,7 +1849,7 @@ export function createSubagentSupervisor(
       entry.kind === "request" ? [entry.request] : [],
     );
     const preparedIds = new Set(
-      inputs.map((input) => `${options.parentRunId}:${input.toolCallId}`),
+      inputs.map((input) => `${options.parent.runId}:${input.toolCallId}`),
     );
     const freshAcceptedIds = new Set<string>();
     const seenCandidateIds = new Set<string>();
@@ -1745,7 +1864,7 @@ export function createSubagentSupervisor(
       try {
         options.lifecyclePersistence?.rejected({
           delegationId,
-          parentRunId: options.parentRunId,
+          parentRunId: options.parent.runId,
           parentToolCallId: input.toolCallId,
           task: input.task,
           reason: rejection.reason,
@@ -1763,7 +1882,7 @@ export function createSubagentSupervisor(
       });
     };
     for (const input of inputs) {
-      const delegationId = `${options.parentRunId}:${input.toolCallId}`;
+      const delegationId = `${options.parent.runId}:${input.toolCallId}`;
       if (receipts.has(delegationId) || seenCandidateIds.has(delegationId)) {
         continue;
       }
@@ -1810,7 +1929,10 @@ export function createSubagentSupervisor(
         });
         continue;
       }
-      const profile = options.profileRegistry.resolve(input.profile);
+      const profile =
+        options.parent.kind === "subagent"
+          ? options.parent.delegationProfiles.resolve(input.profile)
+          : options.profileRegistry.resolve(input.profile);
       if (profile === undefined) {
         recordRejection(input, delegationId, {
           reason: `Delegation rejected: unknown subagent profile ${JSON.stringify(input.profile)}.`,
@@ -1855,6 +1977,9 @@ export function createSubagentSupervisor(
         continue;
       }
       const capability = profileSelection.selection.capability;
+      const delegationProfiles = subagentCapabilityIsWriter(capability)
+        ? undefined
+        : childDelegationProfiles(input.mode, profile, capability);
       if (profileSelection.workspaceAccess === "isolated_write") {
         if (input.mode !== "foreground") {
           recordRejection(input, delegationId, {
@@ -1899,6 +2024,8 @@ export function createSubagentSupervisor(
         roleInstructions: profile.roleInstructions,
         maxFinalTextChars: capability.maxFinalTextChars,
         workspaceAccess: profileSelection.workspaceAccess,
+        delegation:
+          delegationProfiles === undefined ? "none" : "foreground_read_only",
       });
       const userMessage = childTaskMessage(
         delegationId,
@@ -1909,7 +2036,7 @@ export function createSubagentSupervisor(
         systemPrompt: effectiveChildSystemPrompt(systemPrompt, capability),
         messages: [{ role: "user", content: userMessage }],
         signal: input.signal,
-        toolExposure: childToolExposure(capability),
+        toolExposure: childToolExposure(capability, delegationProfiles),
       };
       const minimumInputTokens = estimateProviderInputTokens(
         execution.provider,
@@ -1954,6 +2081,7 @@ export function createSubagentSupervisor(
           workspaceAccess: profileSelection.workspaceAccess,
           capability: profileSelection.selection.capability,
           threadCapabilityCeiling: profileSelection.threadCapabilityCeiling,
+          ...(delegationProfiles !== undefined ? { delegationProfiles } : {}),
         });
       }
     }
@@ -1979,7 +2107,7 @@ export function createSubagentSupervisor(
         }
         const input = entry.request;
         const receipt = receipts.get(
-          `${options.parentRunId}:${input.toolCallId}`,
+          `${options.parent.runId}:${input.toolCallId}`,
         );
         if (receipt?.kind === "rejected") {
           return {
@@ -2032,9 +2160,9 @@ export function createSubagentSupervisor(
       if (rejectedCandidate === undefined) break;
       recordRejection(rejectedCandidate.input, rejectedCandidate.delegationId, {
         reason:
-          "Delegation rejected: the root budget cannot fund this child while preserving one admitted aggregate main continuation.",
+          "Delegation rejected: the available tree budget cannot fund this child while preserving one admitted aggregate parent continuation.",
         recovery:
-          "Do not retry with the same session budget. Continue the investigation in Main, or ask the user to start a new run with a higher --max-cost.",
+          "Do not retry with the same session budget. Continue in the current agent, or ask the user to start a new run with a higher --max-cost.",
       });
       acceptedCandidates = acceptedCandidates.slice(0, -1);
     }
@@ -2050,6 +2178,7 @@ export function createSubagentSupervisor(
               readonly kind: "read_only";
               readonly capability: ReadOnlySubagentCapabilitySnapshot;
               readonly threadCapabilityCeiling: ReadOnlySubagentCapabilitySnapshot;
+              readonly delegationProfiles?: SubagentDelegationProfileAuthority;
             }
           | {
               readonly kind: "isolated_write";
@@ -2084,6 +2213,9 @@ export function createSubagentSupervisor(
             kind: "read_only",
             capability: candidate.capability,
             threadCapabilityCeiling: candidate.threadCapabilityCeiling,
+            ...(candidate.delegationProfiles !== undefined
+              ? { delegationProfiles: candidate.delegationProfiles }
+              : {}),
           };
         }
         const acceptedSystemPrompt =
@@ -2099,6 +2231,7 @@ export function createSubagentSupervisor(
                 roleInstructions: candidate.roleInstructions,
                 maxFinalTextChars: candidate.capability.maxFinalTextChars,
                 workspaceAccess: "isolated_write",
+                delegation: "none",
               })
             : candidate.systemPrompt;
         try {
@@ -2106,7 +2239,7 @@ export function createSubagentSupervisor(
             delegationId: candidate.delegationId,
             childAgentId,
             childRunId,
-            parentRunId: options.parentRunId,
+            parentRunId: options.parent.runId,
             parentToolCallId: candidate.input.toolCallId,
             task: candidate.input.task,
             focusPaths: candidate.input.focusPaths,
@@ -2224,6 +2357,11 @@ export function createSubagentSupervisor(
             workspace: {
               kind: "read_only",
               capability: workspaceAuthority.capability,
+              ...(workspaceAuthority.delegationProfiles !== undefined
+                ? {
+                    delegationProfiles: workspaceAuthority.delegationProfiles,
+                  }
+                : {}),
             },
             ...(persistence !== undefined ? { persistence } : {}),
           });
@@ -2294,7 +2432,7 @@ export function createSubagentSupervisor(
 
     return {
       executor: createDelegationExecutor(async (input) => {
-        const delegationId = `${options.parentRunId}:${input.toolCallId}`;
+        const delegationId = `${options.parent.runId}:${input.toolCallId}`;
         const receipt = receipts.get(delegationId);
         if (!preparedIds.has(delegationId) || receipt === undefined) {
           return rejectedDelegation(
@@ -2367,6 +2505,7 @@ export function createSubagentSupervisor(
             ok: result.status === "completed",
             content,
             usage: result.usage,
+            costUsd: result.costUsd,
           };
         }
         return {
@@ -2385,9 +2524,10 @@ export function createSubagentSupervisor(
     };
   };
 
-  const capability: DelegationCapability = {
-    mode: options.background === undefined ? "foreground" : "background",
-    profileCatalog: options.profileRegistry.catalog,
+  const capabilityOperations: Omit<
+    DelegationCapability,
+    "mode" | "profileCatalog"
+  > = {
     available: () =>
       admission.available() && options.providerBlocked?.() !== true,
     prepareBatch,
@@ -2400,10 +2540,22 @@ export function createSubagentSupervisor(
       }
     },
   };
+  const capability: DelegationCapability =
+    options.parent.kind === "subagent"
+      ? {
+          ...capabilityOperations,
+          mode: "foreground",
+          profileCatalog: options.parent.delegationProfiles.catalog,
+        }
+      : {
+          ...capabilityOperations,
+          mode: options.background === undefined ? "foreground" : "background",
+          profileCatalog: options.profileRegistry.catalog,
+        };
 
   const continuation: SubagentContinuationCapability = {
     resume: async (request) => {
-      const delegationId = `${options.parentRunId}:${request.toolCallId}`;
+      const delegationId = `${options.parent.runId}:${request.toolCallId}`;
       const existing = receipts.get(delegationId);
       if (existing?.kind === "accepted") {
         if (existing.mode === "foreground") {
@@ -2567,7 +2719,7 @@ export function createSubagentSupervisor(
             { role: "user", content: request.message },
           ],
           signal: request.signal,
-          toolExposure: childToolExposure(capability),
+          toolExposure: childToolExposure(capability, undefined),
           maxOutputTokens: MIN_USEFUL_OUTPUT_TOKENS,
         },
       );
@@ -2682,7 +2834,7 @@ export function createSubagentSupervisor(
           delegationId,
           childAgentId: request.childAgentId,
           childRunId,
-          parentRunId: options.parentRunId,
+          parentRunId: options.parent.runId,
           parentToolCallId: request.toolCallId,
           task: request.message,
           focusPaths: request.focusPaths,

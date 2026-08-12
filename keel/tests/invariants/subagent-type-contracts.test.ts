@@ -10,6 +10,7 @@ import type {
   DelegationCapability,
   DelegationExecutor,
   DelegationToolResult,
+  ForegroundDelegationCapability,
 } from "../../src/tools/delegation.ts";
 import type { ExecuteToolCallOptions } from "../../src/tools/execution.ts";
 
@@ -105,6 +106,9 @@ describe("subagent static type contracts", () => {
       Extract<DelegationToolResult, { readonly delivery: "fresh" }>["usage"]
     >().toEqualTypeOf<Usage>();
     expectTypeOf<
+      Extract<DelegationToolResult, { readonly delivery: "fresh" }>["costUsd"]
+    >().toEqualTypeOf<number>();
+    expectTypeOf<
       Extract<DelegationToolResult, { readonly delivery: "replayed" }>["usage"]
     >().toEqualTypeOf<undefined>();
   });
@@ -137,31 +141,37 @@ describe("subagent static type contracts", () => {
   });
 
   test(`Given a governed child returns a normal final message under a host budget,
-    When run options omit the budget or add delegation,
-    Then both invalid execution modes are not assignable`, () => {
+    When read-only and writer execution authorities are compared,
+    Then only a budgeted read-only child can carry nested delegation`, () => {
     type ChildWithoutBudget = RunAgentBase & {
       readonly toolProfile: "subagent";
       readonly userMessageOrigin: {
         readonly type: "runtime_subagent_delegation";
       };
     };
-    type ChildWithDelegation = ChildWithoutBudget & {
-      readonly costBudgetProvider: LLMProvider;
-      readonly delegation: DelegationCapability;
-    };
+    type ChildRunOptions = Extract<
+      RunAgentOptions,
+      { readonly toolProfile: "subagent" }
+    >;
+    type ReadOnlyChild = Extract<
+      ChildRunOptions,
+      { readonly workspaceAccess: "read_only" }
+    >;
+    type WriterChild = Extract<
+      ChildRunOptions,
+      { readonly workspaceAccess: "isolated_write" }
+    >;
 
     expectTypeOf<
       Extends<ChildWithoutBudget, RunAgentOptions>
     >().toEqualTypeOf<false>();
     expectTypeOf<
-      Extends<ChildWithDelegation, RunAgentOptions>
-    >().toEqualTypeOf<false>();
-    expectTypeOf<
-      Extract<
-        RunAgentOptions,
-        { readonly toolProfile: "subagent" }
-      >["costBudgetProvider"]
+      ChildRunOptions["costBudgetProvider"]
     >().toEqualTypeOf<LLMProvider>();
+    expectTypeOf<ReadOnlyChild["delegation"]>().toEqualTypeOf<
+      ForegroundDelegationCapability | undefined
+    >();
+    expectTypeOf<WriterChild["delegation"]>().toEqualTypeOf<undefined>();
   });
 
   test(`Given child model operations carry immutable identity attribution,

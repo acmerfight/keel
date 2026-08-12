@@ -1,8 +1,9 @@
 import { z } from "zod";
 import {
-  type SubagentCapabilitySnapshot,
+  type ReadOnlySubagentCapabilitySnapshot,
   subagentCapabilityFingerprint,
   subagentCapabilityIsWriter,
+  type WriterSubagentCapabilitySnapshot,
 } from "../agent/subagent-capability.ts";
 import type {
   SubagentProfileCatalog,
@@ -116,12 +117,26 @@ interface MainModelToolExposure {
   readonly mcp?: McpToolExposureSnapshot;
 }
 
-interface SubagentModelToolExposure {
+interface SubagentModelToolExposureBase {
   readonly kind: "auto";
   readonly profile: "subagent";
-  readonly capability: SubagentCapabilitySnapshot;
   readonly mcp?: McpToolExposureSnapshot;
 }
+
+type SubagentModelToolExposure = SubagentModelToolExposureBase &
+  (
+    | {
+        readonly capability: ReadOnlySubagentCapabilitySnapshot;
+        readonly delegation?: {
+          readonly mode: "foreground";
+          readonly profileCatalog: SubagentProfileCatalog;
+        };
+      }
+    | {
+        readonly capability: WriterSubagentCapabilitySnapshot;
+        readonly delegation?: never;
+      }
+  );
 
 type AutoModelToolExposure = MainModelToolExposure | SubagentModelToolExposure;
 
@@ -147,6 +162,8 @@ export type ResolvedModelToolExposure =
       readonly kind: "auto";
       readonly profile: "subagent";
       readonly capabilitySnapshotFingerprint: string;
+      readonly delegation: boolean;
+      readonly delegationProfileCatalog: readonly SubagentProfileCatalogEntry[];
       readonly skill: boolean;
       readonly mcpSnapshotId: string | null;
     };
@@ -172,6 +189,9 @@ function builtinToolIsExposed(
   tool: RegisteredBuiltinTool,
 ): boolean {
   if (exposure.profile === "subagent") {
+    if (tool.availability === "delegation") {
+      return exposure.delegation !== undefined;
+    }
     if (tool.availability === "skill-catalog") {
       return exposure.capability.skills.length > 0;
     }
@@ -376,9 +396,7 @@ function toOpenAICompatibleToolDefinition(
   exposure: AutoModelToolExposure,
 ): OpenAICompatibleToolDefinition {
   const argumentsSchema =
-    exposure.profile !== "subagent" &&
-    exposure.delegation !== undefined &&
-    tool === builtinToolRegistry.delegate
+    exposure.delegation !== undefined && tool === builtinToolRegistry.delegate
       ? delegateProviderArgumentsSchemaForCatalog(
           exposure.delegation.profileCatalog,
           exposure.delegation.mode,
@@ -432,6 +450,13 @@ export function resolveModelToolExposure(
       capabilitySnapshotFingerprint: subagentCapabilityFingerprint(
         exposure.capability,
       ),
+      delegation: exposure.delegation !== undefined,
+      delegationProfileCatalog:
+        exposure.delegation?.profileCatalog.map((entry) => ({
+          ...entry,
+          skills: [...entry.skills],
+          mcp: entry.mcp.map((tool) => ({ ...tool })),
+        })) ?? [],
       skill: exposure.capability.skills.length > 0,
       mcpSnapshotId:
         exposure.mcp?.catalogAvailable === true
@@ -470,6 +495,9 @@ export function modelToolExposuresEqual(
       right.profile === "subagent" &&
       left.capabilitySnapshotFingerprint ===
         right.capabilitySnapshotFingerprint &&
+      left.delegation === right.delegation &&
+      JSON.stringify(left.delegationProfileCatalog) ===
+        JSON.stringify(right.delegationProfileCatalog) &&
       left.skill === right.skill &&
       left.mcpSnapshotId === right.mcpSnapshotId
     );
@@ -566,7 +594,6 @@ export function providerToolCallFromParsedArguments(
     const dynamicArgumentsSchema =
       name === builtinToolRegistry.delegate.name &&
       exposure.kind === "auto" &&
-      exposure.profile !== "subagent" &&
       exposure.delegation !== undefined
         ? delegateToolArgumentsSchemaForCatalog(
             exposure.delegation.profileCatalog,

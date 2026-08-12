@@ -662,6 +662,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(childInitial).not.toContain("MAIN_ONLY_SKILL_BODY");
       expect(toolNames(requests[1]).toSorted()).toEqual(
         [
+          "delegate",
           "read",
           "grep",
           "git_diff",
@@ -954,7 +955,9 @@ describe("CLI Main - Subagent Delegation", () => {
 
         const parsed = requestSchema.parse(request);
         const requestMessages = JSON.stringify(parsed.messages);
-        const isChildRequest = !toolNames(request).includes("delegate");
+        const isChildRequest = requestMessages.includes(
+          "You are a fresh Keel explorer child agent",
+        );
         const childName = isChildRequest
           ? requestMessages.includes("Inspect alpha.ts only")
             ? "alpha"
@@ -1180,7 +1183,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(requests).toHaveLength(4);
       expect(toolNames(requests[0])).toContain("delegate");
       expect(toolNames(requests[1])).toContain("delegate");
-      expect(toolNames(requests[2])).not.toContain("delegate");
+      expect(toolNames(requests[2])).toContain("delegate");
       expect(toolNames(requests[3])).toContain("delegate");
       expect(requestText(requests[1])).toContain(
         "delegate failed: invalid arguments",
@@ -1209,6 +1212,176 @@ describe("CLI Main - Subagent Delegation", () => {
           (operation) => operation.purpose === "subagent_turn",
         ),
       ).toHaveLength(1);
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given explicit delegation and a foreground read-only child with one focused subtask,
+    When that child delegates the investigation to a grandchild,
+    Then the nested result returns through the child while depth two cannot delegate again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-nesting-"));
+    await writeFile(
+      join(workspace, "module.ts"),
+      "export const nestedAnswer = 42;\n",
+      "utf8",
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_parent", "delegate", {
+                  profile: "reviewer",
+                  task: "Coordinate a focused read-only review of module.ts.",
+                  focusPaths: ["module.ts"],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              [
+                sseToolCall("delegate_nested", "delegate", {
+                  profile: "reviewer",
+                  task: "Read module.ts and report the exported value.",
+                  focusPaths: ["module.ts"],
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(
+              [
+                sseToolCall("forged_third_level", "delegate", {
+                  task: "Try to create an unsupported third-level child.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 4:
+            response.end(
+              [
+                sseToolCall("nested_read", "read", { path: "module.ts" }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 5:
+            response.end(
+              sseTextReplyWithUsage(
+                "module.ts:1 exports nestedAnswer with value 42.",
+              ),
+            );
+            return;
+          case 6:
+            response.end(
+              sseTextReplyWithUsage(
+                "The nested investigation confirmed nestedAnswer equals 42.",
+              ),
+            );
+            return;
+          case 7:
+            response.end(
+              sseTextReplyWithUsage(
+                "The delegated review confirmed nestedAnswer equals 42.",
+              ),
+            );
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--agent-policy",
+        "explicit",
+        "--no-skills",
+        "--max-cost",
+        "0.05",
+        "Use a subagent and let it delegate the focused module.ts investigation.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: join(workspace, ".keel-home"),
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(7);
+      expect(toolNames(requests[1])).toContain("delegate");
+      expect(toolNames(requests[1])).not.toEqual(
+        expect.arrayContaining(["write", "edit", "apply_patch", "bash"]),
+      );
+      const nestedDelegateSchema = z
+        .object({
+          function: z.object({
+            parameters: z.object({
+              properties: z.object({
+                profile: z.object({ enum: z.array(z.string()) }),
+                mode: z.object({ enum: z.array(z.string()) }),
+              }),
+            }),
+          }),
+        })
+        .parse(
+          requestSchema
+            .parse(requests[1])
+            .tools?.find((tool) => tool.function?.name === "delegate"),
+        );
+      expect(
+        nestedDelegateSchema.function.parameters.properties.profile.enum,
+      ).toEqual(["reviewer"]);
+      expect(
+        nestedDelegateSchema.function.parameters.properties.mode.enum,
+      ).toEqual(["foreground"]);
+      expect(toolNames(requests[2])).not.toContain("delegate");
+      expect(toolNames(requests[2])).not.toEqual(
+        expect.arrayContaining(["write", "edit", "apply_patch", "bash"]),
+      );
+      expect(requestText(requests[3])).toContain("Tool failed: delegate");
+      expect(requestText(requests[5])).toContain(
+        "module.ts:1 exports nestedAnswer with value 42.",
+      );
+      expect(requestText(requests[6])).toContain(
+        "The nested investigation confirmed nestedAnswer equals 42.",
+      );
+      expect(fixture.stdout()).toBe(
+        "The delegated review confirmed nestedAnswer equals 42.\n",
+      );
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -1345,13 +1518,13 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(childInitial).toContain("DELEGATED_FIXTURE_RULE");
       expect(childInitial).not.toContain("PRIVATE PARENT CONTEXT");
       expect(toolNames(requests[1]).toSorted()).toEqual(
-        ["glob", "grep", "ls", "read"].toSorted(),
+        ["delegate", "glob", "grep", "ls", "read"].toSorted(),
       );
       expect(toolNames(requests[1])).not.toContain("write");
       expect(toolNames(requests[1])).not.toContain("edit");
       expect(toolNames(requests[1])).not.toContain("apply_patch");
       expect(toolNames(requests[1])).not.toContain("bash");
-      expect(toolNames(requests[1])).not.toContain("delegate");
+      expect(toolNames(requests[1])).toContain("delegate");
 
       const resumedMainRequest = requestSchema.parse(requests[3]);
       expect(toolNames(requests[3])).toContain("delegate");
@@ -1589,7 +1762,7 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(exitCode).toBe(0);
       expect(requests).toHaveLength(5);
       expect(toolNames(requests[0])).toContain("delegate");
-      expect(toolNames(requests[1])).not.toContain("delegate");
+      expect(toolNames(requests[1])).toContain("delegate");
       expect(toolNames(requests[1])).not.toContain("write");
       expect(toolNames(requests[4])).toContain("delegate");
       const continuedMain = requestText(requests[4]);
@@ -1644,9 +1817,9 @@ describe("CLI Main - Subagent Delegation", () => {
     }
   });
 
-  test(`Given an interactive foreground child has an active provider request,
+  test(`Given an interactive foreground grandchild has an active provider request,
     When the user presses Ctrl-C once,
-    Then the turn is cancelled, the child request closes, and no child answer enters the session`, async () => {
+    Then cancellation crosses both child levels, the request closes, and no child answer enters the session`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-interactive-subagent-abort-"),
@@ -1672,6 +1845,18 @@ describe("CLI Main - Subagent Delegation", () => {
         res.end(
           [
             sseToolCall("interactive_delegate_abort", "delegate", {
+              task: "Delegate the focused investigation, then wait for it.",
+            }),
+            sseToolFinish(),
+            "data: [DONE]\n\n",
+          ].join(""),
+        );
+        return;
+      }
+      if (requestCount === 2) {
+        res.end(
+          [
+            sseToolCall("interactive_nested_abort", "delegate", {
               task: "Inspect the workspace until cancelled.",
             }),
             sseToolFinish(),
@@ -1713,20 +1898,30 @@ describe("CLI Main - Subagent Delegation", () => {
 
     try {
       const run = runCliMain(fixture.runtime);
-      input.write("Use a subagent to investigate until I interrupt.\n");
-      await withTimeout(childStarted, 5_000, "interactive child did not start");
+      input.write(
+        "Use a subagent and let it delegate the investigation until I interrupt.\n",
+      );
+      await withTimeout(
+        childStarted,
+        5_000,
+        "interactive grandchild did not start",
+      );
 
       // When
       expect(interrupt.handler).not.toBeNull();
       interrupt.handler?.();
 
       // Then
-      await withTimeout(childClosed, 5_000, "interactive child remained live");
+      await withTimeout(
+        childClosed,
+        5_000,
+        "interactive grandchild remained live",
+      );
       input.end();
       expect(
         await withTimeout(run, 5_000, "interactive session did not stop"),
       ).toBe(0);
-      expect(requestCount).toBe(2);
+      expect(requestCount).toBe(3);
       expect(fixture.stderr()).toMatch(/Subagent .*: cancelled/u);
       expect(fixture.stdout()).not.toContain("still investigating");
     } finally {
