@@ -121,7 +121,7 @@ export function appendDelegationToSystemPrompt(
 ): string {
   const policyInstruction =
     policy === "explicit"
-      ? "- Policy is explicit: call delegate only when the current user explicitly asks to use a subagent or delegate work. Honor that request for eligible work and interpret it semantically; no exact phrase is required."
+      ? "- Policy is explicit: call delegate only when the current user explicitly asks to use a subagent or delegate work. Interpret the request semantically; no exact phrase is required."
       : "- Policy is auto: you may call delegate without an explicit user request when the task meets the delegation criteria below.";
   const backgroundInstructions = options.background
     ? `
@@ -144,17 +144,15 @@ export function appendDelegationToSystemPrompt(
 Stable governed delegation:
 ${policyInstruction}
 - Use delegate for independent, context-heavy workspace investigations${options.writer ? ", or when the user explicitly requests an isolated writer child for one scoped change" : ""}.
-- Before substantial investigation, decide whether the task has separable scopes. Do only the minimal discovery needed to find those boundaries before delegating.
 - Do not delegate small, sequential, approval-requiring, or tightly coupled work${options.writer ? " unless the user explicitly requests the supported writer path" : ""}.
 - Select explorer for codebase investigation and reviewer for correctness-focused code review${writerSelection}. Do not choose a profile by keyword alone; match the requested outcome.
-- When several eligible scopes are independent, give one child ownership of each distinct, non-overlapping scope in the same assistant turn so they can run in parallel. Do not combine separable scopes into one catch-all child or send multiple children over the same scope. A delegate batch may contain only delegate calls; finish setup or other tools first.
-- Each child has fresh context. Explorer and reviewer children are read-only.${writerBoundary}${nestingBoundary} Give each child a concise self-contained task under 4,000 characters with its owned scope, requested outcome, and return contract.
+- When several investigations are independent, call delegate once for each in the same assistant turn so they can run in parallel. A delegate batch may contain only delegate calls; finish setup or other tools first.
+- Each child has fresh context. Explorer and reviewer children are read-only.${writerBoundary}${nestingBoundary} Give each child a concise self-contained task under 4,000 characters.
 - A project profile may advertise governed Skill and MCP ceilings. Lease only the exact capabilities needed for this task through delegate.skills and delegate.mcp; parent-active capabilities are never inherited. For agent_resume, supply the new Run's exact leases again; omission drops prior authority. Child MCP calls can use only exact saved project approvals and cannot prompt.
 - When delegating structured work, preserve the user's original field meanings, units, and output contract in each child task. During final synthesis, reconcile child conclusions against the original user request rather than only your rewritten child tasks.
 - The host waits for every admitted sibling, preserves tool-call source order even when children finish out of order, and returns bounded final answers plus terminal metadata. One sibling failure does not erase unrelated results.
-- Once a foreground scope is delegated, coordinate that scope instead of doing it again: while the child runs, do only non-overlapping work or wait; after it returns, use its answer as the primary input to synthesis.
-- Verify a child only for an identified conflict, missing requirement, insufficient evidence, or material high-risk uncertainty. Keep verification targeted to that reason instead of broadly repeating the child-owned investigation.
-- The root run admits at most four active children at once and eight children in total. After foreground results, finish the remaining synthesis, undelegated work, and any justified targeted verification.${backgroundInstructions}`;
+- Treat child answers as delegated input: synthesize them, decide whether and how to verify them from the task's risk and uncertainty, and avoid repeating work without a reason.
+- The root run admits at most four active children at once and eight children in total. After foreground results, continue the task yourself.${backgroundInstructions}`;
 }
 
 export function buildSubagentSystemPrompt(
