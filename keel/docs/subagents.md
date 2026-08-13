@@ -93,8 +93,23 @@ children in only 2/3 and improved none of the frozen value medians; auto
 selected no child in the parallel task. The full failed window is retained
 rather than repaired sample by sample.
 
+Slice 6.3 pre-registered a second window before changing production behavior.
+It reused the release task and added a different API/worker service domain. A
+general Main contract asked the model to identify separable scopes early, give
+children non-overlapping ownership, coordinate their work, and limit
+verification to identified uncertainty. All 30 arms verified, but auto selected
+no child in 6/6 positives, explicit selected multiple children in 5/6, and all
+six explicit Mains repeated some completed child evidence. Two service trials
+also produced provider-length children followed by budget-limited child
+attempts, increasing latency and cost while Runtime settled every Run safely.
+The production prompt candidate was reverted; the protocol, transcripts, and
+result remain under
+[`evals/experiments/subagent-slice-6-3/`](../evals/experiments/subagent-slice-6-3/).
+
 Subagents are not assumed to be cheaper or faster for every task. The supported
 explicit path is useful when the user chooses independent investigation or
 review; `auto` remains opt-in and default-off. Broader nesting or write modes
 require a separate user need and gate rather than following automatically from
-runtime reliability.
+runtime reliability. The next decision must either test a materially different
+model/profile contract on held-out tasks or narrow the product claim; it should
+not keep tuning wording on the same corpus or add Runtime routing rules.

@@ -1,0 +1,5 @@
+issuer: keel-identity
+audience: keel-services
+positive_clock_skew_seconds: 300
+negative_clock_skew_seconds: 0
+signature_algorithm: EdDSA
