@@ -98,3 +98,10 @@ make `auto` default-on or authorize wider background, writer, Bash, or nesting
 modes. If V2 fails, the full result remains evidence; no keyword router,
 case-specific dispatcher, read receipt, forced child count, or runtime ban on
 verification may be added to repair individual samples.
+
+## Scored result
+
+V2 ran once from the frozen candidate and failed the selection/value gate while
+all 30 task arms verified. The attempted production prompt change was reverted
+after the window instead of shipping an unproven harness change. The complete
+result and retained evidence are in [`RESULTS.md`](RESULTS.md).

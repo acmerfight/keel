@@ -343,6 +343,9 @@ The stable explicit-policy graduation window lives in
 [`evals/experiments/subagent-slice-2-3/README.md`](evals/experiments/subagent-slice-2-3/README.md).
 The explicit/auto product-graduation and sequential-negative window lives in
 [`evals/experiments/subagent-slice-6-2/README.md`](evals/experiments/subagent-slice-6-2/README.md).
+The cross-domain general-orchestration V2 window and failed prompt candidate
+live in
+[`evals/experiments/subagent-slice-6-3/README.md`](evals/experiments/subagent-slice-6-3/README.md).
 
 ## Writing good tasks
 
