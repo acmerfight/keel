@@ -43,16 +43,19 @@ explicit release task still combined both scopes into one broad child once.
 
 Across the six explicit positives, the pre-registered aggregate medians were 8
 versus 7 Main turns, 134,877.5 versus 147,464 input tokens, and 29.007s versus
-85.214s wall time; aggregate treatment cost was 146% higher. The apparent
-one-turn aggregate improvement is not a within-domain improvement: release was
-7 versus 7 and service was 8 versus 8. Mixing the two task distributions moved
-the combined median. Future value gates should use per-task medians or paired
+85.214s wall time; aggregate treatment cost was 146% higher. Gate 4's frozen
+rule therefore mechanically passed on Main turns. The apparent one-turn
+aggregate improvement is not a within-domain improvement: release was 7 versus
+7 and service was 8 versus 8. Mixing the two task distributions moved the
+combined median. Future value gates should use per-task medians or paired
 normalized deltas rather than treating this aggregate artifact as product
 value.
 
 The six auto positive treatments had slightly lower aggregate medians than
 their controls, but they created no child. That movement is ordinary sampling
-noise between two Main-only paths and cannot be attributed to subagents.
+noise between two Main-only paths and cannot be attributed to subagents. It
+also mechanically satisfies the frozen value subcriterion, without proving
+subagent value.
 
 ## Transcript review
 

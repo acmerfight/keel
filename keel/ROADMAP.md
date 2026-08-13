@@ -535,10 +535,12 @@ Not needed to switch; revisit once P0/P1 are done.
   Explicit-policy foreground read-only children may delegate one read-only
   foreground level deeper; depth-two children are leaves and share root tree
   resources. Two same-budget graduation windows kept correctness but failed
-  stable multiple-child selection and value gates; a cross-domain general
-  prompt candidate was reverted after auto selected no child and explicit
-  remained costly. Broader writes, background/writer/auto nesting, and any
-  default-on decision therefore remain gated rather than scheduled follow-ons.
+  stable multiple-child selection. V2's frozen aggregate-value subcriterion
+  mechanically passed, but its movement was not attributable to child work and
+  showed no within-domain Main-turn improvement; the cross-domain prompt
+  candidate was reverted after auto selected no child and explicit remained
+  costly. Broader writes, background/writer/auto nesting, and any default-on
+  decision therefore remain gated rather than scheduled follow-ons.
 - Plan mode
 - IDE integration
 - Skill marketplace

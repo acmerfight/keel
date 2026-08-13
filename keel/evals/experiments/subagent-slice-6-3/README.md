@@ -101,7 +101,10 @@ verification may be added to repair individual samples.
 
 ## Scored result
 
-V2 ran once from the frozen candidate and failed the selection/value gate while
-all 30 task arms verified. The attempted production prompt change was reverted
-after the window instead of shipping an unproven harness change. The complete
-result and retained evidence are in [`RESULTS.md`](RESULTS.md).
+V2 ran once from the frozen candidate and failed the overall graduation gate on
+selection while all 30 task arms verified. The pre-registered aggregate-value
+subcriterion mechanically passed, but its movement was not attributable to
+subagents and showed no within-domain Main-turn improvement. The attempted
+production prompt change was reverted after the window instead of shipping an
+unproven harness change. The complete result and retained evidence are in
+[`RESULTS.md`](RESULTS.md).
