@@ -142,7 +142,7 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 21,
+    schemaVersion: 22,
     tasks: [
       {
         ordinal: 1,
@@ -164,6 +164,7 @@ export function evalRunReport(
     ],
     humanInterventionCount,
     modelOperations,
+    subagents: { status: "observed", runs: [] },
     modelOperationCount: modelOperations.length,
     providerRequestAttemptCount: modelOperations.length,
     modelsUsed: [{ provider: "deepseek", model: "deepseek-v4-flash" }],

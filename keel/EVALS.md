@@ -114,7 +114,7 @@ Each standard trial appends one JSON line:
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "timestamp": "2026-06-13T02:11:09.123Z",
   "keelVersion": "0.0.1",
   "taskId": "fix-typo",
@@ -127,7 +127,7 @@ Each standard trial appends one JSON line:
   "wallMs": 9182,
   "transcriptPath": "/tmp/keel-transcripts/run-2026-06-13T02-11-09-123Z-12345/fix-typo-a1b2c3d4e5f6-trial-1.jsonl",
   "report": {
-    "schemaVersion": 20,
+    "schemaVersion": 22,
     "tasks": [
       {
         "ordinal": 1,
@@ -168,6 +168,7 @@ Each standard trial appends one JSON line:
         "costUsd": 0.000234
       }
     ],
+    "subagents": { "status": "observed", "runs": [] },
     "modelOperationCount": 1,
     "providerRequestAttemptCount": 1,
     "modelsUsed": [{ "provider": "deepseek", "model": "deepseek-v4-flash" }],
@@ -215,6 +216,11 @@ Each standard trial appends one JSON line:
   policy and child count. Control and task outcome never carry that judgment. A
   paired trial appends two lines in stable control/treatment or
   disabled/enabled order.
+  Selection counts only child Runs whose invocation snapshot is terminal with
+  `status: "completed"`; failed, limited, cancelled, interrupted, queued, and
+  running children do not satisfy a positive delegation gate. If the CLI report
+  cannot own a trustworthy invocation snapshot, selection is `unavailable`
+  rather than inferred from provider operations.
   Each line carries the ordinary report, so model operations, child
   attribution, usage, cost, and timing remain inspectable without a second
   result format.
@@ -321,8 +327,9 @@ an `--agent-policy <explicit|auto>` treatment. Odd trials run control first and
 even trials run treatment first to reduce fixed order bias, while JSONL stays
 in control/treatment order. The control harness must complete; its semantic
 task failure remains a valid observation. The treatment must verify and
-separately satisfy `require_one`, `require_any`, `forbid`, or `at_most_one`
-using distinct child identities from the run report. Selection never changes
+separately satisfy `require_one`, `require_multiple` (at least two distinct
+child Runs), `require_any`, `forbid`, or `at_most_one` using distinct child
+identities from the run report. Selection never changes
 `taskOutcome`. The frozen Slice 1.5 corpus, transcript rubric, provider/model,
 trial count,
 budgets, and Continue/Pause/Stop gate live in
@@ -334,6 +341,8 @@ The host-owned completion handoff and continuation-budget reliability gate live
 in [`evals/experiments/subagent-slice-1-6/README.md`](evals/experiments/subagent-slice-1-6/README.md).
 The stable explicit-policy graduation window lives in
 [`evals/experiments/subagent-slice-2-3/README.md`](evals/experiments/subagent-slice-2-3/README.md).
+The explicit/auto product-graduation and sequential-negative window lives in
+[`evals/experiments/subagent-slice-6-2/README.md`](evals/experiments/subagent-slice-6-2/README.md).
 
 ## Writing good tasks
 

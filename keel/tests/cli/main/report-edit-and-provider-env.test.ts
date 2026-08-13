@@ -40,7 +40,7 @@ describe("CLI Main - Report Edit And Provider Env", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 21,
+        schemaVersion: 22,
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {

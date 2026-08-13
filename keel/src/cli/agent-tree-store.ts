@@ -23,10 +23,10 @@ import {
   type SubagentRunningPersistence,
   type SubagentRunPersistence,
   type SubagentTerminalSnapshot,
-  type SubagentTerminalStatus,
 } from "../agent/subagent-lifecycle.ts";
 import type { SubagentWriteWorkspaceReference } from "../agent/subagent-workspace.ts";
 import type { ProviderId } from "../core/provider-id.ts";
+import type { SubagentTerminalStatus } from "../core/subagent-status.ts";
 import {
   agentTreeError,
   createDurableJsonlWriter,

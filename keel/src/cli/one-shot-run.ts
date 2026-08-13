@@ -78,6 +78,7 @@ import {
   projectMemoryReportEntry,
   type RunReportMemory,
   type RunReportMemoryEntry,
+  type RunReportSubagents,
   reportActiveSkills,
   writeRunReport,
   writeRunReportBestEffort,
@@ -509,6 +510,15 @@ export async function runOneShotCli(
             },
           })
         : undefined;
+    const reportSubagents = (): RunReportSubagents => ({
+      status: "observed",
+      runs:
+        subagentRuntime?.supervisor.runSnapshots().map((run) => ({
+          delegationId: run.delegationId,
+          childRunId: run.childRunId,
+          status: run.state === "terminal" ? run.terminal.status : run.state,
+        })) ?? [],
+    });
     let transcriptMessages: readonly SessionMessage[] | undefined;
     const stream = runAgent({
       workspace,
@@ -597,6 +607,7 @@ export async function runOneShotCli(
           {
             tasks: reportRecorder.tasks(),
             modelOperations: reportRecorder.modelOperations(),
+            subagents: reportSubagents(),
             outcome: {
               status: "failed",
               error,
@@ -639,6 +650,7 @@ export async function runOneShotCli(
       writeRunReport(cliArgs.reportFile, {
         tasks: reportRecorder.tasks(),
         modelOperations: reportRecorder.modelOperations(),
+        subagents: reportSubagents(),
         outcome: { status: "completed", end: finalEnd },
         durationMs: runtime.now() - startedAt,
         contextCompactions: reportRecorder.contextCompactions(),

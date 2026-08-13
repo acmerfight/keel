@@ -1,5 +1,6 @@
 import type { ReasoningEffort } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
+import type { subagentNonCompletedStatuses } from "../core/subagent-status.ts";
 import type { Usage } from "../llm/types.ts";
 import type { SessionLedgerObserver } from "./session-ledger.ts";
 import type { SessionMessage } from "./session-message.ts";
@@ -11,23 +12,6 @@ import type {
   SubagentWriteWorkspaceReference,
   SubagentWriteWorkspaceResult,
 } from "./subagent-workspace.ts";
-
-export const subagentNonCompletedStatuses = [
-  "failed",
-  "turn_limited",
-  "timed_out",
-  "budget_limited",
-  "provider_blocked",
-  "cancelled",
-  "interrupted",
-] as const;
-
-export const subagentTerminalStatuses = [
-  "completed",
-  ...subagentNonCompletedStatuses,
-] as const;
-
-export type SubagentTerminalStatus = (typeof subagentTerminalStatuses)[number];
 
 export class SubagentPersistenceError extends Error {}
 

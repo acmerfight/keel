@@ -121,6 +121,9 @@ disabled, changed, or omitted Skills are removed; config or parent activation
 changes cannot add one. `/agents resume` accepts repeated `--skill <name>`
 options before `-- <message>` when a direct continuation needs a retained Skill.
 
+The complete product boundary, invariant ownership, report semantics, and
+graduation evidence are documented in [Subagents](docs/subagents.md).
+
 ## Project Memory
 
 Project memory is a small, explicit store for durable facts that should survive
@@ -339,7 +342,7 @@ Session
   when no Run, retry, continuation, accepted input, queued Task, or runtime hook
   can produce more work.
 
-`keel --report <file>` writes report schema 20. `tasks[].ordinal` and nested
+`keel --report <file>` writes report schema 22. `tasks[].ordinal` and nested
 `agentRuns[].ordinal` are report-local identities. Each Agent Run owns its
 `humanInterventionCount`, `agentLoopTurns`, existing provider retry notices,
 context-compaction records, and stop reason. A human intervention is one user
@@ -353,6 +356,16 @@ has a different owner: it increments once per Goal Agent Run, including
 automatic continuation. Failed physical provider attempts report a distinct
 terminal `errorCode`; retry attempts retain the exact phase-specific reason,
 including first-response and stream-inactivity timeouts.
+
+Subagent provider operations have `purpose: "subagent_turn"` and attribution
+with their delegation ID, child Run ID, profile, and effort. Their attempts,
+usage, and cost roll into root totals. For one-shot runs, `subagents.status` is
+`observed` and `subagents.runs` records each invocation-owned child as queued,
+running, or terminal; consumers must use terminal `completed` status rather
+than infer child success from model operations. Saved interactive reports use
+`subagents.status: "unavailable"` because `/agents` history, not one invocation,
+remains canonical for child lineage, lifecycle, delivery, transcript, and
+workspace state.
 
 If a terminal runtime/provider failure occurs after report instrumentation is
 ready, Keel still exits non-zero but best-effort writes the same current schema.

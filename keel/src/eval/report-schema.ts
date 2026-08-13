@@ -4,6 +4,7 @@ import {
   providerRequestTerminalErrorCodes,
 } from "../core/error.ts";
 import { reasoningEfforts } from "../core/model-metadata.ts";
+import { subagentTerminalStatuses } from "../core/subagent-status.ts";
 
 // Mirrors the CLI --report payload. The eval runner and comparator consume the
 // same report file a user would, so bump this together with CLI report output.
@@ -191,6 +192,23 @@ const modelOperationSchema = z.discriminatedUnion("purpose", [
   }),
 ]);
 
+const runReportSubagentsSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("observed"),
+    runs: z.array(
+      z.object({
+        delegationId: z.string(),
+        childRunId: z.string(),
+        status: z.enum(["queued", "running", ...subagentTerminalStatuses]),
+      }),
+    ),
+  }),
+  z.object({
+    status: z.literal("unavailable"),
+    runs: z.never().optional(),
+  }),
+]);
+
 const projectMemoryScopeSchema = z.object({
   kind: z.literal("project"),
   id: z.string(),
@@ -327,10 +345,11 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 
 const runReportBaseSchema = z.object({
-  schemaVersion: z.literal(21),
+  schemaVersion: z.literal(22),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),
+  subagents: runReportSubagentsSchema,
   modelOperationCount: z.number().int().nonnegative(),
   providerRequestAttemptCount: z.number().int().nonnegative(),
   modelsUsed: z.array(
