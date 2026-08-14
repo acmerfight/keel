@@ -1404,14 +1404,16 @@ export async function* runAgentTurn(
           wrapUpTurn.reasoningContent,
         ),
       );
-      if (combinedReply?.role === "assistant") {
-        options.providerRecovery?.settled({
-          assistantMessage: combinedReply,
-          usage: wrapUpTurn.usage,
-          stopReason: wrapUpTurn.stopReason,
-        });
-        appendSessionLedgerMessage(sessionLedger, combinedReply);
+      /* v8 ignore next 3 -- summary is always nonempty here, so finalReplyMessage cannot return null. */
+      if (combinedReply === null) {
+        throw new Error("final wrap-up reply is unexpectedly empty");
       }
+      options.providerRecovery?.settled({
+        assistantMessage: combinedReply,
+        usage: wrapUpTurn.usage,
+        stopReason: wrapUpTurn.stopReason,
+      });
+      appendSessionLedgerMessage(sessionLedger, combinedReply);
       state.accounting = addRequestAccounting(
         state.accounting,
         wrapUpTurn.usage,

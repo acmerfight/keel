@@ -11,7 +11,12 @@ import {
   forkSessionStore,
   listSessionCatalog,
   persistSessionProviderAttemptSettlement,
+  persistSessionProviderIntent,
+  persistSessionProviderResponse,
   persistSessionQueuedInput,
+  persistSessionTaskRecoveryState,
+  persistSessionTaskStep,
+  persistSessionTaskTerminal,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
@@ -51,6 +56,14 @@ const STEP_COMMITTED_RECORD_SCHEMA = z
         ),
       })
       .passthrough(),
+  })
+  .passthrough();
+const RECOVERY_LEDGER_RECORD_SCHEMA = z
+  .object({
+    type: z.string(),
+    task: z.record(z.string(), z.unknown()).optional(),
+    userMessage: z.record(z.string(), z.unknown()).optional(),
+    messages: z.array(z.unknown()).optional(),
   })
   .passthrough();
 
@@ -102,6 +115,7 @@ describe("Session Store Task Recovery", () => {
       recovery.terminal({
         messages: [...messages, assistantMessage],
         outcome: "completed",
+        consumedInputIds: ["input-terminal"],
       });
 
       const resumed = resumeSessionStore({
@@ -205,6 +219,13 @@ describe("Session Store Task Recovery", () => {
       expect(blocked.task.reason).toBe("provider_replacement_limit");
       expect(blocked.task.providerReplacementsUsed).toBe(1);
       expect(blocked.task.unknownProviderAttemptIds).toHaveLength(2);
+      expect(
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 4),
+        }).activeTask,
+      ).toEqual(blocked.task);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -350,6 +371,132 @@ describe("Session Store Task Recovery", () => {
     }
   });
 
+  test(`Given current-schema recovery records violate distinct Task transition invariants,
+    When each ledger is replayed,
+    Then identity, recovery, phase, terminal-evidence, and run-generation conflicts fail closed`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+
+    try {
+      for (const scenario of [
+        "identity",
+        "not_recovered",
+        "settled_without_tool",
+        "already_blocked",
+        "known_terminal",
+        "same_run",
+        "invalid_blocked_reason",
+      ] as const) {
+        let messages: readonly SessionMessage[] = [];
+        const session = createSessionStore({
+          sessionId: `task-invalid-recovery-${scenario}`,
+          workspace,
+          runtime: runtime(home),
+        });
+        const recovery = createSessionTaskRecovery({
+          session: () => session,
+          runtime: runtime(home, 1),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+        });
+        recovery.admit({
+          userMessage: {
+            role: "user",
+            content: `reject ${scenario}`,
+            origin: { type: "user_prompt" },
+          },
+          provider: PROVIDER,
+          consumedInputIds: [],
+        });
+
+        if (scenario === "settled_without_tool") {
+          const lifecycle = recovery.providerLifecycle(PROVIDER);
+          lifecycle.providerRequestAttempts
+            .begin()
+            .finish({ outcome: "completed", usage: USAGE });
+          lifecycle.settled({
+            assistantMessage: {
+              role: "assistant",
+              content: "text cannot become a blocked tool plan",
+              toolCalls: [],
+            },
+            usage: USAGE,
+            stopReason: "stop",
+          });
+        } else if (scenario === "already_blocked") {
+          recovery.blockProviderBudget();
+        } else if (scenario === "known_terminal") {
+          recovery
+            .providerLifecycle(PROVIDER)
+            .auxiliaryProviderRequestAttempts.begin()
+            .finish({
+              outcome: "terminal_error",
+              errorCode: "provider_http_error",
+            });
+        }
+
+        const current = activeSessionTask(session);
+        if (current === undefined) throw new Error("missing active Task");
+        const readyTask = {
+          taskId: scenario === "identity" ? "task_conflicting" : current.taskId,
+          runId:
+            scenario === "same_run"
+              ? current.runId
+              : `run_recovery_${scenario}`,
+          trigger: current.trigger,
+          admittedAt: current.admittedAt,
+          userMessageId: current.userMessageId,
+          provider: current.provider,
+          maxProviderReplacements: current.maxProviderReplacements,
+          providerReplacementsUsed: current.providerReplacementsUsed,
+          recovered: scenario !== "not_recovered",
+          providerRequestIds: current.providerRequestIds,
+          unknownProviderAttemptIds: current.unknownProviderAttemptIds,
+          phase: "provider_ready",
+        } as const;
+        const nextTask =
+          scenario === "settled_without_tool"
+            ? {
+                ...current,
+                phase: "recovery_blocked" as const,
+                recovered: true,
+                reason: "tool_plan" as const,
+              }
+            : scenario === "invalid_blocked_reason"
+              ? {
+                  ...current,
+                  phase: "recovery_blocked" as const,
+                  recovered: true,
+                  reason: "tool_plan" as const,
+                }
+              : readyTask;
+        await appendFile(
+          session.filePath,
+          `${JSON.stringify({
+            schemaVersion: 7,
+            type: "task_recovery_started",
+            timestamp: "1970-01-01T00:00:03.000Z",
+            task: nextTask,
+          })}\n`,
+          "utf8",
+        );
+
+        expect(() =>
+          resumeSessionStore({
+            sessionId: session.id,
+            workspace,
+            runtime: runtime(home, 2),
+          }),
+        ).toThrow(/task_recovery_started.*active Task/u);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a provider attempt ends with a known terminal failure,
     When its durable attempt lifecycle finishes,
     Then the Task fails terminally and resume never dispatches a replacement`, async () => {
@@ -400,6 +547,750 @@ describe("Session Store Task Recovery", () => {
         unknownProviderAttemptIds: [],
       });
       expect(recovery.resume()).toEqual({ kind: "none" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given context-overflow and abort settlements cross the durable attempt boundary,
+    When observers finish or recovery reopens the Task,
+    Then each outcome is recorded once and abort terminalizes without replacement`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+
+    try {
+      for (const outcome of [
+        "context_overflow",
+        "aborted",
+        "completed",
+      ] as const) {
+        let messages: readonly SessionMessage[] = [];
+        const session = createSessionStore({
+          sessionId: `task-${outcome}`,
+          workspace,
+          runtime: runtime(home),
+        });
+        const recovery = createSessionTaskRecovery({
+          session: () => session,
+          runtime: runtime(home, 1),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+        });
+        recovery.admit({
+          userMessage: {
+            role: "user",
+            content: `settle ${outcome}`,
+            origin: { type: "user_prompt" },
+          },
+          provider: PROVIDER,
+          consumedInputIds: [],
+        });
+        const handle = recovery
+          .providerLifecycle(PROVIDER)
+          .auxiliaryProviderRequestAttempts.begin();
+        handle.finish(
+          outcome === "completed" ? { outcome, usage: USAGE } : { outcome },
+        );
+        handle.finish({ outcome: "completed", usage: USAGE });
+        expect(activeSessionTask(session)).toMatchObject({
+          phase: "provider_pending",
+          providerAttempt: { settlement: { outcome } },
+        });
+        const settledAttemptId =
+          activeSessionTask(session)?.providerAttempt?.attemptId;
+        if (settledAttemptId === undefined) {
+          throw new Error("expected settled provider attempt");
+        }
+
+        if (outcome === "aborted") {
+          expect(recovery.resume()).toEqual({ kind: "none" });
+          expect(session.lastTaskOutcome).toBeUndefined();
+          expect(
+            resumeSessionStore({
+              sessionId: session.id,
+              workspace,
+              runtime: runtime(home, 2),
+            }).lastTaskOutcome,
+          ).toMatchObject({ outcome: "aborted" });
+        } else if (outcome === "completed") {
+          const resumed = recovery.resume();
+          expect(resumed.kind).toBe("run");
+          if (resumed.kind !== "run") {
+            throw new Error("expected completed-attempt recovery");
+          }
+          expect(resumed.task.unknownProviderAttemptIds).toEqual([
+            settledAttemptId,
+          ]);
+          expect(
+            resumeSessionStore({
+              sessionId: session.id,
+              workspace,
+              runtime: runtime(home, 2),
+            }).activeTask,
+          ).toEqual(resumed.task);
+        } else {
+          const resumed = recovery.resume();
+          expect(resumed.kind).toBe("run");
+          if (resumed.kind !== "run") {
+            throw new Error("expected context-overflow recovery");
+          }
+          expect(resumed.task).toMatchObject({
+            providerReplacementsUsed: 1,
+            unknownProviderAttemptIds: [],
+          });
+          expect(
+            resumeSessionStore({
+              sessionId: session.id,
+              workspace,
+              runtime: runtime(home, 2),
+            }).activeTask,
+          ).toEqual(resumed.task);
+        }
+      }
+
+      let mainMessages: readonly SessionMessage[] = [];
+      const mainSession = createSessionStore({
+        sessionId: "task-main-aborted",
+        workspace,
+        runtime: runtime(home, 3),
+      });
+      const mainRecovery = createSessionTaskRecovery({
+        session: () => mainSession,
+        runtime: runtime(home, 4),
+        currentMessages: () => mainMessages,
+        onMessagesPersisted: (persisted) => {
+          mainMessages = persisted;
+        },
+      });
+      mainRecovery.admit({
+        userMessage: {
+          role: "user",
+          content: "terminalize main abort",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      mainRecovery
+        .providerLifecycle(PROVIDER)
+        .providerRequestAttempts.begin()
+        .finish({ outcome: "aborted" });
+      expect(
+        resumeSessionStore({
+          sessionId: mainSession.id,
+          workspace,
+          runtime: runtime(home, 5),
+        }).lastTaskOutcome,
+      ).toMatchObject({ outcome: "aborted" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given no Task or an already blocked Task,
+    When provider-budget blocking is requested,
+    Then the recovery owner rejects the invalid transition`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "task-invalid-budget-block",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      expect(() => recovery.blockProviderBudget()).toThrow(
+        /provider budget cannot block/u,
+      );
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "block once",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      recovery.blockProviderBudget();
+      expect(() => recovery.blockProviderBudget()).toThrow(
+        /provider budget cannot block/u,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given provider-budget blocking occurs before, during, or after a provider request,
+    When each current-schema blocked Task is copied and reopened,
+    Then every supported optional evidence shape round-trips intact`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+
+    try {
+      for (const phase of ["ready", "pending", "settled"] as const) {
+        let messages: readonly SessionMessage[] = [];
+        const session = createSessionStore({
+          sessionId: `task-blocked-shape-${phase}`,
+          workspace,
+          runtime: runtime(home),
+        });
+        const recovery = createSessionTaskRecovery({
+          session: () => session,
+          runtime: runtime(home, 1),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+        });
+        recovery.admit({
+          userMessage: {
+            role: "user",
+            content: `block from ${phase}`,
+            origin: { type: "user_prompt" },
+          },
+          provider: PROVIDER,
+          consumedInputIds: [],
+        });
+        if (phase !== "ready") {
+          const lifecycle = recovery.providerLifecycle(PROVIDER);
+          lifecycle.providerRequestAttempts
+            .begin()
+            .finish({ outcome: "completed", usage: USAGE });
+          if (phase === "settled") {
+            lifecycle.settled({
+              assistantMessage: {
+                role: "assistant",
+                content: "settled before budget block",
+                toolCalls: [],
+              },
+              usage: USAGE,
+              stopReason: "stop",
+            });
+          }
+        }
+        const blocked = recovery.blockProviderBudget();
+        expect(activeSessionTask(session)).toEqual(blocked);
+
+        const opened = resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 2),
+        });
+        expect(opened.activeTask).toEqual(blocked);
+        expect(activeSessionTask(opened)).toEqual(blocked);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given callers violate durable Task writer preconditions,
+    When they try to cross provider, step, recovery, or terminal boundaries,
+    Then every boundary fails closed without mutating the active Task`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    const messages: SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "task-writer-preconditions",
+        workspace,
+        runtime: runtime(home),
+      });
+      expect(() =>
+        persistSessionProviderIntent({
+          session,
+          provider: PROVIDER,
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(/no active durable Task/u);
+
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 2),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages.splice(0, messages.length, ...persisted);
+        },
+      });
+      const userMessage = {
+        role: "user",
+        content: "enforce every durable writer precondition",
+        origin: { type: "user_prompt" },
+      } as const;
+      const assistantMessage = {
+        role: "assistant",
+        content: "durable writer response",
+        toolCalls: [],
+      } as const;
+      recovery.admit({
+        userMessage,
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      expect(() =>
+        recovery.admit({
+          userMessage,
+          provider: PROVIDER,
+          consumedInputIds: [],
+        }),
+      ).toThrow(/already has active Task/u);
+      expect(() =>
+        persistSessionProviderResponse({
+          session,
+          assistantMessage,
+          usage: { outcome: "completed", usage: USAGE },
+          stopReason: "stop",
+          runtime: runtime(home, 3),
+        }),
+      ).toThrow(/no pending provider attempt/u);
+      expect(() =>
+        persistSessionProviderIntent({
+          session,
+          provider: { ...PROVIDER, model: "deepseek-reasoner" },
+          runtime: runtime(home, 3),
+        }),
+      ).toThrow(/captured provider/u);
+
+      const pending = persistSessionProviderIntent({
+        session,
+        provider: PROVIDER,
+        runtime: runtime(home, 4),
+      });
+      expect(() =>
+        persistSessionProviderIntent({
+          session,
+          provider: PROVIDER,
+          runtime: runtime(home, 5),
+        }),
+      ).toThrow(/not ready for a provider request/u);
+      expect(() =>
+        persistSessionProviderAttemptSettlement({
+          session,
+          attemptId: "wrong-attempt",
+          settlement: { outcome: "completed", usage: USAGE },
+          runtime: runtime(home, 6),
+        }),
+      ).toThrow(/cannot be settled/u);
+      persistSessionProviderAttemptSettlement({
+        session,
+        attemptId: pending.providerAttempt.attemptId,
+        settlement: { outcome: "completed", usage: USAGE },
+        runtime: runtime(home, 7),
+      });
+      expect(() =>
+        persistSessionProviderAttemptSettlement({
+          session,
+          attemptId: pending.providerAttempt.attemptId,
+          settlement: { outcome: "completed", usage: USAGE },
+          runtime: runtime(home, 8),
+        }),
+      ).toThrow(/cannot be settled/u);
+
+      expect(() =>
+        persistSessionProviderResponse({
+          session,
+          assistantMessage,
+          usage: {
+            outcome: "completed",
+            usage: { ...USAGE, outputTokens: USAGE.outputTokens + 1 },
+          },
+          stopReason: "stop",
+          runtime: runtime(home, 9),
+        }),
+      ).toThrow(/does not match attempt/u);
+      persistSessionProviderResponse({
+        session,
+        assistantMessage,
+        usage: { outcome: "completed", usage: USAGE },
+        stopReason: "stop",
+        runtime: runtime(home, 10),
+      });
+
+      expect(() =>
+        persistSessionTaskStep({
+          session,
+          currentMessages: [userMessage],
+          runtime: runtime(home, 11),
+        }),
+      ).toThrow(/does not contain response/u);
+      expect(() =>
+        persistSessionTaskStep({
+          session,
+          currentMessages: [assistantMessage],
+          runtime: runtime(home, 12),
+        }),
+      ).toThrow(/missing admitted user message/u);
+      expect(() =>
+        persistSessionTaskTerminal({
+          session,
+          currentMessages: [userMessage],
+          outcome: "completed",
+          runtime: runtime(home, 13),
+        }),
+      ).toThrow(/missing its settled final response/u);
+
+      const otherSession = createSessionStore({
+        sessionId: "task-writer-other",
+        workspace,
+        runtime: runtime(home, 14),
+      });
+      const otherRecovery = createSessionTaskRecovery({
+        session: () => otherSession,
+        runtime: runtime(home, 15),
+        currentMessages: () => [],
+        onMessagesPersisted: () => {},
+      });
+      const otherTask = otherRecovery.admit({
+        userMessage: {
+          role: "user",
+          content: "different task",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      expect(() =>
+        persistSessionTaskRecoveryState({
+          session,
+          task: otherTask,
+          runtime: runtime(home, 16),
+        }),
+      ).toThrow(/recovery state does not match/u);
+      expect(
+        persistSessionTaskStep({
+          session,
+          currentMessages: [userMessage, assistantMessage],
+          runtime: runtime(home, 17),
+        }),
+      ).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given schema-valid ledger records violate admission, provider, or step ordering,
+    When replay evaluates each independent invariant,
+    Then it rejects active/duplicate admission, orphaned/reused provider records, and orphaned/incomplete steps`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+
+    try {
+      let admissionMessages: readonly SessionMessage[] = [];
+      const admissionSource = createSessionStore({
+        sessionId: "task-ledger-admission-source",
+        workspace,
+        runtime: runtime(home),
+      });
+      const admissionRecovery = createSessionTaskRecovery({
+        session: () => admissionSource,
+        runtime: runtime(home, 1),
+        currentMessages: () => admissionMessages,
+        onMessagesPersisted: (persisted) => {
+          admissionMessages = persisted;
+        },
+      });
+      admissionRecovery.admit({
+        userMessage: {
+          role: "user",
+          content: "admission source",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const admissionRecord = (await readFile(admissionSource.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => RECOVERY_LEDGER_RECORD_SCHEMA.parse(JSON.parse(line)))
+        .find((record) => record.type === "task_admitted");
+      if (
+        admissionRecord?.task === undefined ||
+        admissionRecord.userMessage === undefined
+      ) {
+        throw new Error("missing admission source record");
+      }
+      admissionRecovery.terminal({
+        messages: admissionMessages,
+        outcome: "failed",
+      });
+      const admissionTerminal = (
+        await readFile(admissionSource.filePath, "utf8")
+      )
+        .trimEnd()
+        .split("\n")
+        .map((line) => RECOVERY_LEDGER_RECORD_SCHEMA.parse(JSON.parse(line)))
+        .find((record) => record.type === "task_terminal");
+      if (admissionTerminal === undefined) {
+        throw new Error("missing admission terminal record");
+      }
+
+      const admissionCases = [
+        {
+          name: "active",
+          records: [admissionRecord, admissionRecord],
+          error: /admitted while another Task was active/u,
+        },
+        {
+          name: "duplicate-message",
+          records: [admissionRecord, admissionTerminal, admissionRecord],
+          error: /task user message id.*not unique/u,
+        },
+        {
+          name: "mismatched-message",
+          records: [
+            {
+              ...admissionRecord,
+              task: {
+                ...admissionRecord.task,
+                userMessageId: "message_conflicting",
+              },
+            },
+          ],
+          error: /task admission does not match/u,
+        },
+      ];
+      for (const scenario of admissionCases) {
+        const target = createSessionStore({
+          sessionId: `task-ledger-admission-${scenario.name}`,
+          workspace,
+          runtime: runtime(home, 2),
+        });
+        await appendFile(
+          target.filePath,
+          `${scenario.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+          "utf8",
+        );
+        expect(() =>
+          resumeSessionStore({
+            sessionId: target.id,
+            workspace,
+            runtime: runtime(home, 3),
+          }),
+        ).toThrow(scenario.error);
+      }
+
+      let providerMessages: readonly SessionMessage[] = [];
+      const providerSource = createSessionStore({
+        sessionId: "task-ledger-provider-source",
+        workspace,
+        runtime: runtime(home, 4),
+      });
+      const providerRecovery = createSessionTaskRecovery({
+        session: () => providerSource,
+        runtime: runtime(home, 5),
+        currentMessages: () => providerMessages,
+        onMessagesPersisted: (persisted) => {
+          providerMessages = persisted;
+        },
+      });
+      const userMessage = {
+        role: "user",
+        content: "provider source",
+        origin: { type: "user_prompt" },
+      } as const;
+      providerRecovery.admit({
+        userMessage,
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = providerRecovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const assistantMessage = {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "read_source", tool: "read", path: "note.txt" }],
+      } as const;
+      lifecycle.settled({
+        assistantMessage,
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeRequest([
+        userMessage,
+        assistantMessage,
+        { role: "tool", toolCallId: "read_source", content: "source" },
+      ]);
+      const providerRecords = (await readFile(providerSource.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => RECOVERY_LEDGER_RECORD_SCHEMA.parse(JSON.parse(line)));
+      const admission = providerRecords.find(
+        (record) => record.type === "task_admitted",
+      );
+      const intent = providerRecords.find(
+        (record) => record.type === "provider_intent",
+      );
+      const attemptSettled = providerRecords.find(
+        (record) => record.type === "provider_attempt_settled",
+      );
+      const providerSettled = providerRecords.find(
+        (record) => record.type === "provider_settled",
+      );
+      const step = providerRecords.find(
+        (record) => record.type === "step_committed",
+      );
+      if (
+        admission === undefined ||
+        intent === undefined ||
+        attemptSettled === undefined ||
+        providerSettled === undefined ||
+        step === undefined
+      ) {
+        throw new Error("missing provider source records");
+      }
+      const intentTask = z
+        .object({
+          providerRequestIds: z.array(
+            z.object({
+              attemptId: z.string(),
+              responseMessageId: z.string(),
+            }),
+          ),
+          providerAttempt: z
+            .object({
+              attemptId: z.string(),
+              responseMessageId: z.string(),
+              startedAt: z.string(),
+            })
+            .passthrough(),
+        })
+        .passthrough()
+        .parse(intent.task);
+      const settledTask = z
+        .object({
+          providerRequestIds: z.array(
+            z.object({
+              attemptId: z.string(),
+              responseMessageId: z.string(),
+            }),
+          ),
+          providerAttempt: z
+            .object({
+              attemptId: z.string(),
+              responseMessageId: z.string(),
+              startedAt: z.string(),
+            })
+            .passthrough(),
+        })
+        .passthrough()
+        .parse(attemptSettled.task);
+      const newAttemptId = "provider_attempt_reused_response";
+      const reusedResponseIntent = {
+        ...intent,
+        task: {
+          ...settledTask,
+          providerRequestIds: [
+            ...settledTask.providerRequestIds,
+            {
+              attemptId: newAttemptId,
+              responseMessageId: settledTask.providerAttempt.responseMessageId,
+            },
+          ],
+          providerAttempt: {
+            attemptId: newAttemptId,
+            responseMessageId: settledTask.providerAttempt.responseMessageId,
+            startedAt: "1970-01-01T00:00:00.009Z",
+          },
+        },
+      };
+      const providerCases = [
+        {
+          name: "orphaned-intent",
+          records: [intent],
+          error: /provider_intent.*active Task/u,
+        },
+        {
+          name: "reused-intent",
+          records: [admission, intent, intent],
+          error: /provider_intent.*valid transition/u,
+        },
+        {
+          name: "intent-carries-settlement",
+          records: [
+            admission,
+            {
+              ...intent,
+              task: {
+                ...intentTask,
+                providerAttempt: {
+                  ...intentTask.providerAttempt,
+                  settlement: { outcome: "completed", usage: USAGE },
+                },
+              },
+            },
+          ],
+          error: /provider_intent.*valid transition/u,
+        },
+        {
+          name: "reused-settled-attempt",
+          records: [admission, intent, attemptSettled, intent],
+          error: /provider_intent.*valid transition/u,
+        },
+        {
+          name: "reused-response-id",
+          records: [admission, intent, attemptSettled, reusedResponseIntent],
+          error: /provider_intent.*valid transition/u,
+        },
+        {
+          name: "orphaned-response",
+          records: [providerSettled],
+          error: /provider_settled.*active provider attempt/u,
+        },
+        {
+          name: "orphaned-step",
+          records: [step],
+          error: /step_committed.*active Task/u,
+        },
+        {
+          name: "missing-step-response",
+          records: [
+            admission,
+            intent,
+            attemptSettled,
+            providerSettled,
+            { ...step, messages: [] },
+          ],
+          error: /step_committed is missing the settled provider response/u,
+        },
+      ];
+      for (const scenario of providerCases) {
+        const target = createSessionStore({
+          sessionId: `task-ledger-provider-${scenario.name}`,
+          workspace,
+          runtime: runtime(home, 6),
+        });
+        await appendFile(
+          target.filePath,
+          `${scenario.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+          "utf8",
+        );
+        expect(() =>
+          resumeSessionStore({
+            sessionId: target.id,
+            workspace,
+            runtime: runtime(home, 7),
+          }),
+        ).toThrow(scenario.error);
+      }
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -961,6 +1852,450 @@ describe("Session Store Task Recovery", () => {
     }
   });
 
+  test(`Given a current-schema snapshot marks its still-active provider attempt as already unknown,
+    When the bounded ledger is reopened,
+    Then replay rejects the contradictory recovery evidence before deduplication is needed`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "task-current-attempt-already-unknown",
+        workspace,
+        runtime: runtime(home),
+      });
+      await appendFile(
+        session.filePath,
+        `${JSON.stringify({
+          schemaVersion: 7,
+          type: "snapshot",
+          timestamp: "1970-01-01T00:00:00.001Z",
+          reason: "size_threshold",
+          messages: [
+            {
+              id: "message_user",
+              message: {
+                role: "user",
+                content: "do not double count the active attempt",
+                origin: { type: "user_prompt" },
+              },
+            },
+          ],
+          pendingInputs: [],
+          skillStateCheckpoints: [
+            { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+          ],
+          activeTask: {
+            taskId: "task_pending_snapshot",
+            runId: "run_pending_snapshot",
+            trigger: "user_prompt",
+            admittedAt: "1970-01-01T00:00:00.001Z",
+            userMessageId: "message_user",
+            provider: PROVIDER,
+            maxProviderReplacements: 1,
+            providerReplacementsUsed: 1,
+            recovered: true,
+            providerRequestIds: [
+              {
+                attemptId: "provider_attempt_current",
+                responseMessageId: "message_response_current",
+              },
+            ],
+            unknownProviderAttemptIds: ["provider_attempt_current"],
+            phase: "provider_pending",
+            providerAttempt: {
+              attemptId: "provider_attempt_current",
+              responseMessageId: "message_response_current",
+              startedAt: "1970-01-01T00:00:00.001Z",
+            },
+          },
+        })}\n`,
+        "utf8",
+      );
+
+      expect(() =>
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(/snapshot active Task has invalid recovery evidence/u);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given current-schema snapshots violate independent provider and terminal evidence invariants,
+    When each bounded ledger is reopened,
+    Then request history, response ownership, blocked reasons, and last outcomes fail closed`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    const user = {
+      id: "message_snapshot_user",
+      message: {
+        role: "user",
+        content: "validate snapshot evidence",
+        origin: { type: "user_prompt" },
+      },
+    } as const;
+    const request = {
+      attemptId: "provider_attempt_snapshot",
+      responseMessageId: "message_snapshot_response",
+    } as const;
+    const pendingTask = {
+      taskId: "task_snapshot",
+      runId: "run_snapshot",
+      trigger: "user_prompt",
+      admittedAt: "1970-01-01T00:00:00.001Z",
+      userMessageId: user.id,
+      provider: PROVIDER,
+      maxProviderReplacements: 1,
+      providerReplacementsUsed: 0,
+      recovered: false,
+      providerRequestIds: [request],
+      unknownProviderAttemptIds: [],
+      phase: "provider_pending",
+      providerAttempt: {
+        ...request,
+        startedAt: "1970-01-01T00:00:00.001Z",
+      },
+    } as const;
+    const completedAttempt = {
+      ...pendingTask.providerAttempt,
+      settlement: { outcome: "completed", usage: USAGE },
+    } as const;
+    const assistant = {
+      id: request.responseMessageId,
+      message: {
+        role: "assistant",
+        content: "snapshot response",
+        toolCalls: [],
+      },
+    } as const;
+    const canonicalReplacementLimitTask = {
+      ...pendingTask,
+      phase: "recovery_blocked" as const,
+      reason: "provider_replacement_limit" as const,
+      providerAttempt: completedAttempt,
+      providerReplacementsUsed: 1,
+      recovered: true,
+      unknownProviderAttemptIds: [request.attemptId],
+    } as const;
+
+    try {
+      const cases = [
+        {
+          name: "request-history",
+          activeTask: {
+            ...pendingTask,
+            providerRequestIds: [
+              {
+                attemptId: "provider_attempt_other",
+                responseMessageId: request.responseMessageId,
+              },
+            ],
+          },
+          messages: [user],
+          error: /reuses its provider response message id/u,
+        },
+        {
+          name: "response-id-already-stored",
+          activeTask: pendingTask,
+          messages: [
+            user,
+            {
+              id: request.responseMessageId,
+              message: {
+                role: "user",
+                content: "conflicting response reservation",
+                origin: { type: "steer" },
+              },
+            },
+          ],
+          error: /reuses its provider response message id/u,
+        },
+        {
+          name: "assistant-without-completed-attempt",
+          activeTask: {
+            ...pendingTask,
+            phase: "recovery_blocked" as const,
+            reason: "provider_budget" as const,
+            assistantMessage: assistant,
+            stopReason: "stop" as const,
+          },
+          messages: [user],
+          error: /settled provider response is invalid/u,
+        },
+        {
+          name: "assistant-without-stop-reason",
+          activeTask: {
+            ...pendingTask,
+            phase: "recovery_blocked" as const,
+            reason: "provider_budget" as const,
+            providerAttempt: completedAttempt,
+            assistantMessage: assistant,
+          },
+          messages: [user],
+          error: /settled provider response is invalid/u,
+        },
+        {
+          name: "stop-without-assistant",
+          activeTask: {
+            taskId: pendingTask.taskId,
+            runId: pendingTask.runId,
+            trigger: pendingTask.trigger,
+            admittedAt: pendingTask.admittedAt,
+            userMessageId: pendingTask.userMessageId,
+            provider: pendingTask.provider,
+            maxProviderReplacements: 1,
+            providerReplacementsUsed: 0,
+            recovered: false,
+            providerRequestIds: [],
+            unknownProviderAttemptIds: [],
+            phase: "recovery_blocked" as const,
+            reason: "provider_budget" as const,
+            stopReason: "stop" as const,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "tool-plan-without-tools",
+          activeTask: {
+            ...pendingTask,
+            phase: "recovery_blocked" as const,
+            reason: "tool_plan" as const,
+            providerAttempt: completedAttempt,
+            assistantMessage: assistant,
+            stopReason: "stop" as const,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "tool-plan-without-assistant",
+          activeTask: {
+            ...pendingTask,
+            phase: "recovery_blocked" as const,
+            reason: "tool_plan" as const,
+            providerAttempt: completedAttempt,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-without-attempt",
+          activeTask: {
+            taskId: pendingTask.taskId,
+            runId: pendingTask.runId,
+            trigger: pendingTask.trigger,
+            admittedAt: pendingTask.admittedAt,
+            userMessageId: pendingTask.userMessageId,
+            provider: pendingTask.provider,
+            maxProviderReplacements: 1,
+            providerReplacementsUsed: 1,
+            recovered: true,
+            providerRequestIds: [],
+            unknownProviderAttemptIds: [],
+            phase: "recovery_blocked" as const,
+            reason: "provider_replacement_limit" as const,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-unrecovered",
+          activeTask: {
+            ...pendingTask,
+            phase: "recovery_blocked" as const,
+            reason: "provider_replacement_limit" as const,
+            providerAttempt: completedAttempt,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-unused-budget",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            providerReplacementsUsed: 0,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-missing-current-unknown",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            unknownProviderAttemptIds: [],
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-current-unknown-not-latest",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            providerRequestIds: [
+              {
+                attemptId: "provider_attempt_snapshot_prior",
+                responseMessageId: "message_snapshot_prior_response",
+              },
+              request,
+            ],
+            unknownProviderAttemptIds: [
+              request.attemptId,
+              "provider_attempt_snapshot_prior",
+            ],
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-known-attempt-marked-unknown",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            providerAttempt: {
+              ...pendingTask.providerAttempt,
+              settlement: { outcome: "context_overflow" as const },
+            },
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-terminal-attempt",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            providerAttempt: {
+              ...pendingTask.providerAttempt,
+              settlement: {
+                outcome: "terminal_error" as const,
+                errorCode: "provider_http_error",
+              },
+            },
+            unknownProviderAttemptIds: [],
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-aborted-attempt",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            providerAttempt: {
+              ...pendingTask.providerAttempt,
+              settlement: { outcome: "aborted" as const },
+            },
+            unknownProviderAttemptIds: [],
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-with-assistant",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            assistantMessage: assistant,
+            stopReason: "stop" as const,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "replacement-limit-with-stop-only",
+          activeTask: {
+            ...canonicalReplacementLimitTask,
+            stopReason: "stop" as const,
+          },
+          messages: [user],
+          error: /invalid provider state/u,
+        },
+        {
+          name: "last-outcome-duplicate-unknown",
+          messages: [user],
+          lastTaskOutcome: {
+            taskId: "task_terminal_snapshot",
+            runId: "run_terminal_snapshot",
+            outcome: "failed" as const,
+            timestamp: "1970-01-01T00:00:00.001Z",
+            recovered: true,
+            unknownProviderAttemptIds: ["attempt_unknown", "attempt_unknown"],
+          },
+          error: /snapshot last Task outcome is invalid/u,
+        },
+        {
+          name: "last-outcome-unrecovered-unknown",
+          messages: [user],
+          lastTaskOutcome: {
+            taskId: "task_terminal_snapshot",
+            runId: "run_terminal_snapshot",
+            outcome: "failed" as const,
+            timestamp: "1970-01-01T00:00:00.001Z",
+            recovered: false,
+            unknownProviderAttemptIds: ["attempt_unknown"],
+          },
+          error: /snapshot last Task outcome is invalid/u,
+        },
+        {
+          name: "last-outcome-missing-response",
+          messages: [user],
+          lastTaskOutcome: {
+            taskId: "task_terminal_snapshot",
+            runId: "run_terminal_snapshot",
+            outcome: "completed" as const,
+            timestamp: "1970-01-01T00:00:00.001Z",
+            recovered: false,
+            unknownProviderAttemptIds: [],
+            responseMessageId: "message_missing_response",
+          },
+          error: /snapshot last Task outcome is invalid/u,
+        },
+      ];
+
+      for (const scenario of cases) {
+        const session = createSessionStore({
+          sessionId: `task-snapshot-invariant-${scenario.name}`,
+          workspace,
+          runtime: runtime(home),
+        });
+        await appendFile(
+          session.filePath,
+          `${JSON.stringify({
+            schemaVersion: 7,
+            type: "snapshot",
+            timestamp: "1970-01-01T00:00:00.001Z",
+            reason: "size_threshold",
+            messages: scenario.messages,
+            pendingInputs: [],
+            skillStateCheckpoints: [
+              { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+            ],
+            ...(scenario.activeTask === undefined
+              ? {}
+              : { activeTask: scenario.activeTask }),
+            ...(scenario.lastTaskOutcome === undefined
+              ? {}
+              : { lastTaskOutcome: scenario.lastTaskOutcome }),
+          })}\n`,
+          "utf8",
+        );
+
+        expect(() =>
+          resumeSessionStore({
+            sessionId: session.id,
+            workspace,
+            runtime: runtime(home, 2),
+          }),
+        ).toThrow(scenario.error);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a latest snapshot mismatches the settled response and reserved response id,
     When the bounded ledger is reopened,
     Then snapshot replay rejects the unsafe provider projection`, async () => {
@@ -1121,6 +2456,14 @@ describe("Session Store Task Recovery", () => {
         kind: "run",
         userMessage,
       });
+      expect(
+        listSessionCatalog({ workspace, runtime: runtime(home, 4) }).sessions,
+      ).toEqual([
+        expect.objectContaining({
+          id: session.id,
+          preview: "Earlier context was compacted.",
+        }),
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -1343,6 +2686,47 @@ describe("Session Store Task Recovery", () => {
       expect(resumed.task.runId).not.toBe(admitted.runId);
       expect(resumed.task.providerReplacementsUsed).toBe(0);
       expect(resumed.task.unknownProviderAttemptIds).toEqual([]);
+      recovery.terminal({
+        messages: [
+          {
+            role: "user",
+            content: "Compacted durable Task transcript.",
+            origin: { type: "compaction_checkpoint" },
+          },
+          {
+            role: "assistant",
+            content: "failed after compaction",
+            toolCalls: [],
+          },
+        ],
+        outcome: "failed",
+      });
+      expect(
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 2),
+        }).messages,
+      ).toEqual([
+        {
+          role: "user",
+          content: "Compacted durable Task transcript.",
+          origin: { type: "compaction_checkpoint" },
+        },
+        {
+          role: "assistant",
+          content: "failed after compaction",
+          toolCalls: [],
+        },
+      ]);
+      expect(
+        listSessionCatalog({ workspace, runtime: runtime(home, 3) }).sessions,
+      ).toEqual([
+        expect.objectContaining({
+          id: session.id,
+          preview: "Compacted durable Task transcript.",
+        }),
+      ]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -1422,6 +2806,28 @@ describe("Session Store Task Recovery", () => {
         );
         if (scenario === "tool" && directive.kind === "blocked") {
           expect(directive.task.reason).toBe("tool_plan");
+          const taskRecords = (await readFile(session.filePath, "utf8"))
+            .trimEnd()
+            .split("\n")
+            .map((line) =>
+              RECOVERY_LEDGER_RECORD_SCHEMA.parse(JSON.parse(line)),
+            )
+            .filter((record) => record.task !== undefined);
+          const previousTask = taskRecords.at(-2)?.task;
+          const blockedTask = taskRecords.at(-1)?.task;
+          expect(blockedTask).toEqual({
+            ...previousTask,
+            phase: "recovery_blocked",
+            recovered: true,
+            reason: "tool_plan",
+          });
+          expect(
+            resumeSessionStore({
+              sessionId: session.id,
+              workspace,
+              runtime: runtime(home, 4),
+            }).activeTask,
+          ).toEqual(directive.task);
         }
       }
     } finally {
@@ -1480,9 +2886,9 @@ describe("Session Store Task Recovery", () => {
     }
   });
 
-  test(`Given an active Task grows the ledger past the snapshot threshold,
-    When the session is reopened from the bounded snapshot,
-    Then the same active Task and provider-ready phase survive`, async () => {
+  test(`Given an active Task grows the ledger past the snapshot threshold and exhausts provider replacement,
+    When each bounded recovery state is reopened,
+    Then both provider-ready and replacement-limit evidence survive`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
     const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
     let messages: readonly SessionMessage[] = [];
@@ -1533,6 +2939,117 @@ describe("Session Store Task Recovery", () => {
         runId: admitted.runId,
         phase: "provider_ready",
       });
+
+      recovery.providerLifecycle(PROVIDER).providerRequestAttempts.begin();
+      const replacement = recovery.resume();
+      expect(replacement.kind).toBe("run");
+      if (replacement.kind !== "run") {
+        throw new Error("expected first provider replacement");
+      }
+      recovery.providerLifecycle(PROVIDER).providerRequestAttempts.begin();
+      const blocked = recovery.resume();
+      expect(blocked.kind).toBe("blocked");
+      if (blocked.kind !== "blocked") {
+        throw new Error("expected provider replacement limit");
+      }
+      expect(blocked.task).toMatchObject({
+        phase: "recovery_blocked",
+        reason: "provider_replacement_limit",
+        providerReplacementsUsed: 1,
+        recovered: true,
+      });
+      expect(blocked.task.unknownProviderAttemptIds).toHaveLength(2);
+      expect(blocked.task.unknownProviderAttemptIds.at(-1)).toBe(
+        blocked.task.providerAttempt?.attemptId,
+      );
+
+      const resumedBlocked = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 3),
+      });
+      expect(resumedBlocked.activeTask).toEqual(blocked.task);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given replacement is exhausted after a provider attempt completed without a durable response,
+    When that blocked Task becomes a snapshot root,
+    Then replay accepts its current attempt as the latest unknown attempt`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+    const userMessage = {
+      role: "user",
+      content: "preserve completed attempt uncertainty in snapshot",
+      origin: { type: "user_prompt" },
+    } as const;
+
+    try {
+      const session = createSessionStore({
+        sessionId: "completed-attempt-limit-snapshot",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      const admitted = recovery.admit({
+        userMessage,
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      recovery.providerLifecycle(PROVIDER).providerRequestAttempts.begin();
+      const replacement = recovery.resume();
+      if (replacement.kind !== "run") {
+        throw new Error("expected first provider replacement");
+      }
+      recovery
+        .providerLifecycle(PROVIDER)
+        .providerRequestAttempts.begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const blocked = recovery.resume();
+      if (blocked.kind !== "blocked") {
+        throw new Error("expected provider replacement limit");
+      }
+
+      await appendFile(
+        session.filePath,
+        `${JSON.stringify({
+          schemaVersion: 7,
+          type: "snapshot",
+          timestamp: "1970-01-01T00:00:03.000Z",
+          reason: "size_threshold",
+          messages: [{ id: admitted.userMessageId, message: userMessage }],
+          pendingInputs: [],
+          skillStateCheckpoints: [
+            {
+              messageOrdinal: 0,
+              skillActivations: [],
+              activeSkillIds: [],
+            },
+          ],
+          activeTask: blocked.task,
+        })}\n`,
+        "utf8",
+      );
+
+      const reopened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 2),
+      });
+      expect(reopened.activeTask).toEqual(blocked.task);
+      expect(reopened.activeTask?.unknownProviderAttemptIds.at(-1)).toBe(
+        blocked.task.providerAttempt?.attemptId,
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

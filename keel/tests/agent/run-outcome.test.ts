@@ -635,4 +635,61 @@ describe("Run Outcome Reporting", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given a durable Task reaches turn-limit wrap-up,
+    When the summary uses a second physical provider request,
+    Then both requests are observed and only the executable final reply is settled`, async () => {
+    const workspace = await createWorkspace();
+    await writeFile(join(workspace, "a.txt"), "alpha\n", "utf8");
+    const messages: SessionMessage[] = [
+      { role: "user", content: "read once and summarize" },
+    ];
+    const provider = createFakeProvider([
+      fakeToolResponse("read", { path: "a.txt" }),
+      fakeResponse("Stopped before executing the tool request."),
+    ]);
+    let attempts = 0;
+    const settled: SessionMessage[] = [];
+
+    try {
+      const events = await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          ledger: sessionLedgerMirroringMessages(messages),
+          systemPrompt: "You are helpful.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: maxTurnFallbackPolicy(1),
+          providerRecovery: {
+            beforeRequest: () => {},
+            providerRequestAttempts: {
+              begin: () => {
+                attempts++;
+                return { finish: () => {} };
+              },
+            },
+            auxiliaryProviderRequestAttempts: {
+              begin: () => ({ finish: () => {} }),
+            },
+            settled: (response) => {
+              settled.push(response.assistantMessage);
+            },
+          },
+        }),
+      );
+
+      expect(endEvent(events).stopReason).toBe("turn_limit");
+      expect(attempts).toBe(2);
+      expect(settled).toEqual([
+        expect.objectContaining({
+          role: "assistant",
+          content: "Stopped before executing the tool request.",
+          toolCalls: [],
+        }),
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

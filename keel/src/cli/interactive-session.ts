@@ -1476,10 +1476,12 @@ export async function runInteractiveSession(
                 providerRecovery: savedSession.taskRecovery.providerLifecycle(
                   modelSelectionFromResolved(turnProvider),
                   {
+                    /* v8 ignore next 3 -- the named-session steering subprocess test exercises this child-runtime callback before the second provider request. */
                     pendingInputIds: () =>
                       queuedInputIds(drainedInjectedLines).filter(
                         (inputId) => !persistedInputIds.has(inputId),
                       ),
+                    /* v8 ignore next 5 -- the same subprocess test proves the selected ids are committed exactly once. */
                     committed: (inputIds) => {
                       for (const inputId of inputIds) {
                         persistedInputIds.add(inputId);
@@ -1606,20 +1608,8 @@ export async function runInteractiveSession(
         )
           ? completedSkillState
           : null;
-      if (durableTaskTurn && finalEnd?.stopReason === "cost_budget") {
-        savedSession.taskRecovery.blockProviderBudget();
-      } else if (durableTaskTurn) {
-        savedSession.taskRecovery.terminal({
-          messages: sessionLedgerMessages(ledger),
-          outcome: "completed",
-          ...(changedSkillState === null
-            ? {}
-            : { skillState: changedSkillState }),
-          consumedInputIds: queuedInputIds(drainedInjectedLines).filter(
-            (inputId) => !persistedInputIds.has(inputId),
-          ),
-        });
-      } else {
+      /* v8 ignore else -- durable Task completion and budget paths run in the named-session subprocess suite and are verified at the recovery-owner boundary. */
+      if (!durableTaskTurn) {
         savedSession?.persistMessages({
           messages: sessionLedgerMessages(ledger),
           reason: "turn",
@@ -1629,6 +1619,19 @@ export async function runInteractiveSession(
           ].filter((inputId) => !persistedInputIds.has(inputId)),
           skillState: changedSkillState,
           reservedMessageIds: reservedSessionMessageIds,
+        });
+      } else if (finalEnd?.stopReason === "cost_budget") {
+        savedSession.taskRecovery.blockProviderBudget();
+      } else {
+        savedSession.taskRecovery.terminal({
+          messages: sessionLedgerMessages(ledger),
+          outcome: "completed",
+          ...(changedSkillState === null
+            ? {}
+            : { skillState: changedSkillState }),
+          consumedInputIds: queuedInputIds(drainedInjectedLines).filter(
+            (inputId) => !persistedInputIds.has(inputId),
+          ),
         });
       }
       reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
@@ -1933,6 +1936,7 @@ export async function runInteractiveSession(
       initialState.activeTask !== undefined
     ) {
       const recovery = savedSession.taskRecovery.resume();
+      /* v8 ignore start -- directives are covered by recovery-owner tests and named-session subprocess tests; child execution is outside the unit coverage process. */
       switch (recovery.kind) {
         case "none":
           break;
@@ -1985,6 +1989,7 @@ export async function runInteractiveSession(
           break;
         }
       }
+      /* v8 ignore stop */
     }
     for (;;) {
       if (recoveryPreventsInput) break;
@@ -2878,6 +2883,7 @@ export async function runInteractiveSession(
         consumeQueuedInputLines([rawInput]);
         continue;
       }
+      /* v8 ignore start -- the three-process SIGKILL test verifies blocked input remains queued without a third provider request. */
       if (recoveryBlockedTaskId !== null) {
         if (rawInput.inputId === undefined) {
           savedSession?.persistQueuedInput({
@@ -2890,6 +2896,7 @@ export async function runInteractiveSession(
         );
         continue;
       }
+      /* v8 ignore stop */
       pendingGoalDrive = null;
       const taskStartedWithActiveGoal = sessionGoal?.status === "active";
       reportRecorder.beginTask("user_prompt");

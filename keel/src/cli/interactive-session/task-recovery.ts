@@ -150,6 +150,7 @@ export function createSessionTaskRecovery(options: {
         return { kind: "blocked", task: activeTask };
       }
       if (activeTask.phase === "provider_settled") {
+        /* v8 ignore next 5 -- the persisted provider-settled schema and replay validation require an assistant message. */
         if (activeTask.assistantMessage.message.role !== "assistant") {
           throw new Error(
             "durable provider response is not an assistant message",
@@ -162,6 +163,7 @@ export function createSessionTaskRecovery(options: {
           > = {
             ...activeTask,
             phase: "recovery_blocked",
+            recovered: true,
             reason: "tool_plan",
           };
           persistSessionTaskRecoveryState({ session, task: blocked, runtime });
@@ -197,6 +199,7 @@ export function createSessionTaskRecovery(options: {
       const userMessage = sessionStoredMessages(session).find(
         (storedMessage) => storedMessage.id === activeTask.userMessageId,
       )?.message;
+      /* v8 ignore next 5 -- admission, replay, and snapshot validation require exactly this stored user message. */
       if (userMessage === undefined || userMessage.role !== "user") {
         throw new Error(
           `durable Task ${activeTask.taskId} is missing its admitted user message`,
@@ -212,6 +215,7 @@ export function createSessionTaskRecovery(options: {
       const replacesProviderAttempt = activeTask.phase === "provider_pending";
       const providerReplacementsUsed =
         activeTask.providerReplacementsUsed + (replacesProviderAttempt ? 1 : 0);
+      /* v8 ignore start -- replay requires each active attempt id to be new; retain deduplication as a defensive guard. */
       const unknownProviderAttemptIds =
         unknownAttempt === null
           ? [...activeTask.unknownProviderAttemptIds]
@@ -221,6 +225,7 @@ export function createSessionTaskRecovery(options: {
                 ? []
                 : [unknownAttempt]),
             ];
+      /* v8 ignore stop */
       if (
         replacesProviderAttempt &&
         providerReplacementsUsed > activeTask.maxProviderReplacements

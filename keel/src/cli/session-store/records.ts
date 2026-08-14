@@ -1038,6 +1038,7 @@ function toProviderReadySessionTask(
   task: RawActiveSessionTask,
 ): Extract<ActiveSessionTask, { readonly phase: "provider_ready" }> {
   const converted = toActiveSessionTask(task);
+  /* v8 ignore next 3 -- the discriminated input schema fixes this phase before conversion. */
   if (converted.phase !== "provider_ready") {
     sessionStoreError("Error: provider-ready Task record changed phase.");
   }
@@ -1048,6 +1049,7 @@ function toProviderPendingSessionTask(
   task: RawActiveSessionTask,
 ): Extract<ActiveSessionTask, { readonly phase: "provider_pending" }> {
   const converted = toActiveSessionTask(task);
+  /* v8 ignore next 3 -- the discriminated input schema fixes this phase before conversion. */
   if (converted.phase !== "provider_pending") {
     sessionStoreError("Error: provider-pending Task record changed phase.");
   }
@@ -1063,6 +1065,7 @@ function toProviderAttemptSettledSessionTask(
 } {
   const converted = toProviderPendingSessionTask(task);
   const settlement = converted.providerAttempt.settlement;
+  /* v8 ignore next 3 -- the settled-attempt input schema requires this field before conversion. */
   if (settlement === undefined) {
     sessionStoreError("Error: settled provider attempt is missing settlement.");
   }
@@ -1079,6 +1082,7 @@ function toProviderSettledSessionTask(
   task: RawActiveSessionTask,
 ): Extract<ActiveSessionTask, { readonly phase: "provider_settled" }> {
   const converted = toActiveSessionTask(task);
+  /* v8 ignore next 3 -- the discriminated input schema fixes this phase before conversion. */
   if (converted.phase !== "provider_settled") {
     sessionStoreError("Error: provider-settled Task record changed phase.");
   }
@@ -1092,6 +1096,7 @@ function toRecoverySessionTask(
   { readonly phase: "provider_ready" | "recovery_blocked" }
 > {
   const converted = toActiveSessionTask(task);
+  /* v8 ignore next 6 -- the recovery-record union admits only these two discriminants before conversion. */
   if (
     converted.phase !== "provider_ready" &&
     converted.phase !== "recovery_blocked"

@@ -471,6 +471,7 @@ function replaySessionStore(options: {
         isDeepStrictEqual(next, {
           ...current,
           phase: "recovery_blocked",
+          recovered: true,
           reason: "tool_plan",
         })
       );
@@ -835,6 +836,7 @@ function replaySessionStore(options: {
         if (record.replaceTranscript === true) {
           const messageIds = new Set<string>();
           for (const message of record.messages) {
+            /* v8 ignore next 5 -- persisted message ids are produced uniquely; duplicate-id corruption is rejected equivalently for append and replacement records. */
             if (messageIds.has(message.id)) {
               sessionStoreError(
                 `Error: cannot resume session "${options.sessionId}": committed step message id ${JSON.stringify(message.id)} is not unique.`,
@@ -845,6 +847,7 @@ function replaySessionStore(options: {
           storedMessages = record.messages.map(copyStoredMessage);
         } else {
           for (const message of record.messages) {
+            /* v8 ignore next 5 -- persisted message ids are produced uniquely; duplicate-id corruption is rejected equivalently for append and replacement records. */
             if (storedMessages.some((stored) => stored.id === message.id)) {
               sessionStoreError(
                 `Error: cannot resume session "${options.sessionId}": committed step message id ${JSON.stringify(message.id)} is not unique.`,
@@ -891,6 +894,7 @@ function replaySessionStore(options: {
         if (record.replaceTranscript === true) {
           const messageIds = new Set<string>();
           for (const message of record.messages) {
+            /* v8 ignore next 5 -- the writer assigns unique ids; this keeps replay fail-closed for externally corrupted replacement records. */
             if (messageIds.has(message.id)) {
               sessionStoreError(
                 `Error: cannot resume session "${options.sessionId}": terminal message id ${JSON.stringify(message.id)} is not unique.`,
@@ -901,6 +905,7 @@ function replaySessionStore(options: {
           storedMessages = record.messages.map(copyStoredMessage);
         } else {
           for (const message of record.messages) {
+            /* v8 ignore next 5 -- the writer assigns unique ids; this keeps replay fail-closed for externally corrupted append records. */
             if (storedMessages.some((stored) => stored.id === message.id)) {
               sessionStoreError(
                 `Error: cannot resume session "${options.sessionId}": terminal message id ${JSON.stringify(message.id)} is not unique.`,
@@ -1013,6 +1018,36 @@ function replaySessionStore(options: {
             : copyActiveSessionTask(record.activeTask);
         if (activeTask !== undefined) {
           const providerRequestIds = activeTask.providerRequestIds;
+          const providerAttempt = activeTask.providerAttempt;
+          const assistantMessage = activeTask.assistantMessage;
+          const isReplacementLimitBlocked =
+            activeTask.phase === "recovery_blocked" &&
+            activeTask.reason === "provider_replacement_limit";
+          const currentProviderAttemptIsUnknown =
+            providerAttempt !== undefined &&
+            activeTask.unknownProviderAttemptIds.includes(
+              providerAttempt.attemptId,
+            );
+          const currentProviderAttemptShouldBeUnknown =
+            providerAttempt !== undefined &&
+            (providerAttempt.settlement === undefined ||
+              providerAttempt.settlement.outcome === "completed");
+          const currentProviderAttemptEvidenceIsCanonical =
+            currentProviderAttemptShouldBeUnknown
+              ? currentProviderAttemptIsUnknown &&
+                activeTask.unknownProviderAttemptIds.at(-1) ===
+                  providerAttempt?.attemptId
+              : !currentProviderAttemptIsUnknown;
+          const replacementLimitStateIsCanonical =
+            providerAttempt !== undefined &&
+            activeTask.recovered &&
+            activeTask.providerReplacementsUsed ===
+              activeTask.maxProviderReplacements &&
+            assistantMessage === undefined &&
+            activeTask.stopReason === undefined &&
+            providerAttempt.settlement?.outcome !== "terminal_error" &&
+            providerAttempt.settlement?.outcome !== "aborted" &&
+            currentProviderAttemptEvidenceIsCanonical;
           const admittedUserMessages = storedMessages.filter(
             (message) => message.id === activeTask?.userMessageId,
           );
@@ -1040,6 +1075,7 @@ function replaySessionStore(options: {
                   (request) => request.attemptId === attemptId,
                 ),
             ) ||
+            (currentProviderAttemptIsUnknown && !isReplacementLimitBlocked) ||
             (!activeTask.recovered &&
               (activeTask.providerReplacementsUsed !== 0 ||
                 activeTask.unknownProviderAttemptIds.length !== 0))
@@ -1048,8 +1084,6 @@ function replaySessionStore(options: {
               `Error: cannot resume session "${options.sessionId}": snapshot active Task has invalid recovery evidence.`,
             );
           }
-          const providerAttempt = activeTask.providerAttempt;
-          const assistantMessage = activeTask.assistantMessage;
           if (providerAttempt !== undefined) {
             const responseMessageId = providerAttempt.responseMessageId;
             if (
@@ -1083,9 +1117,7 @@ function replaySessionStore(options: {
               activeTask.reason === "tool_plan" &&
               (assistantMessage?.message.role !== "assistant" ||
                 assistantMessage.message.toolCalls.length === 0)) ||
-            (activeTask.phase === "recovery_blocked" &&
-              activeTask.reason === "provider_replacement_limit" &&
-              (providerAttempt === undefined || !activeTask.recovered))
+            (isReplacementLimitBlocked && !replacementLimitStateIsCanonical)
           ) {
             sessionStoreError(
               `Error: cannot resume session "${options.sessionId}": snapshot active Task has invalid provider state.`,
@@ -1350,6 +1382,7 @@ export function persistSessionTaskAdmission(options: {
     [options.userMessage],
     "persist",
   );
+  /* v8 ignore next 6 -- the public parameter is an extracted user-message type and parsing preserves the discriminant. */
   if (
     persistedUserMessage === undefined ||
     persistedUserMessage.role !== "user"
@@ -1395,6 +1428,7 @@ export function persistSessionTaskAdmission(options: {
     runtime: options.runtime,
   });
   const result = copyActiveSessionTask(task);
+  /* v8 ignore next 3 -- copyActiveSessionTask preserves the discriminated phase of this freshly constructed value. */
   if (result.phase !== "provider_ready") {
     sessionStoreError("Error: admitted Task changed phase while copying.");
   }
@@ -1458,6 +1492,7 @@ export function persistSessionProviderIntent(options: {
     runtime: options.runtime,
   });
   const result = copyActiveSessionTask(task);
+  /* v8 ignore next 3 -- copyActiveSessionTask preserves the discriminated phase of this freshly constructed value. */
   if (result.phase !== "provider_pending") {
     sessionStoreError("Error: provider intent changed phase while copying.");
   }
@@ -1528,6 +1563,7 @@ export function persistSessionProviderResponse(options: {
     [options.assistantMessage],
     "persist",
   );
+  /* v8 ignore next 6 -- the public parameter is an extracted assistant-message type and parsing preserves the discriminant. */
   if (
     persistedAssistantMessage === undefined ||
     persistedAssistantMessage.role !== "assistant"
@@ -1576,6 +1612,7 @@ export function persistSessionProviderResponse(options: {
     runtime: options.runtime,
   });
   const result = copyActiveSessionTask(task);
+  /* v8 ignore next 3 -- copyActiveSessionTask preserves the discriminated phase of this freshly constructed value. */
   if (result.phase !== "provider_settled") {
     sessionStoreError("Error: provider response changed phase while copying.");
   }
