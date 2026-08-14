@@ -165,7 +165,7 @@ describe("Session ledger repair", () => {
     When repair is requested,
     Then the command rejects it without inventing a retained prefix`, async () => {
     const fixture = await sessionFixture();
-    await writeFile(fixture.ledgerPath, '{"schemaVersion":6,"type":"session"');
+    await writeFile(fixture.ledgerPath, '{"schemaVersion":7,"type":"session"');
     const original = await readFile(fixture.ledgerPath);
     const run = repairRuntime(fixture);
 
@@ -290,7 +290,7 @@ describe("Session ledger repair", () => {
           ],
           "Oversized repair",
         ),
-        '{"schemaVersion":6,"type":"append"',
+        '{"schemaVersion":7,"type":"append"',
       ].join("\n"),
       "utf8",
     );

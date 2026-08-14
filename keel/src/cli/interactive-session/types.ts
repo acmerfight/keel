@@ -51,12 +51,14 @@ import type {
 } from "../report-events.ts";
 import type { SessionPickerView } from "../session-catalog-format.ts";
 import type {
+  ActiveSessionTask,
   SessionModelSelection,
   SessionPersistenceReason,
   SessionQueuedInput,
 } from "../session-store.ts";
 import type { InteractiveDiffInspection } from "./diff-inspection.ts";
 import type { InteractiveLineInput } from "./line-reader.ts";
+import type { SessionTaskRecovery } from "./task-recovery.ts";
 
 export type { ProviderSelection } from "../provider-config.ts";
 
@@ -123,6 +125,7 @@ export interface SavedInteractiveSession {
   readonly id: string;
   readonly resumeAvailable: () => boolean;
   readonly reserveMessageId: () => string;
+  readonly taskRecovery?: SessionTaskRecovery;
   readonly persistQueuedInput: (input: {
     readonly sequence: number;
     readonly line: string;
@@ -194,6 +197,7 @@ export interface InteractiveActiveSessionState {
   readonly modelSwitchCount: number;
   readonly queuedInputs: readonly SessionQueuedInput[];
   readonly bashApprovalGrants: readonly BashApprovalGrant[];
+  readonly activeTask?: ActiveSessionTask;
 }
 
 export interface ReviewedInteractiveActiveSession {

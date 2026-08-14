@@ -59,7 +59,7 @@ export function appendSessionRecordLine(
   messages: readonly SessionMessage[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "append",
     timestamp,
     reason: "turn",
@@ -72,7 +72,7 @@ export function replaceSessionRecordLine(
   messages: readonly SessionMessage[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "replace",
     timestamp,
     reason: "compaction",
@@ -92,7 +92,7 @@ export function snapshotSessionRecordLine(
   } = {},
 ): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "snapshot",
     timestamp,
     reason: "size_threshold",
@@ -121,7 +121,7 @@ export function sessionGoalRecordLine(options: {
   readonly consumedInputIds?: readonly string[];
 }): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "session_goal",
     timestamp: options.timestamp,
     goal: options.goal === null ? null : sessionGoalRecord(options.goal),
@@ -139,7 +139,7 @@ export function sessionTitleRecordLine(
   } = {},
 ): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "session_title",
     timestamp,
     title,
@@ -155,7 +155,7 @@ export function taskProgressRecordLine(options: {
   readonly messageOrdinal?: number;
 }): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "task_progress",
     timestamp: options.timestamp,
     messageOrdinal: options.messageOrdinal ?? 0,
@@ -169,7 +169,7 @@ export function inputAdmittedRecordLine(options: {
   readonly line: string;
 }): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "input_admitted",
     timestamp: options.timestamp,
     id: options.id,
@@ -183,7 +183,7 @@ export function inputConsumedRecordLine(
   inputIds: readonly string[],
 ): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "input_consumed",
     timestamp,
     inputIds,
@@ -301,9 +301,16 @@ export async function restoredUserMessageId(options: {
       (line) =>
         line.type === "append" ||
         line.type === "replace" ||
-        line.type === "snapshot",
+        line.type === "snapshot" ||
+        line.type === "task_admitted" ||
+        line.type === "step_committed" ||
+        line.type === "task_terminal",
     )
-    .flatMap((line) => line.messages ?? []);
+    .flatMap((line) =>
+      line.type === "task_admitted"
+        ? [line.userMessage].filter(Boolean)
+        : (line.messages ?? []),
+    );
   const storedMessage = storedMessagesFromLedger.find(
     (candidate) =>
       candidate.message?.role === "user" &&
@@ -317,8 +324,23 @@ export async function restoredUserMessageId(options: {
 
 export function ledgerRecordMessages(record: {
   readonly messages?: readonly { readonly message?: SessionMessage }[];
+  readonly type?: string;
+  readonly userMessage?: { readonly message?: SessionMessage };
 }): readonly (SessionMessage | undefined)[] {
-  return (record.messages ?? []).map((storedMessage) => storedMessage.message);
+  return ledgerRecordStoredMessages(record).map(
+    (storedMessage) => storedMessage.message,
+  );
+}
+
+export function ledgerRecordStoredMessages(record: {
+  readonly messages?: readonly { readonly message?: SessionMessage }[];
+  readonly type?: string;
+  readonly userMessage?: { readonly message?: SessionMessage };
+}): readonly { readonly message?: SessionMessage; readonly id?: string }[] {
+  if (record.type === "task_admitted") {
+    return record.userMessage === undefined ? [] : [record.userMessage];
+  }
+  return record.messages ?? [];
 }
 
 export function conversationCheckpoint(
@@ -362,7 +384,7 @@ export async function writeSessionLedger(options: {
     join(sessionDir, "ledger.jsonl"),
     `${[
       JSON.stringify({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "session",
         id: headerId,
         createdAt: options.createdAt,
@@ -377,7 +399,7 @@ export async function writeSessionLedger(options: {
         ? []
         : [
             JSON.stringify({
-              schemaVersion: 6,
+              schemaVersion: 7,
               type: "skill_state",
               timestamp: options.createdAt,
               messageOrdinal: 0,

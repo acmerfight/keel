@@ -8,14 +8,17 @@ export {
   ensureSessionCanBeCreated,
 } from "./session-store/locks.ts";
 export type {
+  ActiveSessionTask,
   SessionCatalog,
   SessionCatalogEntry,
   SessionCatalogWarning,
   SessionForkPointRecord,
   SessionForkPolicyRecord,
+  SessionLastTaskOutcome,
   SessionLock,
   SessionModelSelection,
   SessionPersistenceReason,
+  SessionProviderAttemptSettlement,
   SessionQueuedInput,
   SessionState,
   SessionStoreRuntime,
@@ -32,6 +35,7 @@ export {
   sessionStoredMessages,
 } from "./session-store/state.ts";
 export {
+  activeSessionTask,
   consumeSessionQueuedInputs,
   createSessionStore,
   forkSessionStore,
@@ -41,9 +45,16 @@ export {
   persistSessionGoal,
   persistSessionMessages,
   persistSessionModelSwitch,
+  persistSessionProviderAttemptSettlement,
+  persistSessionProviderIntent,
+  persistSessionProviderResponse,
   persistSessionQueuedInput,
   persistSessionSkillState,
+  persistSessionTaskAdmission,
   persistSessionTaskProgress,
+  persistSessionTaskRecoveryState,
+  persistSessionTaskStep,
+  persistSessionTaskTerminal,
   persistSessionTitle,
   resumeSessionStore,
 } from "./session-store/store.ts";

@@ -44,7 +44,7 @@ function skillState(workflowSkill: WorkflowSkill) {
 
 function modelSwitchRecordLine(timestamp: string): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "model_switch",
     timestamp,
     from: null,
@@ -54,7 +54,7 @@ function modelSwitchRecordLine(timestamp: string): string {
 
 function bashApprovalGrantedRecordLine(timestamp: string, cwd: string): string {
   return JSON.stringify({
-    schemaVersion: 6,
+    schemaVersion: 7,
     type: "bash_approval_granted",
     timestamp,
     grant: {
@@ -101,7 +101,7 @@ describe("CLI Main - Sessions Command", () => {
     });
     await appendFile(
       ledgerPath,
-      '{"schemaVersion":6,"type":"append","timestamp":"2026-04',
+      '{"schemaVersion":7,"type":"append","timestamp":"2026-04',
       "utf8",
     );
     const originalLedger = await readFile(ledgerPath);
@@ -144,7 +144,7 @@ describe("CLI Main - Sessions Command", () => {
     const sessionId = "crash-tail";
     const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
     const incompleteTail =
-      '{"schemaVersion":6,"type":"append","timestamp":"2026-04';
+      '{"schemaVersion":7,"type":"append","timestamp":"2026-04';
     await writeSessionLedger({
       home,
       id: sessionId,
@@ -1182,7 +1182,7 @@ describe("CLI Main - Sessions Command", () => {
       }),
       records: [
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "append",
           timestamp: "2026-02-05T00:00:01.000Z",
           reason: "turn",
@@ -1220,7 +1220,7 @@ describe("CLI Main - Sessions Command", () => {
           ],
         }),
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "model_switch",
           timestamp: "2026-02-05T00:00:02.000Z",
           from: null,

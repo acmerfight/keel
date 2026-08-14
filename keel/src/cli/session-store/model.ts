@@ -11,7 +11,7 @@ import type {
   SkillLifecycleState,
 } from "../../skills/model.ts";
 
-export const SESSION_SCHEMA_VERSION = 6;
+export const SESSION_SCHEMA_VERSION = 7;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 export const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -90,6 +90,100 @@ export interface SessionModelSwitch {
   readonly from: SessionModelSelection | null;
   readonly to: SessionModelSelection;
   readonly messageOrdinal: number;
+}
+
+interface SessionProviderAttemptUsage {
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly uncachedInputTokens: number;
+  readonly outputTokens: number;
+}
+
+export type SessionProviderAttemptSettlement =
+  | {
+      readonly outcome: "completed";
+      readonly usage: SessionProviderAttemptUsage;
+    }
+  | {
+      readonly outcome: "retryable_error";
+      readonly provider: string;
+      readonly reason: string;
+      readonly attempt: number;
+      readonly maxRetries: number;
+      readonly delayMs: number;
+    }
+  | { readonly outcome: "context_overflow" | "aborted" }
+  | { readonly outcome: "terminal_error"; readonly errorCode: string };
+
+export interface ActiveSessionProviderAttempt {
+  readonly attemptId: string;
+  readonly responseMessageId: string;
+  readonly startedAt: string;
+  readonly settlement?: SessionProviderAttemptSettlement;
+}
+
+interface ActiveSessionTaskBase {
+  readonly taskId: string;
+  readonly runId: string;
+  readonly trigger: "user_prompt";
+  readonly admittedAt: string;
+  readonly userMessageId: string;
+  readonly provider: SessionModelSelection;
+  readonly maxProviderReplacements: number;
+  readonly providerReplacementsUsed: number;
+  readonly recovered: boolean;
+  readonly providerRequestIds: readonly {
+    readonly attemptId: string;
+    readonly responseMessageId: string;
+  }[];
+  readonly unknownProviderAttemptIds: readonly string[];
+}
+
+export type ActiveSessionTask = ActiveSessionTaskBase &
+  (
+    | {
+        readonly phase: "provider_ready";
+        readonly providerAttempt?: never;
+        readonly assistantMessage?: never;
+        readonly stopReason?: never;
+      }
+    | {
+        readonly phase: "provider_pending";
+        readonly providerAttempt: ActiveSessionProviderAttempt;
+        readonly assistantMessage?: never;
+        readonly stopReason?: never;
+      }
+    | {
+        readonly phase: "provider_settled";
+        readonly providerAttempt: ActiveSessionProviderAttempt & {
+          readonly settlement: Extract<
+            SessionProviderAttemptSettlement,
+            { readonly outcome: "completed" }
+          >;
+        };
+        readonly assistantMessage: StoredMessage;
+        readonly stopReason: "stop" | "length";
+      }
+    | {
+        readonly phase: "recovery_blocked";
+        readonly providerAttempt?: ActiveSessionProviderAttempt;
+        readonly assistantMessage?: StoredMessage;
+        readonly stopReason?: "stop" | "length";
+        readonly reason:
+          | "provider_replacement_limit"
+          | "provider_budget"
+          | "tool_plan";
+      }
+  );
+
+export interface SessionLastTaskOutcome {
+  readonly taskId: string;
+  readonly runId: string;
+  readonly outcome: "completed" | "failed" | "aborted";
+  readonly timestamp: string;
+  readonly recovered: boolean;
+  readonly unknownProviderAttemptIds: readonly string[];
+  readonly responseMessageId?: string;
 }
 
 export interface AppendSessionRecord {
@@ -188,6 +282,88 @@ interface BashApprovalsClearedSessionRecord {
   readonly consumedInputIds?: readonly string[];
 }
 
+interface TaskAdmittedSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "task_admitted";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_ready" }
+  >;
+  readonly userMessage: StoredMessage;
+  readonly consumedInputIds?: readonly string[];
+}
+
+interface ProviderIntentSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "provider_intent";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_pending" }
+  >;
+}
+
+interface ProviderAttemptSettledSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "provider_attempt_settled";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_pending" }
+  > & {
+    readonly providerAttempt: ActiveSessionProviderAttempt & {
+      readonly settlement: SessionProviderAttemptSettlement;
+    };
+  };
+}
+
+interface ProviderSettledSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "provider_settled";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_settled" }
+  >;
+}
+
+interface TaskRecoveryStartedSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "task_recovery_started";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_ready" | "recovery_blocked" }
+  >;
+}
+
+interface StepCommittedSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "step_committed";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_ready" }
+  >;
+  readonly messages: readonly StoredMessage[];
+  readonly replaceTranscript?: true;
+  readonly consumedInputIds?: readonly string[];
+}
+
+interface TaskTerminalSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "task_terminal";
+  readonly timestamp: string;
+  readonly taskId: string;
+  readonly runId: string;
+  readonly messages: readonly StoredMessage[];
+  readonly replaceTranscript?: true;
+  readonly lastTaskOutcome: SessionLastTaskOutcome;
+  readonly skillState?: SkillLifecycleState;
+  readonly consumedInputIds?: readonly string[];
+}
+
 export interface SnapshotSessionRecord {
   readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "snapshot";
@@ -202,6 +378,8 @@ export interface SnapshotSessionRecord {
   readonly modelSwitches?: readonly SessionModelSwitch[];
   readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
   readonly skillStateCheckpoints: readonly SessionSkillStateCheckpoint[];
+  readonly activeTask?: ActiveSessionTask;
+  readonly lastTaskOutcome?: SessionLastTaskOutcome;
 }
 
 export interface SkillStateSessionRecord {
@@ -230,6 +408,13 @@ export type SessionMutationRecord =
   | BashApprovalGrantedSessionRecord
   | BashApprovalRevokedSessionRecord
   | BashApprovalsClearedSessionRecord
+  | TaskAdmittedSessionRecord
+  | ProviderIntentSessionRecord
+  | ProviderAttemptSettledSessionRecord
+  | ProviderSettledSessionRecord
+  | TaskRecoveryStartedSessionRecord
+  | StepCommittedSessionRecord
+  | TaskTerminalSessionRecord
   | SkillStateSessionRecord
   | SnapshotSessionRecord;
 
@@ -264,6 +449,8 @@ export interface SessionState {
   readonly modelSwitches: readonly SessionModelSwitch[];
   readonly skillActivations: readonly SkillActivation[];
   readonly activeSkillIds: readonly string[];
+  readonly activeTask?: ActiveSessionTask;
+  readonly lastTaskOutcome?: SessionLastTaskOutcome;
   readonly [sessionReplayStateKey]: SessionReplayState;
 }
 
@@ -330,6 +517,8 @@ export interface SessionReplayState {
   activeModel?: SessionModelSelection;
   readonly modelSwitches: SessionModelSwitch[];
   readonly skillStateCheckpoints: SessionSkillStateCheckpoint[];
+  activeTask?: ActiveSessionTask;
+  lastTaskOutcome?: SessionLastTaskOutcome;
 }
 
 export interface SnapshotSearchResult {

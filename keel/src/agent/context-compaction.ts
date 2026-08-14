@@ -1,6 +1,11 @@
 import { errorMessage } from "../core/error.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
-import type { LLMProvider, ProviderMessage, Usage } from "../llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderMessage,
+  ProviderRequestAttemptObserver,
+  Usage,
+} from "../llm/types.ts";
 import { currentToolRound } from "./context-compaction/current-tool-round.ts";
 import type {
   ContextCompactionOptions as InternalContextCompactionOptions,
@@ -117,6 +122,7 @@ interface CompactMessagesOptions {
       "context_compaction" | "manual_compaction" | "model_switch_compaction"
     >
   >;
+  readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
 }
 
 export type CompactMessagesResult =
@@ -474,6 +480,9 @@ export async function compactMessages(
         : {}),
       ...(options.modelOperation !== undefined
         ? { modelOperation: options.modelOperation }
+        : {}),
+      ...(options.providerRequestAttempts !== undefined
+        ? { providerRequestAttempts: options.providerRequestAttempts }
         : {}),
     });
   } catch (error) {

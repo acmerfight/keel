@@ -372,6 +372,9 @@ interface PromptTurnRequest {
   readonly consumedInputLines: readonly QueuedLine[];
   readonly runTrigger: RunReportAgentRunTrigger;
   readonly runtimeOutcome?: SessionGoalRuntimeOutcome;
+  readonly recoveringTask?: {
+    readonly provider: SessionModelSelection;
+  };
 }
 
 interface PendingGoalDrive {
@@ -1124,8 +1127,27 @@ export async function runInteractiveSession(
           };
     managedSkills?.activation.beginTurn();
     const goalTurnStartedAt = sessionGoal?.status === "active" ? now() : null;
-    resolved = resolveActiveProvider(request.userMessage);
-    const turnProvider = resolved;
+    const turnProvider =
+      request.recoveringTask === undefined
+        ? resolveActiveProvider(request.userMessage)
+        : resolveSelectedProvider(
+            options,
+            request.userMessage,
+            request.recoveringTask.provider,
+          );
+    resolved = turnProvider;
+    const currentUserMessage = {
+      role: "user",
+      content: request.userMessage,
+      origin: request.userMessageOrigin,
+    } as const;
+    const durableTaskTurn =
+      savedSession?.taskRecovery !== undefined &&
+      (request.runTrigger === "user_prompt" ||
+        request.recoveringTask !== undefined);
+    if (request.recoveringTask === undefined) {
+      reserveMemoryProposalSource(currentUserMessage, turnProvider);
+    }
     const schemaTarget = mcpProviderSchemaTarget(
       turnProvider.providerId,
       turnProvider.model,
@@ -1194,6 +1216,17 @@ export async function runInteractiveSession(
         agentHistory.deliveredResult(delivery);
       }
     }
+    if (durableTaskTurn && request.recoveringTask === undefined) {
+      const userMessageId = reservedSessionMessageIds.find(
+        (reservation) => reservation.message === currentUserMessage,
+      )?.id;
+      savedSession.taskRecovery.admit({
+        userMessage: currentUserMessage,
+        provider: modelSelectionFromResolved(turnProvider),
+        consumedInputIds: queuedInputIds(request.consumedInputLines),
+        ...(userMessageId === undefined ? {} : { userMessageId }),
+      });
+    }
     const messagesBeforeTurn = [...sessionLedgerMessages(ledger)];
     const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
     const sessionGoalBeforeTurn =
@@ -1215,13 +1248,9 @@ export async function runInteractiveSession(
     const deferredInputLines: QueuedLine[] = [];
     const turnAbortController = new AbortController();
     activeAbortController = turnAbortController;
-    const currentUserMessage = {
-      role: "user",
-      content: request.userMessage,
-      origin: request.userMessageOrigin,
-    } as const;
-    ledger.append(currentUserMessage);
-    reserveMemoryProposalSource(currentUserMessage, turnProvider);
+    if (request.recoveringTask === undefined) {
+      ledger.append(currentUserMessage);
+    }
     let persistedMemorySourceMessages: readonly SessionMessage[] | null = null;
     let persistedDrainedInputCount = 0;
     const persistedInputIds = new Set<string>();
@@ -1250,13 +1279,15 @@ export async function runInteractiveSession(
                 ...request.consumedInputLines,
                 ...drainedInjectedLines,
               ]);
-              reviewedMemory.persistence.persistMessages({
-                messages: sourceMessages,
-                reason: "turn",
-                consumedInputIds: sourceInputIds,
-                skillState: null,
-                reservedMessageIds: sourceReservations,
-              });
+              if (!(durableTaskTurn && sourceMessage === currentUserMessage)) {
+                reviewedMemory.persistence.persistMessages({
+                  messages: sourceMessages,
+                  reason: "turn",
+                  consumedInputIds: sourceInputIds,
+                  skillState: null,
+                  reservedMessageIds: sourceReservations,
+                });
+              }
               persistedMemorySourceMessages = sourceMessages;
               persistedDrainedInputCount = drainedInjectedLines.length;
               for (const inputId of sourceInputIds) {
@@ -1440,6 +1471,24 @@ export async function runInteractiveSession(
           ...(turnModelOperations !== null
             ? { modelOperations: turnModelOperations }
             : {}),
+          ...(durableTaskTurn
+            ? {
+                providerRecovery: savedSession.taskRecovery.providerLifecycle(
+                  modelSelectionFromResolved(turnProvider),
+                  {
+                    pendingInputIds: () =>
+                      queuedInputIds(drainedInjectedLines).filter(
+                        (inputId) => !persistedInputIds.has(inputId),
+                      ),
+                    committed: (inputIds) => {
+                      for (const inputId of inputIds) {
+                        persistedInputIds.add(inputId);
+                      }
+                    },
+                  },
+                ),
+              }
+            : {}),
           ...(options.toolOutputArtifacts !== undefined
             ? { toolOutputArtifacts: options.toolOutputArtifacts }
             : {}),
@@ -1557,16 +1606,31 @@ export async function runInteractiveSession(
         )
           ? completedSkillState
           : null;
-      savedSession?.persistMessages({
-        messages: sessionLedgerMessages(ledger),
-        reason: "turn",
-        consumedInputIds: [
-          ...queuedInputIds(request.consumedInputLines),
-          ...queuedInputIds(drainedInjectedLines),
-        ].filter((inputId) => !persistedInputIds.has(inputId)),
-        skillState: changedSkillState,
-        reservedMessageIds: reservedSessionMessageIds,
-      });
+      if (durableTaskTurn && finalEnd?.stopReason === "cost_budget") {
+        savedSession.taskRecovery.blockProviderBudget();
+      } else if (durableTaskTurn) {
+        savedSession.taskRecovery.terminal({
+          messages: sessionLedgerMessages(ledger),
+          outcome: "completed",
+          ...(changedSkillState === null
+            ? {}
+            : { skillState: changedSkillState }),
+          consumedInputIds: queuedInputIds(drainedInjectedLines).filter(
+            (inputId) => !persistedInputIds.has(inputId),
+          ),
+        });
+      } else {
+        savedSession?.persistMessages({
+          messages: sessionLedgerMessages(ledger),
+          reason: "turn",
+          consumedInputIds: [
+            ...queuedInputIds(request.consumedInputLines),
+            ...queuedInputIds(drainedInjectedLines),
+          ].filter((inputId) => !persistedInputIds.has(inputId)),
+          skillState: changedSkillState,
+          reservedMessageIds: reservedSessionMessageIds,
+        });
+      }
       reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
       if (changedSkillState !== null) {
         systemPrompt = rebuildSystemPrompt();
@@ -1862,7 +1926,68 @@ export async function runInteractiveSession(
   let preserveInputForSessionSwitch = false;
   try {
     options.onInitialInputLinesAdmitted?.();
+    let recoveryPreventsInput = false;
+    let recoveryBlockedTaskId: string | null = null;
+    if (
+      savedSession?.taskRecovery !== undefined &&
+      initialState.activeTask !== undefined
+    ) {
+      const recovery = savedSession.taskRecovery.resume();
+      switch (recovery.kind) {
+        case "none":
+          break;
+        case "delivered":
+          ledger.append(recovery.message);
+          if (recovery.message.content !== "") {
+            options.writeStdout(recovery.message.content);
+          }
+          options.writeStdout("\n");
+          break;
+        case "blocked":
+          options.writeStderr(
+            `Error: recovery_blocked for durable Task ${recovery.task.taskId}: ${recovery.task.reason}.\n`,
+          );
+          recoveryBlockedTaskId = recovery.task.taskId;
+          break;
+        case "run": {
+          const userMessage = recovery.userMessage;
+          if (userMessage.role !== "user") {
+            throw new Error(
+              "durable Task recovery input is not a user message",
+            );
+          }
+          if (userMessage.subagentResultDelivery !== undefined) {
+            throw new Error(
+              "durable Task recovery input cannot be a subagent notification",
+            );
+          }
+          reportRecorder.beginTask("user_prompt");
+          try {
+            const turnResult = await runPromptTurn({
+              userMessage: userMessage.content,
+              userMessageOrigin: userMessage.origin,
+              consumedInputLines: [],
+              runTrigger: "user_prompt",
+              recoveringTask: { provider: recovery.task.provider },
+            });
+            reportRecorder.endTask(
+              turnResult.kind === "aborted" ? "aborted" : undefined,
+            );
+            if (turnResult.kind === "cost_budget") {
+              recoveryPreventsInput = true;
+            }
+          } catch (error) {
+            failCurrentReportTask();
+            throw error;
+          } finally {
+            resolved = null;
+          }
+          break;
+        }
+      }
+    }
     for (;;) {
+      if (recoveryPreventsInput) break;
       if (pendingGoalDrive !== null) {
         if (sessionGoal?.status !== "active") {
           pendingGoalDrive = null;
@@ -2751,6 +2876,18 @@ export async function runInteractiveSession(
           options.writeStderr(formatInteractiveCommandFailure(error));
         }
         consumeQueuedInputLines([rawInput]);
+        continue;
+      }
+      if (recoveryBlockedTaskId !== null) {
+        if (rawInput.inputId === undefined) {
+          savedSession?.persistQueuedInput({
+            sequence: rawInput.sequence,
+            line: rawInput.line,
+          });
+        }
+        options.writeStderr(
+          `Error: recovery_blocked for durable Task ${recoveryBlockedTaskId}; input remains queued.\n`,
+        );
         continue;
       }
       pendingGoalDrive = null;

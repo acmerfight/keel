@@ -10,12 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
-import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   appendSessionRecordLine,
   ledgerRecordMessages,
+  ledgerRecordStoredMessages,
   restoredUserMessageId,
   rootGraph,
   writeSessionLedger,
@@ -279,25 +279,26 @@ describe("CLI Main - Session Fork", () => {
         .trimEnd()
         .split("\n")
         .map((line) => JSON.parse(line));
-      const sourceAppends = sourceLedgerLines.filter(
-        (line) => line.type === "append",
+      const sourceTranscriptRecords = sourceLedgerLines.filter((line) =>
+        [
+          "append",
+          "replace",
+          "task_admitted",
+          "step_committed",
+          "task_terminal",
+        ].includes(line.type),
       );
-      const sourceUserMessages = sourceAppends.flatMap((line) =>
-        line.messages
-          .filter(
-            (storedMessage: { readonly message?: SessionMessage }) =>
-              storedMessage.message?.role === "user",
-          )
-          .map(
-            (storedMessage: {
-              readonly message: { readonly content: string };
-            }) => storedMessage.message.content,
-          ),
-      );
+      const sourceUserMessages = sourceTranscriptRecords
+        .flatMap(ledgerRecordMessages)
+        .flatMap((message) =>
+          message?.role === "user" ? [message.content] : [],
+        );
       expect(sourceUserMessages).not.toContain("/fork-points");
       expect(sourceUserMessages).not.toContain("/fork target --pick");
       expect(sourceUserMessages).not.toContain("2");
-      expect(JSON.stringify(sourceAppends)).toContain("remember gamma");
+      expect(JSON.stringify(sourceTranscriptRecords)).toContain(
+        "remember gamma",
+      );
       const targetLedgerLines = (
         await readFile(join(home, "sessions", "target", "ledger.jsonl"), "utf8")
       )
@@ -852,9 +853,9 @@ describe("CLI Main - Session Fork", () => {
         .trimEnd()
         .split("\n")
         .map((line) => JSON.parse(line));
-      const storedMessages = sourceLedgerLines
-        .filter((line) => line.type === "append")
-        .flatMap((line) => line.messages);
+      const storedMessages = sourceLedgerLines.flatMap(
+        ledgerRecordStoredMessages,
+      );
       const alphaMessage = storedMessages.find(
         (storedMessage) =>
           storedMessage.message?.role === "user" &&
@@ -966,7 +967,7 @@ describe("CLI Main - Session Fork", () => {
     await writeFile(
       join(sessionDir, "ledger.jsonl"),
       `${JSON.stringify({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "session",
         id: "empty",
         createdAt: "1970-01-01T00:00:00.000Z",
