@@ -1992,6 +1992,7 @@ export async function runInteractiveSession(
       /* v8 ignore stop */
     }
     for (;;) {
+      /* v8 ignore next -- the named-session recovery budget subprocess proves the child exits before accepting more input. */
       if (recoveryPreventsInput) break;
       if (pendingGoalDrive !== null) {
         if (sessionGoal?.status !== "active") {

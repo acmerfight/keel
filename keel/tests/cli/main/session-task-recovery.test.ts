@@ -6,7 +6,10 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { createSessionTaskRecovery } from "../../../src/cli/interactive-session/task-recovery.ts";
-import { createSessionStore } from "../../../src/cli/session-store.ts";
+import {
+  createSessionStore,
+  resumeSessionStore,
+} from "../../../src/cli/session-store.ts";
 import { runCliProcess } from "../../../src/testing/cli-harness.ts";
 import { withTimeout } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
@@ -343,6 +346,93 @@ describe("CLI Main - Session Task Recovery", () => {
         }
       }
     } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a recovered Task cannot afford its replacement provider request,
+    When the named session resumes with more input already waiting,
+    Then Keel blocks the Task and exits before accepting that input or calling the provider`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-recovery-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-recovery-home-"));
+    const provider = {
+      providerId: "deepseek" as const,
+      model: "deepseek-v4-flash",
+    };
+    let messages: readonly SessionMessage[] = [];
+    let requestCount = 0;
+    const server = createServer((_request, response) => {
+      requestCount++;
+      response.writeHead(500);
+      response.end();
+    });
+    await listen(server);
+
+    try {
+      const stored = createSessionStore({
+        sessionId: "recovery-cost-budget",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => stored,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "resume only if the provider request is affordable",
+          origin: { type: "user_prompt" },
+        },
+        provider,
+        consumedInputIds: [],
+      });
+      recovery.providerLifecycle(provider).providerRequestAttempts.begin();
+
+      const resumed = runCliProcess(
+        ["--resume", stored.id, "--max-cost", "0.000000001"],
+        {
+          cwd: workspace,
+          env: {
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+            KEEL_FORCE_INTERACTIVE: "1",
+            KEEL_HOME: home,
+            KEEL_PROVIDER: "deepseek",
+          },
+          stdin: "pipe",
+        },
+      );
+      resumed.child.stdin?.end("do not accept this follow-up\n");
+      const result = await withTimeout(
+        resumed.result,
+        5_000,
+        "budget-blocked recovery did not finish",
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(requestCount).toBe(0);
+      expect(
+        resumeSessionStore({
+          sessionId: stored.id,
+          workspace,
+          runtime: runtime(home, 2),
+        }).activeTask,
+      ).toMatchObject({
+        phase: "recovery_blocked",
+        reason: "provider_budget",
+        recovered: true,
+      });
+      expect(await readFile(stored.filePath, "utf8")).not.toContain(
+        "do not accept this follow-up",
+      );
+    } finally {
+      await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
