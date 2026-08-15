@@ -407,7 +407,7 @@ describe("Session Store Tool Call Ledger", () => {
         runtime: runtime(home),
       });
       const ledgerRecord = {
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "append",
         timestamp: "1970-01-01T00:00:00.001Z",
         reason: "turn",
@@ -552,7 +552,7 @@ describe("Session Store Tool Call Ledger", () => {
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toHaveLength(3);
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "append",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",
@@ -639,7 +639,7 @@ describe("Session Store Tool Call Ledger", () => {
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toHaveLength(3);
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "append",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",
@@ -747,7 +747,7 @@ describe("Session Store Tool Call Ledger", () => {
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toHaveLength(3);
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "replace",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",

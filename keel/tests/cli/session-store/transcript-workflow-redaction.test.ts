@@ -325,14 +325,14 @@ describe("Session Store Transcript Workflow Redaction", () => {
       await writeFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "session",
           id: session.id,
           createdAt: "1970-01-01T00:00:00.000Z",
           workspace: session.workspace,
           graph: rootGraph(session.id),
         })}\n${JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "skill_state",
           timestamp: "1970-01-01T00:00:00.001Z",
           messageOrdinal: 0,

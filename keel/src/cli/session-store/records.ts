@@ -51,6 +51,8 @@ import {
 } from "../session-message-schema.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
+  type ActiveSessionProviderAttempt,
+  type ActiveSessionTask,
   type AppendSessionRecord,
   type ModelSwitchSessionRecord,
   type ReplaceSessionRecord,
@@ -61,9 +63,11 @@ import {
   type SessionGoalSessionRecord,
   type SessionGraphRecord,
   type SessionHeaderRecord,
+  type SessionLastTaskOutcome,
   type SessionModelSelection,
   type SessionModelSwitch,
   type SessionMutationRecord,
+  type SessionProviderAttemptSettlement,
   type SessionQueuedInput,
   type SessionSkillStateCheckpoint,
   type SessionTaskProgressCheckpoint,
@@ -80,6 +84,14 @@ type BashApprovalRevokedSessionRecord = Extract<
 type BashApprovalsClearedSessionRecord = Extract<
   SessionMutationRecord,
   { readonly type: "bash_approvals_cleared" }
+>;
+type StepCommittedSessionRecord = Extract<
+  SessionMutationRecord,
+  { readonly type: "step_committed" }
+>;
+type TaskTerminalSessionRecord = Extract<
+  SessionMutationRecord,
+  { readonly type: "task_terminal" }
 >;
 
 const sessionTitleSchema = z.string().min(1).max(SESSION_TITLE_MAX_LENGTH);
@@ -195,6 +207,129 @@ const sessionModelSwitchSchema = z
     from: sessionModelSelectionSchema.nullable(),
     to: sessionModelSelectionSchema,
     messageOrdinal: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const sessionProviderAttemptUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative(),
+    cachedInputTokens: z.number().int().nonnegative(),
+    uncachedInputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const sessionProviderAttemptSettlementSchema = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("completed"),
+      usage: sessionProviderAttemptUsageSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("retryable_error"),
+      provider: z.string(),
+      reason: z.string(),
+      attempt: z.number().int().nonnegative(),
+      maxRetries: z.number().int().nonnegative(),
+      delayMs: z.number().nonnegative(),
+    })
+    .strict(),
+  z.object({ outcome: z.literal("context_overflow") }).strict(),
+  z.object({ outcome: z.literal("aborted") }).strict(),
+  z
+    .object({
+      outcome: z.literal("terminal_error"),
+      errorCode: z.string(),
+    })
+    .strict(),
+]);
+
+const activeSessionProviderAttemptSchema = z
+  .object({
+    attemptId: z.string().min(1),
+    responseMessageId: z.string().min(1),
+    startedAt: z.string(),
+    settlement: sessionProviderAttemptSettlementSchema.optional(),
+  })
+  .strict();
+
+const activeSessionTaskBaseSchema = z.object({
+  taskId: z.string().min(1),
+  runId: z.string().min(1),
+  trigger: z.literal("user_prompt"),
+  admittedAt: z.string(),
+  userMessageId: z.string().min(1),
+  provider: sessionModelSelectionSchema,
+  maxProviderReplacements: z.number().int().nonnegative(),
+  providerReplacementsUsed: z.number().int().nonnegative(),
+  recovered: z.boolean(),
+  providerRequestIds: z.array(
+    z
+      .object({
+        attemptId: z.string().min(1),
+        responseMessageId: z.string().min(1),
+      })
+      .strict(),
+  ),
+  unknownProviderAttemptIds: z.array(z.string().min(1)),
+});
+
+const providerReadyTaskSchema = activeSessionTaskBaseSchema
+  .extend({ phase: z.literal("provider_ready") })
+  .strict();
+const providerPendingTaskSchema = activeSessionTaskBaseSchema
+  .extend({
+    phase: z.literal("provider_pending"),
+    providerAttempt: activeSessionProviderAttemptSchema,
+  })
+  .strict();
+const providerSettledTaskSchema = activeSessionTaskBaseSchema
+  .extend({
+    phase: z.literal("provider_settled"),
+    providerAttempt: activeSessionProviderAttemptSchema.extend({
+      settlement: z
+        .object({
+          outcome: z.literal("completed"),
+          usage: sessionProviderAttemptUsageSchema,
+        })
+        .strict(),
+    }),
+    assistantMessage: storedMessageSchema,
+    stopReason: z.enum(["stop", "length"]),
+  })
+  .strict();
+const recoveryBlockedTaskSchema = activeSessionTaskBaseSchema
+  .extend({
+    phase: z.literal("recovery_blocked"),
+    providerAttempt: activeSessionProviderAttemptSchema.optional(),
+    assistantMessage: storedMessageSchema.optional(),
+    stopReason: z.enum(["stop", "length"]).optional(),
+    reason: z.enum([
+      "provider_replacement_limit",
+      "provider_budget",
+      "tool_plan",
+    ]),
+  })
+  .strict();
+
+const activeSessionTaskSchema = z.discriminatedUnion("phase", [
+  providerReadyTaskSchema,
+  providerPendingTaskSchema,
+  providerSettledTaskSchema,
+  recoveryBlockedTaskSchema,
+]);
+
+const sessionLastTaskOutcomeSchema = z
+  .object({
+    taskId: z.string().min(1),
+    runId: z.string().min(1),
+    outcome: z.enum(["completed", "failed", "aborted"]),
+    timestamp: z.string(),
+    recovered: z.boolean(),
+    unknownProviderAttemptIds: z.array(z.string().min(1)),
+    responseMessageId: z.string().min(1).optional(),
   })
   .strict();
 
@@ -359,6 +494,87 @@ const bashApprovalsClearedRecordSchema = z
   })
   .strict();
 
+const taskAdmittedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("task_admitted"),
+    timestamp: z.string(),
+    task: providerReadyTaskSchema,
+    userMessage: storedMessageSchema,
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
+const providerIntentRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("provider_intent"),
+    timestamp: z.string(),
+    task: providerPendingTaskSchema,
+  })
+  .strict();
+
+const providerAttemptSettledRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("provider_attempt_settled"),
+    timestamp: z.string(),
+    task: providerPendingTaskSchema.extend({
+      providerAttempt: activeSessionProviderAttemptSchema.extend({
+        settlement: sessionProviderAttemptSettlementSchema,
+      }),
+    }),
+  })
+  .strict();
+
+const providerSettledRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("provider_settled"),
+    timestamp: z.string(),
+    task: providerSettledTaskSchema,
+  })
+  .strict();
+
+const taskRecoveryStartedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("task_recovery_started"),
+    timestamp: z.string(),
+    task: z.discriminatedUnion("phase", [
+      providerReadyTaskSchema,
+      recoveryBlockedTaskSchema,
+    ]),
+  })
+  .strict();
+
+const stepCommittedRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("step_committed"),
+    timestamp: z.string(),
+    task: providerReadyTaskSchema,
+    messages: z.array(storedMessageSchema),
+    replaceTranscript: z.literal(true).optional(),
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
+const taskTerminalRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("task_terminal"),
+    timestamp: z.string(),
+    taskId: z.string().min(1),
+    runId: z.string().min(1),
+    messages: z.array(storedMessageSchema),
+    replaceTranscript: z.literal(true).optional(),
+    lastTaskOutcome: sessionLastTaskOutcomeSchema,
+    skillState: skillLifecycleStateSchema.optional(),
+    consumedInputIds: consumedInputIdsSchema.optional(),
+  })
+  .strict();
+
 const queuedInputSchema = z
   .object({
     id: z.string(),
@@ -385,6 +601,8 @@ const snapshotRecordSchema = z
       .array(sessionTaskProgressCheckpointSchema)
       .optional(),
     skillStateCheckpoints: z.array(sessionSkillStateCheckpointSchema).min(1),
+    activeTask: activeSessionTaskSchema.optional(),
+    lastTaskOutcome: sessionLastTaskOutcomeSchema.optional(),
   })
   .strict();
 
@@ -406,6 +624,13 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   bashApprovalGrantedRecordSchema,
   bashApprovalRevokedRecordSchema,
   bashApprovalsClearedRecordSchema,
+  taskAdmittedRecordSchema,
+  providerIntentRecordSchema,
+  providerAttemptSettledRecordSchema,
+  providerSettledRecordSchema,
+  taskRecoveryStartedRecordSchema,
+  stepCommittedRecordSchema,
+  taskTerminalRecordSchema,
   skillStateRecordSchema,
   snapshotRecordSchema,
 ]);
@@ -431,6 +656,8 @@ type RawSkillActivation = z.infer<typeof skillActivationSchema>;
 type RawSessionSkillStateCheckpoint = z.infer<
   typeof sessionSkillStateCheckpointSchema
 >;
+type RawActiveSessionTask = z.infer<typeof activeSessionTaskSchema>;
+type RawSessionLastTaskOutcome = z.infer<typeof sessionLastTaskOutcomeSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
 
@@ -627,6 +854,287 @@ function copyStoredMessage(storedMessage: StoredMessage): StoredMessage {
   return {
     id: storedMessage.id,
     message: copyMessage(storedMessage.message),
+  };
+}
+
+function copySessionProviderAttemptSettlement(
+  settlement: SessionProviderAttemptSettlement,
+): SessionProviderAttemptSettlement {
+  switch (settlement.outcome) {
+    case "completed":
+      return {
+        outcome: "completed",
+        usage: { ...settlement.usage },
+      };
+    case "retryable_error":
+      return { ...settlement };
+    case "context_overflow":
+    case "aborted":
+      return { outcome: settlement.outcome };
+    case "terminal_error":
+      return { ...settlement };
+  }
+}
+
+function copyActiveSessionProviderAttempt(
+  attempt: ActiveSessionProviderAttempt,
+): ActiveSessionProviderAttempt {
+  return {
+    attemptId: attempt.attemptId,
+    responseMessageId: attempt.responseMessageId,
+    startedAt: attempt.startedAt,
+    ...(attempt.settlement === undefined
+      ? {}
+      : {
+          settlement: copySessionProviderAttemptSettlement(attempt.settlement),
+        }),
+  };
+}
+
+function toActiveSessionProviderAttempt(
+  attempt: z.infer<typeof activeSessionProviderAttemptSchema>,
+): ActiveSessionProviderAttempt {
+  return {
+    attemptId: attempt.attemptId,
+    responseMessageId: attempt.responseMessageId,
+    startedAt: attempt.startedAt,
+    ...(attempt.settlement === undefined
+      ? {}
+      : {
+          settlement: copySessionProviderAttemptSettlement(attempt.settlement),
+        }),
+  };
+}
+
+function activeSessionTaskBase(task: ActiveSessionTask) {
+  return {
+    taskId: task.taskId,
+    runId: task.runId,
+    trigger: task.trigger,
+    admittedAt: task.admittedAt,
+    userMessageId: task.userMessageId,
+    provider: toSessionModelSelection(task.provider),
+    maxProviderReplacements: task.maxProviderReplacements,
+    providerReplacementsUsed: task.providerReplacementsUsed,
+    recovered: task.recovered,
+    providerRequestIds: task.providerRequestIds.map((request) => ({
+      attemptId: request.attemptId,
+      responseMessageId: request.responseMessageId,
+    })),
+    unknownProviderAttemptIds: [...task.unknownProviderAttemptIds],
+  } as const;
+}
+
+function copyActiveSessionTask(task: ActiveSessionTask): ActiveSessionTask {
+  const base = activeSessionTaskBase(task);
+  switch (task.phase) {
+    case "provider_ready":
+      return { ...base, phase: "provider_ready" };
+    case "provider_pending":
+      return {
+        ...base,
+        phase: "provider_pending",
+        providerAttempt: copyActiveSessionProviderAttempt(task.providerAttempt),
+      };
+    case "provider_settled":
+      return {
+        ...base,
+        phase: "provider_settled",
+        providerAttempt: {
+          ...copyActiveSessionProviderAttempt(task.providerAttempt),
+          settlement: {
+            outcome: "completed",
+            usage: { ...task.providerAttempt.settlement.usage },
+          },
+        },
+        assistantMessage: copyStoredMessage(task.assistantMessage),
+        stopReason: task.stopReason,
+      };
+    case "recovery_blocked":
+      return {
+        ...base,
+        phase: "recovery_blocked",
+        ...(task.providerAttempt === undefined
+          ? {}
+          : {
+              providerAttempt: copyActiveSessionProviderAttempt(
+                task.providerAttempt,
+              ),
+            }),
+        ...(task.assistantMessage === undefined
+          ? {}
+          : { assistantMessage: copyStoredMessage(task.assistantMessage) }),
+        ...(task.stopReason === undefined
+          ? {}
+          : { stopReason: task.stopReason }),
+        reason: task.reason,
+      };
+  }
+}
+
+function toActiveSessionTask(task: RawActiveSessionTask): ActiveSessionTask {
+  const base = {
+    taskId: task.taskId,
+    runId: task.runId,
+    trigger: task.trigger,
+    admittedAt: task.admittedAt,
+    userMessageId: task.userMessageId,
+    provider: toSessionModelSelection(task.provider),
+    maxProviderReplacements: task.maxProviderReplacements,
+    providerReplacementsUsed: task.providerReplacementsUsed,
+    recovered: task.recovered,
+    providerRequestIds: task.providerRequestIds.map((request) => ({
+      attemptId: request.attemptId,
+      responseMessageId: request.responseMessageId,
+    })),
+    unknownProviderAttemptIds: [...task.unknownProviderAttemptIds],
+  } as const;
+  switch (task.phase) {
+    case "provider_ready":
+      return { ...base, phase: "provider_ready" };
+    case "provider_pending":
+      return {
+        ...base,
+        phase: "provider_pending",
+        providerAttempt: toActiveSessionProviderAttempt(task.providerAttempt),
+      };
+    case "provider_settled":
+      return {
+        ...base,
+        phase: "provider_settled",
+        providerAttempt: {
+          ...task.providerAttempt,
+          settlement: {
+            outcome: "completed",
+            usage: { ...task.providerAttempt.settlement.usage },
+          },
+        },
+        assistantMessage: toStoredMessage(task.assistantMessage),
+        stopReason: task.stopReason,
+      };
+    case "recovery_blocked":
+      return {
+        ...base,
+        phase: "recovery_blocked",
+        ...(task.providerAttempt === undefined
+          ? {}
+          : {
+              providerAttempt: toActiveSessionProviderAttempt(
+                task.providerAttempt,
+              ),
+            }),
+        ...(task.assistantMessage === undefined
+          ? {}
+          : { assistantMessage: toStoredMessage(task.assistantMessage) }),
+        ...(task.stopReason === undefined
+          ? {}
+          : { stopReason: task.stopReason }),
+        reason: task.reason,
+      };
+  }
+}
+
+function toProviderReadySessionTask(
+  task: RawActiveSessionTask,
+): Extract<ActiveSessionTask, { readonly phase: "provider_ready" }> {
+  const converted = toActiveSessionTask(task);
+  /* v8 ignore next 3 -- the discriminated input schema fixes this phase before conversion. */
+  if (converted.phase !== "provider_ready") {
+    sessionStoreError("Error: provider-ready Task record changed phase.");
+  }
+  return converted;
+}
+
+function toProviderPendingSessionTask(
+  task: RawActiveSessionTask,
+): Extract<ActiveSessionTask, { readonly phase: "provider_pending" }> {
+  const converted = toActiveSessionTask(task);
+  /* v8 ignore next 3 -- the discriminated input schema fixes this phase before conversion. */
+  if (converted.phase !== "provider_pending") {
+    sessionStoreError("Error: provider-pending Task record changed phase.");
+  }
+  return converted;
+}
+
+function toProviderAttemptSettledSessionTask(
+  task: RawActiveSessionTask,
+): Extract<ActiveSessionTask, { readonly phase: "provider_pending" }> & {
+  readonly providerAttempt: ActiveSessionProviderAttempt & {
+    readonly settlement: SessionProviderAttemptSettlement;
+  };
+} {
+  const converted = toProviderPendingSessionTask(task);
+  const settlement = converted.providerAttempt.settlement;
+  /* v8 ignore next 3 -- the settled-attempt input schema requires this field before conversion. */
+  if (settlement === undefined) {
+    sessionStoreError("Error: settled provider attempt is missing settlement.");
+  }
+  return {
+    ...converted,
+    providerAttempt: {
+      ...converted.providerAttempt,
+      settlement,
+    },
+  };
+}
+
+function toProviderSettledSessionTask(
+  task: RawActiveSessionTask,
+): Extract<ActiveSessionTask, { readonly phase: "provider_settled" }> {
+  const converted = toActiveSessionTask(task);
+  /* v8 ignore next 3 -- the discriminated input schema fixes this phase before conversion. */
+  if (converted.phase !== "provider_settled") {
+    sessionStoreError("Error: provider-settled Task record changed phase.");
+  }
+  return converted;
+}
+
+function toRecoverySessionTask(
+  task: RawActiveSessionTask,
+): Extract<
+  ActiveSessionTask,
+  { readonly phase: "provider_ready" | "recovery_blocked" }
+> {
+  const converted = toActiveSessionTask(task);
+  /* v8 ignore next 6 -- the recovery-record union admits only these two discriminants before conversion. */
+  if (
+    converted.phase !== "provider_ready" &&
+    converted.phase !== "recovery_blocked"
+  ) {
+    sessionStoreError("Error: recovery Task record changed phase.");
+  }
+  return converted;
+}
+
+function copySessionLastTaskOutcome(
+  outcome: SessionLastTaskOutcome,
+): SessionLastTaskOutcome {
+  return {
+    taskId: outcome.taskId,
+    runId: outcome.runId,
+    outcome: outcome.outcome,
+    timestamp: outcome.timestamp,
+    recovered: outcome.recovered,
+    unknownProviderAttemptIds: [...outcome.unknownProviderAttemptIds],
+    ...(outcome.responseMessageId === undefined
+      ? {}
+      : { responseMessageId: outcome.responseMessageId }),
+  };
+}
+
+function toSessionLastTaskOutcome(
+  outcome: RawSessionLastTaskOutcome,
+): SessionLastTaskOutcome {
+  return {
+    taskId: outcome.taskId,
+    runId: outcome.runId,
+    outcome: outcome.outcome,
+    timestamp: outcome.timestamp,
+    recovered: outcome.recovered,
+    unknownProviderAttemptIds: [...outcome.unknownProviderAttemptIds],
+    ...(outcome.responseMessageId === undefined
+      ? {}
+      : { responseMessageId: outcome.responseMessageId }),
   };
 }
 
@@ -838,6 +1346,14 @@ function appendConsumedInputIds(
   inputIds: readonly string[] | undefined,
 ): SkillStateSessionRecord;
 function appendConsumedInputIds(
+  record: StepCommittedSessionRecord,
+  inputIds: readonly string[] | undefined,
+): StepCommittedSessionRecord;
+function appendConsumedInputIds(
+  record: TaskTerminalSessionRecord,
+  inputIds: readonly string[] | undefined,
+): TaskTerminalSessionRecord;
+function appendConsumedInputIds(
   record:
     | AppendSessionRecord
     | ReplaceSessionRecord
@@ -846,7 +1362,9 @@ function appendConsumedInputIds(
     | SessionGoalSessionRecord
     | BashApprovalRevokedSessionRecord
     | BashApprovalsClearedSessionRecord
-    | SkillStateSessionRecord,
+    | SkillStateSessionRecord
+    | StepCommittedSessionRecord
+    | TaskTerminalSessionRecord,
   inputIds: readonly string[] | undefined,
 ):
   | AppendSessionRecord
@@ -856,7 +1374,9 @@ function appendConsumedInputIds(
   | SessionGoalSessionRecord
   | BashApprovalRevokedSessionRecord
   | BashApprovalsClearedSessionRecord
-  | SkillStateSessionRecord {
+  | SkillStateSessionRecord
+  | StepCommittedSessionRecord
+  | TaskTerminalSessionRecord {
   if (inputIds === undefined) {
     return record;
   }
@@ -1412,6 +1932,85 @@ function toSessionMutationRecord(
         },
         record.consumedInputIds,
       );
+    case "task_admitted":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "task_admitted",
+        timestamp: record.timestamp,
+        task: toProviderReadySessionTask(record.task),
+        userMessage: toStoredMessage(record.userMessage),
+        ...(record.consumedInputIds === undefined
+          ? {}
+          : { consumedInputIds: [...record.consumedInputIds] }),
+      };
+    case "provider_intent":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "provider_intent",
+        timestamp: record.timestamp,
+        task: toProviderPendingSessionTask(record.task),
+      };
+    case "provider_attempt_settled":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "provider_attempt_settled",
+        timestamp: record.timestamp,
+        task: toProviderAttemptSettledSessionTask(record.task),
+      };
+    case "provider_settled":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "provider_settled",
+        timestamp: record.timestamp,
+        task: toProviderSettledSessionTask(record.task),
+      };
+    case "task_recovery_started": {
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "task_recovery_started",
+        timestamp: record.timestamp,
+        task: toRecoverySessionTask(record.task),
+      };
+    }
+    case "step_committed":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "step_committed",
+          timestamp: record.timestamp,
+          task: toProviderReadySessionTask(record.task),
+          messages: record.messages.map(toStoredMessage),
+          ...(record.replaceTranscript === true
+            ? { replaceTranscript: true as const }
+            : {}),
+        },
+        record.consumedInputIds,
+      );
+    case "task_terminal":
+      return appendConsumedInputIds(
+        {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          type: "task_terminal",
+          timestamp: record.timestamp,
+          taskId: record.taskId,
+          runId: record.runId,
+          messages: record.messages.map(toStoredMessage),
+          ...(record.replaceTranscript === true
+            ? { replaceTranscript: true as const }
+            : {}),
+          lastTaskOutcome: toSessionLastTaskOutcome(record.lastTaskOutcome),
+          ...(record.skillState === undefined
+            ? {}
+            : {
+                skillState: {
+                  skillActivations:
+                    record.skillState.skillActivations.map(toSkillActivation),
+                  activeSkillIds: [...record.skillState.activeSkillIds],
+                },
+              }),
+        },
+        record.consumedInputIds,
+      );
     case "skill_state":
       return appendConsumedInputIds(
         {
@@ -1460,6 +2059,14 @@ function toSessionMutationRecord(
         skillStateCheckpoints: record.skillStateCheckpoints.map(
           toSessionSkillStateCheckpoint,
         ),
+        ...(record.activeTask === undefined
+          ? {}
+          : { activeTask: toActiveSessionTask(record.activeTask) }),
+        ...(record.lastTaskOutcome === undefined
+          ? {}
+          : {
+              lastTaskOutcome: toSessionLastTaskOutcome(record.lastTaskOutcome),
+            }),
       };
   }
 }
@@ -1493,6 +2100,9 @@ function validSessionSkillState(record: SessionMutationRecord): boolean {
   }
   if (record.type === "skill_state") {
     return validSkillLifecycleFields(record);
+  }
+  if (record.type === "task_terminal" && record.skillState !== undefined) {
+    return validSkillLifecycleFields(record.skillState);
   }
   if (record.type === "snapshot") {
     return record.skillStateCheckpoints.every(validSkillLifecycleFields);
@@ -1649,10 +2259,12 @@ function validateCompletedTranscript(
 
 export {
   bashApprovalGrantHasRedactionMarker,
+  copyActiveSessionTask,
   copyBashApprovalGrant,
   copyMessage,
   copySessionForkPointRecord,
   copySessionGraphRecord,
+  copySessionLastTaskOutcome,
   copySkillActivation,
   copyStoredMessage,
   messagesFromStoredMessages,

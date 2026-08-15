@@ -7,6 +7,7 @@ import type {
   LLMProvider,
   LLMStopReason,
   ProviderMessage,
+  ProviderRequestAttemptObserver,
   Usage,
 } from "../../llm/types.ts";
 import { isUntrustedMcpContentToolCall } from "../../tools/registry.ts";
@@ -15,6 +16,7 @@ import type {
   ModelOperationPurpose,
   ModelOperationRequest,
 } from "../model-operations.ts";
+import { combineProviderRequestAttemptObservers } from "../provider-request-attempts.ts";
 import type { SessionMessage } from "../session-message.ts";
 import type {
   ToolOutputArtifactCompactionArtifact,
@@ -431,18 +433,23 @@ async function collectTextOnlyTurn(options: {
   readonly messages: readonly ProviderMessage[];
   readonly signal: AbortSignal;
   readonly operation: ModelOperationHandle | null;
+  readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
 }): Promise<TextOnlyTurn> {
   let text = "";
   let usage: Usage | null = null;
   let stopReason: LLMStopReason | null = null;
+  const providerRequestAttempts = combineProviderRequestAttemptObservers([
+    options.providerRequestAttempts,
+    options.operation?.providerRequestAttempts,
+  ]);
   for await (const event of options.provider.stream({
     systemPrompt: options.systemPrompt,
     messages: options.messages,
     signal: options.signal,
     toolExposure: { kind: "none" },
-    ...(options.operation !== null
-      ? { providerRequestAttempts: options.operation.providerRequestAttempts }
-      : {}),
+    ...(providerRequestAttempts === undefined
+      ? {}
+      : { providerRequestAttempts }),
   })) {
     switch (event.type) {
       case "text":
@@ -510,6 +517,7 @@ interface CollectCompactionSummaryOptions {
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly focusInstruction?: string;
   readonly modelOperation?: CompactionModelOperationRequest;
+  readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
 }
 
 function beginCompactionModelOperation(
@@ -582,6 +590,9 @@ async function collectCompactionSummaryAttempts(
         messages: [{ role: "user", content: await prompt }],
         signal: options.signal,
         operation,
+        ...(options.providerRequestAttempts === undefined
+          ? {}
+          : { providerRequestAttempts: options.providerRequestAttempts }),
       });
       completedAttemptCount++;
       usage = addUsage(usage, turn.usage);

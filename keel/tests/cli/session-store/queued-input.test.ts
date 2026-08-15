@@ -59,7 +59,7 @@ describe("Session Store Queued Input", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines[1]).toEqual({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "input_admitted",
         timestamp: "1970-01-01T00:00:00.001Z",
         id: queuedInput.id,
@@ -123,7 +123,7 @@ describe("Session Store Queued Input", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines[2]).toEqual({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "append",
         timestamp: "1970-01-01T00:00:00.002Z",
         reason: "turn",
@@ -151,7 +151,7 @@ describe("Session Store Queued Input", () => {
       `${[
         headerLine("ordered-inputs", ledgerWorkspace),
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.003Z",
           id: "sequence-last",
@@ -159,7 +159,7 @@ describe("Session Store Queued Input", () => {
           line: "third",
         }),
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.002Z",
           id: "same-sequence-later",
@@ -167,7 +167,7 @@ describe("Session Store Queued Input", () => {
           line: "second by timestamp",
         }),
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "same-sequence-earlier",
@@ -175,7 +175,7 @@ describe("Session Store Queued Input", () => {
           line: "first by timestamp",
         }),
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.004Z",
           id: "same-time-b",
@@ -183,7 +183,7 @@ describe("Session Store Queued Input", () => {
           line: "same timestamp second id",
         }),
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.004Z",
           id: "same-time-a",
@@ -345,7 +345,7 @@ describe("Session Store Queued Input", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines.at(-1)).toEqual({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "input_consumed",
         timestamp: "1970-01-01T00:00:00.003Z",
         inputIds: [queuedInput.id],

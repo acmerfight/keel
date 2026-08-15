@@ -909,7 +909,7 @@ describe("CLI Main - Skill Lifecycle", () => {
 
   test(`Given the first line of a named session arrives through an active input waiter,
     When the model selects a Skill before the lazy session is created,
-    Then transcript and activation state appear only in the same append record`, async () => {
+    Then transcript and activation state appear in the atomic Task terminal record`, async () => {
     // Given
     const workspace = await mkdtemp(
       join(tmpdir(), "keel-skill-lazy-atomic-workspace-"),
@@ -974,10 +974,18 @@ describe("CLI Main - Skill Lifecycle", () => {
         .map((line) => JSON.parse(line));
       expect(records.map((record) => record.type)).toEqual([
         "session",
-        "append",
+        "task_admitted",
+        "provider_intent",
+        "provider_attempt_settled",
+        "provider_settled",
+        "step_committed",
+        "provider_intent",
+        "provider_attempt_settled",
+        "provider_settled",
+        "task_terminal",
       ]);
-      expect(records[1]).toMatchObject({
-        type: "append",
+      expect(records.at(-1)).toMatchObject({
+        type: "task_terminal",
         skillState: {
           skillActivations: [{ qualifiedName: "repo:review" }],
           activeSkillIds: [expect.any(String)],

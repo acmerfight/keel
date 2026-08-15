@@ -275,6 +275,66 @@ function applySessionCatalogMutation(
           })),
         },
       };
+    case "task_admitted":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        preview: appendCatalogPreviewState(
+          state.preview,
+          catalogPreviewStateFromStoredMessages([record.userMessage]),
+        ),
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
+      };
+    case "task_terminal":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        preview:
+          record.replaceTranscript === true
+            ? catalogPreviewStateFromStoredMessages(record.messages)
+            : appendCatalogPreviewState(
+                state.preview,
+                catalogPreviewStateFromStoredMessages(record.messages),
+              ),
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
+        ...(record.skillState === undefined
+          ? {}
+          : {
+              skillActivations:
+                record.skillState.skillActivations.map(copySkillActivation),
+              activeSkillIds: [...record.skillState.activeSkillIds],
+            }),
+      };
+    case "step_committed":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+        preview:
+          record.replaceTranscript === true
+            ? catalogPreviewStateFromStoredMessages(record.messages)
+            : appendCatalogPreviewState(
+                state.preview,
+                catalogPreviewStateFromStoredMessages(record.messages),
+              ),
+        pendingInputsById: consumeSessionCatalogInputs(
+          state.pendingInputsById,
+          record.consumedInputIds,
+        ),
+      };
+    case "provider_intent":
+    case "provider_attempt_settled":
+    case "provider_settled":
+    case "task_recovery_started":
+      return {
+        ...state,
+        updatedAt: record.timestamp,
+      };
     case "bash_approval_granted":
       return {
         ...state,

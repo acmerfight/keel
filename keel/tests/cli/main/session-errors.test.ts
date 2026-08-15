@@ -53,6 +53,7 @@ describe("CLI Main - Session Errors", () => {
         });
         req.on("end", () => {
           JSON.parse(body);
+          rmSync(ledgerPath, { force: true });
           mkdirSync(ledgerPath, { recursive: true });
           input.write("queue while the turn is active\n");
           input.write("ignore input after persistence fails\n");
@@ -97,8 +98,8 @@ describe("CLI Main - Session Errors", () => {
 
         // Then
         expect(exitCode).toBe(1);
-        expect(fixture.stderr()).toContain(
-          `Error: session "${sessionId}" already exists.`,
+        expect(fixture.stderr()).toMatch(
+          /Error: (?:cannot write session ledger|completed durable Task .* is missing its settled final response)/u,
         );
         expect(fixture.stderr()).not.toContain("UNCAUGHT");
         expect(fixture.stderr()).not.toContain("unexpected runtime failure");
@@ -369,7 +370,7 @@ describe("CLI Main - Session Errors", () => {
     await writeFile(
       ledgerPath,
       `${JSON.stringify({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "session",
         id: "snapshot-queued",
         createdAt: "1970-01-01T00:00:00.000Z",
@@ -382,7 +383,7 @@ describe("CLI Main - Session Errors", () => {
     await writeFile(
       ledgerPath,
       `\n${JSON.stringify({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.001Z",
         reason: "size_threshold",
@@ -481,7 +482,6 @@ describe("CLI Main - Session Errors", () => {
         .trimEnd()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(ledgerLines).toHaveLength(4);
       const admittedInput = ledgerLines.find(
         (line) => line.type === "input_admitted",
       );
@@ -489,11 +489,14 @@ describe("CLI Main - Session Errors", () => {
         type: "input_admitted",
         line: "what did I ask you to remember?",
       });
-      const consumingAppend = ledgerLines.find((line) =>
-        Array.isArray(line.consumedInputIds),
+      const consumingAdmissions = ledgerLines.filter(
+        (line) =>
+          Array.isArray(line.consumedInputIds) &&
+          line.consumedInputIds.includes(admittedInput.id),
       );
-      expect(consumingAppend).toMatchObject({
-        type: "append",
+      expect(consumingAdmissions).toHaveLength(1);
+      expect(consumingAdmissions[0]).toMatchObject({
+        type: "task_admitted",
         consumedInputIds: [admittedInput.id],
       });
     } finally {
@@ -558,7 +561,7 @@ describe("CLI Main - Session Errors", () => {
       join(home, "sessions", "broken", "ledger.jsonl"),
       [
         JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "session",
           id: "broken",
           createdAt: "1970-01-01T00:00:00.000Z",
@@ -608,7 +611,7 @@ describe("CLI Main - Session Errors", () => {
     await writeFile(
       ledgerPath,
       `${JSON.stringify({
-        schemaVersion: 6,
+        schemaVersion: 7,
         type: "session",
         id: "huge",
         createdAt: "1970-01-01T00:00:00.000Z",

@@ -18,7 +18,9 @@ import type {
   LLMProvider,
   ModelToolExposure,
   ProviderContinuationLease,
+  ProviderRequestAttemptObserver,
   ToolCall,
+  Usage,
 } from "../llm/types.ts";
 import type { McpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
@@ -259,6 +261,7 @@ interface RunAgentTurnOptionsBase {
   readonly costTracking?: CostTrackingOptions;
   readonly contextCompaction?: ContextCompactionOptions;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
+  readonly providerRecovery?: AgentProviderRecoveryLifecycle;
   readonly readVisibility?: ReadVisibilityState;
   readonly projectInstructionVisibility?: ProjectInstructionVisibilityState;
   readonly recordCheckpointOperations?: (
@@ -270,6 +273,20 @@ interface RunAgentTurnOptionsBase {
       "usage" | "turns" | "cost"
     > & { readonly costUsd: number },
   ) => void;
+}
+
+export interface AgentProviderRecoveryLifecycle {
+  readonly providerRequestAttempts: ProviderRequestAttemptObserver;
+  readonly auxiliaryProviderRequestAttempts: ProviderRequestAttemptObserver;
+  readonly beforeRequest: (messages: readonly SessionMessage[]) => void;
+  readonly settled: (response: {
+    readonly assistantMessage: Extract<
+      SessionMessage,
+      { readonly role: "assistant" }
+    >;
+    readonly usage: Usage;
+    readonly stopReason: "stop" | "length";
+  }) => void;
 }
 
 type MainAgentControlOptions =
@@ -505,7 +522,9 @@ function combinedReasoningContent(
   return `${left ?? ""}${right ?? ""}`;
 }
 
-function toolRequestMessage(turn: AgentTurn): SessionMessage {
+function toolRequestMessage(
+  turn: AgentTurn,
+): Extract<SessionMessage, { readonly role: "assistant" }> {
   const providerMetadata = providerMetadataFromReasoningContent(
     turn.reasoningContent,
   );
@@ -644,7 +663,7 @@ function delegationForToolRound(
 function finalReplyMessage(
   text: string,
   reasoningContent: string | null,
-): SessionMessage | null {
+): Extract<SessionMessage, { readonly role: "assistant" }> | null {
   const providerMetadata =
     providerMetadataFromReasoningContent(reasoningContent);
   return text === "" && reasoningContent === null
@@ -1044,6 +1063,12 @@ export async function* runAgentTurn(
       ? { toolOutputArtifacts: options.toolOutputArtifacts }
       : {}),
     modelOperations: options.modelOperations ?? null,
+    ...(options.providerRecovery === undefined
+      ? {}
+      : {
+          providerRequestAttempts:
+            options.providerRecovery.auxiliaryProviderRequestAttempts,
+        }),
     taskProgress: () => taskProgress,
     costTracking,
     onContextCompacted: async (targetMessages) => {
@@ -1239,6 +1264,9 @@ export async function* runAgentTurn(
     let retainSubagentResultContinuation = false;
     try {
       try {
+        options.providerRecovery?.beforeRequest(
+          sessionLedgerMessages(sessionLedger),
+        );
         turnResult = yield* streamTurnWithOverflowRecovery(turnConfig, state, {
           provider: mainContinuation?.continuation.provider ?? requestProvider,
           systemPrompt: turnSystemPrompt,
@@ -1246,6 +1274,12 @@ export async function* runAgentTurn(
           signal,
           toolExposure,
           modelOperation: agentTurnModelOperation(options),
+          ...(options.providerRecovery === undefined
+            ? {}
+            : {
+                providerRequestAttempts:
+                  options.providerRecovery.providerRequestAttempts,
+              }),
         });
       } catch (error) {
         if (
@@ -1288,8 +1322,17 @@ export async function* runAgentTurn(
         turnResult.text,
         turnResult.reasoningContent,
       );
+      const durableReply =
+        reply ?? ({ role: "assistant", content: "", toolCalls: [] } as const);
+      options.providerRecovery?.settled({
+        assistantMessage: durableReply,
+        usage: turnResult.usage,
+        stopReason: turnResult.stopReason,
+      });
       if (reply !== null) {
         appendSessionLedgerMessage(sessionLedger, reply);
+      } else if (options.providerRecovery !== undefined) {
+        appendSessionLedgerMessage(sessionLedger, durableReply);
       }
       if (turnResult.toolCalls.length === 0 && priorToolCalls.length === 0) {
         const sessionGoalEvent = clearPendingBlockedAudit(
@@ -1319,6 +1362,12 @@ export async function* runAgentTurn(
             provider: requestProvider,
             systemPrompt: baseTurnSystemPrompt,
             signal,
+            ...(options.providerRecovery === undefined
+              ? {}
+              : {
+                  providerRequestAttempts:
+                    options.providerRecovery.providerRequestAttempts,
+                }),
           },
           turnText: turnResult.text,
           turnReasoningContent: turnResult.reasoningContent,
@@ -1355,9 +1404,16 @@ export async function* runAgentTurn(
           wrapUpTurn.reasoningContent,
         ),
       );
-      if (combinedReply !== null) {
-        appendSessionLedgerMessage(sessionLedger, combinedReply);
+      /* v8 ignore next 3 -- summary is always nonempty here, so finalReplyMessage cannot return null. */
+      if (combinedReply === null) {
+        throw new Error("final wrap-up reply is unexpectedly empty");
       }
+      options.providerRecovery?.settled({
+        assistantMessage: combinedReply,
+        usage: wrapUpTurn.usage,
+        stopReason: wrapUpTurn.stopReason,
+      });
+      appendSessionLedgerMessage(sessionLedger, combinedReply);
       state.accounting = addRequestAccounting(
         state.accounting,
         wrapUpTurn.usage,
@@ -1373,6 +1429,12 @@ export async function* runAgentTurn(
       };
       return;
     }
+
+    options.providerRecovery?.settled({
+      assistantMessage: toolRequestMessage(turnResult),
+      usage: turnResult.usage,
+      stopReason: turnResult.stopReason,
+    });
 
     if (turnResult.toolCalls.length === 0) {
       const reply = finalReplyMessage(

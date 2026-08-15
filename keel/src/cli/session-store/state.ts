@@ -21,6 +21,7 @@ import { toolCallCanonicalArguments } from "../../tools/registry.ts";
 import { redactMessageForPersistence } from "../persistence-redaction.ts";
 import { appendJsonLine, sessionLedgerSize } from "./ledger.ts";
 import {
+  type ActiveSessionTask,
   type AppendSessionRecord,
   type ModelSwitchSessionRecord,
   type ReplaceSessionRecord,
@@ -28,6 +29,7 @@ import {
   SESSION_SCHEMA_VERSION,
   type SessionGoalSessionRecord,
   type SessionGraphRecord,
+  type SessionLastTaskOutcome,
   type SessionModelSelection,
   type SessionModelSwitch,
   type SessionQueuedInput,
@@ -41,9 +43,11 @@ import {
   sessionReplayStateKey,
 } from "./model.ts";
 import {
+  copyActiveSessionTask,
   copyBashApprovalGrant,
   copyMessage,
   copySessionGraphRecord,
+  copySessionLastTaskOutcome,
   copySkillActivation,
   copyStoredMessage,
   messagesFromStoredMessages,
@@ -226,6 +230,8 @@ function sessionStateFromReplay(options: {
   readonly skillActivations: readonly SkillActivation[];
   readonly activeSkillIds: readonly string[];
   readonly skillStateCheckpoints: readonly SessionSkillStateCheckpoint[];
+  readonly activeTask?: ActiveSessionTask;
+  readonly lastTaskOutcome?: SessionLastTaskOutcome;
 }): SessionState {
   const graph = copySessionGraphRecord(options.graph);
   const storedMessages = options.storedMessages.map(copyStoredMessage);
@@ -257,6 +263,14 @@ function sessionStateFromReplay(options: {
       activeSkillIds: [...checkpoint.activeSkillIds],
     }),
   );
+  const activeTask =
+    options.activeTask === undefined
+      ? undefined
+      : copyActiveSessionTask(options.activeTask);
+  const lastTaskOutcome =
+    options.lastTaskOutcome === undefined
+      ? undefined
+      : copySessionLastTaskOutcome(options.lastTaskOutcome);
   const replayState = {
     storedMessages: storedMessages.map(copyStoredMessage),
     pendingInputsById,
@@ -270,6 +284,12 @@ function sessionStateFromReplay(options: {
     ...(activeModel !== undefined ? { activeModel } : {}),
     modelSwitches: modelSwitches.map(copySessionModelSwitch),
     skillStateCheckpoints,
+    ...(activeTask !== undefined
+      ? { activeTask: copyActiveSessionTask(activeTask) }
+      : {}),
+    ...(lastTaskOutcome !== undefined
+      ? { lastTaskOutcome: copySessionLastTaskOutcome(lastTaskOutcome) }
+      : {}),
   };
   const session = {
     [sessionReplayStateKey]: replayState,
@@ -288,6 +308,12 @@ function sessionStateFromReplay(options: {
     modelSwitches,
     skillActivations,
     activeSkillIds,
+    ...(activeTask !== undefined
+      ? { activeTask: copyActiveSessionTask(activeTask) }
+      : {}),
+    ...(lastTaskOutcome !== undefined
+      ? { lastTaskOutcome: copySessionLastTaskOutcome(lastTaskOutcome) }
+      : {}),
   };
   return session;
 }
@@ -497,6 +523,16 @@ function appendSessionSnapshotIfNeeded(options: {
     skillStateCheckpoints: replayState.skillStateCheckpoints.map(
       redactSessionSkillStateCheckpointForPersistence,
     ),
+    ...(replayState.activeTask !== undefined
+      ? { activeTask: copyActiveSessionTask(replayState.activeTask) }
+      : {}),
+    ...(replayState.lastTaskOutcome !== undefined
+      ? {
+          lastTaskOutcome: copySessionLastTaskOutcome(
+            replayState.lastTaskOutcome,
+          ),
+        }
+      : {}),
   });
 }
 

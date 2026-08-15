@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import type {
   PersistedSessionMessage,
   SessionMessage,
@@ -39,11 +40,15 @@ import {
   writeInitialHeader,
 } from "./ledger.ts";
 import {
+  type ActiveSessionProviderAttempt,
+  type ActiveSessionTask,
   SESSION_SCHEMA_VERSION,
   type SessionGraphRecord,
+  type SessionLastTaskOutcome,
   type SessionModelSelection,
   type SessionModelSwitch,
   type SessionPersistenceReason,
+  type SessionProviderAttemptSettlement,
   type SessionQueuedInput,
   type SessionRecords,
   type SessionSkillStateCheckpoint,
@@ -56,7 +61,9 @@ import {
 import { sessionFilePath } from "./paths.ts";
 import {
   bashApprovalGrantHasRedactionMarker,
+  copyActiveSessionTask,
   copyBashApprovalGrant,
+  copySessionLastTaskOutcome,
   copyStoredMessage,
   messagesFromStoredMessages,
   normalizeSessionTitleForPersistence,
@@ -76,6 +83,7 @@ import {
   appendSessionSnapshotIfNeeded,
   consumeReplayInputs,
   copySessionModelSelection,
+  createSessionMessageId,
   hasMessagePrefix,
   messageArraysEqual,
   rebaseReplayModelSwitchesAfterReplace,
@@ -97,6 +105,16 @@ export function createSessionStore(options: {
   readonly skillState?: SkillLifecycleState;
 }): SessionState {
   return createEmptySessionStore(options);
+}
+
+function providerSettlementAllowsAnotherRequest(
+  settlement: SessionProviderAttemptSettlement | undefined,
+): boolean {
+  return (
+    settlement?.outcome === "completed" ||
+    settlement?.outcome === "retryable_error" ||
+    settlement?.outcome === "context_overflow"
+  );
 }
 
 function createEmptySessionStore(options: {
@@ -400,6 +418,8 @@ function replaySessionStore(options: {
   let taskProgressCheckpoints: SessionTaskProgressCheckpoint[] = [];
   let title: string | undefined;
   let goal: SessionGoal | undefined;
+  let activeTask: ActiveSessionTask | undefined;
+  let lastTaskOutcome: SessionLastTaskOutcome | undefined;
   let skillActivations: SkillActivation[] = [];
   let activeSkillIds: string[] = [];
   let skillStateCheckpoints: SessionSkillStateCheckpoint[] = [
@@ -409,6 +429,108 @@ function replaySessionStore(options: {
       activeSkillIds: [],
     },
   ];
+
+  const taskIdentityMatches = (
+    current: ActiveSessionTask,
+    next: ActiveSessionTask,
+    allowNewRun = false,
+  ): boolean =>
+    current.taskId === next.taskId &&
+    (allowNewRun || current.runId === next.runId) &&
+    current.trigger === next.trigger &&
+    current.admittedAt === next.admittedAt &&
+    current.userMessageId === next.userMessageId &&
+    sessionModelSelectionsEqual(current.provider, next.provider) &&
+    current.maxProviderReplacements === next.maxProviderReplacements;
+
+  const validTaskRecoveryTransition = (
+    current: ActiveSessionTask,
+    next: Extract<
+      ActiveSessionTask,
+      { readonly phase: "provider_ready" | "recovery_blocked" }
+    >,
+  ): boolean => {
+    if (!taskIdentityMatches(current, next, true)) {
+      return false;
+    }
+    if (
+      current.phase !== "recovery_blocked" &&
+      isDeepStrictEqual(next, {
+        ...current,
+        phase: "recovery_blocked",
+        reason: "provider_budget",
+      })
+    ) {
+      return true;
+    }
+    if (!next.recovered) return false;
+    if (current.phase === "provider_settled") {
+      return (
+        current.assistantMessage.message.role === "assistant" &&
+        current.assistantMessage.message.toolCalls.length > 0 &&
+        isDeepStrictEqual(next, {
+          ...current,
+          phase: "recovery_blocked",
+          recovered: true,
+          reason: "tool_plan",
+        })
+      );
+    }
+    if (current.phase === "recovery_blocked") return false;
+    if (
+      current.phase === "provider_pending" &&
+      (current.providerAttempt.settlement?.outcome === "terminal_error" ||
+        current.providerAttempt.settlement?.outcome === "aborted")
+    ) {
+      return false;
+    }
+
+    const unknownAttemptId =
+      current.phase === "provider_pending" &&
+      (current.providerAttempt.settlement === undefined ||
+        current.providerAttempt.settlement.outcome === "completed")
+        ? current.providerAttempt.attemptId
+        : null;
+    const unknownProviderAttemptIds =
+      unknownAttemptId === null ||
+      current.unknownProviderAttemptIds.includes(unknownAttemptId)
+        ? [...current.unknownProviderAttemptIds]
+        : [...current.unknownProviderAttemptIds, unknownAttemptId];
+    const replacements =
+      current.providerReplacementsUsed +
+      (current.phase === "provider_pending" ? 1 : 0);
+    if (
+      current.phase === "provider_pending" &&
+      replacements > current.maxProviderReplacements
+    ) {
+      return isDeepStrictEqual(next, {
+        ...current,
+        phase: "recovery_blocked",
+        providerReplacementsUsed: current.providerReplacementsUsed,
+        unknownProviderAttemptIds,
+        recovered: true,
+        reason: "provider_replacement_limit",
+      });
+    }
+    if (next.phase !== "provider_ready" || next.runId === current.runId) {
+      return false;
+    }
+    return isDeepStrictEqual(next, {
+      taskId: current.taskId,
+      runId: next.runId,
+      trigger: current.trigger,
+      admittedAt: current.admittedAt,
+      userMessageId: current.userMessageId,
+      provider: current.provider,
+      maxProviderReplacements: current.maxProviderReplacements,
+      providerReplacementsUsed: replacements,
+      recovered: true,
+      providerRequestIds: current.providerRequestIds,
+      unknownProviderAttemptIds,
+      phase: "provider_ready",
+    });
+  };
+
   for (const record of records.mutations) {
     switch (record.type) {
       case "append":
@@ -535,6 +657,281 @@ function replaySessionStore(options: {
         bashApprovalGrants = [];
         consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
+      case "task_admitted":
+        if (activeTask !== undefined) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task ${JSON.stringify(record.task.taskId)} was admitted while another Task was active.`,
+          );
+        }
+        if (
+          storedMessages.some((message) => message.id === record.userMessage.id)
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task user message id ${JSON.stringify(record.userMessage.id)} is not unique.`,
+          );
+        }
+        if (
+          record.userMessage.id !== record.task.userMessageId ||
+          record.userMessage.message.role !== "user"
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task admission does not match its user message.`,
+          );
+        }
+        if (
+          record.task.providerReplacementsUsed !== 0 ||
+          record.task.recovered ||
+          record.task.providerRequestIds.length !== 0 ||
+          record.task.unknownProviderAttemptIds.length !== 0
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task admission is not a canonical initial Task.`,
+          );
+        }
+        storedMessages = [
+          ...storedMessages,
+          copyStoredMessage(record.userMessage),
+        ];
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      case "provider_intent": {
+        if (
+          activeTask === undefined ||
+          !taskIdentityMatches(activeTask, record.task) ||
+          record.task.providerAttempt.settlement !== undefined ||
+          (activeTask.phase !== "provider_ready" &&
+            (activeTask.phase !== "provider_pending" ||
+              !providerSettlementAllowsAnotherRequest(
+                activeTask.providerAttempt.settlement,
+              ))) ||
+          (activeTask.phase === "provider_pending" &&
+            (activeTask.providerAttempt.attemptId ===
+              record.task.providerAttempt.attemptId ||
+              activeTask.providerAttempt.responseMessageId ===
+                record.task.providerAttempt.responseMessageId)) ||
+          !isDeepStrictEqual(record.task.providerRequestIds, [
+            ...activeTask.providerRequestIds,
+            {
+              attemptId: record.task.providerAttempt.attemptId,
+              responseMessageId: record.task.providerAttempt.responseMessageId,
+            },
+          ]) ||
+          new Set(
+            record.task.providerRequestIds.map((request) => request.attemptId),
+          ).size !== record.task.providerRequestIds.length ||
+          new Set(
+            record.task.providerRequestIds.map(
+              (request) => request.responseMessageId,
+            ),
+          ).size !== record.task.providerRequestIds.length ||
+          !isDeepStrictEqual(record.task, {
+            ...activeTask,
+            phase: "provider_pending",
+            providerRequestIds: record.task.providerRequestIds,
+            providerAttempt: record.task.providerAttempt,
+          })
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": provider_intent is not a valid transition for the active Task.`,
+          );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
+      case "provider_attempt_settled": {
+        if (
+          activeTask === undefined ||
+          activeTask.phase !== "provider_pending" ||
+          activeTask.providerAttempt.settlement !== undefined ||
+          !taskIdentityMatches(activeTask, record.task) ||
+          !isDeepStrictEqual(record.task, {
+            ...activeTask,
+            providerAttempt: {
+              ...activeTask.providerAttempt,
+              settlement: record.task.providerAttempt.settlement,
+            },
+          })
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": provider_attempt_settled does not match the active provider attempt.`,
+          );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
+      case "provider_settled": {
+        if (
+          activeTask === undefined ||
+          activeTask.phase !== "provider_pending" ||
+          activeTask.providerAttempt.settlement?.outcome !== "completed" ||
+          record.task.assistantMessage.message.role !== "assistant" ||
+          record.task.assistantMessage.id !==
+            activeTask.providerAttempt.responseMessageId ||
+          !taskIdentityMatches(activeTask, record.task) ||
+          !isDeepStrictEqual(record.task, {
+            ...activeTask,
+            phase: "provider_settled",
+            assistantMessage: record.task.assistantMessage,
+            stopReason: record.task.stopReason,
+          })
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": provider_settled does not match the active provider attempt.`,
+          );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
+      case "task_recovery_started":
+        if (
+          activeTask === undefined ||
+          !validTaskRecoveryTransition(activeTask, record.task)
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task_recovery_started does not match the active Task.`,
+          );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      case "step_committed": {
+        if (
+          activeTask === undefined ||
+          activeTask.phase !== "provider_settled"
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": step_committed does not match the active Task.`,
+          );
+        }
+        const settledTask = activeTask;
+        if (
+          settledTask.taskId !== record.task.taskId ||
+          settledTask.runId !== record.task.runId ||
+          !taskIdentityMatches(settledTask, record.task) ||
+          record.task.providerReplacementsUsed !==
+            settledTask.providerReplacementsUsed ||
+          record.task.recovered !== settledTask.recovered ||
+          !isDeepStrictEqual(
+            record.task.providerRequestIds,
+            settledTask.providerRequestIds,
+          ) ||
+          !isDeepStrictEqual(
+            record.task.unknownProviderAttemptIds,
+            settledTask.unknownProviderAttemptIds,
+          )
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": step_committed does not match the active Task.`,
+          );
+        }
+        if (
+          !record.messages.some((message) =>
+            isDeepStrictEqual(message, settledTask.assistantMessage),
+          )
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": step_committed is missing the settled provider response.`,
+          );
+        }
+        if (record.replaceTranscript === true) {
+          const messageIds = new Set<string>();
+          for (const message of record.messages) {
+            /* v8 ignore next 5 -- persisted message ids are produced uniquely; duplicate-id corruption is rejected equivalently for append and replacement records. */
+            if (messageIds.has(message.id)) {
+              sessionStoreError(
+                `Error: cannot resume session "${options.sessionId}": committed step message id ${JSON.stringify(message.id)} is not unique.`,
+              );
+            }
+            messageIds.add(message.id);
+          }
+          storedMessages = record.messages.map(copyStoredMessage);
+        } else {
+          for (const message of record.messages) {
+            /* v8 ignore next 5 -- persisted message ids are produced uniquely; duplicate-id corruption is rejected equivalently for append and replacement records. */
+            if (storedMessages.some((stored) => stored.id === message.id)) {
+              sessionStoreError(
+                `Error: cannot resume session "${options.sessionId}": committed step message id ${JSON.stringify(message.id)} is not unique.`,
+              );
+            }
+            storedMessages = [...storedMessages, copyStoredMessage(message)];
+          }
+        }
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
+      case "task_terminal": {
+        const terminalResponse = record.messages.at(-1);
+        const expectedResponseMessageId =
+          terminalResponse?.message.role === "assistant"
+            ? terminalResponse.id
+            : undefined;
+        if (
+          activeTask === undefined ||
+          activeTask.taskId !== record.taskId ||
+          activeTask.runId !== record.runId ||
+          record.lastTaskOutcome.taskId !== record.taskId ||
+          record.lastTaskOutcome.runId !== record.runId ||
+          record.lastTaskOutcome.timestamp !== record.timestamp ||
+          record.lastTaskOutcome.recovered !== activeTask.recovered ||
+          !isDeepStrictEqual(
+            record.lastTaskOutcome.unknownProviderAttemptIds,
+            activeTask.unknownProviderAttemptIds,
+          ) ||
+          record.lastTaskOutcome.responseMessageId !==
+            expectedResponseMessageId ||
+          (record.lastTaskOutcome.outcome === "completed" &&
+            (activeTask.phase !== "provider_settled" ||
+              !isDeepStrictEqual(
+                terminalResponse,
+                activeTask.assistantMessage,
+              )))
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task_terminal does not match the active Task.`,
+          );
+        }
+        if (record.replaceTranscript === true) {
+          const messageIds = new Set<string>();
+          for (const message of record.messages) {
+            /* v8 ignore next 5 -- the writer assigns unique ids; this keeps replay fail-closed for externally corrupted replacement records. */
+            if (messageIds.has(message.id)) {
+              sessionStoreError(
+                `Error: cannot resume session "${options.sessionId}": terminal message id ${JSON.stringify(message.id)} is not unique.`,
+              );
+            }
+            messageIds.add(message.id);
+          }
+          storedMessages = record.messages.map(copyStoredMessage);
+        } else {
+          for (const message of record.messages) {
+            /* v8 ignore next 5 -- the writer assigns unique ids; this keeps replay fail-closed for externally corrupted append records. */
+            if (storedMessages.some((stored) => stored.id === message.id)) {
+              sessionStoreError(
+                `Error: cannot resume session "${options.sessionId}": terminal message id ${JSON.stringify(message.id)} is not unique.`,
+              );
+            }
+            storedMessages = [...storedMessages, copyStoredMessage(message)];
+          }
+        }
+        lastTaskOutcome = copySessionLastTaskOutcome(record.lastTaskOutcome);
+        if (record.skillState !== undefined) {
+          skillActivations =
+            record.skillState.skillActivations.map(copySkillActivation);
+          activeSkillIds = [...record.skillState.activeSkillIds];
+          skillStateCheckpoints = [
+            ...skillStateCheckpoints,
+            {
+              messageOrdinal: storedMessages.length,
+              skillActivations: skillActivations.map(copySkillActivation),
+              activeSkillIds: [...activeSkillIds],
+            },
+          ];
+        }
+        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
+        activeTask = undefined;
+        break;
+      }
       case "skill_state":
         skillActivations = record.skillActivations.map(copySkillActivation);
         activeSkillIds = [...record.activeSkillIds];
@@ -615,6 +1012,139 @@ function replaySessionStore(options: {
         skillActivations =
           snapshotSkillState.skillActivations.map(copySkillActivation);
         activeSkillIds = [...snapshotSkillState.activeSkillIds];
+        activeTask =
+          record.activeTask === undefined
+            ? undefined
+            : copyActiveSessionTask(record.activeTask);
+        if (activeTask !== undefined) {
+          const providerRequestIds = activeTask.providerRequestIds;
+          const providerAttempt = activeTask.providerAttempt;
+          const assistantMessage = activeTask.assistantMessage;
+          const isReplacementLimitBlocked =
+            activeTask.phase === "recovery_blocked" &&
+            activeTask.reason === "provider_replacement_limit";
+          const currentProviderAttemptIsUnknown =
+            providerAttempt !== undefined &&
+            activeTask.unknownProviderAttemptIds.includes(
+              providerAttempt.attemptId,
+            );
+          const currentProviderAttemptShouldBeUnknown =
+            providerAttempt !== undefined &&
+            (providerAttempt.settlement === undefined ||
+              providerAttempt.settlement.outcome === "completed");
+          const currentProviderAttemptEvidenceIsCanonical =
+            currentProviderAttemptShouldBeUnknown
+              ? currentProviderAttemptIsUnknown &&
+                activeTask.unknownProviderAttemptIds.at(-1) ===
+                  providerAttempt?.attemptId
+              : !currentProviderAttemptIsUnknown;
+          const replacementLimitStateIsCanonical =
+            providerAttempt !== undefined &&
+            activeTask.recovered &&
+            activeTask.providerReplacementsUsed ===
+              activeTask.maxProviderReplacements &&
+            assistantMessage === undefined &&
+            activeTask.stopReason === undefined &&
+            providerAttempt.settlement?.outcome !== "terminal_error" &&
+            providerAttempt.settlement?.outcome !== "aborted" &&
+            currentProviderAttemptEvidenceIsCanonical;
+          const admittedUserMessages = storedMessages.filter(
+            (message) => message.id === activeTask?.userMessageId,
+          );
+          if (
+            admittedUserMessages.length !== 1 ||
+            admittedUserMessages[0]?.message.role !== "user"
+          ) {
+            sessionStoreError(
+              `Error: cannot resume session "${options.sessionId}": snapshot active Task is missing its admitted user message.`,
+            );
+          }
+          if (
+            activeTask.providerReplacementsUsed >
+              activeTask.maxProviderReplacements ||
+            new Set(providerRequestIds.map((request) => request.attemptId))
+              .size !== providerRequestIds.length ||
+            new Set(
+              providerRequestIds.map((request) => request.responseMessageId),
+            ).size !== providerRequestIds.length ||
+            new Set(activeTask.unknownProviderAttemptIds).size !==
+              activeTask.unknownProviderAttemptIds.length ||
+            activeTask.unknownProviderAttemptIds.some(
+              (attemptId) =>
+                !providerRequestIds.some(
+                  (request) => request.attemptId === attemptId,
+                ),
+            ) ||
+            (currentProviderAttemptIsUnknown && !isReplacementLimitBlocked) ||
+            (!activeTask.recovered &&
+              (activeTask.providerReplacementsUsed !== 0 ||
+                activeTask.unknownProviderAttemptIds.length !== 0))
+          ) {
+            sessionStoreError(
+              `Error: cannot resume session "${options.sessionId}": snapshot active Task has invalid recovery evidence.`,
+            );
+          }
+          if (providerAttempt !== undefined) {
+            const responseMessageId = providerAttempt.responseMessageId;
+            if (
+              !isDeepStrictEqual(providerRequestIds.at(-1), {
+                attemptId: providerAttempt.attemptId,
+                responseMessageId,
+              }) ||
+              storedMessages.some((message) => message.id === responseMessageId)
+            ) {
+              sessionStoreError(
+                `Error: cannot resume session "${options.sessionId}": snapshot active Task reuses its provider response message id.`,
+              );
+            }
+          }
+          if (assistantMessage !== undefined) {
+            if (
+              providerAttempt?.settlement?.outcome !== "completed" ||
+              assistantMessage.message.role !== "assistant" ||
+              assistantMessage.id !== providerAttempt.responseMessageId ||
+              activeTask.stopReason === undefined
+            ) {
+              sessionStoreError(
+                `Error: cannot resume session "${options.sessionId}": snapshot settled provider response is invalid.`,
+              );
+            }
+          }
+          if (
+            (assistantMessage === undefined &&
+              activeTask.stopReason !== undefined) ||
+            (activeTask.phase === "recovery_blocked" &&
+              activeTask.reason === "tool_plan" &&
+              (assistantMessage?.message.role !== "assistant" ||
+                assistantMessage.message.toolCalls.length === 0)) ||
+            (isReplacementLimitBlocked && !replacementLimitStateIsCanonical)
+          ) {
+            sessionStoreError(
+              `Error: cannot resume session "${options.sessionId}": snapshot active Task has invalid provider state.`,
+            );
+          }
+        }
+        lastTaskOutcome =
+          record.lastTaskOutcome === undefined
+            ? undefined
+            : copySessionLastTaskOutcome(record.lastTaskOutcome);
+        if (
+          lastTaskOutcome !== undefined &&
+          (new Set(lastTaskOutcome.unknownProviderAttemptIds).size !==
+            lastTaskOutcome.unknownProviderAttemptIds.length ||
+            (!lastTaskOutcome.recovered &&
+              lastTaskOutcome.unknownProviderAttemptIds.length !== 0) ||
+            (lastTaskOutcome.responseMessageId !== undefined &&
+              storedMessages.filter(
+                (message) =>
+                  message.id === lastTaskOutcome?.responseMessageId &&
+                  message.message.role === "assistant",
+              ).length !== 1))
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": snapshot last Task outcome is invalid.`,
+          );
+        }
         break;
       }
     }
@@ -641,6 +1171,8 @@ function replaySessionStore(options: {
     skillActivations,
     activeSkillIds,
     skillStateCheckpoints,
+    ...(activeTask !== undefined ? { activeTask } : {}),
+    ...(lastTaskOutcome !== undefined ? { lastTaskOutcome } : {}),
   });
 }
 
@@ -809,6 +1341,508 @@ export function persistSessionTaskProgress(options: {
     session: options.session,
     runtime: options.runtime,
   });
+}
+
+function activeTaskForSession(session: SessionState): ActiveSessionTask {
+  const activeTask = replayStateForSession(session).activeTask;
+  if (activeTask === undefined) {
+    sessionStoreError(
+      `Error: session ${JSON.stringify(session.id)} has no active durable Task.`,
+    );
+  }
+  return activeTask;
+}
+
+export function activeSessionTask(
+  session: SessionState,
+): ActiveSessionTask | undefined {
+  const activeTask = replayStateForSession(session).activeTask;
+  return activeTask === undefined
+    ? undefined
+    : copyActiveSessionTask(activeTask);
+}
+
+export function persistSessionTaskAdmission(options: {
+  readonly session: SessionState;
+  readonly userMessage: Extract<SessionMessage, { readonly role: "user" }>;
+  readonly provider: SessionModelSelection;
+  readonly consumedInputIds: readonly string[];
+  readonly userMessageId?: string;
+  readonly runtime: SessionStoreRuntime;
+  readonly maxProviderReplacements?: number;
+}): Extract<ActiveSessionTask, { readonly phase: "provider_ready" }> {
+  const replayState = replayStateForSession(options.session);
+  if (replayState.activeTask !== undefined) {
+    sessionStoreError(
+      `Error: session ${JSON.stringify(options.session.id)} already has active Task ${JSON.stringify(replayState.activeTask.taskId)}.`,
+    );
+  }
+  const [persistedUserMessage] = parseSessionMessages(
+    options.session.id,
+    [options.userMessage],
+    "persist",
+  );
+  /* v8 ignore next 6 -- the public parameter is an extracted user-message type and parsing preserves the discriminant. */
+  if (
+    persistedUserMessage === undefined ||
+    persistedUserMessage.role !== "user"
+  ) {
+    sessionStoreError(
+      `Error: cannot admit durable Task for session ${JSON.stringify(options.session.id)}: user message is invalid.`,
+    );
+  }
+  const timestamp = isoTimestamp(options.runtime);
+  const userMessage = redactStoredMessageForPersistence({
+    id: options.userMessageId ?? createSessionMessageId(),
+    message: persistedUserMessage,
+  });
+  const task: Extract<ActiveSessionTask, { readonly phase: "provider_ready" }> =
+    {
+      taskId: `task_${randomUUID()}`,
+      runId: `run_${randomUUID()}`,
+      trigger: "user_prompt",
+      admittedAt: timestamp,
+      userMessageId: userMessage.id,
+      provider: copySessionModelSelection(options.provider),
+      maxProviderReplacements: options.maxProviderReplacements ?? 1,
+      providerReplacementsUsed: 0,
+      recovered: false,
+      providerRequestIds: [],
+      unknownProviderAttemptIds: [],
+      phase: "provider_ready",
+    };
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "task_admitted",
+    timestamp,
+    task,
+    userMessage,
+    ...(consumedInputIds.length === 0 ? {} : { consumedInputIds }),
+  });
+  replayState.storedMessages.push(copyStoredMessage(userMessage));
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  replayState.activeTask = copyActiveSessionTask(task);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+  const result = copyActiveSessionTask(task);
+  /* v8 ignore next 3 -- copyActiveSessionTask preserves the discriminated phase of this freshly constructed value. */
+  if (result.phase !== "provider_ready") {
+    sessionStoreError("Error: admitted Task changed phase while copying.");
+  }
+  return result;
+}
+
+export function persistSessionProviderIntent(options: {
+  readonly session: SessionState;
+  readonly provider: SessionModelSelection;
+  readonly runtime: SessionStoreRuntime;
+}): Extract<ActiveSessionTask, { readonly phase: "provider_pending" }> {
+  const activeTask = activeTaskForSession(options.session);
+  const mayStart =
+    activeTask.phase === "provider_ready" ||
+    (activeTask.phase === "provider_pending" &&
+      providerSettlementAllowsAnotherRequest(
+        activeTask.providerAttempt.settlement,
+      ));
+  if (!mayStart) {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} is not ready for a provider request.`,
+    );
+  }
+  if (
+    activeTask.provider.providerId !== options.provider.providerId ||
+    activeTask.provider.model !== options.provider.model
+  ) {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} captured provider ${activeTask.provider.providerId}/${activeTask.provider.model}, not ${options.provider.providerId}/${options.provider.model}.`,
+    );
+  }
+  const timestamp = isoTimestamp(options.runtime);
+  const attemptId = `provider_attempt_${randomUUID()}`;
+  const responseMessageId = createSessionMessageId();
+  const task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_pending" }
+  > = {
+    ...activeTask,
+    phase: "provider_pending",
+    providerRequestIds: [
+      ...activeTask.providerRequestIds,
+      { attemptId, responseMessageId },
+    ],
+    providerAttempt: {
+      attemptId,
+      responseMessageId,
+      startedAt: timestamp,
+    },
+  };
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "provider_intent",
+    timestamp,
+    task,
+  });
+  replayStateForSession(options.session).activeTask =
+    copyActiveSessionTask(task);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+  const result = copyActiveSessionTask(task);
+  /* v8 ignore next 3 -- copyActiveSessionTask preserves the discriminated phase of this freshly constructed value. */
+  if (result.phase !== "provider_pending") {
+    sessionStoreError("Error: provider intent changed phase while copying.");
+  }
+  return result;
+}
+
+export function persistSessionProviderAttemptSettlement(options: {
+  readonly session: SessionState;
+  readonly attemptId: string;
+  readonly settlement: SessionProviderAttemptSettlement;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const activeTask = activeTaskForSession(options.session);
+  if (
+    activeTask.phase !== "provider_pending" ||
+    activeTask.providerAttempt.attemptId !== options.attemptId ||
+    activeTask.providerAttempt.settlement !== undefined
+  ) {
+    sessionStoreError(
+      `Error: provider attempt ${JSON.stringify(options.attemptId)} cannot be settled for durable Task ${JSON.stringify(activeTask.taskId)}.`,
+    );
+  }
+  const task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_pending" }
+  > & {
+    readonly providerAttempt: ActiveSessionProviderAttempt & {
+      readonly settlement: SessionProviderAttemptSettlement;
+    };
+  } = {
+    ...activeTask,
+    providerAttempt: {
+      ...activeTask.providerAttempt,
+      settlement: options.settlement,
+    },
+  };
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "provider_attempt_settled",
+    timestamp: isoTimestamp(options.runtime),
+    task,
+  });
+  replayStateForSession(options.session).activeTask =
+    copyActiveSessionTask(task);
+}
+
+export function persistSessionProviderResponse(options: {
+  readonly session: SessionState;
+  readonly assistantMessage: Extract<
+    SessionMessage,
+    { readonly role: "assistant" }
+  >;
+  readonly usage: Extract<
+    SessionProviderAttemptSettlement,
+    { readonly outcome: "completed" }
+  >;
+  readonly stopReason: "stop" | "length";
+  readonly runtime: SessionStoreRuntime;
+}): Extract<ActiveSessionTask, { readonly phase: "provider_settled" }> {
+  const activeTask = activeTaskForSession(options.session);
+  if (activeTask.phase !== "provider_pending") {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} has no pending provider attempt to checkpoint.`,
+    );
+  }
+  const [persistedAssistantMessage] = parseSessionMessages(
+    options.session.id,
+    [options.assistantMessage],
+    "persist",
+  );
+  /* v8 ignore next 6 -- the public parameter is an extracted assistant-message type and parsing preserves the discriminant. */
+  if (
+    persistedAssistantMessage === undefined ||
+    persistedAssistantMessage.role !== "assistant"
+  ) {
+    sessionStoreError(
+      `Error: cannot checkpoint provider response for durable Task ${JSON.stringify(activeTask.taskId)}.`,
+    );
+  }
+  const settlement = activeTask.providerAttempt.settlement;
+  if (
+    settlement !== undefined &&
+    (settlement.outcome !== "completed" ||
+      !isDeepStrictEqual(settlement.usage, options.usage.usage))
+  ) {
+    sessionStoreError(
+      `Error: provider response does not match attempt ${JSON.stringify(activeTask.providerAttempt.attemptId)}.`,
+    );
+  }
+  const assistantMessage = redactStoredMessageForPersistence({
+    id: activeTask.providerAttempt.responseMessageId,
+    message: persistedAssistantMessage,
+  });
+  const task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_settled" }
+  > = {
+    ...activeTask,
+    phase: "provider_settled",
+    providerAttempt: {
+      ...activeTask.providerAttempt,
+      settlement: options.usage,
+    },
+    assistantMessage,
+    stopReason: options.stopReason,
+  };
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "provider_settled",
+    timestamp: isoTimestamp(options.runtime),
+    task,
+  });
+  replayStateForSession(options.session).activeTask =
+    copyActiveSessionTask(task);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+  const result = copyActiveSessionTask(task);
+  /* v8 ignore next 3 -- copyActiveSessionTask preserves the discriminated phase of this freshly constructed value. */
+  if (result.phase !== "provider_settled") {
+    sessionStoreError("Error: provider response changed phase while copying.");
+  }
+  return result;
+}
+
+export function persistSessionTaskRecoveryState(options: {
+  readonly session: SessionState;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_ready" | "recovery_blocked" }
+  >;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const activeTask = activeTaskForSession(options.session);
+  if (activeTask.taskId !== options.task.taskId) {
+    sessionStoreError(
+      `Error: recovery state does not match durable Task ${JSON.stringify(activeTask.taskId)}.`,
+    );
+  }
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "task_recovery_started",
+    timestamp: isoTimestamp(options.runtime),
+    task: options.task,
+  });
+  replayStateForSession(options.session).activeTask = copyActiveSessionTask(
+    options.task,
+  );
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+}
+
+export function persistSessionTaskStep(options: {
+  readonly session: SessionState;
+  readonly currentMessages: readonly SessionMessage[];
+  readonly consumedInputIds?: readonly string[];
+  readonly runtime: SessionStoreRuntime;
+}): boolean {
+  const activeTask = activeTaskForSession(options.session);
+  if (activeTask.phase !== "provider_settled") return false;
+  const currentMessages = parseSessionMessages(
+    options.session.id,
+    options.currentMessages,
+    "persist",
+  );
+  validateCompletedTranscript(options.session.id, currentMessages, "persist");
+  const replayState = replayStateForSession(options.session);
+  const previousMessages = messagesFromStoredMessages(
+    replayState.storedMessages,
+  );
+  const extendsTranscript = hasMessagePrefix(currentMessages, previousMessages);
+  const responseIndex = extendsTranscript
+    ? previousMessages.length
+    : currentMessages.findLastIndex((message) =>
+        messageArraysEqual([message], [activeTask.assistantMessage.message]),
+      );
+  const response = currentMessages[responseIndex];
+  if (
+    response === undefined ||
+    !messageArraysEqual([response], [activeTask.assistantMessage.message])
+  ) {
+    sessionStoreError(
+      `Error: completed provider step does not contain response ${JSON.stringify(activeTask.assistantMessage.id)}.`,
+    );
+  }
+  const admittedUserMessage = replayState.storedMessages.find(
+    (message) => message.id === activeTask.userMessageId,
+  );
+  const admittedUserMessageIndex = currentMessages.findLastIndex(
+    (message) =>
+      admittedUserMessage !== undefined &&
+      messageArraysEqual([message], [admittedUserMessage.message]),
+  );
+  if (
+    admittedUserMessage === undefined ||
+    admittedUserMessage.message.role !== "user" ||
+    admittedUserMessageIndex < 0
+  ) {
+    sessionStoreError(
+      `Error: committed durable Task step is missing admitted user message ${JSON.stringify(activeTask.userMessageId)}.`,
+    );
+  }
+  const storedMessages = storedMessagesForSessionMessages({
+    messages: currentMessages,
+    previousStoredMessages: replayState.storedMessages,
+    reservedMessageIds: new Map([
+      [admittedUserMessageIndex, activeTask.userMessageId],
+      [responseIndex, activeTask.assistantMessage.id],
+    ]),
+  });
+  const messages = extendsTranscript
+    ? storedMessages.slice(replayState.storedMessages.length)
+    : storedMessages;
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  const task: Extract<ActiveSessionTask, { readonly phase: "provider_ready" }> =
+    {
+      taskId: activeTask.taskId,
+      runId: activeTask.runId,
+      trigger: activeTask.trigger,
+      admittedAt: activeTask.admittedAt,
+      userMessageId: activeTask.userMessageId,
+      provider: activeTask.provider,
+      maxProviderReplacements: activeTask.maxProviderReplacements,
+      providerReplacementsUsed: activeTask.providerReplacementsUsed,
+      recovered: activeTask.recovered,
+      providerRequestIds: activeTask.providerRequestIds,
+      unknownProviderAttemptIds: activeTask.unknownProviderAttemptIds,
+      phase: "provider_ready",
+    };
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "step_committed",
+    timestamp: isoTimestamp(options.runtime),
+    task,
+    messages,
+    ...(extendsTranscript ? {} : { replaceTranscript: true as const }),
+    ...(consumedInputIds.length === 0 ? {} : { consumedInputIds }),
+  });
+  replaceReplayMessages(replayState, storedMessages);
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  replayState.activeTask = copyActiveSessionTask(task);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+  return true;
+}
+
+export function persistSessionTaskTerminal(options: {
+  readonly session: SessionState;
+  readonly currentMessages: readonly SessionMessage[];
+  readonly outcome: "completed" | "failed" | "aborted";
+  readonly skillState?: SkillLifecycleState;
+  readonly consumedInputIds?: readonly string[];
+  readonly runtime: SessionStoreRuntime;
+}): SessionLastTaskOutcome {
+  const activeTask = activeTaskForSession(options.session);
+  const currentMessages = parseSessionMessages(
+    options.session.id,
+    options.currentMessages,
+    "persist",
+  );
+  validateCompletedTranscript(options.session.id, currentMessages, "persist");
+  const replayState = replayStateForSession(options.session);
+  const previousMessages = messagesFromStoredMessages(
+    replayState.storedMessages,
+  );
+  const extendsTranscript = hasMessagePrefix(currentMessages, previousMessages);
+  const reservedMessageIds = new Map<number, string>();
+  if (activeTask.phase === "provider_settled") {
+    const responseIndex = currentMessages.findLastIndex((message) =>
+      messageArraysEqual([message], [activeTask.assistantMessage.message]),
+    );
+    const response = currentMessages[responseIndex];
+    if (
+      response !== undefined &&
+      messageArraysEqual([response], [activeTask.assistantMessage.message])
+    ) {
+      reservedMessageIds.set(responseIndex, activeTask.assistantMessage.id);
+    }
+  }
+  if (
+    options.outcome === "completed" &&
+    (activeTask.phase !== "provider_settled" ||
+      reservedMessageIds.get(currentMessages.length - 1) !==
+        activeTask.assistantMessage.id)
+  ) {
+    sessionStoreError(
+      `Error: completed durable Task ${JSON.stringify(activeTask.taskId)} is missing its settled final response.`,
+    );
+  }
+  const storedMessages = storedMessagesForSessionMessages({
+    messages: currentMessages,
+    previousStoredMessages: replayState.storedMessages,
+    reservedMessageIds,
+  });
+  const terminalMessages = extendsTranscript
+    ? storedMessages.slice(replayState.storedMessages.length)
+    : storedMessages;
+  const timestamp = isoTimestamp(options.runtime);
+  const responseMessageId =
+    terminalMessages.length === 0 ? undefined : terminalMessages.at(-1)?.id;
+  const lastTaskOutcome: SessionLastTaskOutcome = {
+    taskId: activeTask.taskId,
+    runId: activeTask.runId,
+    outcome: options.outcome,
+    timestamp,
+    recovered: activeTask.recovered,
+    unknownProviderAttemptIds: [...activeTask.unknownProviderAttemptIds],
+    ...(responseMessageId === undefined ? {} : { responseMessageId }),
+  };
+  const persistedSkillState =
+    options.skillState === undefined
+      ? undefined
+      : {
+          skillActivations: options.skillState.skillActivations.map(
+            redactSkillActivationForPersistence,
+          ),
+          activeSkillIds: [...options.skillState.activeSkillIds],
+        };
+  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "task_terminal",
+    timestamp,
+    taskId: activeTask.taskId,
+    runId: activeTask.runId,
+    messages: terminalMessages,
+    ...(extendsTranscript ? {} : { replaceTranscript: true as const }),
+    lastTaskOutcome,
+    ...(persistedSkillState === undefined
+      ? {}
+      : { skillState: persistedSkillState }),
+    ...(consumedInputIds.length === 0 ? {} : { consumedInputIds }),
+  });
+  replaceReplayMessages(replayState, storedMessages);
+  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
+  replayState.lastTaskOutcome = copySessionLastTaskOutcome(lastTaskOutcome);
+  if (persistedSkillState !== undefined) {
+    appendReplaySkillState(replayState, persistedSkillState);
+  }
+  delete replayState.activeTask;
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+  return copySessionLastTaskOutcome(lastTaskOutcome);
 }
 
 export function persistSessionMessages(options: {

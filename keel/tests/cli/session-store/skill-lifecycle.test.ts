@@ -9,6 +9,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import type { SessionMessage } from "../../../src/agent/session-message.ts";
+import { createSessionTaskRecovery } from "../../../src/cli/interactive-session/task-recovery.ts";
 import {
   createSessionStore,
   forkSessionStore,
@@ -52,6 +54,91 @@ function activation(skill: WorkflowSkill, activatedAt: string) {
 }
 
 describe("Session Store Skill Lifecycle", () => {
+  test(`Given a durable Task activates a Skill in its terminal transition,
+    When the session catalog is listed,
+    Then catalog replay exposes the same active Skill as full session replay`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-session-skill-task-workspace-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-session-skill-task-home-"));
+    const review = activation(
+      workflowSkill("review", "review-task-digest"),
+      "1970-01-01T00:00:00.000Z",
+    );
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "task-terminal-skill",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "activate review",
+          origin: { type: "user_prompt" },
+        },
+        provider: { providerId: "deepseek", model: "deepseek-chat" },
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle({
+        providerId: "deepseek",
+        model: "deepseek-chat",
+      });
+      const usage = {
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 1,
+        outputTokens: 1,
+      };
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage });
+      const assistantMessage = {
+        role: "assistant",
+        content: "Review activated.",
+        toolCalls: [],
+      } as const;
+      lifecycle.settled({
+        assistantMessage,
+        usage,
+        stopReason: "stop",
+      });
+      recovery.terminal({
+        messages: [...messages, assistantMessage],
+        outcome: "completed",
+        skillState: {
+          skillActivations: [review],
+          activeSkillIds: [review.descriptorId],
+        },
+      });
+
+      expect(
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 2),
+        }).activeSkillIds,
+      ).toEqual([review.descriptorId]);
+      expect(
+        listSessionCatalog({ workspace, runtime: runtime(home, 3) }).sessions[0]
+          ?.workflowSkills,
+      ).toEqual([expect.objectContaining({ qualifiedName: "repo:review" })]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a session snapshot contains multiple Skill lifecycle checkpoints,
     When the user resumes or lists the session,
     Then both views restore the latest checkpoint`, async () => {
@@ -287,7 +374,7 @@ describe("Session Store Skill Lifecycle", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 6,
+            schemaVersion: 7,
             type: "skill_state",
             timestamp: "1970-01-01T00:00:00.010Z",
             messageOrdinal: 0,
@@ -312,7 +399,7 @@ describe("Session Store Skill Lifecycle", () => {
       await appendFile(
         oversized.filePath,
         `\n${JSON.stringify({
-          schemaVersion: 6,
+          schemaVersion: 7,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.031Z",
           reason: "size_threshold",

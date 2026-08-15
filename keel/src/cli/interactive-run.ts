@@ -47,6 +47,7 @@ import {
   type StableInteractiveDisplay,
 } from "./interactive-session/display.ts";
 import type { InteractiveLineInput } from "./interactive-session/line-reader.ts";
+import { createSessionTaskRecovery } from "./interactive-session/task-recovery.ts";
 import {
   type InteractiveActiveSession,
   type InteractiveActiveSessionState,
@@ -1100,12 +1101,23 @@ async function runActiveSessionCli(
           modelSwitchCount: initialSession?.modelSwitches.length ?? 0,
           queuedInputs: initialSession?.pendingInputs ?? [],
           bashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
+          ...(initialSession?.activeTask === undefined
+            ? {}
+            : { activeTask: initialSession.activeTask }),
         };
         savedInteractiveSession = {
           kind: "saved",
           id: sessionId,
           resumeAvailable: () => session !== undefined,
           reserveMessageId: createSessionMessageId,
+          taskRecovery: createSessionTaskRecovery({
+            session: activeSessionForPersistence,
+            runtime,
+            currentMessages: () => persistedMessages,
+            onMessagesPersisted: (messages) => {
+              persistedMessages = [...messages];
+            },
+          }),
           persistQueuedInput: (input: {
             readonly sequence: number;
             readonly line: string;

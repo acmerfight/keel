@@ -562,6 +562,38 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
+  test(`Given durable Task recovery has one CLI orchestration owner,
+    When its dependencies and reverse dependencies are inspected,
+    Then it uses the session-store facade and lower layers do not depend on it`, () => {
+    const owner = "src/cli/interactive-session/task-recovery.ts";
+    const ownerImports = importSpecifiers(owner, readFileSync(owner, "utf8"));
+
+    expect(ownerImports).toContain("../session-store.ts");
+    expect(
+      ownerImports.filter((specifier) => specifier.includes("session-store/")),
+    ).toEqual([]);
+
+    const violations: string[] = [];
+    for (const file of sourceFiles()) {
+      if (
+        file === owner ||
+        file === "src/cli/interactive-run.ts" ||
+        file === "src/cli/interactive-session/types.ts"
+      ) {
+        continue;
+      }
+      for (const specifier of importSpecifiers(
+        file,
+        readFileSync(file, "utf8"),
+      )) {
+        if (resolvedRelativeSpecifier(file, specifier) === owner) {
+          violations.push(`${file} imports ${specifier}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
   test(`Given context-compaction internals have a public facade,
     When external imports are inspected,
     Then consumers do not bypass the context-compaction facade`, () => {

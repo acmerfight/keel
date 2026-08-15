@@ -1,5 +1,8 @@
 import type { SessionTaskProgress } from "../core/task-progress.ts";
-import type { LLMProvider } from "../llm/types.ts";
+import type {
+  LLMProvider,
+  ProviderRequestAttemptObserver,
+} from "../llm/types.ts";
 import {
   addRequestAccounting,
   type CostTrackingOptions,
@@ -24,6 +27,7 @@ import type {
   ModelOperationRecoveryTarget,
   ModelOperationRequest,
 } from "./model-operations.ts";
+import { combineProviderRequestAttemptObservers } from "./provider-request-attempts.ts";
 import {
   type AgentTurn,
   ContextOverflowBeforeAssistantError,
@@ -50,6 +54,7 @@ export interface CompactionConfig {
   readonly taskProgress?: () => SessionTaskProgress;
   readonly costTracking: CostTrackingOptions | undefined;
   readonly modelOperations: ModelOperationInstrumentation | null;
+  readonly providerRequestAttempts?: ProviderRequestAttemptObserver;
   readonly onContextCompacted: (
     messages: SessionMessage[],
   ) => Promise<ContextCompactionFinalization>;
@@ -169,6 +174,11 @@ async function attemptContextCompaction(
           },
         }
       : {}),
+    ...(config.providerRequestAttempts === undefined
+      ? {}
+      : {
+          providerRequestAttempts: config.providerRequestAttempts,
+        }),
   });
   let finalResult = result;
   if (result.compacted) {
@@ -396,6 +406,10 @@ export async function* streamTurnWithOverflowRecovery(
                 currentSystemPrompt = refreshSystemPrompt();
                 return currentSystemPrompt;
               };
+        const providerRequestAttempts = combineProviderRequestAttemptObservers([
+          streamOptions.providerRequestAttempts,
+          currentOperation?.providerRequestAttempts,
+        ]);
         const turn = yield* streamAgentTurn({
           provider: streamOptions.provider,
           systemPrompt: currentSystemPrompt,
@@ -406,12 +420,9 @@ export async function* streamTurnWithOverflowRecovery(
           ...(streamOptions.textPrefix !== undefined
             ? { textPrefix: streamOptions.textPrefix }
             : {}),
-          ...(currentOperation !== null
-            ? {
-                providerRequestAttempts:
-                  currentOperation.providerRequestAttempts,
-              }
-            : {}),
+          ...(providerRequestAttempts === undefined
+            ? {}
+            : { providerRequestAttempts }),
         });
         finishOperation("completed");
         state.contextAccounting =
