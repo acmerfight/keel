@@ -50,6 +50,7 @@ type UndoCheckpointNotWrittenReason = Extract<
 
 export interface RecordLastEditCheckpointOptions {
   readonly workspace: string;
+  readonly ownerId?: string | undefined;
   readonly filePath: string;
   readonly beforeContent: string;
   readonly afterContent: string;
@@ -72,6 +73,7 @@ interface PersistedEditCheckpoint {
   readonly beforeContent: string;
   readonly afterContent: string;
   readonly modeOwnership: EditCheckpointModeOwnership;
+  readonly ownerId?: string | undefined;
   readonly createdAt: string;
 }
 
@@ -85,6 +87,7 @@ interface PersistedBatchEditCheckpointOperation {
 
 export interface RecordLastCreateCheckpointOptions {
   readonly workspace: string;
+  readonly ownerId?: string;
   readonly filePath: string;
   readonly afterContent: string;
   readonly mode?: number;
@@ -92,6 +95,7 @@ export interface RecordLastCreateCheckpointOptions {
 
 export interface RecordLastDeleteCheckpointOptions {
   readonly workspace: string;
+  readonly ownerId?: string;
   readonly filePath: string;
   readonly beforeContent: string;
   readonly mode: number;
@@ -120,6 +124,7 @@ export type RecordLastBatchCheckpointOperation =
 
 export interface RecordLastBatchCheckpointOptions {
   readonly workspace: string;
+  readonly ownerId?: string;
   readonly operations: readonly RecordLastBatchCheckpointOperation[];
 }
 
@@ -166,6 +171,7 @@ const editCheckpointFields = {
   relativePath: z.string().min(1),
   beforeContent: z.string(),
   afterContent: z.string(),
+  ownerId: z.string().min(1).optional(),
   createdAt: z.string().min(1),
 };
 const editCheckpointSchema = z.union([
@@ -205,6 +211,7 @@ const createCheckpointSchema = z
     relativePath: z.string().min(1),
     afterContent: z.string(),
     mode: checkpointModeSchema.optional(),
+    ownerId: z.string().min(1).optional(),
     createdAt: z.string().min(1),
   })
   .strict();
@@ -217,6 +224,7 @@ const deleteCheckpointSchema = z
     relativePath: z.string().min(1),
     beforeContent: z.string(),
     mode: checkpointModeSchema,
+    ownerId: z.string().min(1).optional(),
     createdAt: z.string().min(1),
   })
   .strict();
@@ -286,6 +294,7 @@ const batchCheckpointSchema = z
     operation: z.literal("batch"),
     gitRoot: z.string().min(1),
     operations: z.array(batchCheckpointOperationSchema).min(1),
+    ownerId: z.string().min(1).optional(),
     createdAt: z.string().min(1),
   })
   .strict();
@@ -393,6 +402,9 @@ function checkpointForDisk(checkpoint: PersistedCheckpoint): CheckpointForDisk {
       beforeContent: checkpoint.beforeContent,
       afterContent: checkpoint.afterContent,
       ...editModeOwnershipForDisk(checkpoint.modeOwnership),
+      ...(checkpoint.ownerId === undefined
+        ? {}
+        : { ownerId: checkpoint.ownerId }),
       createdAt: checkpoint.createdAt,
     };
   }
@@ -531,9 +543,15 @@ function appendCheckpoint(
   const existingCheckpoints = readExistingCheckpointsForAppend(
     gitWorkspace.checkpointPath,
   );
+  const retainedCheckpoints =
+    checkpoint.ownerId === undefined
+      ? existingCheckpoints
+      : existingCheckpoints.filter(
+          (existing) => existing.ownerId !== checkpoint.ownerId,
+        );
   writeCheckpoint(
     gitWorkspace.checkpointPath,
-    [...existingCheckpoints, checkpoint].slice(-MAX_UNDO_CHECKPOINTS),
+    [...retainedCheckpoints, checkpoint].slice(-MAX_UNDO_CHECKPOINTS),
   );
 }
 
@@ -669,6 +687,7 @@ export function recordLastEditCheckpoint(
       beforeContent: options.beforeContent,
       afterContent: options.afterContent,
       modeOwnership: options.modeOwnership,
+      ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
       createdAt: new Date().toISOString(),
     });
 
@@ -714,6 +733,7 @@ export function recordLastCreateCheckpoint(
       relativePath,
       afterContent: options.afterContent,
       ...modeState(options.mode),
+      ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
       createdAt: new Date().toISOString(),
     });
 
@@ -759,6 +779,7 @@ export function recordLastDeleteCheckpoint(
       relativePath,
       beforeContent: options.beforeContent,
       mode: options.mode,
+      ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
       createdAt: new Date().toISOString(),
     });
 
@@ -837,6 +858,7 @@ export function recordLastBatchCheckpoint(
       operation: "batch",
       gitRoot: gitWorkspace.root,
       operations,
+      ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
       createdAt: new Date().toISOString(),
     });
 
@@ -1185,6 +1207,53 @@ function checkpointForwardOperations(
   ];
 }
 
+export function loadTaskCheckpointOperations(options: {
+  readonly workspace: string;
+  readonly ownerId: string;
+}): readonly RecordLastBatchCheckpointOperation[] {
+  const gitWorkspace = findGitWorkspace(options.workspace);
+  if (gitWorkspace === null) return [];
+  const checkpoint = readExistingCheckpointsForAppend(
+    gitWorkspace.checkpointPath,
+  ).findLast((candidate) => candidate.ownerId === options.ownerId);
+  if (checkpoint === undefined || checkpoint.gitRoot !== gitWorkspace.root) {
+    return [];
+  }
+  const operations: RecordLastBatchCheckpointOperation[] = [];
+  for (const operation of checkpointForwardOperations(checkpoint)) {
+    const filePath = resolve(gitWorkspace.root, operation.relativePath);
+    if (!isInside(gitWorkspace.root, filePath)) return [];
+    switch (operation.operation) {
+      case "edit":
+        operations.push({
+          operation: "edit",
+          filePath,
+          beforeContent: operation.beforeContent,
+          afterContent: operation.afterContent,
+          modeOwnership: { ...operation.modeOwnership },
+        });
+        break;
+      case "create":
+        operations.push({
+          operation: "create",
+          filePath,
+          afterContent: operation.afterContent,
+          ...(operation.mode === undefined ? {} : { mode: operation.mode }),
+        });
+        break;
+      case "delete":
+        operations.push({
+          operation: "delete",
+          filePath,
+          beforeContent: operation.beforeContent,
+          mode: operation.mode,
+        });
+        break;
+    }
+  }
+  return operations;
+}
+
 export function recordLastTaskCheckpoint(
   options: RecordLastBatchCheckpointOptions,
 ): RecordUndoCheckpointResult {
@@ -1202,6 +1271,9 @@ export function recordLastTaskCheckpoint(
       if (operation.operation === "create") {
         return recordLastCreateCheckpoint({
           workspace: options.workspace,
+          ...(options.ownerId === undefined
+            ? {}
+            : { ownerId: options.ownerId }),
           filePath: operation.filePath,
           afterContent: operation.afterContent,
           ...modeState(operation.mode),
@@ -1210,6 +1282,9 @@ export function recordLastTaskCheckpoint(
       if (operation.operation === "delete") {
         return recordLastDeleteCheckpoint({
           workspace: options.workspace,
+          ...(options.ownerId === undefined
+            ? {}
+            : { ownerId: options.ownerId }),
           filePath: operation.filePath,
           beforeContent: operation.beforeContent,
           mode: operation.mode,
@@ -1217,6 +1292,7 @@ export function recordLastTaskCheckpoint(
       }
       return recordLastEditCheckpoint({
         workspace: options.workspace,
+        ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
         filePath: operation.filePath,
         beforeContent: operation.beforeContent,
         afterContent: operation.afterContent,
@@ -1227,6 +1303,7 @@ export function recordLastTaskCheckpoint(
 
   return recordLastBatchCheckpoint({
     workspace: options.workspace,
+    ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
     operations,
   });
 }

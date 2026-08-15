@@ -431,7 +431,7 @@ describe("builtin tool registry invariants", () => {
 
   test(`Given builtin tool metadata is owned by defineTool objects,
     When object-literal properties are inspected,
-    Then every builtin tool definition exposes name and args metadata`, () => {
+    Then every builtin tool definition exposes name, args, and recovery metadata`, () => {
     for (const constantName of builtinToolConstantNames) {
       const properties = objectLiteralPropertyNames(
         defineToolObject(toolDefinitionsSource, constantName),
@@ -439,6 +439,17 @@ describe("builtin tool registry invariants", () => {
 
       expect(properties).toContain("name");
       expect(properties).toContain("args");
+      expect(properties).toContain("recovery");
+
+      const recovery = objectProperty(
+        defineToolObject(toolDefinitionsSource, constantName),
+        "recovery",
+      )?.initializer;
+      expect(
+        recovery !== undefined && ts.isObjectLiteralExpression(recovery)
+          ? objectLiteralPropertyNames(recovery)
+          : [],
+      ).toContain("kind");
     }
   });
 

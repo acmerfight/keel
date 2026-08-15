@@ -17,6 +17,7 @@ import {
   builtinToolCallSchema,
   builtinToolRegistry,
   builtinTools,
+  type ToolRecoveryCapability,
 } from "./tool-definitions.ts";
 import { toolCallValidationError, zodIssuesText } from "./tool-error.ts";
 import {
@@ -707,6 +708,18 @@ export function toolCallCanonicalArguments(
   }
   const tool = builtinToolForName(toolCall.tool);
   return tool.canonicalArgumentsFromCall(toolCall);
+}
+
+export function toolCallRecoveryCapability(
+  toolCall: ToolCall,
+): ToolRecoveryCapability {
+  if (isInvalidToolCall(toolCall)) {
+    return { kind: "no_effect" };
+  }
+  if (isMcpToolInvocation(toolCall)) {
+    return { kind: "opaque" };
+  }
+  return builtinToolForName(toolCall.tool).recovery;
 }
 
 export function toolCallLabel(toolCall: ToolCall): string {

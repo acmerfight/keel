@@ -911,6 +911,93 @@ describe("Tool Scheduling", () => {
     }
   });
 
+  test(`Given a durable parallel batch exceeds the ten-worker limit,
+    When the first wave is still being scheduled,
+    Then Keel records intent only as each worker dispatches its tool call`, async () => {
+    const workspace = await createWorkspace();
+    const toolCallIds = Array.from(
+      { length: 11 },
+      (_, index) => `limited_read_${index + 1}`,
+    );
+    await Promise.all(
+      toolCallIds.map((_, index) =>
+        writeFile(
+          join(workspace, `shared-${index + 1}.txt`),
+          "visible\n",
+          "utf8",
+        ),
+      ),
+    );
+    const durableIntents: string[] = [];
+    const durableSettlements: string[] = [];
+    let settledBeforeEleventhIntent = -1;
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "parallel-durable-intent-limit-provider",
+      async *stream() {
+        if (turn++ === 0) {
+          for (const [index, id] of toolCallIds.entries()) {
+            yield {
+              type: "tool_call",
+              id,
+              tool: "read",
+              path: `shared-${index + 1}.txt`,
+            };
+          }
+        } else {
+          yield { type: "text", text: "All reads finished." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          ledger: sessionLedgerMirroringMessages([
+            { role: "user", content: "read eleven times" },
+          ]),
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          providerRecovery: {
+            beforeRequest: () => {},
+            providerRequestAttempts: {
+              begin: () => ({ finish: () => {} }),
+            },
+            auxiliaryProviderRequestAttempts: {
+              begin: () => ({ finish: () => {} }),
+            },
+            settled: () => {},
+            beforeToolCalls: (toolCalls) => {
+              expect(toolCalls).toHaveLength(1);
+              const [toolCall] = toolCalls;
+              if (toolCall === undefined) {
+                throw new Error("expected one dispatched tool call");
+              }
+              if (toolCall.id === toolCallIds[10]) {
+                settledBeforeEleventhIntent = durableSettlements.length;
+              }
+              durableIntents.push(toolCall.id);
+            },
+            toolSettled: ({ toolMessage }) => {
+              durableSettlements.push(toolMessage.toolCallId);
+            },
+          },
+        }),
+      );
+
+      expect(durableIntents).toEqual(toolCallIds);
+      expect(durableSettlements).toEqual(toolCallIds);
+      expect(settledBeforeEleventhIntent).toBeGreaterThanOrEqual(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the assistant edits a file and reads it in one turn,
     When the batch includes a workspace mutation,
     Then the read waits for the edit and sees the updated content`, async () => {
@@ -1412,6 +1499,90 @@ describe("Tool Scheduling", () => {
     }
   });
 
+  test(`Given a durable Task executes independent writes in one tool round,
+    When each write finishes,
+    Then each mutation checkpoint is independently included in its durable settlement`, async () => {
+    const workspace = await createWorkspace();
+    const messages: SessionMessage[] = [
+      { role: "user", content: "create two durable files" },
+    ];
+    const durableSettlements: {
+      readonly toolCallId: string;
+      readonly checkpointOperationCount: number;
+    }[] = [];
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "durable-independent-writes-provider",
+      async *stream() {
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "durable_write_alpha",
+            tool: "write",
+            path: "alpha.txt",
+            content: "alpha\n",
+          };
+          yield {
+            type: "tool_call",
+            id: "durable_write_beta",
+            tool: "write",
+            path: "beta.txt",
+            content: "beta\n",
+          };
+          yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+          return;
+        }
+        yield { type: "text", text: "Both writes are durable." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+
+    try {
+      await collect(
+        runAgentTurn({
+          workspace,
+          provider,
+          ledger: sessionLedgerMirroringMessages(messages),
+          systemPrompt: "You are a helpful assistant.",
+          signal: freshSignal(),
+          bash: { kind: "disabled" },
+          stopPolicy: defaultStopPolicy(),
+          providerRecovery: {
+            beforeRequest: () => {},
+            providerRequestAttempts: {
+              begin: () => ({ finish: () => {} }),
+            },
+            auxiliaryProviderRequestAttempts: {
+              begin: () => ({ finish: () => {} }),
+            },
+            settled: () => {},
+            beforeToolCalls: () => {},
+            toolSettled: ({ toolMessage, effects }) => {
+              durableSettlements.push({
+                toolCallId: toolMessage.toolCallId,
+                checkpointOperationCount: effects.checkpointOperations.length,
+              });
+            },
+          },
+        }),
+      );
+
+      expect(durableSettlements).toEqual([
+        { toolCallId: "durable_write_alpha", checkpointOperationCount: 1 },
+        { toolCallId: "durable_write_beta", checkpointOperationCount: 1 },
+      ]);
+      expect(await readFile(join(workspace, "alpha.txt"), "utf8")).toBe(
+        "alpha\n",
+      );
+      expect(await readFile(join(workspace, "beta.txt"), "utf8")).toBe(
+        "beta\n",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a read-only batch has a source-earlier success before cancellation,
     When a later scheduled tool rejects with a terminal error,
     Then the artifact-backed successful result is still recorded before the run fails`, async () => {
@@ -1428,6 +1599,7 @@ describe("Tool Scheduling", () => {
       { role: "user", content: "inspect and search" },
     ];
     const saved: ToolOutputArtifactSaveInput[] = [];
+    const durableToolResults: SessionMessage[] = [];
     const provider: LLMProvider = {
       id: "terminal-parallel-search-provider",
       async *stream() {
@@ -1463,6 +1635,20 @@ describe("Tool Scheduling", () => {
             store: storedArtifactStore(saved),
             maxInlineChars: 64,
           },
+          providerRecovery: {
+            beforeRequest: () => {},
+            providerRequestAttempts: {
+              begin: () => ({ finish: () => {} }),
+            },
+            auxiliaryProviderRequestAttempts: {
+              begin: () => ({ finish: () => {} }),
+            },
+            settled: () => {},
+            beforeToolCalls: () => {},
+            toolSettled: ({ toolMessage }) => {
+              durableToolResults.push(toolMessage);
+            },
+          },
         })) {
           events.push(event);
         }
@@ -1486,6 +1672,14 @@ describe("Tool Scheduling", () => {
         omittedChars: expect.any(Number),
       });
       expect(saved).toHaveLength(1);
+      expect(durableToolResults).toEqual([
+        expect.objectContaining({
+          role: "tool",
+          toolCallId: "read_note",
+          content: expect.stringContaining("keel artifacts show"),
+          evidenceShortened: true,
+        }),
+      ]);
       expect(messages).toContainEqual({
         role: "tool",
         toolCallId: "read_note",

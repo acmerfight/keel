@@ -6,13 +6,17 @@ import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import { parseInteractiveCommand } from "../../../src/cli/interactive-session/commands.ts";
+import { createSessionTaskRecovery } from "../../../src/cli/interactive-session/task-recovery.ts";
 import {
   createSessionStore,
   persistSessionMessages,
   persistSessionQueuedInput,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import { recordLastEditCheckpoint } from "../../../src/core/git.ts";
+import {
+  listUndoCheckpoints,
+  recordLastEditCheckpoint,
+} from "../../../src/core/git.ts";
 import type { LLMProvider, ProviderMessage } from "../../../src/llm/types.ts";
 import {
   commitFile,
@@ -28,6 +32,107 @@ import {
 } from "../../../src/testing/interactive-session-fixtures.ts";
 
 describe("Interactive Session - Undo", () => {
+  test(`Given a named session completes a durable write,
+    When interactive turn finalization refreshes undo protection,
+    Then the Task keeps exactly one owned checkpoint`, async () => {
+    const workspace = await createGitWorkspace(
+      "keel-interactive-durable-undo-",
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+      now: () => 0,
+    };
+    const storedSession = createSessionStore({
+      sessionId: "durable-undo-finalization",
+      workspace,
+      runtime,
+    });
+    let messages: readonly SessionMessage[] = [];
+    const taskRecovery = createSessionTaskRecovery({
+      session: () => storedSession,
+      runtime,
+      currentMessages: () => messages,
+      onMessagesPersisted: (persisted) => {
+        messages = persisted;
+      },
+    });
+    let turn = 0;
+    const provider: LLMProvider = {
+      id: "fake",
+      async *stream(options) {
+        const attempt = options.providerRequestAttempts?.begin();
+        if (turn === 0) {
+          turn++;
+          yield {
+            type: "tool_call",
+            id: "durable_write",
+            tool: "write",
+            path: "result.txt",
+            content: "durable\n",
+          };
+        } else {
+          yield { type: "text", text: "Created durably." };
+        }
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+        attempt?.finish({ outcome: "completed", usage: ZERO_USAGE });
+      },
+    };
+    const input = new PassThrough();
+    const pending = runInteractiveSession({
+      cliArgs: { bashMode: "disabled" },
+      workspace,
+      platform: process.platform,
+      session: {
+        ...savedInteractiveSession({ id: storedSession.id }),
+        taskRecovery,
+      },
+      input,
+      writeStdout: () => {},
+      writeStderr: () => {},
+      onSigint: () => {},
+      offSigint: () => {},
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: () => ({
+        provider,
+        providerId: "fake",
+        model: "fake",
+        costModel: ZERO_COST_MODEL,
+      }),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async (stream) => {
+        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
+        for await (const event of stream) {
+          if (event.type === "end") finalEnd = event;
+        }
+        return finalEnd;
+      },
+      formatCostReport: () => "",
+    });
+
+    try {
+      input.end("create the file\n");
+      await pending;
+      expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe(
+        "durable\n",
+      );
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "result.txt" },
+      ]);
+      expect(
+        (await readFile(storedSession.filePath, "utf8")).match(
+          /"type":"tool_settled"/gu,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no edit checkpoint exists,
     When user enters /undo,
     Then the command reports the next actions without starting a model turn`, async () => {

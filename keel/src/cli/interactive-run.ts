@@ -1196,6 +1196,7 @@ async function runActiveSessionCli(
               session: activeSessionForPersistence(),
               taskProgress: update.taskProgress,
               messageOrdinal: update.messageOrdinal,
+              forceRecord: true,
               runtime,
             });
           },

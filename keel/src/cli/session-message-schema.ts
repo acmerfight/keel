@@ -92,6 +92,19 @@ const readResourceObservationSchema = z
   })
   .strict();
 
+const toolRecoveryResultMetadataSchema = z
+  .object({
+    kind: z.enum([
+      "not_executed_after_restart",
+      "interrupted_no_effect",
+      "interrupted_effect_unknown",
+    ]),
+    taskId: z.string().min(1),
+    runId: z.string().min(1),
+    operationId: z.string().min(1),
+  })
+  .strict();
+
 const toolMessageSchema = z
   .object({
     role: z.literal("tool"),
@@ -100,6 +113,7 @@ const toolMessageSchema = z
     sourceTruncated: z.boolean().optional(),
     evidenceShortened: z.literal(true).optional(),
     resourceObservation: readResourceObservationSchema.optional(),
+    recovery: toolRecoveryResultMetadataSchema.optional(),
   })
   .strict();
 

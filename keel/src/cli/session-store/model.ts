@@ -1,4 +1,5 @@
 import type { PersistedSessionMessage } from "../../agent/session-message.ts";
+import type { RecordLastBatchCheckpointOperation } from "../../core/git.ts";
 import type { ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type {
@@ -10,8 +11,10 @@ import type {
   SkillActivation,
   SkillLifecycleState,
 } from "../../skills/model.ts";
+import type { ToolJsonValue } from "../../tools/tool-call.ts";
+import type { ToolRecoveryCapability } from "../../tools/tool-definitions.ts";
 
-export const SESSION_SCHEMA_VERSION = 7;
+export const SESSION_SCHEMA_VERSION = 8;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 export const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -122,6 +125,63 @@ export interface ActiveSessionProviderAttempt {
   readonly settlement?: SessionProviderAttemptSettlement;
 }
 
+export interface SessionToolContinuationEffects {
+  readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
+  readonly taskProgress?: SessionTaskProgress;
+  readonly goal?: SessionGoal;
+  readonly skillState?: SkillLifecycleState;
+  readonly delegation?: readonly {
+    readonly usage: SessionProviderAttemptUsage;
+    readonly costUsd: number;
+  }[];
+}
+
+interface ActiveSessionToolInvocationBase {
+  readonly operationId: string;
+  readonly runId: string;
+  readonly resultMessageId: string;
+  readonly toolCallId: string;
+  readonly sourceIndex: number;
+  readonly toolName: string;
+  readonly recovery: ToolRecoveryCapability;
+  readonly canonicalArguments: Readonly<Record<string, ToolJsonValue>>;
+  readonly argumentsSha256: string;
+}
+
+type SessionToolSettlementKind =
+  | "completed"
+  | "not_executed_after_restart"
+  | "interrupted_no_effect"
+  | "interrupted_effect_unknown";
+
+export type ActiveSessionToolInvocation = ActiveSessionToolInvocationBase &
+  (
+    | {
+        readonly phase: "planned";
+        readonly startedAt?: never;
+        readonly settledAt?: never;
+        readonly kind?: never;
+        readonly toolMessage?: never;
+        readonly effects?: never;
+      }
+    | {
+        readonly phase: "effect_pending";
+        readonly startedAt: string;
+        readonly settledAt?: never;
+        readonly kind?: never;
+        readonly toolMessage?: never;
+        readonly effects?: never;
+      }
+    | {
+        readonly phase: "settled";
+        readonly startedAt?: string;
+        readonly settledAt: string;
+        readonly kind: SessionToolSettlementKind;
+        readonly toolMessage: StoredMessage;
+        readonly effects: SessionToolContinuationEffects;
+      }
+  );
+
 interface ActiveSessionTaskBase {
   readonly taskId: string;
   readonly runId: string;
@@ -165,14 +225,27 @@ export type ActiveSessionTask = ActiveSessionTaskBase &
         readonly stopReason: "stop" | "length";
       }
     | {
+        readonly phase: "tool_execution";
+        readonly providerAttempt: ActiveSessionProviderAttempt & {
+          readonly settlement: Extract<
+            SessionProviderAttemptSettlement,
+            { readonly outcome: "completed" }
+          >;
+        };
+        readonly assistantMessage: StoredMessage;
+        readonly stopReason: "stop" | "length";
+        readonly toolInvocations: readonly ActiveSessionToolInvocation[];
+      }
+    | {
         readonly phase: "recovery_blocked";
         readonly providerAttempt?: ActiveSessionProviderAttempt;
         readonly assistantMessage?: StoredMessage;
         readonly stopReason?: "stop" | "length";
+        readonly toolInvocations?: readonly ActiveSessionToolInvocation[];
         readonly reason:
           | "provider_replacement_limit"
           | "provider_budget"
-          | "tool_plan";
+          | "tool_effect";
       }
   );
 
@@ -324,8 +397,30 @@ interface ProviderSettledSessionRecord {
   readonly timestamp: string;
   readonly task: Extract<
     ActiveSessionTask,
-    { readonly phase: "provider_settled" }
+    { readonly phase: "provider_settled" | "tool_execution" }
   >;
+}
+
+interface ToolIntentSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "tool_intent";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "tool_execution" }
+  >;
+  readonly operationIds: readonly string[];
+}
+
+interface ToolSettledSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "tool_settled";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "tool_execution" }
+  >;
+  readonly operationId: string;
 }
 
 interface TaskRecoveryStartedSessionRecord {
@@ -344,7 +439,7 @@ interface StepCommittedSessionRecord {
   readonly timestamp: string;
   readonly task: Extract<
     ActiveSessionTask,
-    { readonly phase: "provider_ready" }
+    { readonly phase: "provider_ready" | "recovery_blocked" }
   >;
   readonly messages: readonly StoredMessage[];
   readonly replaceTranscript?: true;
@@ -412,6 +507,8 @@ export type SessionMutationRecord =
   | ProviderIntentSessionRecord
   | ProviderAttemptSettledSessionRecord
   | ProviderSettledSessionRecord
+  | ToolIntentSessionRecord
+  | ToolSettledSessionRecord
   | TaskRecoveryStartedSessionRecord
   | StepCommittedSessionRecord
   | TaskTerminalSessionRecord

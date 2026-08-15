@@ -675,6 +675,8 @@ describe("Run Outcome Reporting", () => {
             settled: (response) => {
               settled.push(response.assistantMessage);
             },
+            beforeToolCalls: () => {},
+            toolSettled: () => {},
           },
         }),
       );

@@ -4,6 +4,12 @@ import type {
   PersistedSessionMessage,
   SessionMessage,
 } from "../../agent/session-message.ts";
+import {
+  loadTaskCheckpointOperations,
+  type RecordLastBatchCheckpointOperation,
+  recordLastTaskCheckpoint,
+} from "../../core/git.ts";
+import type { RecordUndoCheckpointResult } from "../../core/undo-protection.ts";
 import type {
   ProviderRequestAttemptFinish,
   ProviderRequestAttemptObserver,
@@ -20,6 +26,8 @@ import {
   persistSessionTaskRecoveryState,
   persistSessionTaskStep,
   persistSessionTaskTerminal,
+  persistSessionToolIntents,
+  persistSessionToolSettlement,
   type SessionLastTaskOutcome,
   type SessionModelSelection,
   type SessionProviderAttemptSettlement,
@@ -40,6 +48,7 @@ type SessionTaskResumeDirective =
         PersistedSessionMessage,
         { readonly role: "user" }
       >;
+      readonly recoveredMessages: readonly SessionMessage[];
     }
   | {
       readonly kind: "delivered";
@@ -62,10 +71,10 @@ export interface SessionTaskRecovery {
     readonly userMessageId?: string;
   }) => Extract<ActiveSessionTask, { readonly phase: "provider_ready" }>;
   readonly resume: () => SessionTaskResumeDirective;
-  readonly blockProviderBudget: () => Extract<
-    ActiveSessionTask,
-    { readonly phase: "recovery_blocked" }
-  >;
+  readonly finalizeCheckpoint: () => RecordUndoCheckpointResult | null;
+  readonly blockProviderBudget: (
+    messages: readonly SessionMessage[],
+  ) => Extract<ActiveSessionTask, { readonly phase: "recovery_blocked" }>;
   readonly providerLifecycle: (
     provider: SessionModelSelection,
     inputPersistence?: {
@@ -123,8 +132,34 @@ export function createSessionTaskRecovery(options: {
   readonly onMessagesPersisted: (messages: readonly SessionMessage[]) => void;
 }): SessionTaskRecovery {
   const { runtime } = options;
+  let checkpointOwnerId: string | undefined;
+  const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
+  const restoreCheckpointOwner = (session: SessionState): void => {
+    const task = activeSessionTask(session);
+    if (task === undefined || checkpointOwnerId === task.taskId) return;
+    checkpointOwnerId = task.taskId;
+    checkpointOperations.splice(
+      0,
+      checkpointOperations.length,
+      ...loadTaskCheckpointOperations({
+        workspace: session.workspace,
+        ownerId: task.taskId,
+      }),
+    );
+  };
+  const persistCheckpoint = (): RecordUndoCheckpointResult | null => {
+    if (checkpointOwnerId === undefined || checkpointOperations.length === 0) {
+      return null;
+    }
+    return recordLastTaskCheckpoint({
+      workspace: options.session().workspace,
+      ownerId: checkpointOwnerId,
+      operations: checkpointOperations,
+    });
+  };
   return {
     admit: (request) => {
+      checkpointOperations.splice(0, checkpointOperations.length);
       const session = options.session();
       const task = persistSessionTaskAdmission({
         session,
@@ -136,6 +171,7 @@ export function createSessionTaskRecovery(options: {
           : { userMessageId: request.userMessageId }),
         runtime,
       });
+      checkpointOwnerId = task.taskId;
       options.onMessagesPersisted([
         ...options.currentMessages(),
         request.userMessage,
@@ -146,6 +182,7 @@ export function createSessionTaskRecovery(options: {
       const session = options.session();
       const activeTask = activeSessionTask(session);
       if (activeTask === undefined) return { kind: "none" };
+      restoreCheckpointOwner(session);
       if (activeTask.phase === "recovery_blocked") {
         return { kind: "blocked", task: activeTask };
       }
@@ -156,19 +193,6 @@ export function createSessionTaskRecovery(options: {
             "durable provider response is not an assistant message",
           );
         }
-        if (activeTask.assistantMessage.message.toolCalls.length > 0) {
-          const blocked: Extract<
-            ActiveSessionTask,
-            { readonly phase: "recovery_blocked" }
-          > = {
-            ...activeTask,
-            phase: "recovery_blocked",
-            recovered: true,
-            reason: "tool_plan",
-          };
-          persistSessionTaskRecoveryState({ session, task: blocked, runtime });
-          return { kind: "blocked", task: blocked };
-        }
         const message = activeTask.assistantMessage.message;
         const outcome = persistSessionTaskTerminal({
           session,
@@ -178,6 +202,103 @@ export function createSessionTaskRecovery(options: {
         });
         options.onMessagesPersisted([...options.currentMessages(), message]);
         return { kind: "delivered", message, outcome };
+      }
+      if (activeTask.phase === "tool_execution") {
+        for (const invocation of activeTask.toolInvocations) {
+          if (invocation.phase === "settled") continue;
+          const settlementKind =
+            invocation.phase === "planned"
+              ? "not_executed_after_restart"
+              : invocation.recovery.kind === "no_effect"
+                ? "interrupted_no_effect"
+                : "interrupted_effect_unknown";
+          const content = JSON.stringify({
+            status: settlementKind,
+            operationId: invocation.operationId,
+            tool: invocation.toolName,
+            message:
+              settlementKind === "interrupted_effect_unknown"
+                ? "The prior process ended after this invocation started. Its effect is unknown; the old invocation was not repeated."
+                : settlementKind === "interrupted_no_effect"
+                  ? "The prior process ended during this no-effect invocation. It was not repeated."
+                  : "The prior process ended before this invocation started. It was not executed.",
+          });
+          persistSessionToolSettlement({
+            session,
+            toolCallId: invocation.toolCallId,
+            settlementKind,
+            toolMessage: {
+              role: "tool",
+              toolCallId: invocation.toolCallId,
+              content,
+              recovery: {
+                kind: settlementKind,
+                taskId: activeTask.taskId,
+                runId: invocation.runId,
+                operationId: invocation.operationId,
+              },
+            },
+            effects: { checkpointOperations: [] },
+            runtime,
+          });
+        }
+        const settledTask = activeSessionTask(session);
+        /* v8 ignore next 4 -- each unsettled invocation was synchronously settled above. */
+        if (settledTask?.phase !== "tool_execution") {
+          throw new Error(
+            "durable tool recovery changed Task phase unexpectedly",
+          );
+        }
+        const recoveredMessages: readonly SessionMessage[] = [
+          settledTask.assistantMessage.message,
+          ...[...settledTask.toolInvocations]
+            .sort((left, right) => left.sourceIndex - right.sourceIndex)
+            .map((invocation) => {
+              /* v8 ignore next 3 -- the recovery loop settles every invocation before transcript promotion. */
+              if (invocation.phase !== "settled") {
+                throw new Error(
+                  "durable tool recovery left an invocation unsettled",
+                );
+              }
+              return invocation.toolMessage.message;
+            }),
+        ];
+        const nextRunId = `run_${randomUUID()}`;
+        persistSessionTaskStep({
+          session,
+          currentMessages: [...options.currentMessages(), ...recoveredMessages],
+          recoveryRunId: nextRunId,
+          runtime,
+        });
+        const recoveredTask = activeSessionTask(session);
+        /* v8 ignore next 4 -- the atomic step commit chooses exactly one recovery outcome. */
+        if (recoveredTask === undefined) {
+          throw new Error("durable tool recovery lost its active Task");
+        }
+        options.onMessagesPersisted([
+          ...options.currentMessages(),
+          ...recoveredMessages,
+        ]);
+        if (recoveredTask.phase === "recovery_blocked") {
+          return { kind: "blocked", task: recoveredTask };
+        }
+        /* v8 ignore next 3 -- a non-blocked recovered tool step is provider-ready. */
+        if (recoveredTask.phase !== "provider_ready") {
+          throw new Error("durable tool recovery did not create a fresh Run");
+        }
+        const userMessage = sessionStoredMessages(session).find(
+          (storedMessage) => storedMessage.id === recoveredTask.userMessageId,
+        )?.message;
+        /* v8 ignore next 4 -- task admission requires this exact stored user message. */
+        if (userMessage === undefined || userMessage.role !== "user") {
+          throw new Error("durable tool recovery input is missing");
+        }
+        return {
+          kind: "run",
+          task: recoveredTask,
+          userMessage,
+          recoveredMessages,
+        };
       }
       if (
         activeTask.phase === "provider_pending" &&
@@ -262,13 +383,29 @@ export function createSessionTaskRecovery(options: {
         phase: "provider_ready",
       };
       persistSessionTaskRecoveryState({ session, task, runtime });
-      return { kind: "run", task, userMessage };
+      return { kind: "run", task, userMessage, recoveredMessages: [] };
     },
-    blockProviderBudget: () => {
+    finalizeCheckpoint: persistCheckpoint,
+    blockProviderBudget: (messages) => {
       const session = options.session();
-      const activeTask = activeSessionTask(session);
+      let activeTask = activeSessionTask(session);
       if (activeTask === undefined || activeTask.phase === "recovery_blocked") {
         throw new Error("provider budget cannot block this durable Task phase");
+      }
+      if (activeTask.phase === "tool_execution") {
+        persistSessionTaskStep({
+          session,
+          currentMessages: messages,
+          runtime,
+        });
+        activeTask = activeSessionTask(session);
+        /* v8 ignore next 4 -- a complete tool group commits to provider-ready before budget blocking. */
+        if (activeTask?.phase !== "provider_ready") {
+          throw new Error(
+            "provider budget could not commit its durable tool group",
+          );
+        }
+        options.onMessagesPersisted(messages);
       }
       const blocked: Extract<
         ActiveSessionTask,
@@ -342,6 +479,31 @@ export function createSessionTaskRecovery(options: {
             assistantMessage: response.assistantMessage,
             usage: completedSettlement(response.usage),
             stopReason: response.stopReason,
+            runtime,
+          });
+        },
+        beforeToolCalls: (toolCalls) => {
+          persistSessionToolIntents({
+            session: options.session(),
+            toolCallIds: toolCalls.map((toolCall) => toolCall.id),
+            runtime,
+          });
+        },
+        toolSettled: (settlement) => {
+          const session = options.session();
+          restoreCheckpointOwner(session);
+          if (settlement.effects.checkpointOperations.length > 0) {
+            checkpointOperations.push(
+              ...settlement.effects.checkpointOperations,
+            );
+            persistCheckpoint();
+          }
+          persistSessionToolSettlement({
+            session,
+            toolCallId: settlement.toolMessage.toolCallId,
+            settlementKind: "completed",
+            toolMessage: settlement.toolMessage,
+            effects: settlement.effects,
             runtime,
           });
         },

@@ -29,7 +29,10 @@ import {
   bashRuntimeExposesTool,
 } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
-import type { SkillActivationCapability } from "../skills/model.ts";
+import type {
+  SkillActivationCapability,
+  SkillLifecycleState,
+} from "../skills/model.ts";
 import type { AgentControlCapability } from "../tools/agent-control.ts";
 import type {
   DelegationBatchEntry,
@@ -286,6 +289,20 @@ export interface AgentProviderRecoveryLifecycle {
     >;
     readonly usage: Usage;
     readonly stopReason: "stop" | "length";
+  }) => void;
+  readonly beforeToolCalls: (toolCalls: readonly ToolCall[]) => void;
+  readonly toolSettled: (settlement: {
+    readonly toolMessage: Extract<SessionMessage, { readonly role: "tool" }>;
+    readonly effects: {
+      readonly checkpointOperations: readonly RecordLastBatchCheckpointOperation[];
+      readonly taskProgress?: SessionTaskProgress;
+      readonly goal?: SessionGoal;
+      readonly skillState?: SkillLifecycleState;
+      readonly delegation?: readonly {
+        readonly usage: Usage;
+        readonly costUsd: number;
+      }[];
+    };
   }) => void;
 }
 
@@ -1638,11 +1655,121 @@ export async function* runAgentTurn(
 
     const scheduled = scheduledToolCalls(workspace, turnResult.toolCalls);
     const completedToolExecutions: CompletedTurnToolExecution[] = [];
+    const durableToolSettlement = options.providerRecovery !== undefined;
     let pendingToolExecutions: CompletedTurnToolExecution[] = [];
+    const artifactOptionsForIndependentSettlement =
+      options.toolOutputArtifacts === undefined
+        ? undefined
+        : {
+            ...options.toolOutputArtifacts,
+            maxInlineChars: Math.min(
+              resolvedMaxInlineChars(options.toolOutputArtifacts),
+              Math.max(
+                1,
+                Math.floor(
+                  resolvedMaxAggregateInlineChars(options.toolOutputArtifacts) /
+                    turnResult.toolCalls.length,
+                ),
+              ),
+            ),
+            maxAggregateInlineChars: Math.max(
+              1,
+              Math.floor(
+                resolvedMaxAggregateInlineChars(options.toolOutputArtifacts) /
+                  turnResult.toolCalls.length,
+              ),
+            ),
+          };
+    const settleCompletedToolExecution = async (
+      completed: CompletedTurnToolExecution,
+    ): Promise<SettledTurnToolExecution> => {
+      const [settled] = await settleToolExecutionContents({
+        executions: [completed],
+        artifacts: artifactOptionsForIndependentSettlement,
+      });
+      /* v8 ignore next 3 -- a singleton settlement always returns one result. */
+      if (settled === undefined) {
+        throw new Error("tool execution settlement produced no result");
+      }
+      const read = settled.execution.ok
+        ? toolExecutionEffect(settled.execution, "read")
+        : undefined;
+      const toolMessage: Extract<SessionMessage, { readonly role: "tool" }> = {
+        role: "tool",
+        toolCallId: settled.toolCall.id,
+        content: settled.content,
+        ...toolMessageSourceTruncationMetadata({
+          content: settled.content,
+          sourceTruncated: settled.sourceTruncated,
+        }),
+        ...(settled.evidenceShortened
+          ? { evidenceShortened: true as const }
+          : {}),
+        ...(read === undefined
+          ? {}
+          : { resourceObservation: read.resourceObservation }),
+      };
+      const progress = settled.execution.ok
+        ? toolExecutionEffect(settled.execution, "task_progress")
+        : undefined;
+      const goal = toolExecutionEffect(settled.execution, "session_goal");
+      const skillActivation = settled.execution.ok
+        ? toolExecutionEffect(settled.execution, "skill_activation")
+        : undefined;
+      const delegation = toolExecutionEffect(settled.execution, "delegation");
+      options.providerRecovery?.toolSettled({
+        toolMessage,
+        effects: {
+          checkpointOperations: settled.execution.ok
+            ? toolExecutionEffects(settled.execution, "mutation").flatMap(
+                (mutation) => mutation.checkpointOperations,
+              )
+            : [],
+          ...(progress === undefined
+            ? {}
+            : { taskProgress: progress.taskProgress }),
+          ...(goal === undefined ? {} : { goal: goal.goal }),
+          ...(skillActivation === undefined ||
+          options.skillActivation === undefined
+            ? {}
+            : { skillState: options.skillActivation.state() }),
+          ...(delegation === undefined
+            ? {}
+            : {
+                delegation: [
+                  { usage: delegation.usage, costUsd: delegation.costUsd },
+                ],
+              }),
+        },
+      });
+      return settled;
+    };
+    const appendSettledToolExecution = (
+      settled: SettledTurnToolExecution,
+    ): void => {
+      const read = settled.execution.ok
+        ? toolExecutionEffect(settled.execution, "read")
+        : undefined;
+      appendSessionLedgerMessage(sessionLedger, {
+        role: "tool",
+        toolCallId: settled.toolCall.id,
+        content: settled.content,
+        ...toolMessageSourceTruncationMetadata({
+          content: settled.content,
+          sourceTruncated: settled.sourceTruncated,
+        }),
+        ...(settled.evidenceShortened
+          ? { evidenceShortened: true as const }
+          : {}),
+        ...(read === undefined
+          ? {}
+          : { resourceObservation: read.resourceObservation }),
+      });
+    };
     const settlePendingToolExecutions = async (): Promise<
       readonly ToolOutputArtifactNotice[]
     > => {
-      if (pendingToolExecutions.length === 0) {
+      if (durableToolSettlement || pendingToolExecutions.length === 0) {
         return [];
       }
       const pending = pendingToolExecutions;
@@ -1651,33 +1778,12 @@ export async function* runAgentTurn(
         executions: pending,
         artifacts: options.toolOutputArtifacts,
       });
-      const artifactNotices: ToolOutputArtifactNotice[] = [];
+      const notices: ToolOutputArtifactNotice[] = [];
       for (const settled of settledToolExecutions) {
-        const read = settled.execution.ok
-          ? toolExecutionEffect(settled.execution, "read")
-          : undefined;
-        appendSessionLedgerMessage(sessionLedger, {
-          role: "tool",
-          toolCallId: settled.toolCall.id,
-          content: settled.content,
-          ...toolMessageSourceTruncationMetadata({
-            content: settled.content,
-            sourceTruncated: settled.sourceTruncated,
-          }),
-          ...(settled.evidenceShortened
-            ? { evidenceShortened: true as const }
-            : {}),
-          ...(read !== undefined
-            ? {
-                resourceObservation: read.resourceObservation,
-              }
-            : {}),
-        });
-        if (settled.notice !== undefined) {
-          artifactNotices.push(settled.notice);
-        }
+        appendSettledToolExecution(settled);
+        if (settled.notice !== undefined) notices.push(settled.notice);
       }
-      return artifactNotices;
+      return notices;
     };
     const recordCompletedToolExecution = (
       completed: CompletedTurnToolExecution,
@@ -1691,7 +1797,7 @@ export async function* runAgentTurn(
         mutatedTargetPathsFromExecution(completed.execution),
       );
       completedToolExecutions.push(completed);
-      pendingToolExecutions.push(completed);
+      if (!durableToolSettlement) pendingToolExecutions.push(completed);
       const delegation = toolExecutionEffect(completed.execution, "delegation");
       if (delegation !== undefined) {
         state.accounting = addMeasuredRequestAccounting(
@@ -1721,8 +1827,7 @@ export async function* runAgentTurn(
         taskProgress,
         messageOrdinal:
           sessionLedgerMessages(sessionLedger).length +
-          pendingToolExecutions.length +
-          1,
+          (durableToolSettlement ? 0 : pendingToolExecutions.length + 1),
       };
     };
     const sessionGoalEventFromExecution = (
@@ -1741,8 +1846,7 @@ export async function* runAgentTurn(
         goal: sessionGoal,
         messageOrdinal:
           sessionLedgerMessages(sessionLedger).length +
-          pendingToolExecutions.length +
-          1,
+          (durableToolSettlement ? 0 : pendingToolExecutions.length + 1),
       };
     };
 
@@ -1754,7 +1858,13 @@ export async function* runAgentTurn(
           }
           const results = await executeParallelToolCallsInSourceOrder({
             toolCalls: segment.toolCalls,
-            execute: executeTurnToolCall,
+            execute: async (toolCall) => {
+              options.providerRecovery?.beforeToolCalls([toolCall]);
+              const execution = await executeTurnToolCall(toolCall);
+              return durableToolSettlement
+                ? await settleCompletedToolExecution({ toolCall, execution })
+                : { toolCall, execution };
+            },
           });
           for (const result of results) {
             if (result.status === "rejected") {
@@ -1763,7 +1873,14 @@ export async function* runAgentTurn(
               }
               throw result.reason;
             }
-            const { toolCall, result: execution } = result;
+            const { toolCall, result: completed } = result;
+            const { execution } = completed;
+            if ("content" in completed) {
+              appendSettledToolExecution(completed);
+              if (completed.notice !== undefined) {
+                yield { type: "tool_output_artifact", ...completed.notice };
+              }
+            }
             yield toolEndEvent(toolCall, execution);
             recordCompletedToolExecution({ toolCall, execution });
           }
@@ -1777,6 +1894,7 @@ export async function* runAgentTurn(
               yield { type: "tool_output_artifact", ...notice };
             }
           }
+          options.providerRecovery?.beforeToolCalls([toolCall]);
           yield { type: "tool_start", toolCall };
           let execution: ToolExecution;
           try {
@@ -1799,7 +1917,15 @@ export async function* runAgentTurn(
                 effects: [],
               },
             });
-            await settlePendingToolExecutions();
+            const settled = await settleCompletedToolExecution({
+              toolCall,
+              execution: {
+                content: COST_BUDGET_ADMISSION_TOOL_RESULT,
+                ok: false,
+                effects: [],
+              },
+            });
+            appendSettledToolExecution(settled);
             yield {
               type: "end",
               usage: state.accounting.totalUsage,
@@ -1814,6 +1940,16 @@ export async function* runAgentTurn(
               ),
             };
             return;
+          }
+          if (durableToolSettlement) {
+            const settled = await settleCompletedToolExecution({
+              toolCall,
+              execution,
+            });
+            appendSettledToolExecution(settled);
+            if (settled.notice !== undefined) {
+              yield { type: "tool_output_artifact", ...settled.notice };
+            }
           }
           yield toolEndEvent(toolCall, execution);
           if (execution.ok) {
