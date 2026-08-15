@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
 import type {
   PersistedSessionMessage,
   SessionMessage,
@@ -24,6 +25,12 @@ import type {
   SkillActivation,
   SkillLifecycleState,
 } from "../../skills/model.ts";
+import {
+  type ToolJsonValue,
+  toolCallCanonicalArguments,
+  toolCallRecoveryCapability,
+} from "../../tools/registry.ts";
+import { redactMessageForPersistence } from "../persistence-redaction.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
   endForkPoint,
@@ -42,6 +49,7 @@ import {
 import {
   type ActiveSessionProviderAttempt,
   type ActiveSessionTask,
+  type ActiveSessionToolInvocation,
   SESSION_SCHEMA_VERSION,
   type SessionGraphRecord,
   type SessionLastTaskOutcome,
@@ -51,10 +59,12 @@ import {
   type SessionProviderAttemptSettlement,
   type SessionQueuedInput,
   type SessionRecords,
+  type SessionReplayState,
   type SessionSkillStateCheckpoint,
   type SessionState,
   type SessionStoreRuntime,
   type SessionTaskProgressCheckpoint,
+  type SessionToolContinuationEffects,
   type SkillStateSessionRecord,
   type StoredMessage,
 } from "./model.ts";
@@ -72,6 +82,7 @@ import {
   redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
   redactSessionTaskProgressForPersistence,
+  redactSessionToolContinuationEffectsForPersistence,
   redactSkillActivationForPersistence,
   redactStoredMessageForPersistence,
   validateCompletedTranscript,
@@ -115,6 +126,21 @@ function providerSettlementAllowsAnotherRequest(
     settlement?.outcome === "retryable_error" ||
     settlement?.outcome === "context_overflow"
   );
+}
+
+const canonicalToolArgumentsSchema = z.record(z.string(), z.json());
+
+function canonicalToolArguments(
+  toolCall: Parameters<typeof toolCallCanonicalArguments>[0],
+): Readonly<Record<string, ToolJsonValue>> {
+  const result = canonicalToolArgumentsSchema.safeParse(
+    toolCallCanonicalArguments(toolCall),
+  );
+  /* v8 ignore next 3 -- parsed ToolCall variants contain only schema-validated JSON values; retain a fail-closed guard for future variants. */
+  if (!result.success) {
+    sessionStoreError("Error: canonical tool arguments are not JSON values.");
+  }
+  return result.data;
 }
 
 function createEmptySessionStore(options: {
@@ -464,17 +490,11 @@ function replaySessionStore(options: {
       return true;
     }
     if (!next.recovered) return false;
-    if (current.phase === "provider_settled") {
-      return (
-        current.assistantMessage.message.role === "assistant" &&
-        current.assistantMessage.message.toolCalls.length > 0 &&
-        isDeepStrictEqual(next, {
-          ...current,
-          phase: "recovery_blocked",
-          recovered: true,
-          reason: "tool_plan",
-        })
-      );
+    if (
+      current.phase === "provider_settled" ||
+      current.phase === "tool_execution"
+    ) {
+      return false;
     }
     if (current.phase === "recovery_blocked") return false;
     if (
@@ -530,6 +550,53 @@ function replaySessionStore(options: {
       phase: "provider_ready",
     });
   };
+
+  const validPersistedToolMetadata = (task: {
+    readonly assistantMessage: StoredMessage;
+    readonly toolInvocations: readonly ActiveSessionToolInvocation[];
+    readonly expectedRunId?: string;
+  }): boolean => {
+    const assistantMessage = task.assistantMessage.message;
+    if (
+      assistantMessage.role !== "assistant" ||
+      assistantMessage.toolCalls.length !== task.toolInvocations.length ||
+      new Set(task.toolInvocations.map((item) => item.operationId)).size !==
+        task.toolInvocations.length ||
+      new Set(task.toolInvocations.map((item) => item.resultMessageId)).size !==
+        task.toolInvocations.length ||
+      new Set(task.toolInvocations.map((item) => item.toolCallId)).size !==
+        task.toolInvocations.length
+    ) {
+      return false;
+    }
+    return task.toolInvocations.every((invocation, sourceIndex) => {
+      const toolCall = assistantMessage.toolCalls[sourceIndex];
+      /* v8 ignore next -- the length equality above guarantees one provider tool call for every source index. */
+      if (toolCall === undefined) return false;
+      const canonicalArguments = canonicalToolArguments(toolCall);
+      return (
+        invocation.sourceIndex === sourceIndex &&
+        (task.expectedRunId === undefined ||
+          invocation.runId === task.expectedRunId) &&
+        invocation.toolCallId === toolCall.id &&
+        invocation.toolName === toolCall.tool &&
+        isDeepStrictEqual(
+          invocation.recovery,
+          toolCallRecoveryCapability(toolCall),
+        ) &&
+        isDeepStrictEqual(invocation.canonicalArguments, canonicalArguments) &&
+        invocation.argumentsSha256 ===
+          createHash("sha256")
+            .update(canonicalToolJson(canonicalArguments))
+            .digest("hex")
+      );
+    });
+  };
+  const validPersistedToolPlan = (
+    task: Extract<ActiveSessionTask, { readonly phase: "tool_execution" }>,
+  ): boolean =>
+    validPersistedToolMetadata({ ...task, expectedRunId: task.runId }) &&
+    task.toolInvocations.every((invocation) => invocation.phase === "planned");
 
   for (const record of records.mutations) {
     switch (record.type) {
@@ -761,6 +828,11 @@ function replaySessionStore(options: {
         break;
       }
       case "provider_settled": {
+        const expectedPhase =
+          record.task.assistantMessage.message.role === "assistant" &&
+          record.task.assistantMessage.message.toolCalls.length > 0
+            ? "tool_execution"
+            : "provider_settled";
         if (
           activeTask === undefined ||
           activeTask.phase !== "provider_pending" ||
@@ -769,16 +841,158 @@ function replaySessionStore(options: {
           record.task.assistantMessage.id !==
             activeTask.providerAttempt.responseMessageId ||
           !taskIdentityMatches(activeTask, record.task) ||
+          record.task.phase !== expectedPhase ||
+          (record.task.phase === "tool_execution" &&
+            !validPersistedToolPlan(record.task)) ||
           !isDeepStrictEqual(record.task, {
             ...activeTask,
-            phase: "provider_settled",
+            phase: expectedPhase,
             assistantMessage: record.task.assistantMessage,
             stopReason: record.task.stopReason,
+            ...(record.task.phase === "tool_execution"
+              ? { toolInvocations: record.task.toolInvocations }
+              : {}),
           })
         ) {
           sessionStoreError(
             `Error: cannot resume session "${options.sessionId}": provider_settled does not match the active provider attempt.`,
           );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
+      case "tool_intent": {
+        if (
+          activeTask === undefined ||
+          activeTask.phase !== "tool_execution" ||
+          !taskIdentityMatches(activeTask, record.task) ||
+          new Set(record.operationIds).size !== record.operationIds.length
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": tool_intent does not match the active tool plan.`,
+          );
+        }
+        const operationIds = new Set(record.operationIds);
+        const expectedInvocations = activeTask.toolInvocations.map(
+          (invocation) => {
+            if (!operationIds.has(invocation.operationId)) return invocation;
+            if (invocation.phase !== "planned") return null;
+            operationIds.delete(invocation.operationId);
+            return {
+              ...invocation,
+              phase: "effect_pending" as const,
+              startedAt: record.timestamp,
+            };
+          },
+        );
+        if (
+          operationIds.size > 0 ||
+          expectedInvocations.some((invocation) => invocation === null) ||
+          !isDeepStrictEqual(record.task, {
+            ...activeTask,
+            toolInvocations: expectedInvocations,
+          })
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": tool_intent is not a canonical transition.`,
+          );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
+      case "tool_settled": {
+        if (
+          activeTask === undefined ||
+          activeTask.phase !== "tool_execution" ||
+          !taskIdentityMatches(activeTask, record.task)
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": tool_settled does not match the active tool plan.`,
+          );
+        }
+        const prior = activeTask.toolInvocations.find(
+          (invocation) => invocation.operationId === record.operationId,
+        );
+        const settled = record.task.toolInvocations.find(
+          (invocation) => invocation.operationId === record.operationId,
+        );
+        const validKind =
+          prior !== undefined &&
+          settled?.phase === "settled" &&
+          persistedToolSettlementIsCanonical(activeTask.taskId, settled) &&
+          validPersistedToolMetadata({
+            assistantMessage: record.task.assistantMessage,
+            toolInvocations: record.task.toolInvocations,
+            expectedRunId: record.task.runId,
+          }) &&
+          !storedMessages.some(
+            (message) => message.id === settled.toolMessage.id,
+          ) &&
+          !activeTask.toolInvocations.some(
+            (invocation) =>
+              invocation.phase === "settled" &&
+              invocation.toolMessage.id === settled.toolMessage.id,
+          ) &&
+          ((settled.kind === "completed" &&
+            prior.phase === "effect_pending" &&
+            settled.startedAt === prior.startedAt) ||
+            (settled.kind === "not_executed_after_restart" &&
+              prior.phase === "planned" &&
+              settled.startedAt === undefined) ||
+            (settled.kind === "interrupted_no_effect" &&
+              prior.phase === "effect_pending" &&
+              prior.recovery.kind === "no_effect" &&
+              settled.startedAt === prior.startedAt) ||
+            (settled.kind === "interrupted_effect_unknown" &&
+              prior.phase === "effect_pending" &&
+              prior.recovery.kind === "opaque" &&
+              settled.startedAt === prior.startedAt));
+        const expectedInvocations = activeTask.toolInvocations.map(
+          (invocation) =>
+            invocation.operationId === record.operationId
+              ? settled
+              : invocation,
+        );
+        if (
+          !validKind ||
+          settled === undefined ||
+          record.task.toolInvocations.length !==
+            activeTask.toolInvocations.length ||
+          !isDeepStrictEqual(record.task, {
+            ...activeTask,
+            toolInvocations: expectedInvocations,
+          })
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": tool_settled is not a canonical transition.`,
+          );
+        }
+        const settlementOrdinal =
+          storedMessages.length + settled.sourceIndex + 2;
+        if (settled.effects.taskProgress !== undefined) {
+          taskProgress = copySessionTaskProgress(settled.effects.taskProgress);
+          taskProgressCheckpoints = [
+            ...taskProgressCheckpoints,
+            { messageOrdinal: settlementOrdinal, taskProgress },
+          ];
+        }
+        if (settled.effects.goal !== undefined) {
+          goal = copySessionGoal(settled.effects.goal);
+        }
+        if (settled.effects.skillState !== undefined) {
+          skillActivations =
+            settled.effects.skillState.skillActivations.map(
+              copySkillActivation,
+            );
+          activeSkillIds = [...settled.effects.skillState.activeSkillIds];
+          skillStateCheckpoints = [
+            ...skillStateCheckpoints,
+            {
+              messageOrdinal: settlementOrdinal,
+              skillActivations: skillActivations.map(copySkillActivation),
+              activeSkillIds: [...activeSkillIds],
+            },
+          ];
         }
         activeTask = copyActiveSessionTask(record.task);
         break;
@@ -797,20 +1011,41 @@ function replaySessionStore(options: {
       case "step_committed": {
         if (
           activeTask === undefined ||
-          activeTask.phase !== "provider_settled"
+          (activeTask.phase !== "provider_settled" &&
+            activeTask.phase !== "tool_execution")
         ) {
           sessionStoreError(
             `Error: cannot resume session "${options.sessionId}": step_committed does not match the active Task.`,
           );
         }
         const settledTask = activeTask;
+        const toolRecovery =
+          settledTask.phase === "tool_execution" &&
+          record.task.runId !== settledTask.runId;
+        const hasUnknownEffect =
+          settledTask.phase === "tool_execution" &&
+          settledTask.toolInvocations.some(
+            (invocation) =>
+              invocation.phase === "settled" &&
+              invocation.kind === "interrupted_effect_unknown",
+          );
         if (
           settledTask.taskId !== record.task.taskId ||
-          settledTask.runId !== record.task.runId ||
-          !taskIdentityMatches(settledTask, record.task) ||
+          !taskIdentityMatches(settledTask, record.task, toolRecovery) ||
+          (toolRecovery
+            ? record.task.runId === settledTask.runId || !record.task.recovered
+            : record.task.runId !== settledTask.runId ||
+              record.task.recovered !== settledTask.recovered) ||
+          (hasUnknownEffect
+            ? record.task.phase !== "recovery_blocked" ||
+              record.task.reason !== "tool_effect" ||
+              !isDeepStrictEqual(
+                record.task.toolInvocations,
+                settledTask.toolInvocations,
+              )
+            : record.task.phase !== "provider_ready") ||
           record.task.providerReplacementsUsed !==
             settledTask.providerReplacementsUsed ||
-          record.task.recovered !== settledTask.recovered ||
           !isDeepStrictEqual(
             record.task.providerRequestIds,
             settledTask.providerRequestIds,
@@ -824,9 +1059,28 @@ function replaySessionStore(options: {
             `Error: cannot resume session "${options.sessionId}": step_committed does not match the active Task.`,
           );
         }
+        const responseIndex = record.messages.findLastIndex((message) =>
+          isDeepStrictEqual(message, settledTask.assistantMessage),
+        );
+        const expectedToolMessages =
+          settledTask.phase === "tool_execution"
+            ? [...settledTask.toolInvocations]
+                .sort((left, right) => left.sourceIndex - right.sourceIndex)
+                .map((invocation) =>
+                  invocation.phase === "settled"
+                    ? invocation.toolMessage
+                    : undefined,
+                )
+            : [];
         if (
-          !record.messages.some((message) =>
-            isDeepStrictEqual(message, settledTask.assistantMessage),
+          responseIndex < 0 ||
+          expectedToolMessages.some(
+            (message, index) =>
+              message === undefined ||
+              !isDeepStrictEqual(
+                record.messages[responseIndex + index + 1],
+                message,
+              ),
           )
         ) {
           sessionStoreError(
@@ -1023,6 +1277,9 @@ function replaySessionStore(options: {
           const isReplacementLimitBlocked =
             activeTask.phase === "recovery_blocked" &&
             activeTask.reason === "provider_replacement_limit";
+          const isToolEffectBlocked =
+            activeTask.phase === "recovery_blocked" &&
+            activeTask.reason === "tool_effect";
           const currentProviderAttemptIsUnknown =
             providerAttempt !== undefined &&
             activeTask.unknownProviderAttemptIds.includes(
@@ -1091,7 +1348,10 @@ function replaySessionStore(options: {
                 attemptId: providerAttempt.attemptId,
                 responseMessageId,
               }) ||
-              storedMessages.some((message) => message.id === responseMessageId)
+              (storedMessages.some(
+                (message) => message.id === responseMessageId,
+              ) &&
+                !isToolEffectBlocked)
             ) {
               sessionStoreError(
                 `Error: cannot resume session "${options.sessionId}": snapshot active Task reuses its provider response message id.`,
@@ -1110,13 +1370,63 @@ function replaySessionStore(options: {
               );
             }
           }
+          const toolInvocations =
+            "toolInvocations" in activeTask
+              ? activeTask.toolInvocations
+              : undefined;
+          if (toolInvocations !== undefined) {
+            const activeTaskId = activeTask.taskId;
+            /* v8 ignore next 3 -- tool-execution and tool-effect-blocked schemas require the settled assistant message validated immediately above. */
+            const assistantToolCalls =
+              assistantMessage?.message.role === "assistant"
+                ? assistantMessage.message.toolCalls
+                : [];
+            const toolStateIsCanonical =
+              assistantMessage !== undefined &&
+              validPersistedToolMetadata({
+                assistantMessage,
+                toolInvocations,
+                ...(activeTask.phase === "tool_execution"
+                  ? { expectedRunId: activeTask.runId }
+                  : {}),
+              }) &&
+              toolInvocations.length === assistantToolCalls.length &&
+              toolInvocations.every((invocation, sourceIndex) => {
+                const toolCall = assistantToolCalls[sourceIndex];
+                return (
+                  toolCall !== undefined &&
+                  invocation.sourceIndex === sourceIndex &&
+                  invocation.toolCallId === toolCall.id &&
+                  invocation.toolName === toolCall.tool &&
+                  (invocation.phase !== "settled" ||
+                    persistedToolSettlementIsCanonical(
+                      activeTaskId,
+                      invocation,
+                    ))
+                );
+              });
+            const blockedToolStateIsCanonical =
+              !isToolEffectBlocked ||
+              (toolInvocations.every(
+                (invocation) => invocation.phase === "settled",
+              ) &&
+                toolInvocations.some(
+                  (invocation) =>
+                    invocation.phase === "settled" &&
+                    invocation.kind === "interrupted_effect_unknown",
+                ));
+            if (!toolStateIsCanonical || !blockedToolStateIsCanonical) {
+              sessionStoreError(
+                `Error: cannot resume session "${options.sessionId}": snapshot active Task has invalid tool recovery state.`,
+              );
+            }
+          }
           if (
             (assistantMessage === undefined &&
               activeTask.stopReason !== undefined) ||
             (activeTask.phase === "recovery_blocked" &&
-              activeTask.reason === "tool_plan" &&
-              (assistantMessage?.message.role !== "assistant" ||
-                assistantMessage.message.toolCalls.length === 0)) ||
+              activeTask.reason === "tool_effect" &&
+              toolInvocations === undefined) ||
             (isReplacementLimitBlocked && !replacementLimitStateIsCanonical)
           ) {
             sessionStoreError(
@@ -1314,10 +1624,12 @@ export function persistSessionTaskProgress(options: {
   readonly session: SessionState;
   readonly taskProgress: SessionTaskProgress;
   readonly messageOrdinal?: number;
+  readonly forceRecord?: boolean;
   readonly runtime: SessionStoreRuntime;
 }): void {
   const replayState = replayStateForSession(options.session);
   if (
+    options.forceRecord !== true &&
     sessionTaskProgressesEqual(replayState.taskProgress, options.taskProgress)
   ) {
     return;
@@ -1539,6 +1851,110 @@ export function persistSessionProviderAttemptSettlement(options: {
     copyActiveSessionTask(task);
 }
 
+function canonicalToolJson(value: ToolJsonValue): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalToolJson).join(",")}]`;
+  }
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([key, nested]) => `${JSON.stringify(key)}:${canonicalToolJson(nested)}`,
+    )
+    .join(",")}}`;
+}
+
+function toolContinuationEffectsAreEmpty(
+  effects: SessionToolContinuationEffects,
+): boolean {
+  return (
+    effects.checkpointOperations.length === 0 &&
+    effects.taskProgress === undefined &&
+    effects.goal === undefined &&
+    effects.skillState === undefined &&
+    effects.delegation === undefined
+  );
+}
+
+function persistedToolSettlementIsCanonical(
+  taskId: string,
+  invocation: Extract<
+    ActiveSessionToolInvocation,
+    { readonly phase: "settled" }
+  >,
+): boolean {
+  const message = invocation.toolMessage.message;
+  if (
+    message.role !== "tool" ||
+    invocation.toolMessage.id !== invocation.resultMessageId ||
+    message.toolCallId !== invocation.toolCallId
+  ) {
+    return false;
+  }
+  if (invocation.kind === "completed") {
+    return invocation.startedAt !== undefined && message.recovery === undefined;
+  }
+  if (
+    !toolContinuationEffectsAreEmpty(invocation.effects) ||
+    !isDeepStrictEqual(message.recovery, {
+      kind: invocation.kind,
+      taskId,
+      runId: invocation.runId,
+      operationId: invocation.operationId,
+    })
+  ) {
+    return false;
+  }
+  switch (invocation.kind) {
+    case "not_executed_after_restart":
+      return invocation.startedAt === undefined;
+    case "interrupted_no_effect":
+      return (
+        invocation.startedAt !== undefined &&
+        invocation.recovery.kind === "no_effect"
+      );
+    case "interrupted_effect_unknown":
+      return (
+        invocation.startedAt !== undefined &&
+        invocation.recovery.kind === "opaque"
+      );
+  }
+}
+
+function persistedToolPlan(
+  runId: string,
+  assistantMessage: Extract<
+    PersistedSessionMessage,
+    { readonly role: "assistant" }
+  >,
+): readonly ActiveSessionToolInvocation[] {
+  if (
+    new Set(assistantMessage.toolCalls.map((toolCall) => toolCall.id)).size !==
+    assistantMessage.toolCalls.length
+  ) {
+    sessionStoreError("Error: provider tool plan contains duplicate call ids.");
+  }
+  return assistantMessage.toolCalls.map((toolCall, sourceIndex) => {
+    const canonicalArguments = canonicalToolArguments(toolCall);
+    return {
+      operationId: `tool_operation_${randomUUID()}`,
+      runId,
+      resultMessageId: createSessionMessageId(),
+      toolCallId: toolCall.id,
+      sourceIndex,
+      toolName: toolCall.tool,
+      recovery: toolCallRecoveryCapability(toolCall),
+      canonicalArguments,
+      argumentsSha256: createHash("sha256")
+        .update(canonicalToolJson(canonicalArguments))
+        .digest("hex"),
+      phase: "planned",
+    };
+  });
+}
+
 export function persistSessionProviderResponse(options: {
   readonly session: SessionState;
   readonly assistantMessage: Extract<
@@ -1551,7 +1967,10 @@ export function persistSessionProviderResponse(options: {
   >;
   readonly stopReason: "stop" | "length";
   readonly runtime: SessionStoreRuntime;
-}): Extract<ActiveSessionTask, { readonly phase: "provider_settled" }> {
+}): Extract<
+  ActiveSessionTask,
+  { readonly phase: "provider_settled" | "tool_execution" }
+> {
   const activeTask = activeTaskForSession(options.session);
   if (activeTask.phase !== "provider_pending") {
     sessionStoreError(
@@ -1586,12 +2005,15 @@ export function persistSessionProviderResponse(options: {
     id: activeTask.providerAttempt.responseMessageId,
     message: persistedAssistantMessage,
   });
-  const task: Extract<
-    ActiveSessionTask,
-    { readonly phase: "provider_settled" }
-  > = {
+  /* v8 ignore next 5 -- parsing and the public input type preserve this role. */
+  if (assistantMessage.message.role !== "assistant") {
+    sessionStoreError(
+      "Error: persisted provider response changed message role.",
+    );
+  }
+  const assistantToolCalls = assistantMessage.message.toolCalls;
+  const base = {
     ...activeTask,
-    phase: "provider_settled",
     providerAttempt: {
       ...activeTask.providerAttempt,
       settlement: options.usage,
@@ -1599,6 +2021,20 @@ export function persistSessionProviderResponse(options: {
     assistantMessage,
     stopReason: options.stopReason,
   };
+  const task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_settled" | "tool_execution" }
+  > =
+    assistantToolCalls.length === 0
+      ? { ...base, phase: "provider_settled" }
+      : {
+          ...base,
+          phase: "tool_execution",
+          toolInvocations: persistedToolPlan(
+            activeTask.runId,
+            assistantMessage.message,
+          ),
+        };
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     type: "provider_settled",
@@ -1613,10 +2049,194 @@ export function persistSessionProviderResponse(options: {
   });
   const result = copyActiveSessionTask(task);
   /* v8 ignore next 3 -- copyActiveSessionTask preserves the discriminated phase of this freshly constructed value. */
-  if (result.phase !== "provider_settled") {
+  if (
+    result.phase !== "provider_settled" &&
+    result.phase !== "tool_execution"
+  ) {
     sessionStoreError("Error: provider response changed phase while copying.");
   }
   return result;
+}
+
+function applySettledToolEffectsToReplay(options: {
+  readonly replayState: SessionReplayState;
+  readonly invocation: Extract<
+    ActiveSessionToolInvocation,
+    { readonly phase: "settled" }
+  >;
+}): void {
+  const { effects } = options.invocation;
+  const messageOrdinal =
+    options.replayState.storedMessages.length +
+    options.invocation.sourceIndex +
+    2;
+  if (effects.taskProgress !== undefined) {
+    replaceReplayTaskProgress(
+      options.replayState,
+      effects.taskProgress,
+      messageOrdinal,
+    );
+  }
+  if (effects.goal !== undefined) {
+    options.replayState.goal = copySessionGoal(effects.goal);
+  }
+  if (effects.skillState !== undefined) {
+    options.replayState.skillStateCheckpoints.push({
+      messageOrdinal,
+      ...copySkillLifecycleState(effects.skillState),
+    });
+  }
+}
+
+export function persistSessionToolIntents(options: {
+  readonly session: SessionState;
+  readonly toolCallIds: readonly string[];
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const activeTask = activeTaskForSession(options.session);
+  if (activeTask.phase !== "tool_execution") {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} has no tool plan to start.`,
+    );
+  }
+  const ids = new Set(options.toolCallIds);
+  if (ids.size !== options.toolCallIds.length || ids.size === 0) {
+    sessionStoreError("Error: tool intent batch must contain unique calls.");
+  }
+  const timestamp = isoTimestamp(options.runtime);
+  const operationIds: string[] = [];
+  const toolInvocations = activeTask.toolInvocations.map((invocation) => {
+    if (!ids.has(invocation.toolCallId)) return invocation;
+    if (invocation.phase !== "planned") {
+      sessionStoreError(
+        `Error: tool call ${JSON.stringify(invocation.toolCallId)} is not planned.`,
+      );
+    }
+    ids.delete(invocation.toolCallId);
+    operationIds.push(invocation.operationId);
+    return {
+      ...invocation,
+      phase: "effect_pending" as const,
+      startedAt: timestamp,
+    };
+  });
+  if (ids.size > 0) {
+    sessionStoreError(
+      "Error: tool intent does not match the durable tool plan.",
+    );
+  }
+  const task: Extract<ActiveSessionTask, { readonly phase: "tool_execution" }> =
+    { ...activeTask, toolInvocations };
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "tool_intent",
+    timestamp,
+    task,
+    operationIds,
+  });
+  replayStateForSession(options.session).activeTask =
+    copyActiveSessionTask(task);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+}
+
+export function persistSessionToolSettlement(options: {
+  readonly session: SessionState;
+  readonly toolCallId: string;
+  readonly settlementKind:
+    | "completed"
+    | "not_executed_after_restart"
+    | "interrupted_no_effect"
+    | "interrupted_effect_unknown";
+  readonly toolMessage: Extract<SessionMessage, { readonly role: "tool" }>;
+  readonly effects: SessionToolContinuationEffects;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const activeTask = activeTaskForSession(options.session);
+  if (activeTask.phase !== "tool_execution") {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} has no active tool execution.`,
+    );
+  }
+  const invocationIndex = activeTask.toolInvocations.findIndex(
+    (invocation) => invocation.toolCallId === options.toolCallId,
+  );
+  const invocation = activeTask.toolInvocations[invocationIndex];
+  if (invocation === undefined) {
+    sessionStoreError(
+      `Error: tool call ${JSON.stringify(options.toolCallId)} is not in the durable tool plan.`,
+    );
+  }
+  const actualSettlement = options.settlementKind === "completed";
+  if (
+    (actualSettlement && invocation.phase !== "effect_pending") ||
+    (!actualSettlement && invocation.phase === "settled")
+  ) {
+    sessionStoreError(
+      `Error: tool call ${JSON.stringify(options.toolCallId)} cannot be settled from phase ${invocation.phase}.`,
+    );
+  }
+  const [parsedToolMessage] = parseSessionMessages(
+    options.session.id,
+    [options.toolMessage],
+    "persist",
+  );
+  if (
+    parsedToolMessage === undefined ||
+    parsedToolMessage.role !== "tool" ||
+    parsedToolMessage.toolCallId !== invocation.toolCallId
+  ) {
+    sessionStoreError("Error: tool settlement does not match its invocation.");
+  }
+  const storedToolMessage = redactStoredMessageForPersistence({
+    id: invocation.resultMessageId,
+    message: parsedToolMessage,
+  });
+  const settledAt = isoTimestamp(options.runtime);
+  const settledInvocation: Extract<
+    ActiveSessionToolInvocation,
+    { readonly phase: "settled" }
+  > = {
+    ...invocation,
+    phase: "settled",
+    ...(invocation.phase === "effect_pending"
+      ? { startedAt: invocation.startedAt }
+      : {}),
+    settledAt,
+    kind: options.settlementKind,
+    toolMessage: storedToolMessage,
+    effects: redactSessionToolContinuationEffectsForPersistence(
+      options.effects,
+    ),
+  };
+  if (
+    !persistedToolSettlementIsCanonical(activeTask.taskId, settledInvocation)
+  ) {
+    sessionStoreError("Error: tool settlement evidence is not canonical.");
+  }
+  const toolInvocations = [...activeTask.toolInvocations];
+  toolInvocations[invocationIndex] = settledInvocation;
+  const task: Extract<ActiveSessionTask, { readonly phase: "tool_execution" }> =
+    { ...activeTask, toolInvocations };
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "tool_settled",
+    timestamp: settledAt,
+    task,
+    operationId: settledInvocation.operationId,
+  });
+  const replayState = replayStateForSession(options.session);
+  replayState.activeTask = copyActiveSessionTask(task);
+  applySettledToolEffectsToReplay({
+    replayState,
+    invocation: settledInvocation,
+  });
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
 }
 
 export function persistSessionTaskRecoveryState(options: {
@@ -1652,27 +2272,47 @@ export function persistSessionTaskStep(options: {
   readonly session: SessionState;
   readonly currentMessages: readonly SessionMessage[];
   readonly consumedInputIds?: readonly string[];
+  readonly recoveryRunId?: string;
   readonly runtime: SessionStoreRuntime;
 }): boolean {
   const activeTask = activeTaskForSession(options.session);
-  if (activeTask.phase !== "provider_settled") return false;
+  if (
+    activeTask.phase !== "provider_settled" &&
+    activeTask.phase !== "tool_execution"
+  ) {
+    return false;
+  }
+  if (
+    activeTask.phase === "tool_execution" &&
+    activeTask.toolInvocations.some(
+      (invocation) => invocation.phase !== "settled",
+    )
+  ) {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} cannot commit an incomplete tool group.`,
+    );
+  }
   const currentMessages = parseSessionMessages(
     options.session.id,
     options.currentMessages,
     "persist",
   );
+  const comparableMessages = currentMessages.map(redactMessageForPersistence);
   validateCompletedTranscript(options.session.id, currentMessages, "persist");
   const replayState = replayStateForSession(options.session);
   const previousMessages = messagesFromStoredMessages(
     replayState.storedMessages,
   );
-  const extendsTranscript = hasMessagePrefix(currentMessages, previousMessages);
+  const extendsTranscript = hasMessagePrefix(
+    comparableMessages,
+    previousMessages,
+  );
   const responseIndex = extendsTranscript
     ? previousMessages.length
-    : currentMessages.findLastIndex((message) =>
+    : comparableMessages.findLastIndex((message) =>
         messageArraysEqual([message], [activeTask.assistantMessage.message]),
       );
-  const response = currentMessages[responseIndex];
+  const response = comparableMessages[responseIndex];
   if (
     response === undefined ||
     !messageArraysEqual([response], [activeTask.assistantMessage.message])
@@ -1684,7 +2324,7 @@ export function persistSessionTaskStep(options: {
   const admittedUserMessage = replayState.storedMessages.find(
     (message) => message.id === activeTask.userMessageId,
   );
-  const admittedUserMessageIndex = currentMessages.findLastIndex(
+  const admittedUserMessageIndex = comparableMessages.findLastIndex(
     (message) =>
       admittedUserMessage !== undefined &&
       messageArraysEqual([message], [admittedUserMessage.message]),
@@ -1698,33 +2338,75 @@ export function persistSessionTaskStep(options: {
       `Error: committed durable Task step is missing admitted user message ${JSON.stringify(activeTask.userMessageId)}.`,
     );
   }
+  const reservedMessageIds = new Map([
+    [admittedUserMessageIndex, activeTask.userMessageId],
+    [responseIndex, activeTask.assistantMessage.id],
+  ]);
+  if (activeTask.phase === "tool_execution") {
+    for (const invocation of activeTask.toolInvocations) {
+      /* v8 ignore next -- the incomplete-group guard above proves every invocation is settled before transcript promotion. */
+      if (invocation.phase !== "settled") continue;
+      const messageIndex = responseIndex + invocation.sourceIndex + 1;
+      const message = comparableMessages[messageIndex];
+      if (
+        message === undefined ||
+        !messageArraysEqual([message], [invocation.toolMessage.message])
+      ) {
+        sessionStoreError(
+          `Error: completed durable tool group is missing result ${JSON.stringify(invocation.toolCallId)} in source order.`,
+        );
+      }
+      reservedMessageIds.set(messageIndex, invocation.toolMessage.id);
+    }
+  }
   const storedMessages = storedMessagesForSessionMessages({
     messages: currentMessages,
     previousStoredMessages: replayState.storedMessages,
-    reservedMessageIds: new Map([
-      [admittedUserMessageIndex, activeTask.userMessageId],
-      [responseIndex, activeTask.assistantMessage.id],
-    ]),
+    reservedMessageIds,
   });
   const messages = extendsTranscript
     ? storedMessages.slice(replayState.storedMessages.length)
     : storedMessages;
   const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
-  const task: Extract<ActiveSessionTask, { readonly phase: "provider_ready" }> =
-    {
-      taskId: activeTask.taskId,
-      runId: activeTask.runId,
-      trigger: activeTask.trigger,
-      admittedAt: activeTask.admittedAt,
-      userMessageId: activeTask.userMessageId,
-      provider: activeTask.provider,
-      maxProviderReplacements: activeTask.maxProviderReplacements,
-      providerReplacementsUsed: activeTask.providerReplacementsUsed,
-      recovered: activeTask.recovered,
-      providerRequestIds: activeTask.providerRequestIds,
-      unknownProviderAttemptIds: activeTask.unknownProviderAttemptIds,
-      phase: "provider_ready",
-    };
+  const recovered = options.recoveryRunId !== undefined;
+  const hasUnknownEffect =
+    activeTask.phase === "tool_execution" &&
+    activeTask.toolInvocations.some(
+      (invocation) =>
+        invocation.phase === "settled" &&
+        invocation.kind === "interrupted_effect_unknown",
+    );
+  const readyTask = {
+    taskId: activeTask.taskId,
+    runId: options.recoveryRunId ?? activeTask.runId,
+    trigger: activeTask.trigger,
+    admittedAt: activeTask.admittedAt,
+    userMessageId: activeTask.userMessageId,
+    provider: activeTask.provider,
+    maxProviderReplacements: activeTask.maxProviderReplacements,
+    providerReplacementsUsed: activeTask.providerReplacementsUsed,
+    recovered: recovered || activeTask.recovered,
+    providerRequestIds: activeTask.providerRequestIds,
+    unknownProviderAttemptIds: activeTask.unknownProviderAttemptIds,
+  } as const;
+  const task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "provider_ready" | "recovery_blocked" }
+  > =
+    recovered && hasUnknownEffect && activeTask.phase === "tool_execution"
+      ? {
+          ...readyTask,
+          phase: "recovery_blocked",
+          providerAttempt: activeTask.providerAttempt,
+          assistantMessage: activeTask.assistantMessage,
+          stopReason: activeTask.stopReason,
+          toolInvocations: activeTask.toolInvocations,
+          reason: "tool_effect",
+        }
+      : {
+          ...readyTask,
+          phase: "provider_ready",
+        };
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     type: "step_committed",
@@ -1758,18 +2440,22 @@ export function persistSessionTaskTerminal(options: {
     options.currentMessages,
     "persist",
   );
+  const comparableMessages = currentMessages.map(redactMessageForPersistence);
   validateCompletedTranscript(options.session.id, currentMessages, "persist");
   const replayState = replayStateForSession(options.session);
   const previousMessages = messagesFromStoredMessages(
     replayState.storedMessages,
   );
-  const extendsTranscript = hasMessagePrefix(currentMessages, previousMessages);
+  const extendsTranscript = hasMessagePrefix(
+    comparableMessages,
+    previousMessages,
+  );
   const reservedMessageIds = new Map<number, string>();
   if (activeTask.phase === "provider_settled") {
-    const responseIndex = currentMessages.findLastIndex((message) =>
+    const responseIndex = comparableMessages.findLastIndex((message) =>
       messageArraysEqual([message], [activeTask.assistantMessage.message]),
     );
-    const response = currentMessages[responseIndex];
+    const response = comparableMessages[responseIndex];
     if (
       response !== undefined &&
       messageArraysEqual([response], [activeTask.assistantMessage.message])

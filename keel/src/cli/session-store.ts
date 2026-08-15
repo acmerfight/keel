@@ -9,6 +9,7 @@ export {
 } from "./session-store/locks.ts";
 export type {
   ActiveSessionTask,
+  ActiveSessionToolInvocation,
   SessionCatalog,
   SessionCatalogEntry,
   SessionCatalogWarning,
@@ -23,6 +24,7 @@ export type {
   SessionState,
   SessionStoreRuntime,
   SessionTaskProgressCheckpoint,
+  SessionToolContinuationEffects,
   StoredMessage,
 } from "./session-store/model.ts";
 export { sessionFilePath, sessionHome } from "./session-store/paths.ts";
@@ -56,5 +58,7 @@ export {
   persistSessionTaskStep,
   persistSessionTaskTerminal,
   persistSessionTitle,
+  persistSessionToolIntents,
+  persistSessionToolSettlement,
   resumeSessionStore,
 } from "./session-store/store.ts";

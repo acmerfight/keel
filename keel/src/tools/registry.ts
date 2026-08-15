@@ -22,5 +22,6 @@ export {
   toolCallCanonicalArguments,
   toolCallFromParsedArguments,
   toolCallLabel,
+  toolCallRecoveryCapability,
 } from "./tool-call.ts";
 export type { OpenAICompatibleToolParameter } from "./tool-schema.ts";

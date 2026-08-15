@@ -330,6 +330,8 @@ function applySessionCatalogMutation(
     case "provider_intent":
     case "provider_attempt_settled":
     case "provider_settled":
+    case "tool_intent":
+    case "tool_settled":
     case "task_recovery_started":
       return {
         ...state,

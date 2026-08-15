@@ -8,6 +8,7 @@ import type {
 import { providerIds } from "../../core/provider-id.ts";
 import { copyReadResourceObservation } from "../../core/resource-observation.ts";
 import {
+  copySessionGoal,
   normalizeSessionGoalCompletionCommand,
   normalizeSessionGoalCompletionCriterion,
   normalizeSessionGoalCompletionEvidence,
@@ -29,12 +30,16 @@ import {
   sessionGoalSchema,
 } from "../../core/session-goal.ts";
 import {
+  copySessionTaskProgress,
   type SessionTaskProgress,
   sessionTaskPlanSchema,
   sessionTaskProgressSchema,
 } from "../../core/task-progress.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
-import { copySkillActivation } from "../../skills/lifecycle.ts";
+import {
+  copySkillActivation,
+  copySkillLifecycleState,
+} from "../../skills/lifecycle.ts";
 import type { SkillActivation } from "../../skills/model.ts";
 import {
   isWorkflowSkillResourcePath,
@@ -53,6 +58,7 @@ import { sessionStoreError } from "./errors.ts";
 import {
   type ActiveSessionProviderAttempt,
   type ActiveSessionTask,
+  type ActiveSessionToolInvocation,
   type AppendSessionRecord,
   type ModelSwitchSessionRecord,
   type ReplaceSessionRecord,
@@ -72,6 +78,7 @@ import {
   type SessionSkillStateCheckpoint,
   type SessionTaskProgressCheckpoint,
   type SessionTitleSessionRecord,
+  type SessionToolContinuationEffects,
   type SkillStateSessionRecord,
   type SnapshotSessionRecord,
   type StoredMessage,
@@ -255,6 +262,108 @@ const activeSessionProviderAttemptSchema = z
   })
   .strict();
 
+const toolRecoveryCapabilitySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("no_effect") }).strict(),
+  z.object({ kind: z.literal("opaque") }).strict(),
+]);
+
+const checkpointModeOwnershipSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("unowned") }).strict(),
+  z
+    .object({
+      kind: z.literal("owned"),
+      beforeMode: z.number().int().nonnegative(),
+      afterMode: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+
+const checkpointOperationSchema = z.discriminatedUnion("operation", [
+  z
+    .object({
+      operation: z.literal("edit"),
+      filePath: z.string(),
+      beforeContent: z.string(),
+      afterContent: z.string(),
+      modeOwnership: checkpointModeOwnershipSchema,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("create"),
+      filePath: z.string(),
+      afterContent: z.string(),
+      mode: z.number().int().nonnegative().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("delete"),
+      filePath: z.string(),
+      beforeContent: z.string(),
+      mode: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+
+const sessionToolContinuationEffectsSchema = z
+  .object({
+    checkpointOperations: z.array(checkpointOperationSchema),
+    taskProgress: sessionTaskProgressSchema.optional(),
+    goal: sessionGoalSchema.optional(),
+    skillState: skillLifecycleStateSchema.optional(),
+    delegation: z
+      .array(
+        z
+          .object({
+            usage: sessionProviderAttemptUsageSchema,
+            costUsd: z.number().nonnegative(),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();
+
+const activeSessionToolInvocationBaseSchema = z.object({
+  operationId: z.string().min(1),
+  runId: z.string().min(1),
+  resultMessageId: z.string().min(1),
+  toolCallId: z.string().min(1),
+  sourceIndex: z.number().int().nonnegative(),
+  toolName: z.string().min(1),
+  recovery: toolRecoveryCapabilitySchema,
+  canonicalArguments: z.record(z.string(), z.json()),
+  argumentsSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
+const activeSessionToolInvocationSchema = z.discriminatedUnion("phase", [
+  activeSessionToolInvocationBaseSchema
+    .extend({ phase: z.literal("planned") })
+    .strict(),
+  activeSessionToolInvocationBaseSchema
+    .extend({
+      phase: z.literal("effect_pending"),
+      startedAt: z.string(),
+    })
+    .strict(),
+  activeSessionToolInvocationBaseSchema
+    .extend({
+      phase: z.literal("settled"),
+      startedAt: z.string().optional(),
+      settledAt: z.string(),
+      kind: z.enum([
+        "completed",
+        "not_executed_after_restart",
+        "interrupted_no_effect",
+        "interrupted_effect_unknown",
+      ]),
+      toolMessage: storedMessageSchema,
+      effects: sessionToolContinuationEffectsSchema,
+    })
+    .strict(),
+]);
+
 const activeSessionTaskBaseSchema = z.object({
   taskId: z.string().min(1),
   runId: z.string().min(1),
@@ -300,16 +409,27 @@ const providerSettledTaskSchema = activeSessionTaskBaseSchema
     stopReason: z.enum(["stop", "length"]),
   })
   .strict();
+const toolExecutionTaskSchema = providerSettledTaskSchema
+  .omit({ phase: true })
+  .extend({
+    phase: z.literal("tool_execution"),
+    toolInvocations: z.array(activeSessionToolInvocationSchema).min(1),
+  })
+  .strict();
 const recoveryBlockedTaskSchema = activeSessionTaskBaseSchema
   .extend({
     phase: z.literal("recovery_blocked"),
     providerAttempt: activeSessionProviderAttemptSchema.optional(),
     assistantMessage: storedMessageSchema.optional(),
     stopReason: z.enum(["stop", "length"]).optional(),
+    toolInvocations: z
+      .array(activeSessionToolInvocationSchema)
+      .min(1)
+      .optional(),
     reason: z.enum([
       "provider_replacement_limit",
       "provider_budget",
-      "tool_plan",
+      "tool_effect",
     ]),
   })
   .strict();
@@ -318,6 +438,7 @@ const activeSessionTaskSchema = z.discriminatedUnion("phase", [
   providerReadyTaskSchema,
   providerPendingTaskSchema,
   providerSettledTaskSchema,
+  toolExecutionTaskSchema,
   recoveryBlockedTaskSchema,
 ]);
 
@@ -532,7 +653,30 @@ const providerSettledRecordSchema = z
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
     type: z.literal("provider_settled"),
     timestamp: z.string(),
-    task: providerSettledTaskSchema,
+    task: z.discriminatedUnion("phase", [
+      providerSettledTaskSchema,
+      toolExecutionTaskSchema,
+    ]),
+  })
+  .strict();
+
+const toolIntentRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("tool_intent"),
+    timestamp: z.string(),
+    task: toolExecutionTaskSchema,
+    operationIds: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+
+const toolSettledRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("tool_settled"),
+    timestamp: z.string(),
+    task: toolExecutionTaskSchema,
+    operationId: z.string().min(1),
   })
   .strict();
 
@@ -553,7 +697,10 @@ const stepCommittedRecordSchema = z
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
     type: z.literal("step_committed"),
     timestamp: z.string(),
-    task: providerReadyTaskSchema,
+    task: z.discriminatedUnion("phase", [
+      providerReadyTaskSchema,
+      recoveryBlockedTaskSchema,
+    ]),
     messages: z.array(storedMessageSchema),
     replaceTranscript: z.literal(true).optional(),
     consumedInputIds: consumedInputIdsSchema.optional(),
@@ -628,6 +775,8 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   providerIntentRecordSchema,
   providerAttemptSettledRecordSchema,
   providerSettledRecordSchema,
+  toolIntentRecordSchema,
+  toolSettledRecordSchema,
   taskRecoveryStartedRecordSchema,
   stepCommittedRecordSchema,
   taskTerminalRecordSchema,
@@ -657,6 +806,9 @@ type RawSessionSkillStateCheckpoint = z.infer<
   typeof sessionSkillStateCheckpointSchema
 >;
 type RawActiveSessionTask = z.infer<typeof activeSessionTaskSchema>;
+type RawActiveSessionToolInvocation = z.infer<
+  typeof activeSessionToolInvocationSchema
+>;
 type RawSessionLastTaskOutcome = z.infer<typeof sessionLastTaskOutcomeSchema>;
 type RawSessionHeaderRecord = z.infer<typeof sessionHeaderSchema>;
 type RawSessionMutationRecord = z.infer<typeof sessionMutationRecordSchema>;
@@ -779,6 +931,9 @@ function toMessage(message: RawMessage): PersistedSessionMessage {
               ),
             }
           : {}),
+        ...(message.recovery === undefined
+          ? {}
+          : { recovery: { ...message.recovery } }),
       };
   }
 }
@@ -839,6 +994,9 @@ function copyMessage(
               ),
             }
           : {}),
+        ...(message.recovery === undefined
+          ? {}
+          : { recovery: { ...message.recovery } }),
       };
   }
 }
@@ -925,6 +1083,89 @@ function activeSessionTaskBase(task: ActiveSessionTask) {
   } as const;
 }
 
+/* v8 ignore next 5 -- the checkpoint operation discriminant is exhaustive; this only guards future variants that bypass TypeScript. */
+function unsupportedCheckpointOperation(operation: never): never {
+  throw new Error(
+    `unsupported checkpoint operation ${JSON.stringify(operation)}`,
+  );
+}
+
+function copySessionToolContinuationEffects(
+  effects: SessionToolContinuationEffects,
+): SessionToolContinuationEffects {
+  return {
+    checkpointOperations: effects.checkpointOperations.map((operation) => {
+      switch (operation.operation) {
+        case "edit":
+          return {
+            ...operation,
+            modeOwnership: { ...operation.modeOwnership },
+          };
+        case "create":
+        case "delete":
+          return { ...operation };
+      }
+      /* v8 ignore next -- the discriminated union is exhaustive; unsupportedCheckpointOperation guards future variants. */
+      return unsupportedCheckpointOperation(operation);
+    }),
+    ...(effects.taskProgress === undefined
+      ? {}
+      : { taskProgress: copySessionTaskProgress(effects.taskProgress) }),
+    ...(effects.goal === undefined
+      ? {}
+      : { goal: copySessionGoal(effects.goal) }),
+    ...(effects.skillState === undefined
+      ? {}
+      : { skillState: copySkillLifecycleState(effects.skillState) }),
+    ...(effects.delegation === undefined
+      ? {}
+      : {
+          delegation: effects.delegation.map((entry) => ({
+            usage: { ...entry.usage },
+            costUsd: entry.costUsd,
+          })),
+        }),
+  };
+}
+
+function copyActiveSessionToolInvocation(
+  invocation: ActiveSessionToolInvocation,
+): ActiveSessionToolInvocation {
+  const base = {
+    operationId: invocation.operationId,
+    runId: invocation.runId,
+    resultMessageId: invocation.resultMessageId,
+    toolCallId: invocation.toolCallId,
+    sourceIndex: invocation.sourceIndex,
+    toolName: invocation.toolName,
+    recovery: { ...invocation.recovery },
+    canonicalArguments: structuredClone(invocation.canonicalArguments),
+    argumentsSha256: invocation.argumentsSha256,
+  } as const;
+  switch (invocation.phase) {
+    case "planned":
+      return { ...base, phase: "planned" };
+    case "effect_pending":
+      return {
+        ...base,
+        phase: "effect_pending",
+        startedAt: invocation.startedAt,
+      };
+    case "settled":
+      return {
+        ...base,
+        phase: "settled",
+        ...(invocation.startedAt === undefined
+          ? {}
+          : { startedAt: invocation.startedAt }),
+        settledAt: invocation.settledAt,
+        kind: invocation.kind,
+        toolMessage: copyStoredMessage(invocation.toolMessage),
+        effects: copySessionToolContinuationEffects(invocation.effects),
+      };
+  }
+}
+
 function copyActiveSessionTask(task: ActiveSessionTask): ActiveSessionTask {
   const base = activeSessionTaskBase(task);
   switch (task.phase) {
@@ -950,6 +1191,23 @@ function copyActiveSessionTask(task: ActiveSessionTask): ActiveSessionTask {
         assistantMessage: copyStoredMessage(task.assistantMessage),
         stopReason: task.stopReason,
       };
+    case "tool_execution":
+      return {
+        ...base,
+        phase: "tool_execution",
+        providerAttempt: {
+          ...copyActiveSessionProviderAttempt(task.providerAttempt),
+          settlement: {
+            outcome: "completed",
+            usage: { ...task.providerAttempt.settlement.usage },
+          },
+        },
+        assistantMessage: copyStoredMessage(task.assistantMessage),
+        stopReason: task.stopReason,
+        toolInvocations: task.toolInvocations.map(
+          copyActiveSessionToolInvocation,
+        ),
+      };
     case "recovery_blocked":
       return {
         ...base,
@@ -967,6 +1225,13 @@ function copyActiveSessionTask(task: ActiveSessionTask): ActiveSessionTask {
         ...(task.stopReason === undefined
           ? {}
           : { stopReason: task.stopReason }),
+        ...(task.toolInvocations === undefined
+          ? {}
+          : {
+              toolInvocations: task.toolInvocations.map(
+                copyActiveSessionToolInvocation,
+              ),
+            }),
         reason: task.reason,
       };
   }
@@ -1012,6 +1277,23 @@ function toActiveSessionTask(task: RawActiveSessionTask): ActiveSessionTask {
         assistantMessage: toStoredMessage(task.assistantMessage),
         stopReason: task.stopReason,
       };
+    case "tool_execution":
+      return {
+        ...base,
+        phase: "tool_execution",
+        providerAttempt: {
+          ...task.providerAttempt,
+          settlement: {
+            outcome: "completed",
+            usage: { ...task.providerAttempt.settlement.usage },
+          },
+        },
+        assistantMessage: toStoredMessage(task.assistantMessage),
+        stopReason: task.stopReason,
+        toolInvocations: task.toolInvocations.map(
+          toActiveSessionToolInvocation,
+        ),
+      };
     case "recovery_blocked":
       return {
         ...base,
@@ -1029,7 +1311,102 @@ function toActiveSessionTask(task: RawActiveSessionTask): ActiveSessionTask {
         ...(task.stopReason === undefined
           ? {}
           : { stopReason: task.stopReason }),
+        ...(task.toolInvocations === undefined
+          ? {}
+          : {
+              toolInvocations: task.toolInvocations.map(
+                toActiveSessionToolInvocation,
+              ),
+            }),
         reason: task.reason,
+      };
+  }
+}
+
+function toActiveSessionToolInvocation(
+  invocation: RawActiveSessionToolInvocation,
+): ActiveSessionToolInvocation {
+  const base = {
+    operationId: invocation.operationId,
+    runId: invocation.runId,
+    resultMessageId: invocation.resultMessageId,
+    toolCallId: invocation.toolCallId,
+    sourceIndex: invocation.sourceIndex,
+    toolName: invocation.toolName,
+    recovery: { ...invocation.recovery },
+    canonicalArguments: structuredClone(invocation.canonicalArguments),
+    argumentsSha256: invocation.argumentsSha256,
+  } as const;
+  switch (invocation.phase) {
+    case "planned":
+      return { ...base, phase: "planned" };
+    case "effect_pending":
+      return {
+        ...base,
+        phase: "effect_pending",
+        startedAt: invocation.startedAt,
+      };
+    case "settled":
+      return {
+        ...base,
+        phase: "settled",
+        ...(invocation.startedAt === undefined
+          ? {}
+          : { startedAt: invocation.startedAt }),
+        settledAt: invocation.settledAt,
+        kind: invocation.kind,
+        toolMessage: toStoredMessage(invocation.toolMessage),
+        effects: {
+          checkpointOperations: invocation.effects.checkpointOperations.map(
+            (operation) => {
+              switch (operation.operation) {
+                case "edit":
+                  return {
+                    ...operation,
+                    modeOwnership: { ...operation.modeOwnership },
+                  };
+                case "create":
+                  return {
+                    operation: "create" as const,
+                    filePath: operation.filePath,
+                    afterContent: operation.afterContent,
+                    ...(operation.mode === undefined
+                      ? {}
+                      : { mode: operation.mode }),
+                  };
+                case "delete":
+                  return { ...operation };
+              }
+              /* v8 ignore next -- the discriminated union is exhaustive; unsupportedCheckpointOperation guards future variants. */
+              return unsupportedCheckpointOperation(operation);
+            },
+          ),
+          ...(invocation.effects.taskProgress === undefined
+            ? {}
+            : {
+                taskProgress: copySessionTaskProgress(
+                  invocation.effects.taskProgress,
+                ),
+              }),
+          ...(invocation.effects.goal === undefined
+            ? {}
+            : { goal: copySessionGoal(invocation.effects.goal) }),
+          ...(invocation.effects.skillState === undefined
+            ? {}
+            : {
+                skillState: copySkillLifecycleState(
+                  invocation.effects.skillState,
+                ),
+              }),
+          ...(invocation.effects.delegation === undefined
+            ? {}
+            : {
+                delegation: invocation.effects.delegation.map((entry) => ({
+                  usage: { ...entry.usage },
+                  costUsd: entry.costUsd,
+                })),
+              }),
+        },
       };
   }
 }
@@ -1080,11 +1457,28 @@ function toProviderAttemptSettledSessionTask(
 
 function toProviderSettledSessionTask(
   task: RawActiveSessionTask,
-): Extract<ActiveSessionTask, { readonly phase: "provider_settled" }> {
+): Extract<
+  ActiveSessionTask,
+  { readonly phase: "provider_settled" | "tool_execution" }
+> {
   const converted = toActiveSessionTask(task);
   /* v8 ignore next 3 -- the discriminated input schema fixes this phase before conversion. */
-  if (converted.phase !== "provider_settled") {
+  if (
+    converted.phase !== "provider_settled" &&
+    converted.phase !== "tool_execution"
+  ) {
     sessionStoreError("Error: provider-settled Task record changed phase.");
+  }
+  return converted;
+}
+
+function toToolExecutionSessionTask(
+  task: RawActiveSessionTask,
+): Extract<ActiveSessionTask, { readonly phase: "tool_execution" }> {
+  const converted = toActiveSessionTask(task);
+  /* v8 ignore next 3 -- the tool mutation schemas fix this phase before conversion. */
+  if (converted.phase !== "tool_execution") {
+    sessionStoreError("Error: tool-execution Task record changed phase.");
   }
   return converted;
 }
@@ -1391,6 +1785,70 @@ function redactSessionTaskProgressForPersistence(
       step: redactTextForPersistence(task.step),
       status: task.status,
     })),
+  };
+}
+
+function redactSessionToolContinuationEffectsForPersistence(
+  effects: SessionToolContinuationEffects,
+): SessionToolContinuationEffects {
+  return {
+    checkpointOperations: effects.checkpointOperations.map((operation) => {
+      const filePath = redactTextForPersistence(operation.filePath);
+      switch (operation.operation) {
+        case "edit":
+          return {
+            operation: "edit",
+            filePath,
+            beforeContent: redactTextForPersistence(operation.beforeContent),
+            afterContent: redactTextForPersistence(operation.afterContent),
+            modeOwnership: { ...operation.modeOwnership },
+          };
+        case "create":
+          return {
+            operation: "create",
+            filePath,
+            afterContent: redactTextForPersistence(operation.afterContent),
+            ...(operation.mode === undefined ? {} : { mode: operation.mode }),
+          };
+        case "delete":
+          return {
+            operation: "delete",
+            filePath,
+            beforeContent: redactTextForPersistence(operation.beforeContent),
+            mode: operation.mode,
+          };
+      }
+      /* v8 ignore next -- the discriminated union is exhaustive; unsupportedCheckpointOperation guards future variants. */
+      return unsupportedCheckpointOperation(operation);
+    }),
+    ...(effects.taskProgress === undefined
+      ? {}
+      : {
+          taskProgress: redactSessionTaskProgressForPersistence(
+            effects.taskProgress,
+          ),
+        }),
+    ...(effects.goal === undefined
+      ? {}
+      : { goal: redactSessionGoalForPersistence(effects.goal) }),
+    ...(effects.skillState === undefined
+      ? {}
+      : {
+          skillState: {
+            skillActivations: effects.skillState.skillActivations.map(
+              redactSkillActivationForPersistence,
+            ),
+            activeSkillIds: [...effects.skillState.activeSkillIds],
+          },
+        }),
+    ...(effects.delegation === undefined
+      ? {}
+      : {
+          delegation: effects.delegation.map((entry) => ({
+            usage: { ...entry.usage },
+            costUsd: entry.costUsd,
+          })),
+        }),
   };
 }
 
@@ -1964,6 +2422,22 @@ function toSessionMutationRecord(
         timestamp: record.timestamp,
         task: toProviderSettledSessionTask(record.task),
       };
+    case "tool_intent":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "tool_intent",
+        timestamp: record.timestamp,
+        task: toToolExecutionSessionTask(record.task),
+        operationIds: [...record.operationIds],
+      };
+    case "tool_settled":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "tool_settled",
+        timestamp: record.timestamp,
+        task: toToolExecutionSessionTask(record.task),
+        operationId: record.operationId,
+      };
     case "task_recovery_started": {
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -1978,7 +2452,7 @@ function toSessionMutationRecord(
           schemaVersion: SESSION_SCHEMA_VERSION,
           type: "step_committed",
           timestamp: record.timestamp,
-          task: toProviderReadySessionTask(record.task),
+          task: toRecoverySessionTask(record.task),
           messages: record.messages.map(toStoredMessage),
           ...(record.replaceTranscript === true
             ? { replaceTranscript: true as const }
@@ -2279,6 +2753,7 @@ export {
   redactSessionSkillStateCheckpointForPersistence,
   redactSessionTaskProgressCheckpointForPersistence,
   redactSessionTaskProgressForPersistence,
+  redactSessionToolContinuationEffectsForPersistence,
   redactSkillActivationForPersistence,
   redactStoredMessageForPersistence,
   serializeSessionGoalForPersistence,

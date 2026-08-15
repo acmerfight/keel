@@ -138,7 +138,7 @@ describe("CLI Main - Session Resume Transcript", () => {
         ledgerLines.filter((line) => line.type === "task_progress"),
       ).toEqual([
         {
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "task_progress",
           timestamp: expect.any(String),
           messageOrdinal: 5,
@@ -247,7 +247,7 @@ describe("CLI Main - Session Resume Transcript", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toContainEqual({
-        schemaVersion: 7,
+        schemaVersion: 8,
         type: "task_progress",
         timestamp: expect.any(String),
         messageOrdinal: 3,
@@ -572,7 +572,7 @@ describe("CLI Main - Session Resume Transcript", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toContainEqual({
-        schemaVersion: 7,
+        schemaVersion: 8,
         type: "bash_approval_granted",
         timestamp: "1970-01-01T00:00:00.000Z",
         grant: {
@@ -612,13 +612,13 @@ describe("CLI Main - Session Resume Transcript", () => {
       createdAt: "1970-01-01T00:00:00.000Z",
       records: [
         JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "bash_approval_granted",
           timestamp: "1970-01-01T00:00:00.001Z",
           grant: exactGrant,
         }),
         JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "bash_approval_granted",
           timestamp: "1970-01-01T00:00:00.002Z",
           grant: prefixGrant,
@@ -656,14 +656,14 @@ describe("CLI Main - Session Resume Transcript", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toContainEqual({
-        schemaVersion: 7,
+        schemaVersion: 8,
         type: "bash_approval_revoked",
         timestamp: "1970-01-01T00:00:00.000Z",
         grant: exactGrant,
       });
       expect(ledgerLines).toContainEqual(
         expect.objectContaining({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "bash_approvals_cleared",
           timestamp: "1970-01-01T00:00:00.000Z",
           consumedInputIds: expect.any(Array),
@@ -687,7 +687,7 @@ describe("CLI Main - Session Resume Transcript", () => {
       join(home, "sessions", "queued", "ledger.jsonl"),
       `${[
         JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "session",
           id: "queued",
           createdAt: "1970-01-01T00:00:00.000Z",
@@ -695,7 +695,7 @@ describe("CLI Main - Session Resume Transcript", () => {
           graph: rootGraph("queued"),
         }),
         JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "queued-input-1",
@@ -765,7 +765,7 @@ describe("CLI Main - Session Resume Transcript", () => {
       await writeFile(
         sourceLedgerPath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "queued-source-input",

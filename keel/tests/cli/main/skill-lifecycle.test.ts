@@ -978,6 +978,8 @@ describe("CLI Main - Skill Lifecycle", () => {
         "provider_intent",
         "provider_attempt_settled",
         "provider_settled",
+        "tool_intent",
+        "tool_settled",
         "step_committed",
         "provider_intent",
         "provider_attempt_settled",

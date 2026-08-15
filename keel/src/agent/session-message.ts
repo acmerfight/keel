@@ -74,6 +74,16 @@ interface SessionAssistantMessage extends SessionMessageAudience {
   readonly providerMetadata?: AssistantProviderMetadata | undefined;
 }
 
+interface ToolRecoveryResultMetadata {
+  readonly kind:
+    | "not_executed_after_restart"
+    | "interrupted_no_effect"
+    | "interrupted_effect_unknown";
+  readonly taskId: string;
+  readonly runId: string;
+  readonly operationId: string;
+}
+
 interface SessionToolMessage extends SessionMessageAudience {
   readonly role: "tool";
   readonly toolCallId: string;
@@ -81,6 +91,7 @@ interface SessionToolMessage extends SessionMessageAudience {
   readonly sourceTruncated?: boolean | undefined;
   readonly evidenceShortened?: true | undefined;
   readonly resourceObservation?: ReadResourceObservation | undefined;
+  readonly recovery?: ToolRecoveryResultMetadata | undefined;
 }
 
 export type SessionMessage =

@@ -69,6 +69,10 @@ type ToolRisk =
   | { readonly kind: "trusted-shell" }
   | { readonly kind: "agent-state" };
 
+export type ToolRecoveryCapability =
+  | { readonly kind: "no_effect" }
+  | { readonly kind: "opaque" };
+
 interface BuiltinToolCallInput {
   readonly id: string;
   readonly tool: string;
@@ -101,6 +105,7 @@ interface BuiltinTool<Name extends string, Shape extends ToolArgShape> {
   readonly output: ToolOutput;
   readonly display: ToolDisplay<z.infer<ToolArgsSchema<Shape>>>;
   readonly risk: ToolRisk;
+  readonly recovery: ToolRecoveryCapability;
 }
 
 function objectFieldValue(input: object, key: string): ObjectFieldValue {
@@ -229,6 +234,7 @@ const memoryAddTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: () => "memory_add" },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const memoryForgetTool = defineTool({
@@ -247,6 +253,7 @@ const memoryForgetTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: (args) => `memory_forget ${args.memoryId}` },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const memoryProposeTool = defineTool({
@@ -265,6 +272,7 @@ const memoryProposeTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: () => "memory_propose" },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const readTool = defineTool({
@@ -282,6 +290,7 @@ const readTool = defineTool({
     formatLabel: (args) => `read ${args.path}`,
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const skillTool = defineTool({
@@ -301,6 +310,7 @@ const skillTool = defineTool({
     formatLabel: (args) => `skill ${args.name}`,
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "opaque" },
 });
 
 const skillSearchTool = defineTool({
@@ -318,6 +328,7 @@ const skillSearchTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: (args) => `skill_search ${args.query}` },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const mcpSearchTool = defineTool({
@@ -335,6 +346,7 @@ const mcpSearchTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: (args) => `mcp_search ${args.query}` },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const skillResourceTool = defineTool({
@@ -353,6 +365,7 @@ const skillResourceTool = defineTool({
     formatLabel: (args) => `skill_resource ${args.skill} ${args.path}`,
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const lsTool = defineTool({
@@ -371,6 +384,7 @@ const lsTool = defineTool({
       args.path === undefined ? "ls ." : `ls ${args.path}`,
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const globTool = defineTool({
@@ -391,6 +405,7 @@ const globTool = defineTool({
         : `glob ${args.pattern} ${args.path}`,
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const grepTool = defineTool({
@@ -411,6 +426,7 @@ const grepTool = defineTool({
         : `grep ${args.pattern} ${args.path}`,
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const gitDiffTool = defineTool({
@@ -441,6 +457,7 @@ const gitDiffTool = defineTool({
     },
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const gitStatusTool = defineTool({
@@ -461,6 +478,7 @@ const gitStatusTool = defineTool({
         : `git_status ${args.paths.join(" ")}`,
   },
   risk: { kind: "workspace-read" },
+  recovery: { kind: "no_effect" },
 });
 
 const editTool = defineTool({
@@ -481,6 +499,7 @@ const editTool = defineTool({
     formatLabel: (args) => `edit ${args.path}`,
   },
   risk: { kind: "workspace-write", destructive: false },
+  recovery: { kind: "opaque" },
 });
 
 const writeTool = defineTool({
@@ -498,6 +517,7 @@ const writeTool = defineTool({
     formatLabel: (args) => `write ${args.path}`,
   },
   risk: { kind: "workspace-write", destructive: true },
+  recovery: { kind: "opaque" },
 });
 
 const applyPatchTool = defineTool({
@@ -517,6 +537,7 @@ const applyPatchTool = defineTool({
     formatLabel: () => "apply_patch",
   },
   risk: { kind: "workspace-write", destructive: true },
+  recovery: { kind: "opaque" },
 });
 
 const bashTool = defineTool({
@@ -537,6 +558,7 @@ const bashTool = defineTool({
     formatLabel: (args) => `bash ${args.command}`,
   },
   risk: { kind: "trusted-shell" },
+  recovery: { kind: "opaque" },
 });
 
 const updatePlanTool = defineTool({
@@ -555,6 +577,7 @@ const updatePlanTool = defineTool({
     formatLabel: () => "update_plan",
   },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const updateGoalTool = defineTool({
@@ -574,6 +597,7 @@ const updateGoalTool = defineTool({
     formatLabel: () => "update_goal",
   },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const delegateTool = defineTool({
@@ -597,6 +621,7 @@ const delegateTool = defineTool({
     formatLabel: (args) => `delegate ${args.task}`,
   },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const agentListTool = defineTool({
@@ -609,6 +634,7 @@ const agentListTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: () => "agent_list" },
   risk: { kind: "agent-state" },
+  recovery: { kind: "no_effect" },
 });
 
 const agentWaitTool = defineTool({
@@ -622,6 +648,7 @@ const agentWaitTool = defineTool({
   resultAdmission: "subagent",
   display: { formatLabel: (args) => `agent_wait ${args.agentId}` },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const agentCancelTool = defineTool({
@@ -634,6 +661,7 @@ const agentCancelTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: (args) => `agent_cancel ${args.agentId}` },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const agentInputTool = defineTool({
@@ -646,6 +674,7 @@ const agentInputTool = defineTool({
   output: { kind: "text" },
   display: { formatLabel: (args) => `agent_input ${args.agentId}` },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 const agentResumeTool = defineTool({
@@ -659,6 +688,7 @@ const agentResumeTool = defineTool({
   resultAdmission: "subagent",
   display: { formatLabel: (args) => `agent_resume ${args.agentId}` },
   risk: { kind: "agent-state" },
+  recovery: { kind: "opaque" },
 });
 
 export const builtinToolRegistry = {

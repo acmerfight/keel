@@ -60,6 +60,7 @@ import {
 } from "../core/task-progress.ts";
 import {
   createUndoProtectionTracker,
+  type RecordUndoCheckpointResult,
   undoCheckpointUnavailable,
 } from "../core/undo-protection.ts";
 import type { Usage } from "../llm/types.ts";
@@ -1621,7 +1622,9 @@ export async function runInteractiveSession(
           reservedMessageIds: reservedSessionMessageIds,
         });
       } else if (finalEnd?.stopReason === "cost_budget") {
-        savedSession.taskRecovery.blockProviderBudget();
+        savedSession.taskRecovery.blockProviderBudget(
+          sessionLedgerMessages(ledger),
+        );
       } else {
         savedSession.taskRecovery.terminal({
           messages: sessionLedgerMessages(ledger),
@@ -1793,10 +1796,26 @@ export async function runInteractiveSession(
       return { kind: "aborted" };
     } finally {
       if (checkpointOperations.length > 0) {
-        const result = recordLastTaskCheckpoint({
-          workspace: options.workspace,
-          operations: checkpointOperations,
-        });
+        let result: RecordUndoCheckpointResult;
+        if (durableTaskTurn) {
+          assert(
+            savedSession !== null,
+            "durable Task turn lost its saved session",
+          );
+          const durableResult = savedSession.taskRecovery.finalizeCheckpoint();
+          /* v8 ignore next 5 -- every durable mutation is checkpointed before settlement; retain the ordinary recorder only as a last-resort undo safeguard. */
+          result =
+            durableResult ??
+            recordLastTaskCheckpoint({
+              workspace: options.workspace,
+              operations: checkpointOperations,
+            });
+        } else {
+          result = recordLastTaskCheckpoint({
+            workspace: options.workspace,
+            operations: checkpointOperations,
+          });
+        }
         undoProtection.record(result);
         if (undoCheckpointUnavailable(result)) {
           options.writeStderr(`${formatUndoCheckpointWarning()}\n`);
@@ -1954,6 +1973,9 @@ export async function runInteractiveSession(
           recoveryBlockedTaskId = recovery.task.taskId;
           break;
         case "run": {
+          for (const message of recovery.recoveredMessages) {
+            ledger.append(message);
+          }
           const userMessage = recovery.userMessage;
           if (userMessage.role !== "user") {
             throw new Error(

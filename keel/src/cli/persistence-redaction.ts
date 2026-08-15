@@ -205,6 +205,9 @@ export function redactMessageForPersistence(
               ),
             }
           : {}),
+        ...(message.recovery === undefined
+          ? {}
+          : { recovery: { ...message.recovery } }),
       };
   }
 }

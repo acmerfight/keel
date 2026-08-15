@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
   listUndoCheckpoints,
+  loadTaskCheckpointOperations,
   type RecordLastEditCheckpointOptions,
   recordLastBatchCheckpoint,
   recordLastCreateCheckpoint,
@@ -120,6 +121,230 @@ describe("Git Checkpoints", () => {
         message:
           "No earlier checkpoints. Ask me to undo more, or use git to reset.",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given one durable Task records more effects after its first checkpoint,
+    When the Task reloads and refreshes its owned checkpoint,
+    Then the undo stack keeps one cumulative checkpoint for that Task`, async () => {
+    // Given
+    const workspace = await createGitWorkspace("keel-git-owned-task-");
+    const firstPath = join(workspace, "first.txt");
+    const secondPath = join(workspace, "second.txt");
+    await writeFile(firstPath, "first\n", "utf8");
+    await writeFile(secondPath, "second\n", "utf8");
+    const ownerId = "task_owned_checkpoint";
+
+    try {
+      recordLastTaskCheckpoint({
+        workspace,
+        ownerId,
+        operations: [
+          {
+            operation: "create",
+            filePath: firstPath,
+            afterContent: "first\n",
+          },
+        ],
+      });
+      const restoredOperations = loadTaskCheckpointOperations({
+        workspace,
+        ownerId,
+      });
+
+      // When
+      const refreshed = recordLastTaskCheckpoint({
+        workspace,
+        ownerId,
+        operations: [
+          ...restoredOperations,
+          {
+            operation: "create",
+            filePath: secondPath,
+            afterContent: "second\n",
+          },
+        ],
+      });
+      const checkpoints = listUndoCheckpoints(workspace);
+      const restore = restoreLastEditCheckpoint(workspace);
+
+      // Then
+      expect(refreshed).toEqual({ written: true });
+      expect(checkpoints).toEqual([{ restoredLabel: "2 files" }]);
+      expect(restore.status).toBe("restored");
+      await expect(readFile(firstPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(readFile(secondPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an owned Task checkpoint contains every operation shape,
+    When a resumed Task reloads it and later records single-file effects,
+    Then operation content, modes, and ownership survive the round trip`, async () => {
+    const workspace = await createGitWorkspace("keel-git-owned-shapes-");
+    const editedPath = join(workspace, "edited.txt");
+    const createdPath = join(workspace, "created.txt");
+    const executablePath = join(workspace, "tool.sh");
+    const deletedPath = join(workspace, "deleted.txt");
+    await writeFile(editedPath, "after\n", "utf8");
+    await writeFile(createdPath, "created\n", "utf8");
+    await writeFile(executablePath, "#!/bin/sh\n", "utf8");
+
+    try {
+      expect(
+        recordLastTaskCheckpoint({
+          workspace,
+          ownerId: "task_all_shapes",
+          operations: [
+            {
+              operation: "edit",
+              filePath: editedPath,
+              beforeContent: "before\n",
+              afterContent: "after\n",
+              modeOwnership: { kind: "unowned" },
+            },
+            {
+              operation: "create",
+              filePath: createdPath,
+              afterContent: "created\n",
+            },
+            {
+              operation: "create",
+              filePath: executablePath,
+              afterContent: "#!/bin/sh\n",
+              mode: 0o755,
+            },
+            {
+              operation: "delete",
+              filePath: deletedPath,
+              beforeContent: "deleted\n",
+              mode: 0o640,
+            },
+          ],
+        }),
+      ).toEqual({ written: true });
+      expect(
+        loadTaskCheckpointOperations({
+          workspace,
+          ownerId: "task_all_shapes",
+        }),
+      ).toEqual([
+        {
+          operation: "edit",
+          filePath: editedPath,
+          beforeContent: "before\n",
+          afterContent: "after\n",
+          modeOwnership: { kind: "unowned" },
+        },
+        {
+          operation: "create",
+          filePath: createdPath,
+          afterContent: "created\n",
+        },
+        {
+          operation: "create",
+          filePath: executablePath,
+          afterContent: "#!/bin/sh\n",
+          mode: 0o755,
+        },
+        {
+          operation: "delete",
+          filePath: deletedPath,
+          beforeContent: "deleted\n",
+          mode: 0o640,
+        },
+      ]);
+      expect(
+        loadTaskCheckpointOperations({
+          workspace,
+          ownerId: "task_missing",
+        }),
+      ).toEqual([]);
+
+      expect(
+        recordLastTaskCheckpoint({
+          workspace,
+          ownerId: "task_single_edit",
+          operations: [
+            {
+              operation: "edit",
+              filePath: editedPath,
+              beforeContent: "before\n",
+              afterContent: "after\n",
+              modeOwnership: { kind: "unowned" },
+            },
+          ],
+        }),
+      ).toEqual({ written: true });
+      expect(
+        recordLastTaskCheckpoint({
+          workspace,
+          ownerId: "task_single_delete",
+          operations: [
+            {
+              operation: "delete",
+              filePath: deletedPath,
+              beforeContent: "deleted\n",
+              mode: 0o640,
+            },
+          ],
+        }),
+      ).toEqual({ written: true });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an owned checkpoint points at another root or escapes its root,
+    When a resumed Task tries to reload it,
+    Then Keel rejects the checkpoint instead of trusting external paths`, async () => {
+    const workspace = await createGitWorkspace("keel-git-owned-invalid-");
+    const gitRoot = await realpath(workspace);
+
+    try {
+      await writeRawCheckpoint(workspace, {
+        version: 2,
+        operation: "create",
+        gitRoot: `${gitRoot}-other`,
+        relativePath: "note.txt",
+        afterContent: "unsafe\n",
+        ownerId: "task_wrong_root",
+        createdAt: "1970-01-01T00:00:00.000Z",
+      });
+      expect(
+        loadTaskCheckpointOperations({
+          workspace,
+          ownerId: "task_wrong_root",
+        }),
+      ).toEqual([]);
+
+      await writeRawCheckpoint(workspace, {
+        version: 3,
+        operation: "batch",
+        gitRoot,
+        operations: [
+          {
+            operation: "create",
+            relativePath: "../outside.txt",
+            afterContent: "unsafe\n",
+          },
+        ],
+        ownerId: "task_outside_root",
+        createdAt: "1970-01-01T00:00:00.001Z",
+      });
+      expect(
+        loadTaskCheckpointOperations({
+          workspace,
+          ownerId: "task_outside_root",
+        }),
+      ).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

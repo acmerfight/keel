@@ -17,8 +17,13 @@ import {
   persistSessionTaskRecoveryState,
   persistSessionTaskStep,
   persistSessionTaskTerminal,
+  persistSessionToolIntents,
+  persistSessionToolSettlement,
   resumeSessionStore,
+  sessionStoredMessages,
 } from "../../../src/cli/session-store.ts";
+import { listUndoCheckpoints } from "../../../src/core/git.ts";
+import { createGitWorkspace } from "../../../src/testing/cli-harness.ts";
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
 const PROVIDER = {
@@ -68,6 +73,650 @@ const RECOVERY_LEDGER_RECORD_SCHEMA = z
   .passthrough();
 
 describe("Session Store Task Recovery", () => {
+  test.each([
+    {
+      name: "planned effect-capable invocation",
+      toolCall: {
+        id: "planned_bash",
+        tool: "bash",
+        command: "echo once",
+      } as const,
+      start: false,
+      settle: false,
+      expectedKind: "not_executed_after_restart",
+    },
+    {
+      name: "started no-effect invocation",
+      toolCall: { id: "pending_read", tool: "read", path: "note.txt" } as const,
+      start: true,
+      settle: false,
+      expectedKind: "interrupted_no_effect",
+    },
+    {
+      name: "durably settled invocation",
+      toolCall: { id: "settled_read", tool: "read", path: "note.txt" } as const,
+      start: true,
+      settle: true,
+      expectedKind: "completed",
+    },
+  ])(
+    `Given a $name when the process ends before transcript promotion,
+    When the named session resumes,
+    Then recovery promotes one complete tool group and starts a fresh Run`,
+    async ({ toolCall, start, settle, expectedKind }) => {
+      const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+      const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+      let messages: readonly SessionMessage[] = [];
+      try {
+        const session = createSessionStore({
+          sessionId: `tool-recovery-${expectedKind}`,
+          workspace,
+          runtime: runtime(home),
+        });
+        const recovery = createSessionTaskRecovery({
+          session: () => session,
+          runtime: runtime(home, 1),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+        });
+        const userMessage = {
+          role: "user",
+          content: "recover this tool round",
+          origin: { type: "user_prompt" },
+        } as const;
+        recovery.admit({
+          userMessage,
+          provider: PROVIDER,
+          consumedInputIds: [],
+        });
+        const lifecycle = recovery.providerLifecycle(PROVIDER);
+        lifecycle.providerRequestAttempts
+          .begin()
+          .finish({ outcome: "completed", usage: USAGE });
+        const assistantMessage = {
+          role: "assistant",
+          content: "",
+          toolCalls: [toolCall],
+        } as const;
+        lifecycle.settled({
+          assistantMessage,
+          usage: USAGE,
+          stopReason: "stop",
+        });
+        if (start) lifecycle.beforeToolCalls([toolCall]);
+        if (settle) {
+          lifecycle.toolSettled({
+            toolMessage: {
+              role: "tool",
+              toolCallId: toolCall.id,
+              content: "durable exact result",
+            },
+            effects: { checkpointOperations: [] },
+          });
+        }
+
+        const opened = resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 2),
+        });
+        const interruptedRunId = opened.activeTask?.runId;
+        messages = opened.messages;
+        const directive = createSessionTaskRecovery({
+          session: () => opened,
+          runtime: runtime(home, 3),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+        }).resume();
+
+        expect(directive.kind).toBe("run");
+        if (directive.kind !== "run") throw new Error("expected fresh Run");
+        expect(directive.task.runId).not.toBe(interruptedRunId);
+        expect(directive.recoveredMessages).toHaveLength(2);
+        const recoveredToolMessage = directive.recoveredMessages[1];
+        if (recoveredToolMessage?.role !== "tool") {
+          throw new Error("expected recovered tool result");
+        }
+        expect(
+          settle
+            ? recoveredToolMessage
+            : JSON.parse(recoveredToolMessage.content),
+        ).toMatchObject(
+          settle
+            ? { role: "tool", content: "durable exact result" }
+            : { status: expectedKind },
+        );
+        if (!settle) {
+          expect(recoveredToolMessage.recovery).toEqual({
+            kind: expectedKind,
+            taskId: directive.task.taskId,
+            runId: interruptedRunId,
+            operationId: expect.stringMatching(/^tool_operation_/u),
+          });
+        }
+        const reopened = resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 4),
+        });
+        expect(reopened.messages).toHaveLength(3);
+        expect(
+          reopened.messages.filter((message) => message.role === "tool"),
+        ).toHaveLength(1);
+        if (!settle) {
+          expect(
+            reopened.messages.find((message) => message.role === "tool"),
+          ).toMatchObject({
+            recovery: {
+              kind: expectedKind,
+              taskId: directive.task.taskId,
+              runId: interruptedRunId,
+            },
+          });
+        }
+        expect(reopened.activeTask).toMatchObject({
+          phase: "provider_ready",
+          recovered: true,
+        });
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(`Given an opaque tool invocation was started before the process ended,
+    When the named session resumes,
+    Then Keel records unknown effect once and blocks without redispatching or asking the user`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "opaque-tool-effect-unknown",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "write exactly once",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCalls = [
+        {
+          id: "opaque_write",
+          tool: "write",
+          path: "result.txt",
+          content: "once\n",
+        },
+        { id: "opaque_read", tool: "read", path: "result.txt" },
+      ] as const;
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls,
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls(toolCalls);
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 2),
+      });
+      messages = opened.messages;
+      const directive = createSessionTaskRecovery({
+        session: () => opened,
+        runtime: runtime(home, 3),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      }).resume();
+      expect(directive.kind).toBe("blocked");
+      if (directive.kind !== "blocked") {
+        throw new Error("expected opaque effect to block recovery");
+      }
+      expect(directive.task).toMatchObject({
+        phase: "recovery_blocked",
+        reason: "tool_effect",
+        toolInvocations: [
+          {
+            phase: "settled",
+            kind: "interrupted_effect_unknown",
+            toolMessage: {
+              message: {
+                role: "tool",
+                toolCallId: toolCalls[0].id,
+                recovery: { kind: "interrupted_effect_unknown" },
+              },
+            },
+          },
+          {
+            phase: "settled",
+            kind: "interrupted_no_effect",
+            toolMessage: {
+              message: {
+                role: "tool",
+                toolCallId: toolCalls[1].id,
+                recovery: { kind: "interrupted_no_effect" },
+              },
+            },
+          },
+        ],
+      });
+      expect(messages).toHaveLength(4);
+
+      const reopened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 4),
+      });
+      expect(
+        createSessionTaskRecovery({
+          session: () => reopened,
+          runtime: runtime(home, 5),
+          currentMessages: () => reopened.messages,
+          onMessagesPersisted: () => {},
+        }).resume(),
+      ).toMatchObject({
+        kind: "blocked",
+        task: { reason: "tool_effect" },
+      });
+      const ledger = await readFile(session.filePath, "utf8");
+      expect(ledger.match(/"type":"tool_settled"/gu)).toHaveLength(2);
+      expect(ledger.match(/"type":"step_committed"/gu)).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given parallel no-effect invocations settle in completion order,
+    When the process ends after only the later source invocation settles,
+    Then recovery reuses it once and promotes synthetic plus real results in source order`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+    try {
+      const session = createSessionStore({
+        sessionId: "parallel-tool-settlement",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "read two resources",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCalls = [
+        { id: "read_first", tool: "read", path: "first.txt" },
+        { id: "read_second", tool: "read", path: "second.txt" },
+      ] as const;
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls,
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls(toolCalls);
+      lifecycle.toolSettled({
+        toolMessage: {
+          role: "tool",
+          toolCallId: "read_second",
+          content: "second completed first",
+        },
+        effects: {
+          checkpointOperations: [],
+          taskProgress: {
+            tasks: [{ step: "second settled", status: "in_progress" }],
+          },
+        },
+      });
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 2),
+      });
+      expect(opened.taskProgress).toEqual({
+        tasks: [{ step: "second settled", status: "in_progress" }],
+      });
+      messages = opened.messages;
+      const directive = createSessionTaskRecovery({
+        session: () => opened,
+        runtime: runtime(home, 3),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      }).resume();
+      expect(directive.kind).toBe("run");
+      if (directive.kind !== "run") throw new Error("expected fresh Run");
+      expect(
+        directive.recoveredMessages
+          .slice(1)
+          .map((message) =>
+            message.role === "tool" ? message.toolCallId : "unexpected",
+          ),
+      ).toEqual(["read_first", "read_second"]);
+      const firstRecoveredToolMessage = directive.recoveredMessages[1];
+      if (firstRecoveredToolMessage?.role !== "tool") {
+        throw new Error("expected first recovered tool result");
+      }
+      expect(firstRecoveredToolMessage.content).toContain(
+        "interrupted_no_effect",
+      );
+      expect(directive.recoveredMessages[2]).toMatchObject({
+        role: "tool",
+        content: "second completed first",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a completed tool carries every durable continuation effect,
+    When its Task settles and provider budget stops the next request,
+    Then one owned checkpoint and the exact continuation state survive reopen`, async () => {
+    const workspace = await createGitWorkspace("keel-task-effects-");
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    const editedPath = join(workspace, "edited.txt");
+    const createdPath = join(workspace, "created.txt");
+    const executablePath = join(workspace, "executable.sh");
+    const deletedPath = join(workspace, "deleted.txt");
+    await writeFile(editedPath, "after\n", "utf8");
+    await writeFile(createdPath, "created\n", "utf8");
+    await writeFile(executablePath, "#!/bin/sh\n", "utf8");
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "tool-continuation-effects",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      expect(recovery.finalizeCheckpoint()).toBeNull();
+      const userMessage = {
+        role: "user",
+        content: "persist all continuation effects",
+        origin: { type: "user_prompt" },
+      } as const;
+      recovery.admit({
+        userMessage,
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      expect(recovery.finalizeCheckpoint()).toBeNull();
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCall = {
+        id: "write_effects",
+        tool: "write",
+        path: "created.txt",
+        content: "created\n",
+      } as const;
+      const assistantMessage = {
+        role: "assistant",
+        content: "",
+        toolCalls: [toolCall],
+      } as const;
+      lifecycle.settled({
+        assistantMessage,
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls([toolCall]);
+      const toolMessage = {
+        role: "tool",
+        toolCallId: toolCall.id,
+        content: "all effects settled",
+      } as const;
+      lifecycle.toolSettled({
+        toolMessage,
+        effects: {
+          checkpointOperations: [
+            {
+              operation: "edit",
+              filePath: editedPath,
+              beforeContent: "before\n",
+              afterContent: "after\n",
+              modeOwnership: { kind: "unowned" },
+            },
+            {
+              operation: "create",
+              filePath: createdPath,
+              afterContent: "created\n",
+            },
+            {
+              operation: "create",
+              filePath: executablePath,
+              afterContent: "#!/bin/sh\n",
+              mode: 0o755,
+            },
+            {
+              operation: "delete",
+              filePath: deletedPath,
+              beforeContent: "deleted\n",
+              mode: 0o644,
+            },
+          ],
+          taskProgress: {
+            tasks: [{ step: "effects persisted", status: "in_progress" }],
+          },
+          goal: {
+            objective: "Persist continuation effects",
+            status: "active",
+            budget: {},
+            usage: { turns: 1, tokens: 18, activeTimeMs: 25 },
+          },
+          skillState: { skillActivations: [], activeSkillIds: [] },
+          delegation: [{ usage: USAGE, costUsd: 0.001 }],
+        },
+      });
+
+      expect(recovery.finalizeCheckpoint()).toEqual({ written: true });
+      expect(listUndoCheckpoints(workspace)).toEqual([
+        { restoredLabel: "4 files" },
+      ]);
+      const blocked = recovery.blockProviderBudget([
+        userMessage,
+        assistantMessage,
+        toolMessage,
+      ]);
+      expect(blocked).toMatchObject({
+        phase: "recovery_blocked",
+        reason: "provider_budget",
+      });
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 2),
+      });
+      expect(opened.messages).toEqual([
+        userMessage,
+        assistantMessage,
+        toolMessage,
+      ]);
+      expect(opened.taskProgress).toEqual({
+        tasks: [{ step: "effects persisted", status: "in_progress" }],
+      });
+      expect(opened.goal).toMatchObject({
+        objective: "Persist continuation effects",
+        status: "active",
+      });
+      expect(opened.activeSkillIds).toEqual([]);
+      expect(opened.activeTask).toMatchObject({
+        phase: "recovery_blocked",
+        reason: "provider_budget",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given recovery itself ends after one synthetic settlement,
+    When the session resumes recovery again,
+    Then the settled invocation is reused and each source call is promoted exactly once`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+    try {
+      const session = createSessionStore({
+        sessionId: "recovery-restart-idempotence",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "recover twice safely",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            { id: "planned_one", tool: "read", path: "one.txt" },
+            { id: "planned_two", tool: "read", path: "two.txt" },
+          ],
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      const plannedTask = activeSessionTask(session);
+      if (plannedTask?.phase !== "tool_execution") {
+        throw new Error("expected a durable tool plan");
+      }
+      const plannedInvocation = plannedTask.toolInvocations[0];
+      if (plannedInvocation === undefined) {
+        throw new Error("expected the first planned invocation");
+      }
+      persistSessionToolSettlement({
+        session,
+        toolCallId: "planned_one",
+        settlementKind: "not_executed_after_restart",
+        toolMessage: {
+          role: "tool",
+          toolCallId: "planned_one",
+          content: "first synthetic result",
+          recovery: {
+            kind: "not_executed_after_restart",
+            taskId: plannedTask.taskId,
+            runId: plannedInvocation.runId,
+            operationId: plannedInvocation.operationId,
+          },
+        },
+        effects: { checkpointOperations: [] },
+        runtime: runtime(home, 2),
+      });
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 3),
+      });
+      messages = opened.messages;
+      const directive = createSessionTaskRecovery({
+        session: () => opened,
+        runtime: runtime(home, 4),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      }).resume();
+      expect(directive.kind).toBe("run");
+      if (directive.kind !== "run") throw new Error("expected fresh Run");
+      expect(directive.recoveredMessages[1]).toMatchObject({
+        role: "tool",
+        toolCallId: "planned_one",
+        content: "first synthetic result",
+      });
+      expect(directive.recoveredMessages[2]).toMatchObject({
+        role: "tool",
+        toolCallId: "planned_two",
+      });
+      const ledger = await readFile(session.filePath, "utf8");
+      expect(ledger.match(/"type":"tool_settled"/gu)).toHaveLength(2);
+      expect(ledger.match(/"type":"step_committed"/gu)).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given an ordinary prompt completes through a durable provider boundary,
     When the Task reaches its terminal transition,
     Then replay exposes one transcript and the stable terminal outcome`, async () => {
@@ -271,7 +920,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "provider_attempt_settled",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -337,7 +986,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "task_recovery_started",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -381,11 +1030,9 @@ describe("Session Store Task Recovery", () => {
       for (const scenario of [
         "identity",
         "not_recovered",
-        "settled_without_tool",
         "already_blocked",
         "known_terminal",
         "same_run",
-        "invalid_blocked_reason",
       ] as const) {
         let messages: readonly SessionMessage[] = [];
         const session = createSessionStore({
@@ -411,22 +1058,8 @@ describe("Session Store Task Recovery", () => {
           consumedInputIds: [],
         });
 
-        if (scenario === "settled_without_tool") {
-          const lifecycle = recovery.providerLifecycle(PROVIDER);
-          lifecycle.providerRequestAttempts
-            .begin()
-            .finish({ outcome: "completed", usage: USAGE });
-          lifecycle.settled({
-            assistantMessage: {
-              role: "assistant",
-              content: "text cannot become a blocked tool plan",
-              toolCalls: [],
-            },
-            usage: USAGE,
-            stopReason: "stop",
-          });
-        } else if (scenario === "already_blocked") {
-          recovery.blockProviderBudget();
+        if (scenario === "already_blocked") {
+          recovery.blockProviderBudget(messages);
         } else if (scenario === "known_terminal") {
           recovery
             .providerLifecycle(PROVIDER)
@@ -456,26 +1089,11 @@ describe("Session Store Task Recovery", () => {
           unknownProviderAttemptIds: current.unknownProviderAttemptIds,
           phase: "provider_ready",
         } as const;
-        const nextTask =
-          scenario === "settled_without_tool"
-            ? {
-                ...current,
-                phase: "recovery_blocked" as const,
-                recovered: true,
-                reason: "tool_plan" as const,
-              }
-            : scenario === "invalid_blocked_reason"
-              ? {
-                  ...current,
-                  phase: "recovery_blocked" as const,
-                  recovered: true,
-                  reason: "tool_plan" as const,
-                }
-              : readyTask;
+        const nextTask = readyTask;
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 7,
+            schemaVersion: 8,
             type: "task_recovery_started",
             timestamp: "1970-01-01T00:00:03.000Z",
             task: nextTask,
@@ -712,7 +1330,7 @@ describe("Session Store Task Recovery", () => {
           messages = persisted;
         },
       });
-      expect(() => recovery.blockProviderBudget()).toThrow(
+      expect(() => recovery.blockProviderBudget(messages)).toThrow(
         /provider budget cannot block/u,
       );
       recovery.admit({
@@ -724,8 +1342,8 @@ describe("Session Store Task Recovery", () => {
         provider: PROVIDER,
         consumedInputIds: [],
       });
-      recovery.blockProviderBudget();
-      expect(() => recovery.blockProviderBudget()).toThrow(
+      recovery.blockProviderBudget(messages);
+      expect(() => recovery.blockProviderBudget(messages)).toThrow(
         /provider budget cannot block/u,
       );
     } finally {
@@ -782,7 +1400,7 @@ describe("Session Store Task Recovery", () => {
             });
           }
         }
-        const blocked = recovery.blockProviderBudget();
+        const blocked = recovery.blockProviderBudget(messages);
         expect(activeSessionTask(session)).toEqual(blocked);
 
         const opened = resumeSessionStore({
@@ -921,7 +1539,6 @@ describe("Session Store Task Recovery", () => {
         stopReason: "stop",
         runtime: runtime(home, 10),
       });
-
       expect(() =>
         persistSessionTaskStep({
           session,
@@ -979,6 +1596,288 @@ describe("Session Store Task Recovery", () => {
           runtime: runtime(home, 17),
         }),
       ).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given callers violate durable tool-plan writer preconditions,
+    When they start, settle, or commit calls outside the canonical transition,
+    Then every invalid transition fails closed and one valid group can commit`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    const userMessage = {
+      role: "user",
+      content: "enforce tool-plan writer preconditions",
+      origin: { type: "user_prompt" },
+    } as const;
+    const toolCalls = [
+      { id: "read_guard", tool: "read", path: "note.txt" },
+      {
+        id: "write_guard",
+        tool: "write",
+        path: "result.txt",
+        content: "done\n",
+      },
+    ] as const;
+    const assistantMessage = {
+      role: "assistant",
+      content: "",
+      toolCalls,
+    } as const;
+    const readResult = {
+      role: "tool",
+      toolCallId: "read_guard",
+      content: "read settled",
+    } as const;
+    const writeResult = {
+      role: "tool",
+      toolCallId: "write_guard",
+      content: "write was not dispatched",
+    } as const;
+
+    try {
+      const session = createSessionStore({
+        sessionId: "tool-writer-preconditions",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => [],
+        onMessagesPersisted: () => {},
+      });
+      recovery.admit({
+        userMessage,
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      expect(() =>
+        persistSessionToolIntents({
+          session,
+          toolCallIds: ["read_guard"],
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(/no tool plan to start/u);
+
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      expect(() =>
+        lifecycle.settled({
+          assistantMessage: {
+            role: "assistant",
+            content: "",
+            toolCalls: [toolCalls[0], toolCalls[0]],
+          },
+          usage: USAGE,
+          stopReason: "stop",
+        }),
+      ).toThrow(/duplicate call ids/u);
+      lifecycle.settled({
+        assistantMessage,
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      const plannedTask = activeSessionTask(session);
+      if (plannedTask?.phase !== "tool_execution") {
+        throw new Error("expected a durable tool plan");
+      }
+      const writeInvocation = plannedTask.toolInvocations.find(
+        (invocation) => invocation.toolCallId === "write_guard",
+      );
+      if (writeInvocation === undefined) {
+        throw new Error("expected the planned write invocation");
+      }
+      const writeRecoveryResult = {
+        ...writeResult,
+        recovery: {
+          kind: "not_executed_after_restart" as const,
+          taskId: plannedTask.taskId,
+          runId: writeInvocation.runId,
+          operationId: writeInvocation.operationId,
+        },
+      };
+      for (const invalidIds of [
+        [],
+        ["read_guard", "read_guard"],
+        ["unknown_guard"],
+      ]) {
+        expect(() =>
+          persistSessionToolIntents({
+            session,
+            toolCallIds: invalidIds,
+            runtime: runtime(home, 3),
+          }),
+        ).toThrow(/tool intent/u);
+      }
+
+      persistSessionToolIntents({
+        session,
+        toolCallIds: ["read_guard"],
+        runtime: runtime(home, 4),
+      });
+      expect(() =>
+        persistSessionToolIntents({
+          session,
+          toolCallIds: ["read_guard"],
+          runtime: runtime(home, 5),
+        }),
+      ).toThrow(/is not planned/u);
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "unknown_guard",
+          settlementKind: "completed",
+          toolMessage: readResult,
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 6),
+        }),
+      ).toThrow(/not in the durable tool plan/u);
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "write_guard",
+          settlementKind: "completed",
+          toolMessage: writeResult,
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 7),
+        }),
+      ).toThrow(/cannot be settled from phase planned/u);
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "read_guard",
+          settlementKind: "completed",
+          toolMessage: writeResult,
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 8),
+        }),
+      ).toThrow(/does not match its invocation/u);
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "write_guard",
+          settlementKind: "not_executed_after_restart",
+          toolMessage: writeResult,
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 9),
+        }),
+      ).toThrow(/evidence is not canonical/u);
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "write_guard",
+          settlementKind: "interrupted_effect_unknown",
+          toolMessage: {
+            ...writeRecoveryResult,
+            recovery: {
+              ...writeRecoveryResult.recovery,
+              kind: "interrupted_effect_unknown",
+            },
+          },
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 9),
+        }),
+      ).toThrow(/evidence is not canonical/u);
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "read_guard",
+          settlementKind: "completed",
+          toolMessage: {
+            ...readResult,
+            recovery: {
+              kind: "interrupted_no_effect",
+              taskId: plannedTask.taskId,
+              runId: plannedTask.runId,
+              operationId:
+                plannedTask.toolInvocations[0]?.operationId ?? "missing",
+            },
+          },
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 9),
+        }),
+      ).toThrow(/evidence is not canonical/u);
+
+      persistSessionToolSettlement({
+        session,
+        toolCallId: "read_guard",
+        settlementKind: "completed",
+        toolMessage: readResult,
+        effects: { checkpointOperations: [] },
+        runtime: runtime(home, 9),
+      });
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "read_guard",
+          settlementKind: "interrupted_no_effect",
+          toolMessage: readResult,
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 10),
+        }),
+      ).toThrow(/cannot be settled from phase settled/u);
+      expect(() =>
+        persistSessionTaskStep({
+          session,
+          currentMessages: [userMessage, assistantMessage, readResult],
+          runtime: runtime(home, 11),
+        }),
+      ).toThrow(/cannot commit an incomplete tool group/u);
+
+      persistSessionToolSettlement({
+        session,
+        toolCallId: "write_guard",
+        settlementKind: "not_executed_after_restart",
+        toolMessage: writeRecoveryResult,
+        effects: { checkpointOperations: [] },
+        runtime: runtime(home, 12),
+      });
+      expect(() =>
+        persistSessionTaskStep({
+          session,
+          currentMessages: [userMessage, assistantMessage, readResult],
+          runtime: runtime(home, 13),
+        }),
+      ).toThrow(/incomplete tool calls/u);
+      expect(() =>
+        persistSessionTaskStep({
+          session,
+          currentMessages: [
+            userMessage,
+            assistantMessage,
+            { ...readResult, content: "wrong durable result" },
+            writeRecoveryResult,
+          ],
+          runtime: runtime(home, 14),
+        }),
+      ).toThrow(/missing result.*source order/u);
+      expect(
+        persistSessionTaskStep({
+          session,
+          currentMessages: [
+            userMessage,
+            assistantMessage,
+            readResult,
+            writeRecoveryResult,
+          ],
+          runtime: runtime(home, 15),
+        }),
+      ).toBe(true);
+      expect(() =>
+        persistSessionToolSettlement({
+          session,
+          toolCallId: "read_guard",
+          settlementKind: "completed",
+          toolMessage: readResult,
+          effects: { checkpointOperations: [] },
+          runtime: runtime(home, 16),
+        }),
+      ).toThrow(/no active tool execution/u);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -1123,6 +2022,15 @@ describe("Session Store Task Recovery", () => {
         assistantMessage,
         usage: USAGE,
         stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls(assistantMessage.toolCalls);
+      lifecycle.toolSettled({
+        toolMessage: {
+          role: "tool",
+          toolCallId: "read_source",
+          content: "source",
+        },
+        effects: { checkpointOperations: [] },
       });
       lifecycle.beforeRequest([
         userMessage,
@@ -1297,6 +2205,266 @@ describe("Session Store Task Recovery", () => {
     }
   });
 
+  test(`Given schema-valid tool intent and settlement records are reordered or altered,
+    When ledger replay evaluates each tool-plan transition,
+    Then orphaned, repeated, unknown, and non-canonical records all fail closed`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const source = createSessionStore({
+        sessionId: "tool-ledger-source",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => source,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "produce canonical tool ledger records",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCalls = [
+        { id: "ledger_read_one", tool: "read", path: "one.txt" },
+        { id: "ledger_read_two", tool: "read", path: "two.txt" },
+      ] as const;
+      lifecycle.settled({
+        assistantMessage: { role: "assistant", content: "", toolCalls },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      const plannedTask = activeSessionTask(source);
+      if (plannedTask?.phase !== "tool_execution") {
+        throw new Error("expected planned tool Task");
+      }
+      const {
+        providerAttempt: _providerAttempt,
+        assistantMessage: _assistantMessage,
+        stopReason: _stopReason,
+        toolInvocations: _toolInvocations,
+        ...plannedTaskBase
+      } = plannedTask;
+      lifecycle.beforeToolCalls(toolCalls);
+      lifecycle.toolSettled({
+        toolMessage: {
+          role: "tool",
+          toolCallId: toolCalls[0].id,
+          content: "first read settled",
+        },
+        effects: { checkpointOperations: [] },
+      });
+
+      const records = (await readFile(source.filePath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => RECOVERY_LEDGER_RECORD_SCHEMA.parse(JSON.parse(line)));
+      const required = (type: string) => {
+        const record = records.find((candidate) => candidate.type === type);
+        if (record === undefined) throw new Error(`missing ${type} record`);
+        return record;
+      };
+      const admission = required("task_admitted");
+      const providerIntent = required("provider_intent");
+      const attemptSettled = required("provider_attempt_settled");
+      const providerSettled = required("provider_settled");
+      const toolIntent = z
+        .object({
+          type: z.literal("tool_intent"),
+          operationIds: z.array(z.string()),
+          task: z
+            .object({
+              taskId: z.string(),
+              toolInvocations: z.array(z.record(z.string(), z.unknown())),
+            })
+            .passthrough(),
+        })
+        .passthrough()
+        .parse(required("tool_intent"));
+      const toolSettled = z
+        .object({
+          type: z.literal("tool_settled"),
+          operationId: z.string(),
+          task: z
+            .object({
+              taskId: z.string(),
+              toolInvocations: z.array(z.record(z.string(), z.unknown())),
+            })
+            .passthrough(),
+        })
+        .passthrough()
+        .parse(required("tool_settled"));
+      const settledPrefix = [
+        admission,
+        providerIntent,
+        attemptSettled,
+        providerSettled,
+      ];
+      const invalidToolRecovery = {
+        schemaVersion: 8,
+        type: "task_recovery_started",
+        timestamp: "1970-01-01T00:00:00.009Z",
+        task: {
+          ...plannedTaskBase,
+          runId: "run_invalid_tool_recovery",
+          phase: "provider_ready",
+          recovered: true,
+        },
+      };
+      const scenarios = [
+        {
+          name: "orphan-intent",
+          records: [toolIntent],
+          error: /tool_intent does not match/u,
+        },
+        {
+          name: "wrong-phase-intent",
+          records: [admission, toolIntent],
+          error: /tool_intent does not match/u,
+        },
+        {
+          name: "wrong-identity-intent",
+          records: [
+            ...settledPrefix,
+            {
+              ...toolIntent,
+              task: { ...toolIntent.task, taskId: "task_wrong" },
+            },
+          ],
+          error: /tool_intent does not match/u,
+        },
+        {
+          name: "empty-intent",
+          records: [...settledPrefix, { ...toolIntent, operationIds: [] }],
+          error: /not a valid session mutation record/u,
+        },
+        {
+          name: "duplicate-intent",
+          records: [
+            ...settledPrefix,
+            {
+              ...toolIntent,
+              operationIds: [
+                toolIntent.operationIds[0],
+                toolIntent.operationIds[0],
+              ],
+            },
+          ],
+          error: /tool_intent does not match/u,
+        },
+        {
+          name: "unknown-intent",
+          records: [
+            ...settledPrefix,
+            { ...toolIntent, operationIds: ["tool_operation_unknown"] },
+          ],
+          error: /tool_intent is not a canonical transition/u,
+        },
+        {
+          name: "repeated-intent",
+          records: [...settledPrefix, toolIntent, toolIntent],
+          error: /tool_intent is not a canonical transition/u,
+        },
+        {
+          name: "noncanonical-intent-task",
+          records: [
+            ...settledPrefix,
+            { ...toolIntent, task: providerSettled.task },
+          ],
+          error: /tool_intent is not a canonical transition/u,
+        },
+        {
+          name: "orphan-settlement",
+          records: [toolSettled],
+          error: /tool_settled does not match/u,
+        },
+        {
+          name: "wrong-phase-settlement",
+          records: [admission, toolSettled],
+          error: /tool_settled does not match/u,
+        },
+        {
+          name: "wrong-identity-settlement",
+          records: [
+            ...settledPrefix,
+            toolIntent,
+            {
+              ...toolSettled,
+              task: { ...toolSettled.task, taskId: "task_wrong" },
+            },
+          ],
+          error: /tool_settled does not match/u,
+        },
+        {
+          name: "unknown-settlement",
+          records: [
+            ...settledPrefix,
+            toolIntent,
+            { ...toolSettled, operationId: "tool_operation_unknown" },
+          ],
+          error: /tool_settled is not a canonical transition/u,
+        },
+        {
+          name: "short-settlement-task",
+          records: [
+            ...settledPrefix,
+            toolIntent,
+            {
+              ...toolSettled,
+              task: {
+                ...toolSettled.task,
+                toolInvocations: toolSettled.task.toolInvocations.slice(0, 1),
+              },
+            },
+          ],
+          error: /tool_settled is not a canonical transition/u,
+        },
+        {
+          name: "recovery-from-tool-execution",
+          records: [...settledPrefix, invalidToolRecovery],
+          error: /task_recovery_started does not match/u,
+        },
+      ];
+
+      for (const scenario of scenarios) {
+        const target = createSessionStore({
+          sessionId: `tool-ledger-${scenario.name}`,
+          workspace,
+          runtime: runtime(home, 2),
+        });
+        await appendFile(
+          target.filePath,
+          `${scenario.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+          "utf8",
+        );
+        expect(() =>
+          resumeSessionStore({
+            sessionId: target.id,
+            workspace,
+            runtime: runtime(home, 3),
+          }),
+        ).toThrow(scenario.error);
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a known terminal provider settlement was durable before the process died,
     When the same Task resumes before its terminal record existed,
     Then recovery terminalizes the failure without another provider request`, async () => {
@@ -1411,7 +2579,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "task_terminal",
           timestamp: "1970-01-01T00:00:03.000Z",
           taskId: recovered.taskId,
@@ -1564,7 +2732,7 @@ describe("Session Store Task Recovery", () => {
         .auxiliaryProviderRequestAttempts.begin();
       auxiliary.finish({ outcome: "completed", usage: USAGE });
 
-      const blocked = recovery.blockProviderBudget();
+      const blocked = recovery.blockProviderBudget(messages);
       expect(blocked.reason).toBe("provider_budget");
       expect(blocked.phase).toBe("recovery_blocked");
       expect(blocked.providerAttempt?.settlement?.outcome).toBe("completed");
@@ -1633,8 +2801,7 @@ describe("Session Store Task Recovery", () => {
         usage: USAGE,
         stopReason: "stop",
       });
-
-      const blocked = recovery.blockProviderBudget();
+      const blocked = recovery.blockProviderBudget(messages);
 
       expect(blocked).toMatchObject({
         phase: "recovery_blocked",
@@ -1704,7 +2871,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.003Z",
           task: {
@@ -1746,7 +2913,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "task_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           task: {
@@ -1788,6 +2955,417 @@ describe("Session Store Task Recovery", () => {
     }
   });
 
+  test(`Given snapshots contain durable tool plans,
+    When canonical and independently corrupted metadata is reopened,
+    Then canonical active and blocked plans survive while altered identities fail closed`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+
+    try {
+      const source = createSessionStore({
+        sessionId: "tool-snapshot-source",
+        workspace,
+        runtime: runtime(home),
+      });
+      const userMessage = {
+        role: "user",
+        content: "snapshot the tool plan",
+        origin: { type: "user_prompt" },
+      } as const;
+      const recovery = createSessionTaskRecovery({
+        session: () => source,
+        runtime: runtime(home, 1),
+        currentMessages: () => [],
+        onMessagesPersisted: () => {},
+      });
+      recovery.admit({
+        userMessage,
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const snapshotToolCalls = [
+        { id: "snapshot_read_one", tool: "read", path: "one.txt" },
+        { id: "snapshot_read_two", tool: "read", path: "two.txt" },
+      ] as const;
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls: snapshotToolCalls,
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      const plannedTask = activeSessionTask(source);
+      if (plannedTask?.phase !== "tool_execution") {
+        throw new Error("expected planned tool snapshot source");
+      }
+      const sourceMessages = sessionStoredMessages(source);
+      const snapshotRecord = (
+        activeTask: unknown,
+        stored = sourceMessages,
+      ) => ({
+        schemaVersion: 8,
+        type: "snapshot",
+        timestamp: "1970-01-01T00:00:00.010Z",
+        reason: "size_threshold",
+        messages: stored,
+        pendingInputs: [],
+        skillStateCheckpoints: [
+          { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+        ],
+        activeTask,
+      });
+      const reopenSnapshot = async (
+        name: string,
+        activeTask: unknown,
+        stored = sourceMessages,
+      ) => {
+        const target = createSessionStore({
+          sessionId: `tool-snapshot-${name}`,
+          workspace,
+          runtime: runtime(home, 2),
+        });
+        await appendFile(
+          target.filePath,
+          `${JSON.stringify(snapshotRecord(activeTask, stored))}\n`,
+          "utf8",
+        );
+        return () =>
+          resumeSessionStore({
+            sessionId: target.id,
+            workspace,
+            runtime: runtime(home, 3),
+          });
+      };
+
+      const openCanonical = await reopenSnapshot("canonical", plannedTask);
+      expect(openCanonical().activeTask).toEqual(plannedTask);
+
+      lifecycle.beforeToolCalls(snapshotToolCalls);
+      lifecycle.toolSettled({
+        toolMessage: {
+          role: "tool",
+          toolCallId: snapshotToolCalls[0].id,
+          content: "snapshot read settled",
+        },
+        effects: { checkpointOperations: [] },
+      });
+      const partiallySettledTask = activeSessionTask(source);
+      if (partiallySettledTask?.phase !== "tool_execution") {
+        throw new Error("expected partially settled tool snapshot source");
+      }
+      const openSettled = await reopenSnapshot("settled", partiallySettledTask);
+      expect(openSettled().activeTask).toEqual(partiallySettledTask);
+
+      const [firstInvocation, secondInvocation] = plannedTask.toolInvocations;
+      if (firstInvocation === undefined || secondInvocation === undefined) {
+        throw new Error("expected two planned invocations");
+      }
+      const corruptions = [
+        {
+          name: "length",
+          task: {
+            ...plannedTask,
+            toolInvocations: [firstInvocation],
+          },
+        },
+        {
+          name: "operation-id",
+          task: {
+            ...plannedTask,
+            toolInvocations: [
+              firstInvocation,
+              { ...secondInvocation, operationId: firstInvocation.operationId },
+            ],
+          },
+        },
+        {
+          name: "result-id",
+          task: {
+            ...plannedTask,
+            toolInvocations: [
+              firstInvocation,
+              {
+                ...secondInvocation,
+                resultMessageId: firstInvocation.resultMessageId,
+              },
+            ],
+          },
+        },
+        {
+          name: "tool-call-id",
+          task: {
+            ...plannedTask,
+            toolInvocations: [
+              firstInvocation,
+              { ...secondInvocation, toolCallId: firstInvocation.toolCallId },
+            ],
+          },
+        },
+        {
+          name: "tool-call-reference",
+          task: {
+            ...plannedTask,
+            toolInvocations: [
+              firstInvocation,
+              { ...secondInvocation, toolCallId: "snapshot_other_call" },
+            ],
+          },
+        },
+        {
+          name: "source-index",
+          task: {
+            ...plannedTask,
+            toolInvocations: [
+              firstInvocation,
+              { ...secondInvocation, sourceIndex: 0 },
+            ],
+          },
+        },
+        {
+          name: "tool-name",
+          task: {
+            ...plannedTask,
+            toolInvocations: [
+              firstInvocation,
+              { ...secondInvocation, toolName: "grep" },
+            ],
+          },
+        },
+        {
+          name: "run-id",
+          task: {
+            ...plannedTask,
+            toolInvocations: [
+              firstInvocation,
+              { ...secondInvocation, runId: "run_other" },
+            ],
+          },
+        },
+      ];
+      for (const corruption of corruptions) {
+        const openCorrupt = await reopenSnapshot(
+          corruption.name,
+          corruption.task,
+        );
+        expect(openCorrupt).toThrow(/invalid tool recovery state/u);
+      }
+
+      const [settledInvocation, pendingInvocation] =
+        partiallySettledTask.toolInvocations;
+      if (
+        settledInvocation?.phase !== "settled" ||
+        pendingInvocation === undefined
+      ) {
+        throw new Error("expected one settled snapshot invocation");
+      }
+      for (const corruption of [
+        {
+          name: "settled-result-role",
+          task: {
+            ...partiallySettledTask,
+            toolInvocations: [
+              {
+                ...settledInvocation,
+                toolMessage: {
+                  ...settledInvocation.toolMessage,
+                  message: {
+                    role: "assistant",
+                    content: "wrong role",
+                    toolCalls: [],
+                  },
+                },
+              },
+              pendingInvocation,
+            ],
+          },
+        },
+        {
+          name: "settled-result-call",
+          task: {
+            ...partiallySettledTask,
+            toolInvocations: [
+              {
+                ...settledInvocation,
+                toolMessage: {
+                  ...settledInvocation.toolMessage,
+                  message: {
+                    ...settledInvocation.toolMessage.message,
+                    toolCallId: "snapshot_other_call",
+                  },
+                },
+              },
+              pendingInvocation,
+            ],
+          },
+        },
+        {
+          name: "settled-result-id",
+          task: {
+            ...partiallySettledTask,
+            toolInvocations: [
+              {
+                ...settledInvocation,
+                toolMessage: {
+                  ...settledInvocation.toolMessage,
+                  id: "message_other_result",
+                },
+              },
+              pendingInvocation,
+            ],
+          },
+        },
+        {
+          name: "completed-with-recovery-metadata",
+          task: {
+            ...partiallySettledTask,
+            toolInvocations: [
+              {
+                ...settledInvocation,
+                toolMessage: {
+                  ...settledInvocation.toolMessage,
+                  message: {
+                    ...settledInvocation.toolMessage.message,
+                    recovery: {
+                      kind: "interrupted_no_effect",
+                      taskId: partiallySettledTask.taskId,
+                      runId: settledInvocation.runId,
+                      operationId: settledInvocation.operationId,
+                    },
+                  },
+                },
+              },
+              pendingInvocation,
+            ],
+          },
+        },
+      ]) {
+        const openCorrupt = await reopenSnapshot(
+          corruption.name,
+          corruption.task,
+        );
+        expect(openCorrupt).toThrow(/invalid tool recovery state/u);
+      }
+
+      let blockedMessages: readonly SessionMessage[] = [];
+      const blockedSource = createSessionStore({
+        sessionId: "tool-snapshot-blocked-source",
+        workspace,
+        runtime: runtime(home, 4),
+      });
+      const blockedRecovery = createSessionTaskRecovery({
+        session: () => blockedSource,
+        runtime: runtime(home, 5),
+        currentMessages: () => blockedMessages,
+        onMessagesPersisted: (persisted) => {
+          blockedMessages = persisted;
+        },
+      });
+      blockedRecovery.admit({
+        userMessage: {
+          role: "user",
+          content: "snapshot an unknown tool effect",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const blockedLifecycle = blockedRecovery.providerLifecycle(PROVIDER);
+      blockedLifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const blockedToolCall = {
+        id: "snapshot_opaque_write",
+        tool: "write",
+        path: "blocked.txt",
+        content: "unknown\n",
+      } as const;
+      blockedLifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls: [blockedToolCall],
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      blockedLifecycle.beforeToolCalls([blockedToolCall]);
+      expect(blockedRecovery.resume().kind).toBe("blocked");
+      const blockedTask = activeSessionTask(blockedSource);
+      if (
+        blockedTask?.phase !== "recovery_blocked" ||
+        blockedTask.reason !== "tool_effect"
+      ) {
+        throw new Error("expected blocked tool snapshot source");
+      }
+      const openBlocked = await reopenSnapshot(
+        "blocked",
+        blockedTask,
+        sessionStoredMessages(blockedSource),
+      );
+      expect(openBlocked().activeTask).toEqual(blockedTask);
+      const blockedInvocation = blockedTask.toolInvocations?.[0];
+      if (
+        blockedInvocation?.phase !== "settled" ||
+        blockedInvocation.toolMessage.message.role !== "tool"
+      ) {
+        throw new Error("expected a settled blocked invocation");
+      }
+      const openMissingRecovery = await reopenSnapshot(
+        "blocked-missing-recovery",
+        {
+          ...blockedTask,
+          toolInvocations: [
+            {
+              ...blockedInvocation,
+              toolMessage: {
+                ...blockedInvocation.toolMessage,
+                message: {
+                  role: "tool",
+                  toolCallId: blockedInvocation.toolCallId,
+                  content: blockedInvocation.toolMessage.message.content,
+                },
+              },
+            },
+          ],
+        },
+        sessionStoredMessages(blockedSource),
+      );
+      expect(openMissingRecovery).toThrow(/invalid tool recovery state/u);
+      const openWrongRecovery = await reopenSnapshot(
+        "blocked-wrong-recovery",
+        {
+          ...blockedTask,
+          toolInvocations: [
+            {
+              ...blockedInvocation,
+              toolMessage: {
+                ...blockedInvocation.toolMessage,
+                message: {
+                  ...blockedInvocation.toolMessage.message,
+                  recovery: {
+                    ...blockedInvocation.toolMessage.message.recovery,
+                    runId: "run_other",
+                  },
+                },
+              },
+            },
+          ],
+        },
+        sessionStoredMessages(blockedSource),
+      );
+      expect(openWrongRecovery).toThrow(/invalid tool recovery state/u);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a latest snapshot contains an active Task whose admitted input is absent,
     When the bounded ledger is reopened,
     Then snapshot replay fails before recovery can act on orphaned state`, async () => {
@@ -1803,7 +3381,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -1867,7 +3445,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -2061,30 +3639,6 @@ describe("Session Store Task Recovery", () => {
           error: /invalid provider state/u,
         },
         {
-          name: "tool-plan-without-tools",
-          activeTask: {
-            ...pendingTask,
-            phase: "recovery_blocked" as const,
-            reason: "tool_plan" as const,
-            providerAttempt: completedAttempt,
-            assistantMessage: assistant,
-            stopReason: "stop" as const,
-          },
-          messages: [user],
-          error: /invalid provider state/u,
-        },
-        {
-          name: "tool-plan-without-assistant",
-          activeTask: {
-            ...pendingTask,
-            phase: "recovery_blocked" as const,
-            reason: "tool_plan" as const,
-            providerAttempt: completedAttempt,
-          },
-          messages: [user],
-          error: /invalid provider state/u,
-        },
-        {
           name: "replacement-limit-without-attempt",
           activeTask: {
             taskId: pendingTask.taskId,
@@ -2263,7 +3817,7 @@ describe("Session Store Task Recovery", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 7,
+            schemaVersion: 8,
             type: "snapshot",
             timestamp: "1970-01-01T00:00:00.001Z",
             reason: "size_threshold",
@@ -2311,7 +3865,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -2425,6 +3979,15 @@ describe("Session Store Task Recovery", () => {
         usage: USAGE,
         stopReason: "stop",
       });
+      lifecycle.beforeToolCalls(assistantMessage.toolCalls);
+      lifecycle.toolSettled({
+        toolMessage: {
+          role: "tool",
+          toolCallId: "read_once",
+          content: "stable",
+        },
+        effects: { checkpointOperations: [] },
+      });
       const compactedMessages: readonly SessionMessage[] = [
         {
           role: "user",
@@ -2515,6 +4078,15 @@ describe("Session Store Task Recovery", () => {
         usage: USAGE,
         stopReason: "stop",
       });
+      lifecycle.beforeToolCalls(assistantMessage.toolCalls);
+      lifecycle.toolSettled({
+        toolMessage: {
+          role: "tool",
+          toolCallId: "read_identity",
+          content: "stable",
+        },
+        effects: { checkpointOperations: [] },
+      });
       lifecycle.beforeRequest([
         userMessage,
         assistantMessage,
@@ -2545,7 +4117,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.009Z",
           task: {
@@ -2800,34 +4372,28 @@ describe("Session Store Task Recovery", () => {
         const directive = resumed.resume();
         if (directive.kind === "run") providerRequests++;
 
-        expect(providerRequests).toBe(0);
-        expect(directive.kind).toBe(
-          scenario === "text" ? "delivered" : "blocked",
-        );
-        if (scenario === "tool" && directive.kind === "blocked") {
-          expect(directive.task.reason).toBe("tool_plan");
-          const taskRecords = (await readFile(session.filePath, "utf8"))
-            .trimEnd()
-            .split("\n")
-            .map((line) =>
-              RECOVERY_LEDGER_RECORD_SCHEMA.parse(JSON.parse(line)),
-            )
-            .filter((record) => record.task !== undefined);
-          const previousTask = taskRecords.at(-2)?.task;
-          const blockedTask = taskRecords.at(-1)?.task;
-          expect(blockedTask).toEqual({
-            ...previousTask,
-            phase: "recovery_blocked",
-            recovered: true,
-            reason: "tool_plan",
+        expect(providerRequests).toBe(scenario === "text" ? 0 : 1);
+        expect(directive.kind).toBe(scenario === "text" ? "delivered" : "run");
+        if (scenario === "tool" && directive.kind === "run") {
+          expect(directive.recoveredMessages.at(-1)).toMatchObject({
+            role: "tool",
+            toolCallId: "old-bash",
           });
+          expect(JSON.stringify(directive.recoveredMessages.at(-1))).toContain(
+            "not_executed_after_restart",
+          );
           expect(
             resumeSessionStore({
               sessionId: session.id,
               workspace,
               runtime: runtime(home, 4),
             }).activeTask,
-          ).toEqual(directive.task);
+          ).toMatchObject({
+            taskId: directive.task.taskId,
+            runId: directive.task.runId,
+            phase: "provider_ready",
+            recovered: true,
+          });
         }
       }
     } finally {
@@ -3023,7 +4589,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 7,
+          schemaVersion: 8,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:03.000Z",
           reason: "size_threshold",

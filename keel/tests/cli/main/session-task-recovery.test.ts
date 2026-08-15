@@ -135,6 +135,120 @@ describe("CLI Main - Session Task Recovery", () => {
     }
   });
 
+  test(`Given a named session is killed after a bash effect starts,
+    When the user resumes the session,
+    Then Keel preserves the unknown effect without dispatching the old invocation again`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-tool-recovery-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-tool-recovery-home-"));
+    const markerPath = join(workspace, "effect-count.txt");
+    const bashPidPath = join(workspace, "bash.pid");
+    const command =
+      "printf %s $$ > bash.pid; printf x >> effect-count.txt; sleep 30";
+    let requestCount = 0;
+    const server = createServer((request, response) => {
+      if (request.url !== "/chat/completions") {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      requestCount++;
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(
+        `${sseToolCall("bash_unknown_effect", "bash", {
+          command,
+        })}${sseToolFinish()}data: [DONE]\n\n`,
+      );
+    });
+    await listen(server);
+    const environment = {
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      KEEL_FORCE_INTERACTIVE: "1",
+      KEEL_HOME: home,
+      KEEL_PROVIDER: "deepseek",
+    };
+    const original = runCliProcess(
+      ["--session", "tool-effect-recovery", "--bash-policy", "trusted"],
+      {
+        cwd: workspace,
+        env: environment,
+        stdin: "pipe",
+      },
+    );
+    original.child.stdin?.on("error", () => {});
+
+    try {
+      original.child.stdin?.write("perform the requested effect once\n");
+      await withTimeout(
+        (async () => {
+          for (;;) {
+            const marker = await readFile(markerPath, "utf8").catch(() => "");
+            if (marker === "x") return;
+            await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          }
+        })(),
+        5_000,
+        "bash effect was not observed",
+      );
+      original.child.kill("SIGKILL");
+      expect(
+        (
+          await withTimeout(
+            original.result,
+            5_000,
+            "original tool process did not terminate",
+          )
+        ).signal,
+      ).toBe("SIGKILL");
+
+      // When
+      const resumed = runCliProcess(
+        ["--resume", "tool-effect-recovery", "--bash-policy", "trusted"],
+        {
+          cwd: workspace,
+          env: environment,
+          stdin: "pipe",
+        },
+      );
+      resumed.child.stdin?.end();
+      const resumedResult = await withTimeout(
+        resumed.result,
+        5_000,
+        "tool recovery process did not finish",
+      );
+
+      // Then
+      expect(resumedResult.exitCode, resumedResult.stderr).toBe(0);
+      expect(resumedResult.stderr).toContain("recovery_blocked");
+      expect(resumedResult.stderr).toContain("tool_effect");
+      expect(requestCount).toBe(1);
+      expect(await readFile(markerPath, "utf8")).toBe("x");
+      const ledger = await readFile(
+        join(home, "sessions", "tool-effect-recovery", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"type":"tool_intent"');
+      expect(ledger).toContain('"kind":"interrupted_effect_unknown"');
+    } finally {
+      original.child.kill("SIGKILL");
+      const bashPid = Number.parseInt(
+        await readFile(bashPidPath, "utf8").catch(() => ""),
+        10,
+      );
+      if (process.platform !== "win32" && Number.isSafeInteger(bashPid)) {
+        try {
+          process.kill(-bashPid, "SIGKILL");
+        } catch {
+          // The bounded test command may already have exited.
+        }
+      }
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the original provider request and its one replacement are both SIGKILLed,
     When a third process resumes the named session,
     Then recovery blocks without a third request and preserves queued user input`, async () => {

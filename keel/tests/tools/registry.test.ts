@@ -28,6 +28,7 @@ import {
   toolCallArguments,
   toolCallCanonicalArguments,
   toolCallFromParsedArguments,
+  toolCallRecoveryCapability,
 } from "../../src/tools/registry.ts";
 
 const emptyMcpExposure = {
@@ -252,6 +253,30 @@ function expectProviderParameterMatchesSchema(
 }
 
 describe("tool registry", () => {
+  test(`Given builtin tools declare recovery independently from permission risk,
+    When recovery classifies read, shell, and invalid calls,
+    Then no-effect calls are explicit and every effect-capable fallback is opaque`, () => {
+    expect(
+      toolCallRecoveryCapability({ id: "read", tool: "read", path: "a.txt" }),
+    ).toEqual({ kind: "no_effect" });
+    expect(
+      toolCallRecoveryCapability({
+        id: "bash",
+        tool: "bash",
+        command: "echo once",
+      }),
+    ).toEqual({ kind: "opaque" });
+    expect(
+      toolCallRecoveryCapability({
+        id: "invalid",
+        tool: "update_plan",
+        invalidArguments: {},
+        validationError: "invalid plan",
+        recovery: "repair the plan",
+      }),
+    ).toEqual({ kind: "no_effect" });
+  });
+
   test(`Given no project skill catalog is available,
     When builtin execution receives a skill call,
     Then it fails recoverably without loading instructions`, async () => {
