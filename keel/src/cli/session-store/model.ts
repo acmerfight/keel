@@ -14,7 +14,7 @@ import type {
 import type { ToolJsonValue } from "../../tools/tool-call.ts";
 import type { ToolRecoveryCapability } from "../../tools/tool-definitions.ts";
 
-export const SESSION_SCHEMA_VERSION = 8;
+export const SESSION_SCHEMA_VERSION = 9;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 export const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -86,6 +86,13 @@ export interface SessionHeaderRecord {
 export interface SessionModelSelection {
   readonly providerId: ProviderId;
   readonly model: string;
+}
+
+export type SessionToolEffectRecoveryPolicy = "block" | "accept_unknown";
+
+export interface SessionTaskRecoveryDisposition {
+  readonly kind: "accept_unknown";
+  readonly operationIds: readonly string[];
 }
 
 export interface SessionModelSwitch {
@@ -197,6 +204,8 @@ interface ActiveSessionTaskBase {
     readonly responseMessageId: string;
   }[];
   readonly unknownProviderAttemptIds: readonly string[];
+  readonly toolEffectRecoveryPolicy: SessionToolEffectRecoveryPolicy;
+  readonly acceptedUnknownEffectOperationIds: readonly string[];
 }
 
 export type ActiveSessionTask = ActiveSessionTaskBase &
@@ -252,10 +261,15 @@ export type ActiveSessionTask = ActiveSessionTaskBase &
 export interface SessionLastTaskOutcome {
   readonly taskId: string;
   readonly runId: string;
-  readonly outcome: "completed" | "failed" | "aborted";
+  readonly outcome:
+    | "completed"
+    | "completed_with_unknown_effects"
+    | "failed"
+    | "aborted";
   readonly timestamp: string;
   readonly recovered: boolean;
   readonly unknownProviderAttemptIds: readonly string[];
+  readonly unknownToolEffectOperationIds: readonly string[];
   readonly responseMessageId?: string;
 }
 
@@ -423,6 +437,17 @@ interface ToolSettledSessionRecord {
   readonly operationId: string;
 }
 
+interface TaskRecoveryDispositionSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "task_recovery_disposition";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "tool_execution" }
+  >;
+  readonly disposition: SessionTaskRecoveryDisposition;
+}
+
 interface TaskRecoveryStartedSessionRecord {
   readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "task_recovery_started";
@@ -509,6 +534,7 @@ export type SessionMutationRecord =
   | ProviderSettledSessionRecord
   | ToolIntentSessionRecord
   | ToolSettledSessionRecord
+  | TaskRecoveryDispositionSessionRecord
   | TaskRecoveryStartedSessionRecord
   | StepCommittedSessionRecord
   | TaskTerminalSessionRecord
@@ -570,6 +596,7 @@ export interface SessionCatalogEntry {
   readonly preview: string;
   readonly pendingInputCount: number;
   readonly taskProgress: SessionTaskProgress;
+  readonly lastTaskOutcome?: SessionLastTaskOutcome;
 }
 
 export interface SessionCatalogWorkflowSkill {
@@ -601,6 +628,7 @@ export interface SessionCatalogReplayState {
   readonly taskProgress: SessionTaskProgress;
   readonly skillActivations: readonly SkillActivation[];
   readonly activeSkillIds: readonly string[];
+  readonly lastTaskOutcome?: SessionLastTaskOutcome;
 }
 
 export interface SessionReplayState {

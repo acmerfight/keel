@@ -24,7 +24,9 @@ export type {
   SessionState,
   SessionStoreRuntime,
   SessionTaskProgressCheckpoint,
+  SessionTaskRecoveryDisposition,
   SessionToolContinuationEffects,
+  SessionToolEffectRecoveryPolicy,
   StoredMessage,
 } from "./session-store/model.ts";
 export { sessionFilePath, sessionHome } from "./session-store/paths.ts";
@@ -54,6 +56,7 @@ export {
   persistSessionSkillState,
   persistSessionTaskAdmission,
   persistSessionTaskProgress,
+  persistSessionTaskRecoveryDisposition,
   persistSessionTaskRecoveryState,
   persistSessionTaskStep,
   persistSessionTaskTerminal,

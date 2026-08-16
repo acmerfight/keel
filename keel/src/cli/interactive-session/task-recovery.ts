@@ -23,6 +23,7 @@ import {
   persistSessionProviderIntent,
   persistSessionProviderResponse,
   persistSessionTaskAdmission,
+  persistSessionTaskRecoveryDisposition,
   persistSessionTaskRecoveryState,
   persistSessionTaskStep,
   persistSessionTaskTerminal,
@@ -33,6 +34,7 @@ import {
   type SessionProviderAttemptSettlement,
   type SessionState,
   type SessionStoreRuntime,
+  type SessionToolEffectRecoveryPolicy,
   sessionStoredMessages,
 } from "../session-store.ts";
 
@@ -130,6 +132,7 @@ export function createSessionTaskRecovery(options: {
   readonly runtime: SessionStoreRuntime;
   readonly currentMessages: () => readonly SessionMessage[];
   readonly onMessagesPersisted: (messages: readonly SessionMessage[]) => void;
+  readonly toolEffectRecoveryPolicy?: SessionToolEffectRecoveryPolicy;
 }): SessionTaskRecovery {
   const { runtime } = options;
   let checkpointOwnerId: string | undefined;
@@ -166,6 +169,7 @@ export function createSessionTaskRecovery(options: {
         userMessage: request.userMessage,
         provider: request.provider,
         consumedInputIds: request.consumedInputIds,
+        toolEffectRecoveryPolicy: options.toolEffectRecoveryPolicy ?? "block",
         ...(request.userMessageId === undefined
           ? {}
           : { userMessageId: request.userMessageId }),
@@ -242,12 +246,44 @@ export function createSessionTaskRecovery(options: {
             runtime,
           });
         }
-        const settledTask = activeSessionTask(session);
+        let settledTask = activeSessionTask(session);
         /* v8 ignore next 4 -- each unsettled invocation was synchronously settled above. */
         if (settledTask?.phase !== "tool_execution") {
           throw new Error(
             "durable tool recovery changed Task phase unexpectedly",
           );
+        }
+        const acceptedUnknownEffects = new Set(
+          settledTask.acceptedUnknownEffectOperationIds,
+        );
+        const unknownEffectOperationIds = settledTask.toolInvocations
+          .filter(
+            (invocation) =>
+              invocation.phase === "settled" &&
+              invocation.kind === "interrupted_effect_unknown" &&
+              !acceptedUnknownEffects.has(invocation.operationId),
+          )
+          .sort((left, right) => left.sourceIndex - right.sourceIndex)
+          .map((invocation) => invocation.operationId);
+        if (
+          settledTask.toolEffectRecoveryPolicy === "accept_unknown" &&
+          unknownEffectOperationIds.length > 0
+        ) {
+          persistSessionTaskRecoveryDisposition({
+            session,
+            disposition: {
+              kind: "accept_unknown",
+              operationIds: unknownEffectOperationIds,
+            },
+            runtime,
+          });
+          settledTask = activeSessionTask(session);
+          /* v8 ignore next 4 -- the disposition writer preserves the tool-execution phase. */
+          if (settledTask?.phase !== "tool_execution") {
+            throw new Error(
+              "durable tool recovery disposition changed Task phase unexpectedly",
+            );
+          }
         }
         const recoveredMessages: readonly SessionMessage[] = [
           settledTask.assistantMessage.message,
@@ -380,6 +416,9 @@ export function createSessionTaskRecovery(options: {
         recovered: true,
         providerRequestIds: activeTask.providerRequestIds,
         unknownProviderAttemptIds,
+        toolEffectRecoveryPolicy: activeTask.toolEffectRecoveryPolicy,
+        acceptedUnknownEffectOperationIds:
+          activeTask.acceptedUnknownEffectOperationIds,
         phase: "provider_ready",
       };
       persistSessionTaskRecoveryState({ session, task, runtime });

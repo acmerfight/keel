@@ -1400,6 +1400,67 @@ describe("CLI Args", () => {
     });
   });
 
+  test(`Given a host configures standing recovery policy for a saved session,
+    When the CLI parses separated or equals syntax,
+    Then it preserves accept_unknown as the typed interactive policy`, () => {
+    for (const option of [
+      ["--recovery-policy", "accept-unknown"],
+      ["--recovery-policy=accept-unknown"],
+    ]) {
+      expect(parseCliArgs(["--session", "durable", ...option])).toMatchObject({
+        ok: true,
+        value: {
+          command: "run",
+          mode: "interactive",
+          session: { kind: "create", sessionId: "durable" },
+          recoveryPolicy: "accept_unknown",
+        },
+      });
+    }
+    expect(
+      parseCliArgs(["--session", "durable", "--recovery-policy", "block"]),
+    ).toMatchObject({
+      ok: true,
+      value: { recoveryPolicy: "block" },
+    });
+    expect(
+      parseCliArgs(["--session", "durable", "--recovery-policy", "guess"]),
+    ).toEqual({
+      ok: false,
+      message:
+        "Error: --recovery-policy must be one of: block, accept-unknown.",
+    });
+    expect(
+      parseCliArgs(["--session", "durable", "--recovery-policy=guess"]),
+    ).toEqual({
+      ok: false,
+      message:
+        "Error: --recovery-policy must be one of: block, accept-unknown.",
+    });
+    for (const [args, message] of [
+      [
+        ["--recovery-policy", "accept-unknown", "do work"],
+        "Error: --recovery-policy is only supported for saved interactive sessions.",
+      ],
+      [
+        ["--recovery-policy", "accept-unknown", "--ephemeral"],
+        "Error: --recovery-policy cannot be combined with --ephemeral.",
+      ],
+      [
+        [
+          "--recovery-policy",
+          "accept-unknown",
+          "--resume",
+          "durable",
+          "--fork-points",
+        ],
+        "Error: --recovery-policy cannot be combined with --fork-points.",
+      ],
+    ] as const) {
+      expect(parseCliArgs(args)).toEqual({ ok: false, message });
+    }
+  });
+
   test(`Given the user passes an empty positional message,
     When the CLI parses the run,
     Then it preserves the automatic interactive-session entrypoint`, () => {

@@ -1113,6 +1113,7 @@ async function runActiveSessionCli(
           taskRecovery: createSessionTaskRecovery({
             session: activeSessionForPersistence,
             runtime,
+            toolEffectRecoveryPolicy: cliArgs.recoveryPolicy,
             currentMessages: () => persistedMessages,
             onMessagesPersisted: (messages) => {
               persistedMessages = [...messages];

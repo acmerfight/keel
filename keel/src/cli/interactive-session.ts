@@ -1943,6 +1943,15 @@ export async function runInteractiveSession(
     }
     reportRecorder.endTask("failed");
   };
+  /* v8 ignore next 8 -- observable coverage runs in the named-session SIGKILL subprocess, outside this instrumented process. */
+  const discloseAcceptedUnknownEffects = (
+    taskId: string,
+    operationIds: readonly string[],
+  ): void => {
+    options.writeStderr(
+      `Warning: durable Task ${taskId} completed_with_unknown_effects; interrupted tool effect count ${operationIds.length} remains unknown under its persisted recovery policy.\n`,
+    );
+  };
 
   options.onSigint(abortActiveTurn);
   let preserveInputForSessionSwitch = false;
@@ -1965,6 +1974,12 @@ export async function runInteractiveSession(
             options.writeStdout(recovery.message.content);
           }
           options.writeStdout("\n");
+          if (recovery.outcome.outcome === "completed_with_unknown_effects") {
+            discloseAcceptedUnknownEffects(
+              recovery.outcome.taskId,
+              recovery.outcome.unknownToolEffectOperationIds,
+            );
+          }
           break;
         case "blocked":
           options.writeStderr(
@@ -1997,8 +2012,22 @@ export async function runInteractiveSession(
               recoveringTask: { provider: recovery.task.provider },
             });
             reportRecorder.endTask(
-              turnResult.kind === "aborted" ? "aborted" : undefined,
+              turnResult.kind === "aborted"
+                ? "aborted"
+                : turnResult.kind === "completed" &&
+                    recovery.task.acceptedUnknownEffectOperationIds.length > 0
+                  ? "completed_with_unknown_effects"
+                  : undefined,
             );
+            if (
+              turnResult.kind === "completed" &&
+              recovery.task.acceptedUnknownEffectOperationIds.length > 0
+            ) {
+              discloseAcceptedUnknownEffects(
+                recovery.task.taskId,
+                recovery.task.acceptedUnknownEffectOperationIds,
+              );
+            }
             if (turnResult.kind === "cost_budget") {
               recoveryPreventsInput = true;
             }
