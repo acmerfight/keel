@@ -132,7 +132,7 @@ describe("Session Store Fork", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toContainEqual({
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.005Z",
         from: null,
@@ -394,7 +394,7 @@ describe("Session Store Fork", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toEqual([
         {
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "session",
           id: "empty-target",
           createdAt: "1970-01-01T00:00:00.001Z",
@@ -494,7 +494,7 @@ describe("Session Store Fork", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toEqual([
         {
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "session",
           id: "target",
           createdAt: "1970-01-01T00:00:00.003Z",
@@ -716,7 +716,7 @@ describe("Session Store Fork", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines[0]).toEqual({
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "session",
         id: "target",
         createdAt: "1970-01-01T00:00:00.003Z",
@@ -742,7 +742,7 @@ describe("Session Store Fork", () => {
         },
       });
       expect(targetLedgerLines[1]).toEqual({
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "append",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",

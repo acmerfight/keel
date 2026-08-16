@@ -2,6 +2,7 @@ import { z } from "zod";
 import { type AgentPolicy, agentPolicies } from "../../core/agent-policy.ts";
 import { type ProviderId, providerIds } from "../../core/provider-id.ts";
 import type { BashPolicy } from "../../permissions/bash.ts";
+import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 
 export type ParseErrorKind = "unknownOption";
 
@@ -34,6 +35,7 @@ const maxCostSchema = z
   .pipe(z.number().finite().positive());
 const bashPolicySchema = z.enum(["ask", "deny", "trusted"]);
 const agentPolicySchema = z.enum(agentPolicies);
+const recoveryPolicySchema = z.enum(["block", "accept-unknown"]);
 const providerIdSchema = z.enum(providerIds);
 const trialsSchema = z
   .string()
@@ -78,6 +80,18 @@ export function parseAgentPolicy(
     );
   }
   return parseOk(result.data);
+}
+
+export function parseRecoveryPolicy(
+  raw: string | undefined,
+): ParseResult<SessionToolEffectRecoveryPolicy> {
+  const result = recoveryPolicySchema.safeParse(raw);
+  if (!result.success) {
+    return parseError(
+      "Error: --recovery-policy must be one of: block, accept-unknown.",
+    );
+  }
+  return parseOk(result.data === "accept-unknown" ? "accept_unknown" : "block");
 }
 
 export function parseProviderId(

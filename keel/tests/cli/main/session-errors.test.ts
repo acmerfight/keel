@@ -370,7 +370,7 @@ describe("CLI Main - Session Errors", () => {
     await writeFile(
       ledgerPath,
       `${JSON.stringify({
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "session",
         id: "snapshot-queued",
         createdAt: "1970-01-01T00:00:00.000Z",
@@ -383,7 +383,7 @@ describe("CLI Main - Session Errors", () => {
     await writeFile(
       ledgerPath,
       `\n${JSON.stringify({
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.001Z",
         reason: "size_threshold",
@@ -561,7 +561,7 @@ describe("CLI Main - Session Errors", () => {
       join(home, "sessions", "broken", "ledger.jsonl"),
       [
         JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "session",
           id: "broken",
           createdAt: "1970-01-01T00:00:00.000Z",
@@ -611,7 +611,7 @@ describe("CLI Main - Session Errors", () => {
     await writeFile(
       ledgerPath,
       `${JSON.stringify({
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "session",
         id: "huge",
         createdAt: "1970-01-01T00:00:00.000Z",

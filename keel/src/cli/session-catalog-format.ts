@@ -21,6 +21,7 @@ import type {
   SessionCatalogWarning,
   SessionForkPointRecord,
   SessionForkPolicyRecord,
+  SessionLastTaskOutcome,
   SessionRepairResult,
   SessionState,
   StoredMessage,
@@ -104,7 +105,19 @@ function sessionRecoveryStateLines(
     ...(entry.pendingInputCount > 0
       ? [`${indent}pending inputs: ${entry.pendingInputCount}`]
       : []),
+    ...(entry.lastTaskOutcome === undefined ||
+    entry.lastTaskOutcome.unknownToolEffectOperationIds.length === 0
+      ? []
+      : [formatSessionLastTaskOutcome(entry.lastTaskOutcome, indent)]),
   ];
+}
+
+function formatSessionLastTaskOutcome(
+  outcome: SessionLastTaskOutcome,
+  indent: string,
+): string {
+  const unknownEffectCount = outcome.unknownToolEffectOperationIds.length;
+  return `${indent}last task: ${outcome.outcome}; unknown tool effects: ${unknownEffectCount}`;
 }
 
 function formatSessionForkPoint(forkPoint: SessionForkPointRecord): string {
@@ -494,6 +507,10 @@ export function formatSessionDetail(options: {
     `  active model: ${formatSessionDetailActiveModel(options.session)}`,
     `  model switches: ${options.session.modelSwitches.length}`,
     `  bash approvals: ${options.session.bashApprovalGrants.length}`,
+    ...(options.session.lastTaskOutcome === undefined ||
+    options.session.lastTaskOutcome.unknownToolEffectOperationIds.length === 0
+      ? []
+      : [formatSessionLastTaskOutcome(options.session.lastTaskOutcome, "  ")]),
     "actions:",
     `  resume: keel --resume ${options.entry.id}`,
     `  fork-points: keel --resume ${options.entry.id} --fork-points`,

@@ -383,6 +383,8 @@ const activeSessionTaskBaseSchema = z.object({
       .strict(),
   ),
   unknownProviderAttemptIds: z.array(z.string().min(1)),
+  toolEffectRecoveryPolicy: z.enum(["block", "accept_unknown"]),
+  acceptedUnknownEffectOperationIds: z.array(z.string().min(1)),
 });
 
 const providerReadyTaskSchema = activeSessionTaskBaseSchema
@@ -446,10 +448,16 @@ const sessionLastTaskOutcomeSchema = z
   .object({
     taskId: z.string().min(1),
     runId: z.string().min(1),
-    outcome: z.enum(["completed", "failed", "aborted"]),
+    outcome: z.enum([
+      "completed",
+      "completed_with_unknown_effects",
+      "failed",
+      "aborted",
+    ]),
     timestamp: z.string(),
     recovered: z.boolean(),
     unknownProviderAttemptIds: z.array(z.string().min(1)),
+    unknownToolEffectOperationIds: z.array(z.string().min(1)),
     responseMessageId: z.string().min(1).optional(),
   })
   .strict();
@@ -680,6 +688,21 @@ const toolSettledRecordSchema = z
   })
   .strict();
 
+const taskRecoveryDispositionRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("task_recovery_disposition"),
+    timestamp: z.string(),
+    task: toolExecutionTaskSchema,
+    disposition: z
+      .object({
+        kind: z.literal("accept_unknown"),
+        operationIds: z.array(z.string().min(1)).min(1),
+      })
+      .strict(),
+  })
+  .strict();
+
 const taskRecoveryStartedRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -777,6 +800,7 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   providerSettledRecordSchema,
   toolIntentRecordSchema,
   toolSettledRecordSchema,
+  taskRecoveryDispositionRecordSchema,
   taskRecoveryStartedRecordSchema,
   stepCommittedRecordSchema,
   taskTerminalRecordSchema,
@@ -1080,6 +1104,10 @@ function activeSessionTaskBase(task: ActiveSessionTask) {
       responseMessageId: request.responseMessageId,
     })),
     unknownProviderAttemptIds: [...task.unknownProviderAttemptIds],
+    toolEffectRecoveryPolicy: task.toolEffectRecoveryPolicy,
+    acceptedUnknownEffectOperationIds: [
+      ...task.acceptedUnknownEffectOperationIds,
+    ],
   } as const;
 }
 
@@ -1253,6 +1281,10 @@ function toActiveSessionTask(task: RawActiveSessionTask): ActiveSessionTask {
       responseMessageId: request.responseMessageId,
     })),
     unknownProviderAttemptIds: [...task.unknownProviderAttemptIds],
+    toolEffectRecoveryPolicy: task.toolEffectRecoveryPolicy,
+    acceptedUnknownEffectOperationIds: [
+      ...task.acceptedUnknownEffectOperationIds,
+    ],
   } as const;
   switch (task.phase) {
     case "provider_ready":
@@ -1510,6 +1542,7 @@ function copySessionLastTaskOutcome(
     timestamp: outcome.timestamp,
     recovered: outcome.recovered,
     unknownProviderAttemptIds: [...outcome.unknownProviderAttemptIds],
+    unknownToolEffectOperationIds: [...outcome.unknownToolEffectOperationIds],
     ...(outcome.responseMessageId === undefined
       ? {}
       : { responseMessageId: outcome.responseMessageId }),
@@ -1526,6 +1559,7 @@ function toSessionLastTaskOutcome(
     timestamp: outcome.timestamp,
     recovered: outcome.recovered,
     unknownProviderAttemptIds: [...outcome.unknownProviderAttemptIds],
+    unknownToolEffectOperationIds: [...outcome.unknownToolEffectOperationIds],
     ...(outcome.responseMessageId === undefined
       ? {}
       : { responseMessageId: outcome.responseMessageId }),
@@ -2437,6 +2471,17 @@ function toSessionMutationRecord(
         timestamp: record.timestamp,
         task: toToolExecutionSessionTask(record.task),
         operationId: record.operationId,
+      };
+    case "task_recovery_disposition":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "task_recovery_disposition",
+        timestamp: record.timestamp,
+        task: toToolExecutionSessionTask(record.task),
+        disposition: {
+          kind: "accept_unknown",
+          operationIds: [...record.disposition.operationIds],
+        },
       };
     case "task_recovery_started": {
       return {

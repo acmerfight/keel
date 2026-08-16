@@ -64,7 +64,9 @@ import {
   type SessionState,
   type SessionStoreRuntime,
   type SessionTaskProgressCheckpoint,
+  type SessionTaskRecoveryDisposition,
   type SessionToolContinuationEffects,
+  type SessionToolEffectRecoveryPolicy,
   type SkillStateSessionRecord,
   type StoredMessage,
 } from "./model.ts";
@@ -467,7 +469,29 @@ function replaySessionStore(options: {
     current.admittedAt === next.admittedAt &&
     current.userMessageId === next.userMessageId &&
     sessionModelSelectionsEqual(current.provider, next.provider) &&
-    current.maxProviderReplacements === next.maxProviderReplacements;
+    current.maxProviderReplacements === next.maxProviderReplacements &&
+    current.toolEffectRecoveryPolicy === next.toolEffectRecoveryPolicy;
+
+  const unknownEffectOperationIsGrounded = (
+    taskId: string,
+    operationId: string,
+    task?: ActiveSessionTask,
+  ): boolean =>
+    storedMessages.some(
+      ({ message }) =>
+        message.role === "tool" &&
+        message.recovery?.kind === "interrupted_effect_unknown" &&
+        message.recovery.taskId === taskId &&
+        message.recovery.operationId === operationId,
+    ) ||
+    (task !== undefined &&
+      "toolInvocations" in task &&
+      task.toolInvocations.some(
+        (invocation) =>
+          invocation.phase === "settled" &&
+          invocation.kind === "interrupted_effect_unknown" &&
+          invocation.operationId === operationId,
+      ));
 
   const validTaskRecoveryTransition = (
     current: ActiveSessionTask,
@@ -547,6 +571,9 @@ function replaySessionStore(options: {
       recovered: true,
       providerRequestIds: current.providerRequestIds,
       unknownProviderAttemptIds,
+      toolEffectRecoveryPolicy: current.toolEffectRecoveryPolicy,
+      acceptedUnknownEffectOperationIds:
+        current.acceptedUnknownEffectOperationIds,
       phase: "provider_ready",
     });
   };
@@ -749,7 +776,8 @@ function replaySessionStore(options: {
           record.task.providerReplacementsUsed !== 0 ||
           record.task.recovered ||
           record.task.providerRequestIds.length !== 0 ||
-          record.task.unknownProviderAttemptIds.length !== 0
+          record.task.unknownProviderAttemptIds.length !== 0 ||
+          record.task.acceptedUnknownEffectOperationIds.length !== 0
         ) {
           sessionStoreError(
             `Error: cannot resume session "${options.sessionId}": task admission is not a canonical initial Task.`,
@@ -997,6 +1025,51 @@ function replaySessionStore(options: {
         activeTask = copyActiveSessionTask(record.task);
         break;
       }
+      case "task_recovery_disposition": {
+        if (
+          activeTask === undefined ||
+          activeTask.phase !== "tool_execution" ||
+          activeTask.toolEffectRecoveryPolicy !== "accept_unknown" ||
+          !taskIdentityMatches(activeTask, record.task) ||
+          record.disposition.kind !== "accept_unknown" ||
+          new Set(record.disposition.operationIds).size !==
+            record.disposition.operationIds.length
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task_recovery_disposition does not match the active Task.`,
+          );
+        }
+        const accepted = new Set(activeTask.acceptedUnknownEffectOperationIds);
+        const expectedOperationIds = activeTask.toolInvocations
+          .filter(
+            (invocation) =>
+              invocation.phase === "settled" &&
+              invocation.kind === "interrupted_effect_unknown" &&
+              !accepted.has(invocation.operationId),
+          )
+          .sort((left, right) => left.sourceIndex - right.sourceIndex)
+          .map((invocation) => invocation.operationId);
+        if (
+          expectedOperationIds.length === 0 ||
+          !isDeepStrictEqual(
+            record.disposition.operationIds,
+            expectedOperationIds,
+          ) ||
+          !isDeepStrictEqual(record.task, {
+            ...activeTask,
+            acceptedUnknownEffectOperationIds: [
+              ...activeTask.acceptedUnknownEffectOperationIds,
+              ...expectedOperationIds,
+            ],
+          })
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": task_recovery_disposition is not a canonical transition.`,
+          );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
       case "task_recovery_started":
         if (
           activeTask === undefined ||
@@ -1022,12 +1095,16 @@ function replaySessionStore(options: {
         const toolRecovery =
           settledTask.phase === "tool_execution" &&
           record.task.runId !== settledTask.runId;
-        const hasUnknownEffect =
+        const acceptedUnknownEffects = new Set(
+          settledTask.acceptedUnknownEffectOperationIds,
+        );
+        const hasUnacceptedUnknownEffect =
           settledTask.phase === "tool_execution" &&
           settledTask.toolInvocations.some(
             (invocation) =>
               invocation.phase === "settled" &&
-              invocation.kind === "interrupted_effect_unknown",
+              invocation.kind === "interrupted_effect_unknown" &&
+              !acceptedUnknownEffects.has(invocation.operationId),
           );
         if (
           settledTask.taskId !== record.task.taskId ||
@@ -1036,7 +1113,7 @@ function replaySessionStore(options: {
             ? record.task.runId === settledTask.runId || !record.task.recovered
             : record.task.runId !== settledTask.runId ||
               record.task.recovered !== settledTask.recovered) ||
-          (hasUnknownEffect
+          (hasUnacceptedUnknownEffect
             ? record.task.phase !== "recovery_blocked" ||
               record.task.reason !== "tool_effect" ||
               !isDeepStrictEqual(
@@ -1053,6 +1130,10 @@ function replaySessionStore(options: {
           !isDeepStrictEqual(
             record.task.unknownProviderAttemptIds,
             settledTask.unknownProviderAttemptIds,
+          ) ||
+          !isDeepStrictEqual(
+            record.task.acceptedUnknownEffectOperationIds,
+            settledTask.acceptedUnknownEffectOperationIds,
           )
         ) {
           sessionStoreError(
@@ -1132,9 +1213,20 @@ function replaySessionStore(options: {
             record.lastTaskOutcome.unknownProviderAttemptIds,
             activeTask.unknownProviderAttemptIds,
           ) ||
+          !isDeepStrictEqual(
+            record.lastTaskOutcome.unknownToolEffectOperationIds,
+            activeTask.acceptedUnknownEffectOperationIds,
+          ) ||
           record.lastTaskOutcome.responseMessageId !==
             expectedResponseMessageId ||
           (record.lastTaskOutcome.outcome === "completed" &&
+            activeTask.acceptedUnknownEffectOperationIds.length > 0) ||
+          (record.lastTaskOutcome.outcome ===
+            "completed_with_unknown_effects" &&
+            activeTask.acceptedUnknownEffectOperationIds.length === 0) ||
+          ((record.lastTaskOutcome.outcome === "completed" ||
+            record.lastTaskOutcome.outcome ===
+              "completed_with_unknown_effects") &&
             (activeTask.phase !== "provider_settled" ||
               !isDeepStrictEqual(
                 terminalResponse,
@@ -1271,6 +1363,7 @@ function replaySessionStore(options: {
             ? undefined
             : copyActiveSessionTask(record.activeTask);
         if (activeTask !== undefined) {
+          const snapshotActiveTask = activeTask;
           const providerRequestIds = activeTask.providerRequestIds;
           const providerAttempt = activeTask.providerAttempt;
           const assistantMessage = activeTask.assistantMessage;
@@ -1326,6 +1419,20 @@ function replaySessionStore(options: {
             ).size !== providerRequestIds.length ||
             new Set(activeTask.unknownProviderAttemptIds).size !==
               activeTask.unknownProviderAttemptIds.length ||
+            new Set(activeTask.acceptedUnknownEffectOperationIds).size !==
+              activeTask.acceptedUnknownEffectOperationIds.length ||
+            (activeTask.acceptedUnknownEffectOperationIds.length > 0 &&
+              (activeTask.toolEffectRecoveryPolicy !== "accept_unknown" ||
+                (!activeTask.recovered &&
+                  activeTask.phase !== "tool_execution"))) ||
+            activeTask.acceptedUnknownEffectOperationIds.some(
+              (operationId) =>
+                !unknownEffectOperationIsGrounded(
+                  snapshotActiveTask.taskId,
+                  operationId,
+                  snapshotActiveTask,
+                ),
+            ) ||
             activeTask.unknownProviderAttemptIds.some(
               (attemptId) =>
                 !providerRequestIds.some(
@@ -1376,6 +1483,9 @@ function replaySessionStore(options: {
               : undefined;
           if (toolInvocations !== undefined) {
             const activeTaskId = activeTask.taskId;
+            const acceptedUnknownEffectOperationIds = new Set(
+              activeTask.acceptedUnknownEffectOperationIds,
+            );
             /* v8 ignore next 3 -- tool-execution and tool-effect-blocked schemas require the settled assistant message validated immediately above. */
             const assistantToolCalls =
               assistantMessage?.message.role === "assistant"
@@ -1413,7 +1523,10 @@ function replaySessionStore(options: {
                 toolInvocations.some(
                   (invocation) =>
                     invocation.phase === "settled" &&
-                    invocation.kind === "interrupted_effect_unknown",
+                    invocation.kind === "interrupted_effect_unknown" &&
+                    !acceptedUnknownEffectOperationIds.has(
+                      invocation.operationId,
+                    ),
                 ));
             if (!toolStateIsCanonical || !blockedToolStateIsCanonical) {
               sessionStoreError(
@@ -1434,20 +1547,40 @@ function replaySessionStore(options: {
             );
           }
         }
-        lastTaskOutcome =
+        const snapshotLastTaskOutcome =
           record.lastTaskOutcome === undefined
             ? undefined
             : copySessionLastTaskOutcome(record.lastTaskOutcome);
+        lastTaskOutcome = snapshotLastTaskOutcome;
         if (
-          lastTaskOutcome !== undefined &&
-          (new Set(lastTaskOutcome.unknownProviderAttemptIds).size !==
-            lastTaskOutcome.unknownProviderAttemptIds.length ||
-            (!lastTaskOutcome.recovered &&
-              lastTaskOutcome.unknownProviderAttemptIds.length !== 0) ||
-            (lastTaskOutcome.responseMessageId !== undefined &&
+          snapshotLastTaskOutcome !== undefined &&
+          (new Set(snapshotLastTaskOutcome.unknownProviderAttemptIds).size !==
+            snapshotLastTaskOutcome.unknownProviderAttemptIds.length ||
+            new Set(snapshotLastTaskOutcome.unknownToolEffectOperationIds)
+              .size !==
+              snapshotLastTaskOutcome.unknownToolEffectOperationIds.length ||
+            (!snapshotLastTaskOutcome.recovered &&
+              (snapshotLastTaskOutcome.unknownProviderAttemptIds.length !== 0 ||
+                snapshotLastTaskOutcome.unknownToolEffectOperationIds.length !==
+                  0)) ||
+            (snapshotLastTaskOutcome.outcome === "completed" &&
+              snapshotLastTaskOutcome.unknownToolEffectOperationIds.length >
+                0) ||
+            (snapshotLastTaskOutcome.outcome ===
+              "completed_with_unknown_effects" &&
+              snapshotLastTaskOutcome.unknownToolEffectOperationIds.length ===
+                0) ||
+            snapshotLastTaskOutcome.unknownToolEffectOperationIds.some(
+              (operationId) =>
+                !unknownEffectOperationIsGrounded(
+                  snapshotLastTaskOutcome.taskId,
+                  operationId,
+                ),
+            ) ||
+            (snapshotLastTaskOutcome.responseMessageId !== undefined &&
               storedMessages.filter(
                 (message) =>
-                  message.id === lastTaskOutcome?.responseMessageId &&
+                  message.id === snapshotLastTaskOutcome.responseMessageId &&
                   message.message.role === "assistant",
               ).length !== 1))
         ) {
@@ -1682,6 +1815,7 @@ export function persistSessionTaskAdmission(options: {
   readonly userMessageId?: string;
   readonly runtime: SessionStoreRuntime;
   readonly maxProviderReplacements?: number;
+  readonly toolEffectRecoveryPolicy: SessionToolEffectRecoveryPolicy;
 }): Extract<ActiveSessionTask, { readonly phase: "provider_ready" }> {
   const replayState = replayStateForSession(options.session);
   if (replayState.activeTask !== undefined) {
@@ -1721,6 +1855,8 @@ export function persistSessionTaskAdmission(options: {
       recovered: false,
       providerRequestIds: [],
       unknownProviderAttemptIds: [],
+      toolEffectRecoveryPolicy: options.toolEffectRecoveryPolicy,
+      acceptedUnknownEffectOperationIds: [],
       phase: "provider_ready",
     };
   const consumedInputIds = uniqueInputIds(options.consumedInputIds);
@@ -2239,6 +2375,66 @@ export function persistSessionToolSettlement(options: {
   });
 }
 
+export function persistSessionTaskRecoveryDisposition(options: {
+  readonly session: SessionState;
+  readonly disposition: SessionTaskRecoveryDisposition;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const activeTask = activeTaskForSession(options.session);
+  if (
+    activeTask.phase !== "tool_execution" ||
+    activeTask.toolEffectRecoveryPolicy !== "accept_unknown"
+  ) {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} cannot accept unknown tool effects.`,
+    );
+  }
+  const accepted = new Set(activeTask.acceptedUnknownEffectOperationIds);
+  const operationIds = activeTask.toolInvocations
+    .filter(
+      (invocation) =>
+        invocation.phase === "settled" &&
+        invocation.kind === "interrupted_effect_unknown" &&
+        !accepted.has(invocation.operationId),
+    )
+    .sort((left, right) => left.sourceIndex - right.sourceIndex)
+    .map((invocation) => invocation.operationId);
+  if (
+    operationIds.length === 0 ||
+    options.disposition.kind !== "accept_unknown" ||
+    !isDeepStrictEqual(options.disposition.operationIds, operationIds)
+  ) {
+    sessionStoreError(
+      `Error: recovery disposition does not match unknown effects for durable Task ${JSON.stringify(activeTask.taskId)}.`,
+    );
+  }
+  const task: Extract<ActiveSessionTask, { readonly phase: "tool_execution" }> =
+    {
+      ...activeTask,
+      acceptedUnknownEffectOperationIds: [
+        ...activeTask.acceptedUnknownEffectOperationIds,
+        ...operationIds,
+      ],
+    };
+  const timestamp = isoTimestamp(options.runtime);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "task_recovery_disposition",
+    timestamp,
+    task,
+    disposition: {
+      kind: "accept_unknown",
+      operationIds,
+    },
+  });
+  replayStateForSession(options.session).activeTask =
+    copyActiveSessionTask(task);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+}
+
 export function persistSessionTaskRecoveryState(options: {
   readonly session: SessionState;
   readonly task: Extract<
@@ -2369,12 +2565,16 @@ export function persistSessionTaskStep(options: {
     : storedMessages;
   const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
   const recovered = options.recoveryRunId !== undefined;
-  const hasUnknownEffect =
+  const acceptedUnknownEffects = new Set(
+    activeTask.acceptedUnknownEffectOperationIds,
+  );
+  const hasUnacceptedUnknownEffect =
     activeTask.phase === "tool_execution" &&
     activeTask.toolInvocations.some(
       (invocation) =>
         invocation.phase === "settled" &&
-        invocation.kind === "interrupted_effect_unknown",
+        invocation.kind === "interrupted_effect_unknown" &&
+        !acceptedUnknownEffects.has(invocation.operationId),
     );
   const readyTask = {
     taskId: activeTask.taskId,
@@ -2388,12 +2588,17 @@ export function persistSessionTaskStep(options: {
     recovered: recovered || activeTask.recovered,
     providerRequestIds: activeTask.providerRequestIds,
     unknownProviderAttemptIds: activeTask.unknownProviderAttemptIds,
+    toolEffectRecoveryPolicy: activeTask.toolEffectRecoveryPolicy,
+    acceptedUnknownEffectOperationIds:
+      activeTask.acceptedUnknownEffectOperationIds,
   } as const;
   const task: Extract<
     ActiveSessionTask,
     { readonly phase: "provider_ready" | "recovery_blocked" }
   > =
-    recovered && hasUnknownEffect && activeTask.phase === "tool_execution"
+    recovered &&
+    hasUnacceptedUnknownEffect &&
+    activeTask.phase === "tool_execution"
       ? {
           ...readyTask,
           phase: "recovery_blocked",
@@ -2484,13 +2689,21 @@ export function persistSessionTaskTerminal(options: {
   const timestamp = isoTimestamp(options.runtime);
   const responseMessageId =
     terminalMessages.length === 0 ? undefined : terminalMessages.at(-1)?.id;
+  const terminalOutcome =
+    options.outcome === "completed" &&
+    activeTask.acceptedUnknownEffectOperationIds.length > 0
+      ? "completed_with_unknown_effects"
+      : options.outcome;
   const lastTaskOutcome: SessionLastTaskOutcome = {
     taskId: activeTask.taskId,
     runId: activeTask.runId,
-    outcome: options.outcome,
+    outcome: terminalOutcome,
     timestamp,
     recovered: activeTask.recovered,
     unknownProviderAttemptIds: [...activeTask.unknownProviderAttemptIds],
+    unknownToolEffectOperationIds: [
+      ...activeTask.acceptedUnknownEffectOperationIds,
+    ],
     ...(responseMessageId === undefined ? {} : { responseMessageId }),
   };
   const persistedSkillState =

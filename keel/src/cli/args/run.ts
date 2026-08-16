@@ -3,6 +3,7 @@ import type {
   AgentPolicyConfiguration,
 } from "../../core/agent-policy.ts";
 import { type BashMode, bashModeFromPolicy } from "../../permissions/bash.ts";
+import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 import {
   isRecognizedOptionToken,
   type ParseResult,
@@ -14,6 +15,7 @@ import {
   parseModel,
   parseOk,
   parseProviderId,
+  parseRecoveryPolicy,
   parseReportFile,
   parseSkillName,
   requireOptionValue,
@@ -29,6 +31,7 @@ const RUN_OPTIONS = [
   "--skill",
   "--no-skills",
   "--agent-policy",
+  "--recovery-policy",
   "--max-cost",
   "--report",
   "--transcript",
@@ -64,6 +67,8 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   let model: string | undefined;
   let skillsEnabled = true;
   let agentPolicy: AgentPolicy = "off";
+  let recoveryPolicy: SessionToolEffectRecoveryPolicy = "block";
+  let recoveryPolicyOptionSeen = false;
   const skillNames: string[] = [];
   let userMessage: string | undefined;
   let positionalMessagePresent = false;
@@ -72,6 +77,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   const transcriptPrefix = "--transcript=";
   const bashPolicyPrefix = "--bash-policy=";
   const agentPolicyPrefix = "--agent-policy=";
+  const recoveryPolicyPrefix = "--recovery-policy=";
   const sessionPrefix = "--session=";
   const resumePrefix = "--resume=";
   const forkPrefix = "--fork=";
@@ -188,6 +194,25 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       const parsed = parseAgentPolicy(arg.slice(agentPolicyPrefix.length));
       if (!parsed.ok) return parsed;
       agentPolicy = parsed.value;
+      continue;
+    }
+
+    if (arg === "--recovery-policy") {
+      const parsed = parseRecoveryPolicy(args[index + 1]);
+      if (!parsed.ok) return parsed;
+      recoveryPolicy = parsed.value;
+      recoveryPolicyOptionSeen = true;
+      skipNext = true;
+      continue;
+    }
+
+    if (arg.startsWith(recoveryPolicyPrefix)) {
+      const parsed = parseRecoveryPolicy(
+        arg.slice(recoveryPolicyPrefix.length),
+      );
+      if (!parsed.ok) return parsed;
+      recoveryPolicy = parsed.value;
+      recoveryPolicyOptionSeen = true;
       continue;
     }
 
@@ -496,6 +521,21 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       "Error: --ephemeral is only supported for interactive sessions.",
     );
   }
+  if (recoveryPolicyOptionSeen && positionalMessagePresent) {
+    return parseError(
+      "Error: --recovery-policy is only supported for saved interactive sessions.",
+    );
+  }
+  if (recoveryPolicyOptionSeen && ephemeral) {
+    return parseError(
+      "Error: --recovery-policy cannot be combined with --ephemeral.",
+    );
+  }
+  if (recoveryPolicyOptionSeen && forkPoints) {
+    return parseError(
+      "Error: --recovery-policy cannot be combined with --fork-points.",
+    );
+  }
   if (userMessage === undefined && transcriptFile !== undefined) {
     return parseError(
       "Error: --transcript is only supported for one-shot runs.",
@@ -559,5 +599,6 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
     ...common,
     mode: "interactive",
     session,
+    recoveryPolicy,
   });
 }

@@ -46,7 +46,11 @@ import {
   SUMMARY_OPEN,
 } from "./model.ts";
 import { sessionFilePath, sessionHome } from "./paths.ts";
-import { copySessionGraphRecord, parseSessionHeaderRecord } from "./records.ts";
+import {
+  copySessionGraphRecord,
+  copySessionLastTaskOutcome,
+  parseSessionHeaderRecord,
+} from "./records.ts";
 
 export function normalizeSessionPreview(content: string): string {
   const normalized = redactTextForPersistence(content)
@@ -214,6 +218,13 @@ function applySessionCatalogMutation(
         skillActivations:
           snapshotSkillState.skillActivations.map(copySkillActivation),
         activeSkillIds: [...snapshotSkillState.activeSkillIds],
+        ...(record.lastTaskOutcome === undefined
+          ? {}
+          : {
+              lastTaskOutcome: copySessionLastTaskOutcome(
+                record.lastTaskOutcome,
+              ),
+            }),
       };
     }
     case "session_title":
@@ -239,6 +250,13 @@ function applySessionCatalogMutation(
         taskProgress: copySessionTaskProgress(state.taskProgress),
         skillActivations: state.skillActivations.map(copySkillActivation),
         activeSkillIds: [...state.activeSkillIds],
+        ...(state.lastTaskOutcome === undefined
+          ? {}
+          : {
+              lastTaskOutcome: copySessionLastTaskOutcome(
+                state.lastTaskOutcome,
+              ),
+            }),
       };
       return record.goal === null
         ? nextState
@@ -310,6 +328,7 @@ function applySessionCatalogMutation(
                 record.skillState.skillActivations.map(copySkillActivation),
               activeSkillIds: [...record.skillState.activeSkillIds],
             }),
+        lastTaskOutcome: copySessionLastTaskOutcome(record.lastTaskOutcome),
       };
     case "step_committed":
       return {
@@ -332,6 +351,7 @@ function applySessionCatalogMutation(
     case "provider_settled":
     case "tool_intent":
     case "tool_settled":
+    case "task_recovery_disposition":
     case "task_recovery_started":
       return {
         ...state,
@@ -393,6 +413,11 @@ function sessionCatalogEntry(records: SessionRecords): SessionCatalogEntry {
     preview: catalogPreviewValue(state.preview),
     pendingInputCount: state.pendingInputsById.size,
     taskProgress: copySessionTaskProgress(state.taskProgress),
+    ...(state.lastTaskOutcome === undefined
+      ? {}
+      : {
+          lastTaskOutcome: copySessionLastTaskOutcome(state.lastTaskOutcome),
+        }),
   };
 }
 

@@ -54,6 +54,19 @@ the next follow-up if the turn finishes first; slash commands remain queued work
 A live region keeps current provider/tool activity and the latest durable Goal
 state visible without replacing an in-progress draft.
 
+An embedding host can opt a saved-session Task into automatic continuation when
+restart leaves an opaque tool effect uncertain:
+
+```bash
+keel --session durable-task --recovery-policy accept-unknown
+```
+
+The policy is captured when each Task is admitted. On resume, Keel does not
+repeat the interrupted effect or ask the end user to decide: it first persists
+the accepted-unknown disposition, continues the same Task in a fresh Run, and
+reports `completed_with_unknown_effects` if the Task completes. The default
+`block` policy preserves fail-closed behavior.
+
 Useful follow-up commands:
 
 ```bash

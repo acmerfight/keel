@@ -2,6 +2,7 @@ import type { AgentPolicyConfiguration } from "../../core/agent-policy.ts";
 import type { ApiKeyProviderId, ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoalBudget } from "../../core/session-goal.ts";
 import type { BashMode } from "../../permissions/bash.ts";
+import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 
 export interface EvalRunCliArgs {
   readonly command: "eval";
@@ -343,6 +344,7 @@ type OneShotRunCliArgs = RunCliCommonArgs & {
 type InteractiveRunCliArgs = RunCliCommonArgs & {
   readonly mode: "interactive";
   readonly session: InteractiveSessionCliIntent;
+  readonly recoveryPolicy: SessionToolEffectRecoveryPolicy;
 };
 
 type ForkPointsRunCliArgs = RunCliCommonArgs & {

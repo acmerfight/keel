@@ -14,6 +14,7 @@ import {
   persistSessionProviderIntent,
   persistSessionProviderResponse,
   persistSessionQueuedInput,
+  persistSessionTaskRecoveryDisposition,
   persistSessionTaskRecoveryState,
   persistSessionTaskStep,
   persistSessionTaskTerminal,
@@ -259,6 +260,16 @@ describe("Session Store Task Recovery", () => {
         provider: PROVIDER,
         consumedInputIds: [],
       });
+      expect(() =>
+        persistSessionTaskRecoveryDisposition({
+          session,
+          disposition: {
+            kind: "accept_unknown",
+            operationIds: ["tool_operation_not_started"],
+          },
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(/cannot accept unknown tool effects/u);
       const lifecycle = recovery.providerLifecycle(PROVIDER);
       lifecycle.providerRequestAttempts
         .begin()
@@ -350,6 +361,380 @@ describe("Session Store Task Recovery", () => {
       const ledger = await readFile(session.filePath, "utf8");
       expect(ledger.match(/"type":"tool_settled"/gu)).toHaveLength(2);
       expect(ledger.match(/"type":"step_committed"/gu)).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given accept_unknown was captured before an opaque effect and its disposition is durable,
+    When recovery restarts between disposition and continuation,
+    Then it reuses that decision once and terminalizes with disclosed unknown effects`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "accepted-unknown-disposition",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        toolEffectRecoveryPolicy: "accept_unknown",
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "continue after an accepted unknown effect",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCall = {
+        id: "accepted_unknown_write",
+        tool: "write",
+        path: "result.txt",
+        content: "possibly written\n",
+      } as const;
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls: [toolCall],
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls([toolCall]);
+      const pendingTask = activeSessionTask(session);
+      if (pendingTask?.phase !== "tool_execution") {
+        throw new Error("expected pending opaque tool effect");
+      }
+      const pendingInvocation = pendingTask.toolInvocations[0];
+      if (pendingInvocation?.phase !== "effect_pending") {
+        throw new Error("expected effect-pending invocation");
+      }
+      persistSessionToolSettlement({
+        session,
+        toolCallId: toolCall.id,
+        settlementKind: "interrupted_effect_unknown",
+        toolMessage: {
+          role: "tool",
+          toolCallId: toolCall.id,
+          content: "unknown effect persisted before disposition",
+          recovery: {
+            kind: "interrupted_effect_unknown",
+            taskId: pendingTask.taskId,
+            runId: pendingInvocation.runId,
+            operationId: pendingInvocation.operationId,
+          },
+        },
+        effects: { checkpointOperations: [] },
+        runtime: runtime(home, 2),
+      });
+      const settledUnknownTask = activeSessionTask(session);
+      if (settledUnknownTask?.phase !== "tool_execution") {
+        throw new Error("expected settled unknown tool execution");
+      }
+      const ledgerBeforeDisposition = await readFile(session.filePath, "utf8");
+      const noncanonicalDispositionLedger = `${ledgerBeforeDisposition}${JSON.stringify(
+        {
+          schemaVersion: 9,
+          type: "task_recovery_disposition",
+          timestamp: "1970-01-01T00:00:03.000Z",
+          task: {
+            ...settledUnknownTask,
+            acceptedUnknownEffectOperationIds: [
+              pendingInvocation.operationId,
+              "tool_operation_fabricated",
+            ],
+          },
+          disposition: {
+            kind: "accept_unknown",
+            operationIds: [pendingInvocation.operationId],
+          },
+        },
+      )}\n`;
+      expect(() =>
+        persistSessionTaskRecoveryDisposition({
+          session,
+          disposition: {
+            kind: "accept_unknown",
+            operationIds: ["tool_operation_wrong"],
+          },
+          runtime: runtime(home, 3),
+        }),
+      ).toThrow(/does not match unknown effects/u);
+      persistSessionTaskRecoveryDisposition({
+        session,
+        disposition: {
+          kind: "accept_unknown",
+          operationIds: [pendingInvocation.operationId],
+        },
+        runtime: runtime(home, 3),
+      });
+      expect(() =>
+        persistSessionTaskRecoveryDisposition({
+          session,
+          disposition: {
+            kind: "accept_unknown",
+            operationIds: [pendingInvocation.operationId],
+          },
+          runtime: runtime(home, 3),
+        }),
+      ).toThrow(/does not match unknown effects/u);
+      const acceptedUnknownTask = activeSessionTask(session);
+      if (acceptedUnknownTask?.phase !== "tool_execution") {
+        throw new Error("expected accepted unknown tool execution");
+      }
+      await appendFile(
+        session.filePath,
+        `${JSON.stringify({
+          schemaVersion: 9,
+          type: "snapshot",
+          timestamp: "1970-01-01T00:00:03.000Z",
+          reason: "size_threshold",
+          messages: sessionStoredMessages(session),
+          pendingInputs: [],
+          skillStateCheckpoints: [
+            { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+          ],
+          activeTask: acceptedUnknownTask,
+        })}\n`,
+        "utf8",
+      );
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 4),
+      });
+      messages = opened.messages;
+      const resumedRecovery = createSessionTaskRecovery({
+        session: () => opened,
+        runtime: runtime(home, 5),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      const directive = resumedRecovery.resume();
+      expect(directive.kind).toBe("run");
+      if (directive.kind !== "run") {
+        throw new Error("expected accepted unknown effect to continue");
+      }
+      expect(directive.task).toMatchObject({
+        taskId: pendingTask.taskId,
+        phase: "provider_ready",
+        toolEffectRecoveryPolicy: "accept_unknown",
+        acceptedUnknownEffectOperationIds: [pendingInvocation.operationId],
+      });
+      expect(directive.task.runId).not.toBe(pendingTask.runId);
+
+      const resumedLifecycle = resumedRecovery.providerLifecycle(PROVIDER);
+      resumedLifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const finalMessage = {
+        role: "assistant",
+        content: "completed with the unknown effect disclosed",
+        toolCalls: [],
+      } as const;
+      resumedLifecycle.settled({
+        assistantMessage: finalMessage,
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      const completedOutcome = resumedRecovery.terminal({
+        messages: [...messages, finalMessage],
+        outcome: "completed",
+      });
+      expect(completedOutcome).toMatchObject({
+        outcome: "completed_with_unknown_effects",
+        unknownToolEffectOperationIds: [pendingInvocation.operationId],
+      });
+      await appendFile(
+        opened.filePath,
+        `${JSON.stringify({
+          schemaVersion: 9,
+          type: "snapshot",
+          timestamp: "1970-01-01T00:00:06.000Z",
+          reason: "size_threshold",
+          messages: sessionStoredMessages(opened),
+          pendingInputs: [],
+          skillStateCheckpoints: [
+            { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+          ],
+          lastTaskOutcome: completedOutcome,
+        })}\n`,
+        "utf8",
+      );
+
+      const terminal = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 6),
+      });
+      expect(terminal.activeTask).toBeUndefined();
+      expect(terminal.lastTaskOutcome).toMatchObject({
+        outcome: "completed_with_unknown_effects",
+        unknownToolEffectOperationIds: [pendingInvocation.operationId],
+      });
+      const ledger = await readFile(session.filePath, "utf8");
+      expect(ledger.match(/"type":"task_recovery_disposition"/gu)).toHaveLength(
+        1,
+      );
+      const dispositionLine = ledger
+        .trimEnd()
+        .split("\n")
+        .find((line) => line.includes('"type":"task_recovery_disposition"'));
+      if (dispositionLine === undefined) {
+        throw new Error("expected recovery disposition record");
+      }
+      await writeFile(session.filePath, noncanonicalDispositionLedger, "utf8");
+      expect(() =>
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 7),
+        }),
+      ).toThrow(/task_recovery_disposition is not a canonical transition/u);
+      await writeFile(
+        session.filePath,
+        `${ledger}${dispositionLine}\n`,
+        "utf8",
+      );
+      expect(() =>
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 8),
+        }),
+      ).toThrow(/task_recovery_disposition does not match the active Task/u);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given accept_unknown covers multiple interrupted opaque effects,
+    When recovery synthesizes their settlements,
+    Then one ordered disposition advances the same Task into a fresh Run`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "automatic-accepted-unknown-effects",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        toolEffectRecoveryPolicy: "accept_unknown",
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      const admitted = recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "continue after both opaque effects",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCalls = [
+        {
+          id: "write_first_unknown",
+          tool: "write",
+          path: "first.txt",
+          content: "first\n",
+        },
+        {
+          id: "write_second_unknown",
+          tool: "write",
+          path: "second.txt",
+          content: "second\n",
+        },
+      ] as const;
+      lifecycle.settled({
+        assistantMessage: { role: "assistant", content: "", toolCalls },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls(toolCalls);
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 2),
+      });
+      messages = opened.messages;
+      const directive = createSessionTaskRecovery({
+        session: () => opened,
+        runtime: runtime(home, 3),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      }).resume();
+      expect(directive.kind).toBe("run");
+      if (directive.kind !== "run") throw new Error("expected fresh Run");
+      expect(directive.task.taskId).toBe(admitted.taskId);
+      expect(directive.task.runId).not.toBe(admitted.runId);
+      expect(directive.recoveredMessages.slice(1)).toMatchObject([
+        {
+          role: "tool",
+          toolCallId: toolCalls[0].id,
+          recovery: { kind: "interrupted_effect_unknown" },
+        },
+        {
+          role: "tool",
+          toolCallId: toolCalls[1].id,
+          recovery: { kind: "interrupted_effect_unknown" },
+        },
+      ]);
+      expect(
+        (await readFile(session.filePath, "utf8")).match(
+          /"type":"task_recovery_disposition"/gu,
+        ),
+      ).toHaveLength(1);
+      expect(
+        activeSessionTask(
+          resumeSessionStore({
+            sessionId: session.id,
+            workspace,
+            runtime: runtime(home, 4),
+          }),
+        ),
+      ).toMatchObject({
+        phase: "provider_ready",
+        acceptedUnknownEffectOperationIds: [
+          expect.any(String),
+          expect.any(String),
+        ],
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -920,7 +1305,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "provider_attempt_settled",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -986,7 +1371,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "task_recovery_started",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -1001,6 +1386,9 @@ describe("Session Store Task Recovery", () => {
             recovered: true,
             providerRequestIds: pending.providerRequestIds,
             unknownProviderAttemptIds: [],
+            toolEffectRecoveryPolicy: pending.toolEffectRecoveryPolicy,
+            acceptedUnknownEffectOperationIds:
+              pending.acceptedUnknownEffectOperationIds,
             phase: "provider_ready",
           },
         })}\n`,
@@ -1087,13 +1475,16 @@ describe("Session Store Task Recovery", () => {
           recovered: scenario !== "not_recovered",
           providerRequestIds: current.providerRequestIds,
           unknownProviderAttemptIds: current.unknownProviderAttemptIds,
+          toolEffectRecoveryPolicy: current.toolEffectRecoveryPolicy,
+          acceptedUnknownEffectOperationIds:
+            current.acceptedUnknownEffectOperationIds,
           phase: "provider_ready",
         } as const;
         const nextTask = readyTask;
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 8,
+            schemaVersion: 9,
             type: "task_recovery_started",
             timestamp: "1970-01-01T00:00:03.000Z",
             task: nextTask,
@@ -2315,7 +2706,7 @@ describe("Session Store Task Recovery", () => {
         providerSettled,
       ];
       const invalidToolRecovery = {
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "task_recovery_started",
         timestamp: "1970-01-01T00:00:00.009Z",
         task: {
@@ -2579,7 +2970,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "task_terminal",
           timestamp: "1970-01-01T00:00:03.000Z",
           taskId: recovered.taskId,
@@ -2592,6 +2983,7 @@ describe("Session Store Task Recovery", () => {
             timestamp: "1970-01-01T00:00:03.000Z",
             recovered: false,
             unknownProviderAttemptIds: [],
+            unknownToolEffectOperationIds: [],
           },
         })}\n`,
         "utf8",
@@ -2871,7 +3263,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.003Z",
           task: {
@@ -2913,7 +3305,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "task_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           task: {
@@ -2928,6 +3320,8 @@ describe("Session Store Task Recovery", () => {
             recovered: true,
             providerRequestIds: [],
             unknownProviderAttemptIds: ["attempt_manufactured"],
+            toolEffectRecoveryPolicy: "block",
+            acceptedUnknownEffectOperationIds: [],
             phase: "provider_ready",
           },
           userMessage: {
@@ -3009,7 +3403,7 @@ describe("Session Store Task Recovery", () => {
         activeTask: unknown,
         stored = sourceMessages,
       ) => ({
-        schemaVersion: 8,
+        schemaVersion: 9,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.010Z",
         reason: "size_threshold",
@@ -3381,7 +3775,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -3411,6 +3805,8 @@ describe("Session Store Task Recovery", () => {
             recovered: false,
             providerRequestIds: [],
             unknownProviderAttemptIds: [],
+            toolEffectRecoveryPolicy: "block",
+            acceptedUnknownEffectOperationIds: [],
             phase: "provider_ready",
           },
         })}\n`,
@@ -3445,7 +3841,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -3480,6 +3876,8 @@ describe("Session Store Task Recovery", () => {
               },
             ],
             unknownProviderAttemptIds: ["provider_attempt_current"],
+            toolEffectRecoveryPolicy: "block",
+            acceptedUnknownEffectOperationIds: [],
             phase: "provider_pending",
             providerAttempt: {
               attemptId: "provider_attempt_current",
@@ -3533,6 +3931,8 @@ describe("Session Store Task Recovery", () => {
       recovered: false,
       providerRequestIds: [request],
       unknownProviderAttemptIds: [],
+      toolEffectRecoveryPolicy: "block",
+      acceptedUnknownEffectOperationIds: [],
       phase: "provider_pending",
       providerAttempt: {
         ...request,
@@ -3563,6 +3963,27 @@ describe("Session Store Task Recovery", () => {
 
     try {
       const cases = [
+        {
+          name: "accepted-unknown-without-recovery-evidence",
+          activeTask: {
+            taskId: pendingTask.taskId,
+            runId: pendingTask.runId,
+            trigger: pendingTask.trigger,
+            admittedAt: pendingTask.admittedAt,
+            userMessageId: pendingTask.userMessageId,
+            provider: pendingTask.provider,
+            maxProviderReplacements: 1,
+            providerReplacementsUsed: 0,
+            recovered: true,
+            providerRequestIds: [],
+            unknownProviderAttemptIds: [],
+            toolEffectRecoveryPolicy: "accept_unknown" as const,
+            acceptedUnknownEffectOperationIds: ["tool_operation_fabricated"],
+            phase: "provider_ready" as const,
+          },
+          messages: [user],
+          error: /snapshot active Task has invalid recovery evidence/u,
+        },
         {
           name: "request-history",
           activeTask: {
@@ -3631,6 +4052,8 @@ describe("Session Store Task Recovery", () => {
             recovered: false,
             providerRequestIds: [],
             unknownProviderAttemptIds: [],
+            toolEffectRecoveryPolicy: "block" as const,
+            acceptedUnknownEffectOperationIds: [],
             phase: "recovery_blocked" as const,
             reason: "provider_budget" as const,
             stopReason: "stop" as const,
@@ -3652,6 +4075,8 @@ describe("Session Store Task Recovery", () => {
             recovered: true,
             providerRequestIds: [],
             unknownProviderAttemptIds: [],
+            toolEffectRecoveryPolicy: "block" as const,
+            acceptedUnknownEffectOperationIds: [],
             phase: "recovery_blocked" as const,
             reason: "provider_replacement_limit" as const,
           },
@@ -3767,6 +4192,20 @@ describe("Session Store Task Recovery", () => {
           error: /invalid provider state/u,
         },
         {
+          name: "last-outcome-ungrounded-unknown-effect",
+          messages: [user],
+          lastTaskOutcome: {
+            taskId: "task_terminal_snapshot",
+            runId: "run_terminal_snapshot",
+            outcome: "completed_with_unknown_effects" as const,
+            timestamp: "1970-01-01T00:00:00.001Z",
+            recovered: true,
+            unknownProviderAttemptIds: [],
+            unknownToolEffectOperationIds: ["tool_operation_fabricated"],
+          },
+          error: /snapshot last Task outcome is invalid/u,
+        },
+        {
           name: "last-outcome-duplicate-unknown",
           messages: [user],
           lastTaskOutcome: {
@@ -3776,6 +4215,7 @@ describe("Session Store Task Recovery", () => {
             timestamp: "1970-01-01T00:00:00.001Z",
             recovered: true,
             unknownProviderAttemptIds: ["attempt_unknown", "attempt_unknown"],
+            unknownToolEffectOperationIds: [],
           },
           error: /snapshot last Task outcome is invalid/u,
         },
@@ -3789,6 +4229,7 @@ describe("Session Store Task Recovery", () => {
             timestamp: "1970-01-01T00:00:00.001Z",
             recovered: false,
             unknownProviderAttemptIds: ["attempt_unknown"],
+            unknownToolEffectOperationIds: [],
           },
           error: /snapshot last Task outcome is invalid/u,
         },
@@ -3802,6 +4243,7 @@ describe("Session Store Task Recovery", () => {
             timestamp: "1970-01-01T00:00:00.001Z",
             recovered: false,
             unknownProviderAttemptIds: [],
+            unknownToolEffectOperationIds: [],
             responseMessageId: "message_missing_response",
           },
           error: /snapshot last Task outcome is invalid/u,
@@ -3817,7 +4259,7 @@ describe("Session Store Task Recovery", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 8,
+            schemaVersion: 9,
             type: "snapshot",
             timestamp: "1970-01-01T00:00:00.001Z",
             reason: "size_threshold",
@@ -3865,7 +4307,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -3900,6 +4342,8 @@ describe("Session Store Task Recovery", () => {
               },
             ],
             unknownProviderAttemptIds: [],
+            toolEffectRecoveryPolicy: "block",
+            acceptedUnknownEffectOperationIds: [],
             phase: "provider_settled",
             providerAttempt: {
               attemptId: "provider_attempt_snapshot",
@@ -4117,7 +4561,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.009Z",
           task: {
@@ -4589,7 +5033,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:03.000Z",
           reason: "size_threshold",

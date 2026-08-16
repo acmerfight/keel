@@ -25,6 +25,7 @@ import {
   sessionGoalRecordLine,
   sessionTitleRecordLine,
   snapshotSessionRecordLine,
+  storedMessages,
   taskProgressRecordLine,
   writeSessionLedger,
 } from "../../../src/testing/session-ledger-fixtures.ts";
@@ -44,7 +45,7 @@ function skillState(workflowSkill: WorkflowSkill) {
 
 function modelSwitchRecordLine(timestamp: string): string {
   return JSON.stringify({
-    schemaVersion: 8,
+    schemaVersion: 9,
     type: "model_switch",
     timestamp,
     from: null,
@@ -54,7 +55,7 @@ function modelSwitchRecordLine(timestamp: string): string {
 
 function bashApprovalGrantedRecordLine(timestamp: string, cwd: string): string {
   return JSON.stringify({
-    schemaVersion: 8,
+    schemaVersion: 9,
     type: "bash_approval_granted",
     timestamp,
     grant: {
@@ -70,6 +71,113 @@ function detailTimestamp(index: number): string {
 }
 
 describe("CLI Main - Sessions Command", () => {
+  test(`Given a completed Task accepted an interrupted opaque effect,
+    When the host lists or inspects the saved session after a later state mutation,
+    Then the catalog preserves and displays the unknown-effect outcome`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionId = "accepted-unknown-outcome";
+    const operationId = "tool_operation_unknown";
+    const taskId = "task_unknown";
+    const runId = "run_unknown";
+    const messages = storedMessages(
+      [
+        {
+          role: "user",
+          content: "perform one opaque effect",
+          origin: { type: "user_prompt" },
+        },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "write_unknown",
+              tool: "write",
+              path: "result.txt",
+              content: "possibly written\n",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "write_unknown",
+          content: "effect state is unknown after restart",
+          recovery: {
+            kind: "interrupted_effect_unknown",
+            taskId,
+            runId,
+            operationId,
+          },
+        },
+        {
+          role: "assistant",
+          content: "continued without repeating the effect",
+          toolCalls: [],
+        },
+      ],
+      "accepted-unknown",
+    );
+    await writeSessionLedger({
+      home,
+      id: sessionId,
+      workspace: ledgerWorkspace,
+      createdAt: "2026-08-16T00:00:00.000Z",
+      records: [
+        JSON.stringify({
+          schemaVersion: 9,
+          type: "snapshot",
+          timestamp: "2026-08-16T00:00:01.000Z",
+          reason: "size_threshold",
+          messages,
+          pendingInputs: [],
+          skillStateCheckpoints: [
+            { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+          ],
+          lastTaskOutcome: {
+            taskId,
+            runId,
+            outcome: "completed_with_unknown_effects",
+            timestamp: "2026-08-16T00:00:01.000Z",
+            recovered: true,
+            unknownProviderAttemptIds: [],
+            unknownToolEffectOperationIds: [operationId],
+            responseMessageId: messages[3]?.id,
+          },
+        }),
+        sessionGoalRecordLine({
+          timestamp: "2026-08-16T00:00:02.000Z",
+          goal: null,
+        }),
+      ],
+    });
+    const listed = createRuntime(["sessions"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+    const shown = createRuntime(["sessions", "show", sessionId, "--all"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      expect(await runCliMain(listed.runtime)).toBe(0);
+      expect(listed.stderr()).toBe("");
+      expect(listed.stdout()).toContain(
+        "last task: completed_with_unknown_effects; unknown tool effects: 1",
+      );
+      expect(await runCliMain(shown.runtime)).toBe(0);
+      expect(shown.stderr()).toBe("");
+      expect(shown.stdout()).toContain(
+        "last task: completed_with_unknown_effects; unknown tool effects: 1",
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a valid session ledger ends with an incomplete JSON fragment,
     When the user resumes the session normally,
     Then the CLI fails closed, preserves the ledger, and points to explicit repair`, async () => {
@@ -1182,7 +1290,7 @@ describe("CLI Main - Sessions Command", () => {
       }),
       records: [
         JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "append",
           timestamp: "2026-02-05T00:00:01.000Z",
           reason: "turn",
@@ -1220,7 +1328,7 @@ describe("CLI Main - Sessions Command", () => {
           ],
         }),
         JSON.stringify({
-          schemaVersion: 8,
+          schemaVersion: 9,
           type: "model_switch",
           timestamp: "2026-02-05T00:00:02.000Z",
           from: null,

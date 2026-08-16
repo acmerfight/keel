@@ -177,6 +177,7 @@ function headlessGoalRunArgs(cliArgs: GoalCliArgs): HeadlessSessionCliArgs {
     bashMode: cliArgs.bashMode,
     skillsEnabled: cliArgs.skillsEnabled,
     memoryEnabled: cliArgs.memoryEnabled,
+    recoveryPolicy: "block",
     session:
       cliArgs.mode === "launch"
         ? {

@@ -249,6 +249,180 @@ describe("CLI Main - Session Task Recovery", () => {
     }
   });
 
+  test(`Given a named session accepts unknown effects before a bash effect is interrupted,
+    When the host resumes the session after SIGKILL,
+    Then Keel continues the same Task without replay or an end-user recovery decision`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-accept-unknown-recovery-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-accept-unknown-recovery-home-"),
+    );
+    const markerPath = join(workspace, "effect-count.txt");
+    const bashPidPath = join(workspace, "bash.pid");
+    const reportPath = join(workspace, "recovery-report.json");
+    const command =
+      "printf %s $$ > bash.pid; printf x >> effect-count.txt; sleep 30";
+    const completed = "Continued after the interrupted effect.";
+    const requestBodies: string[] = [];
+    const server = createServer((request, response) => {
+      if (request.url !== "/chat/completions") {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      request.on("end", () => {
+        requestBodies.push(Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(
+          requestBodies.length === 1
+            ? `${sseToolCall("bash_accepted_unknown", "bash", {
+                command,
+              })}${sseToolFinish()}data: [DONE]\n\n`
+            : sseTextReplyWithUsage(completed),
+        );
+      });
+    });
+    await listen(server);
+    const environment = {
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      KEEL_FORCE_INTERACTIVE: "1",
+      KEEL_HOME: home,
+      KEEL_PROVIDER: "deepseek",
+    };
+    const original = runCliProcess(
+      [
+        "--session",
+        "accept-unknown-effect",
+        "--bash-policy",
+        "trusted",
+        "--recovery-policy",
+        "accept-unknown",
+      ],
+      {
+        cwd: workspace,
+        env: environment,
+        stdin: "pipe",
+      },
+    );
+    original.child.stdin?.on("error", () => {});
+
+    try {
+      original.child.stdin?.write(
+        "perform the effect and recover automatically\n",
+      );
+      await withTimeout(
+        (async () => {
+          for (;;) {
+            const marker = await readFile(markerPath, "utf8").catch(() => "");
+            if (marker === "x") return;
+            await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          }
+        })(),
+        5_000,
+        "bash effect was not observed",
+      );
+      original.child.kill("SIGKILL");
+      expect(
+        (
+          await withTimeout(
+            original.result,
+            5_000,
+            "original accept-unknown process did not terminate",
+          )
+        ).signal,
+      ).toBe("SIGKILL");
+
+      // When
+      const resumed = runCliProcess(
+        [
+          "--resume",
+          "accept-unknown-effect",
+          "--bash-policy",
+          "trusted",
+          "--report",
+          reportPath,
+        ],
+        {
+          cwd: workspace,
+          env: environment,
+          stdin: "pipe",
+        },
+      );
+      resumed.child.stdin?.end();
+      const resumedResult = await withTimeout(
+        resumed.result,
+        5_000,
+        "accept-unknown recovery process did not finish",
+      );
+
+      // Then
+      expect(resumedResult.exitCode, resumedResult.stderr).toBe(0);
+      expect(resumedResult.stdout).toContain(completed);
+      expect(resumedResult.stderr).toContain("completed_with_unknown_effects");
+      expect(resumedResult.stderr).not.toContain("recovery_blocked");
+      expect(requestBodies).toHaveLength(2);
+      expect(requestBodies[1]).toContain("interrupted_effect_unknown");
+      expect(await readFile(markerPath, "utf8")).toBe("x");
+      const ledger = await readFile(
+        join(home, "sessions", "accept-unknown-effect", "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger).toContain('"type":"task_recovery_disposition"');
+      expect(ledger).toContain('"kind":"accept_unknown"');
+      expect(ledger).toContain('"outcome":"completed_with_unknown_effects"');
+      const report = z
+        .object({
+          tasks: z.array(
+            z
+              .object({
+                outcome: z.string(),
+              })
+              .passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      expect(report.tasks).toMatchObject([
+        { outcome: "completed_with_unknown_effects" },
+      ]);
+      const shown = await withTimeout(
+        runCliProcess(["sessions", "show", "accept-unknown-effect", "--all"], {
+          cwd: workspace,
+          env: environment,
+        }).result,
+        5_000,
+        "accepted unknown outcome was not available from session detail",
+      );
+      expect(shown.exitCode, shown.stderr).toBe(0);
+      expect(shown.stdout).toContain(
+        "last task: completed_with_unknown_effects; unknown tool effects: 1",
+      );
+    } finally {
+      original.child.kill("SIGKILL");
+      const bashPid = Number.parseInt(
+        await readFile(bashPidPath, "utf8").catch(() => ""),
+        10,
+      );
+      if (process.platform !== "win32" && Number.isSafeInteger(bashPid)) {
+        try {
+          process.kill(-bashPid, "SIGKILL");
+        } catch {
+          // The bounded test command may already have exited.
+        }
+      }
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the original provider request and its one replacement are both SIGKILLed,
     When a third process resumes the named session,
     Then recovery blocks without a third request and preserves queued user input`, async () => {
