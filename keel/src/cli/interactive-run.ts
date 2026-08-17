@@ -1325,19 +1325,31 @@ async function runActiveSessionCli(
                   {
                     parentRunId: input.runId,
                     parentToolCallId: input.toolCallId,
+                    toolName: input.toolName,
+                    canonicalArguments: input.canonicalArguments,
+                    argumentsSha256: input.argumentsSha256,
                   },
                 );
                 /* v8 ignore next -- owner unknown/failure is covered at the task-recovery boundary; this branch only preserves that discriminant through the concrete registry. */
-                return result.kind === "unknown"
-                  ? result
-                  : {
-                      kind: "resolved" as const,
-                      reconciliation: {
-                        ownerKey: "agent_tree" as const,
-                        effect: "applied" as const,
-                        evidence: result.evidence,
-                      },
-                    };
+                if (result.kind === "unknown") return result;
+                if (result.kind === "applied") {
+                  return {
+                    kind: "resolved" as const,
+                    reconciliation: {
+                      ownerKey: "agent_tree" as const,
+                      effect: "applied" as const,
+                      evidence: result.evidence,
+                    },
+                  };
+                }
+                return {
+                  kind: "resolved" as const,
+                  reconciliation: {
+                    ownerKey: "agent_tree" as const,
+                    effect: "not_applied" as const,
+                    evidence: result.evidence,
+                  },
+                };
               },
             },
           ],

@@ -273,53 +273,73 @@ const toolRecoveryCapabilitySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("opaque") }).strict(),
 ]);
 
-const sessionToolEffectReconciliationSchema = z
-  .object({
-    ownerKey: z.literal("agent_tree"),
-    effect: z.literal("applied"),
-    evidence: z
-      .object({
-        kind: z.literal("agent_tree_delegate"),
-        sessionId: z.string().min(1),
-        delegationId: z.string().min(1),
-        childAgentId: z.string().min(1),
-        childRunId: z.string().min(1),
-        parentRunId: z.string().min(1),
-        parentToolCallId: z.string().min(1),
-        status: z.enum([
-          "queued",
-          "running",
-          "completed",
-          "failed",
-          "turn_limited",
-          "timed_out",
-          "budget_limited",
-          "provider_blocked",
-          "cancelled",
-          "interrupted",
-        ]),
-        result: z
-          .object({
-            status: z.enum([
-              "completed",
-              "failed",
-              "turn_limited",
-              "timed_out",
-              "budget_limited",
-              "provider_blocked",
-              "cancelled",
-              "interrupted",
-            ]),
-            finalText: z.string().nullable(),
-            error: z.string().nullable(),
-            pendingInputCount: z.number().int().nonnegative(),
-          })
-          .strict()
-          .nullable(),
-      })
-      .strict(),
-  })
-  .strict();
+const sessionToolEffectReconciliationSchema = z.discriminatedUnion("effect", [
+  z
+    .object({
+      ownerKey: z.literal("agent_tree"),
+      effect: z.literal("applied"),
+      evidence: z
+        .object({
+          kind: z.literal("agent_tree_delegate"),
+          sessionId: z.string().min(1),
+          delegationId: z.string().min(1),
+          childAgentId: z.string().min(1),
+          childRunId: z.string().min(1),
+          parentRunId: z.string().min(1),
+          parentToolCallId: z.string().min(1),
+          status: z.enum([
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "turn_limited",
+            "timed_out",
+            "budget_limited",
+            "provider_blocked",
+            "cancelled",
+            "interrupted",
+          ]),
+          result: z
+            .object({
+              status: z.enum([
+                "completed",
+                "failed",
+                "turn_limited",
+                "timed_out",
+                "budget_limited",
+                "provider_blocked",
+                "cancelled",
+                "interrupted",
+              ]),
+              finalText: z.string().nullable(),
+              error: z.string().nullable(),
+              pendingInputCount: z.number().int().nonnegative(),
+            })
+            .strict()
+            .nullable(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ownerKey: z.literal("agent_tree"),
+      effect: z.literal("not_applied"),
+      evidence: z
+        .object({
+          kind: z.literal("agent_tree_delegate_not_accepted"),
+          sessionId: z.string().min(1),
+          delegationId: z.string().min(1),
+          parentRunId: z.string().min(1),
+          parentToolCallId: z.string().min(1),
+          profile: z.enum(["explorer", "reviewer"]),
+          mode: z.literal("foreground"),
+          argumentsSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
 
 const checkpointModeOwnershipSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("unowned") }).strict(),
