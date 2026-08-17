@@ -26,6 +26,7 @@ export type {
   SessionTaskProgressCheckpoint,
   SessionTaskRecoveryDisposition,
   SessionToolContinuationEffects,
+  SessionToolEffectReconciliation,
   SessionToolEffectRecoveryPolicy,
   StoredMessage,
 } from "./session-store/model.ts";
@@ -61,6 +62,7 @@ export {
   persistSessionTaskStep,
   persistSessionTaskTerminal,
   persistSessionTitle,
+  persistSessionToolEffectReconciliation,
   persistSessionToolIntents,
   persistSessionToolSettlement,
   resumeSessionStore,

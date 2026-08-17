@@ -66,6 +66,7 @@ import {
   type SessionTaskProgressCheckpoint,
   type SessionTaskRecoveryDisposition,
   type SessionToolContinuationEffects,
+  type SessionToolEffectReconciliation,
   type SessionToolEffectRecoveryPolicy,
   type SkillStateSessionRecord,
   type StoredMessage,
@@ -928,6 +929,53 @@ function replaySessionStore(options: {
         activeTask = copyActiveSessionTask(record.task);
         break;
       }
+      case "effect_reconciled": {
+        if (
+          activeTask === undefined ||
+          activeTask.phase !== "tool_execution" ||
+          !taskIdentityMatches(activeTask, record.task)
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": effect_reconciled does not match the active tool plan.`,
+          );
+        }
+        const prior = activeTask.toolInvocations.find(
+          (invocation) => invocation.operationId === record.operationId,
+        );
+        const reconciled = record.task.toolInvocations.find(
+          (invocation) => invocation.operationId === record.operationId,
+        );
+        const expectedInvocations = activeTask.toolInvocations.map(
+          (invocation) =>
+            invocation.operationId === record.operationId
+              ? reconciled
+              : invocation,
+        );
+        if (
+          prior?.phase !== "effect_pending" ||
+          prior.reconciliation !== undefined ||
+          reconciled?.phase !== "effect_pending" ||
+          !toolEffectReconciliationIsCanonical(
+            options.sessionId,
+            reconciled,
+            record.reconciliation,
+          ) ||
+          !isDeepStrictEqual(
+            reconciled.reconciliation,
+            record.reconciliation,
+          ) ||
+          !isDeepStrictEqual(record.task, {
+            ...activeTask,
+            toolInvocations: expectedInvocations,
+          })
+        ) {
+          sessionStoreError(
+            `Error: cannot resume session "${options.sessionId}": effect_reconciled is not a canonical transition.`,
+          );
+        }
+        activeTask = copyActiveSessionTask(record.task);
+        break;
+      }
       case "tool_settled": {
         if (
           activeTask === undefined ||
@@ -947,7 +995,11 @@ function replaySessionStore(options: {
         const validKind =
           prior !== undefined &&
           settled?.phase === "settled" &&
-          persistedToolSettlementIsCanonical(activeTask.taskId, settled) &&
+          persistedToolSettlementIsCanonical(
+            options.sessionId,
+            activeTask.taskId,
+            settled,
+          ) &&
           validPersistedToolMetadata({
             assistantMessage: record.task.assistantMessage,
             toolInvocations: record.task.toolInvocations,
@@ -973,7 +1025,9 @@ function replaySessionStore(options: {
               settled.startedAt === prior.startedAt) ||
             (settled.kind === "interrupted_effect_unknown" &&
               prior.phase === "effect_pending" &&
-              prior.recovery.kind === "opaque" &&
+              (prior.recovery.kind === "opaque" ||
+                prior.recovery.kind === "owner_reconciled") &&
+              isDeepStrictEqual(settled.reconciliation, prior.reconciliation) &&
               settled.startedAt === prior.startedAt));
         const expectedInvocations = activeTask.toolInvocations.map(
           (invocation) =>
@@ -1045,6 +1099,7 @@ function replaySessionStore(options: {
             (invocation) =>
               invocation.phase === "settled" &&
               invocation.kind === "interrupted_effect_unknown" &&
+              invocation.reconciliation === undefined &&
               !accepted.has(invocation.operationId),
           )
           .sort((left, right) => left.sourceIndex - right.sourceIndex)
@@ -1104,6 +1159,7 @@ function replaySessionStore(options: {
             (invocation) =>
               invocation.phase === "settled" &&
               invocation.kind === "interrupted_effect_unknown" &&
+              invocation.reconciliation === undefined &&
               !acceptedUnknownEffects.has(invocation.operationId),
           );
         if (
@@ -1508,8 +1564,16 @@ function replaySessionStore(options: {
                   invocation.sourceIndex === sourceIndex &&
                   invocation.toolCallId === toolCall.id &&
                   invocation.toolName === toolCall.tool &&
+                  (invocation.phase !== "effect_pending" ||
+                    invocation.reconciliation === undefined ||
+                    toolEffectReconciliationIsCanonical(
+                      options.sessionId,
+                      invocation,
+                      invocation.reconciliation,
+                    )) &&
                   (invocation.phase !== "settled" ||
                     persistedToolSettlementIsCanonical(
+                      options.sessionId,
                       activeTaskId,
                       invocation,
                     ))
@@ -1524,6 +1588,7 @@ function replaySessionStore(options: {
                   (invocation) =>
                     invocation.phase === "settled" &&
                     invocation.kind === "interrupted_effect_unknown" &&
+                    invocation.reconciliation === undefined &&
                     !acceptedUnknownEffectOperationIds.has(
                       invocation.operationId,
                     ),
@@ -2015,6 +2080,7 @@ function toolContinuationEffectsAreEmpty(
 }
 
 function persistedToolSettlementIsCanonical(
+  sessionId: string,
   taskId: string,
   invocation: Extract<
     ActiveSessionToolInvocation,
@@ -2030,7 +2096,11 @@ function persistedToolSettlementIsCanonical(
     return false;
   }
   if (invocation.kind === "completed") {
-    return invocation.startedAt !== undefined && message.recovery === undefined;
+    return (
+      invocation.startedAt !== undefined &&
+      invocation.reconciliation === undefined &&
+      message.recovery === undefined
+    );
   }
   if (
     !toolContinuationEffectsAreEmpty(invocation.effects) ||
@@ -2045,18 +2115,56 @@ function persistedToolSettlementIsCanonical(
   }
   switch (invocation.kind) {
     case "not_executed_after_restart":
-      return invocation.startedAt === undefined;
+      return (
+        invocation.startedAt === undefined &&
+        invocation.reconciliation === undefined
+      );
     case "interrupted_no_effect":
       return (
         invocation.startedAt !== undefined &&
+        invocation.reconciliation === undefined &&
         invocation.recovery.kind === "no_effect"
       );
     case "interrupted_effect_unknown":
       return (
         invocation.startedAt !== undefined &&
-        invocation.recovery.kind === "opaque"
+        (invocation.recovery.kind === "opaque"
+          ? invocation.reconciliation === undefined
+          : invocation.recovery.kind === "owner_reconciled" &&
+            (invocation.reconciliation === undefined ||
+              toolEffectReconciliationIsCanonical(
+                sessionId,
+                invocation,
+                invocation.reconciliation,
+              )))
       );
   }
+}
+
+function toolEffectReconciliationIsCanonical(
+  sessionId: string,
+  invocation: Extract<
+    ActiveSessionToolInvocation,
+    { readonly phase: "effect_pending" | "settled" }
+  >,
+  reconciliation: SessionToolEffectReconciliation,
+): boolean {
+  const evidence = reconciliation.evidence;
+  const resultMatchesStatus =
+    evidence.status === "queued" || evidence.status === "running"
+      ? evidence.result === null
+      : evidence.result !== null && evidence.result.status === evidence.status;
+  return (
+    invocation.recovery.kind === "owner_reconciled" &&
+    invocation.recovery.ownerKey === reconciliation.ownerKey &&
+    reconciliation.effect === "applied" &&
+    evidence.kind === "agent_tree_delegate" &&
+    evidence.sessionId === sessionId &&
+    evidence.delegationId === `${invocation.runId}:${invocation.toolCallId}` &&
+    evidence.parentRunId === invocation.runId &&
+    evidence.parentToolCallId === invocation.toolCallId &&
+    resultMatchesStatus
+  );
 }
 
 function persistedToolPlan(
@@ -2278,6 +2386,62 @@ export function persistSessionToolIntents(options: {
   });
 }
 
+export function persistSessionToolEffectReconciliation(options: {
+  readonly session: SessionState;
+  readonly toolCallId: string;
+  readonly reconciliation: SessionToolEffectReconciliation;
+  readonly runtime: SessionStoreRuntime;
+}): void {
+  const activeTask = activeTaskForSession(options.session);
+  if (activeTask.phase !== "tool_execution") {
+    sessionStoreError(
+      `Error: durable Task ${JSON.stringify(activeTask.taskId)} has no active tool execution.`,
+    );
+  }
+  const invocationIndex = activeTask.toolInvocations.findIndex(
+    (invocation) => invocation.toolCallId === options.toolCallId,
+  );
+  const invocation = activeTask.toolInvocations[invocationIndex];
+  if (
+    invocation === undefined ||
+    invocation.phase !== "effect_pending" ||
+    invocation.reconciliation !== undefined ||
+    !toolEffectReconciliationIsCanonical(
+      options.session.id,
+      invocation,
+      options.reconciliation,
+    )
+  ) {
+    sessionStoreError(
+      `Error: tool call ${JSON.stringify(options.toolCallId)} cannot accept this effect reconciliation.`,
+    );
+  }
+  const reconciliation = structuredClone(options.reconciliation);
+  const reconciledInvocation: Extract<
+    ActiveSessionToolInvocation,
+    { readonly phase: "effect_pending" }
+  > = { ...invocation, reconciliation };
+  const toolInvocations = [...activeTask.toolInvocations];
+  toolInvocations[invocationIndex] = reconciledInvocation;
+  const task: Extract<ActiveSessionTask, { readonly phase: "tool_execution" }> =
+    { ...activeTask, toolInvocations };
+  const timestamp = isoTimestamp(options.runtime);
+  appendJsonLine(options.session.filePath, {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    type: "effect_reconciled",
+    timestamp,
+    task,
+    operationId: invocation.operationId,
+    reconciliation,
+  });
+  replayStateForSession(options.session).activeTask =
+    copyActiveSessionTask(task);
+  appendSessionSnapshotIfNeeded({
+    session: options.session,
+    runtime: options.runtime,
+  });
+}
+
 export function persistSessionToolSettlement(options: {
   readonly session: SessionState;
   readonly toolCallId: string;
@@ -2348,7 +2512,11 @@ export function persistSessionToolSettlement(options: {
     ),
   };
   if (
-    !persistedToolSettlementIsCanonical(activeTask.taskId, settledInvocation)
+    !persistedToolSettlementIsCanonical(
+      options.session.id,
+      activeTask.taskId,
+      settledInvocation,
+    )
   ) {
     sessionStoreError("Error: tool settlement evidence is not canonical.");
   }
@@ -2395,6 +2563,7 @@ export function persistSessionTaskRecoveryDisposition(options: {
       (invocation) =>
         invocation.phase === "settled" &&
         invocation.kind === "interrupted_effect_unknown" &&
+        invocation.reconciliation === undefined &&
         !accepted.has(invocation.operationId),
     )
     .sort((left, right) => left.sourceIndex - right.sourceIndex)
@@ -2574,6 +2743,7 @@ export function persistSessionTaskStep(options: {
       (invocation) =>
         invocation.phase === "settled" &&
         invocation.kind === "interrupted_effect_unknown" &&
+        invocation.reconciliation === undefined &&
         !acceptedUnknownEffects.has(invocation.operationId),
     );
   const readyTask = {

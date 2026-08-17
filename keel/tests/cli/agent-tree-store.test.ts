@@ -155,6 +155,127 @@ function terminalRecord(
 }
 
 describe("Agent Tree Store", () => {
+  test(`Given one accepted foreground read-only delegation plus unsupported background and writer delegations,
+    When the authoritative owner reconciles by the original parent Run and tool call,
+    Then it returns exact durable evidence only for the supported foreground child`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
+    const keelHome = join(workspace, ".keel-home");
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? keelHome : undefined),
+      now: () => 1_700_000_000_000,
+    };
+    const sessionId = "delegate-effect-reconciliation";
+    const foreground = acceptedLifecycle(
+      "agent-11111111-1111-4111-8111-111111111111",
+      "subagent-11111111-1111-4111-8111-111111111111",
+    );
+    const background = {
+      ...acceptedLifecycle(
+        "agent-22222222-2222-4222-8222-222222222222",
+        "subagent-22222222-2222-4222-8222-222222222222",
+      ),
+      mode: "background" as const,
+    };
+    const writer: SubagentAcceptedLifecycle = {
+      ...acceptedLifecycle(
+        "agent-33333333-3333-4333-8333-333333333333",
+        "subagent-33333333-3333-4333-8333-333333333333",
+      ),
+      mode: "foreground",
+      task: "Make one isolated change.",
+      threadCapabilityCeiling: writerCapability,
+      capability: writerCapability,
+      workspace: {
+        kind: "isolated_write",
+        leaseId: "subagent-33333333-3333-4333-8333-333333333333",
+        baseCommit: "a".repeat(40),
+        branch: "keel/subagent/33333333-3333-4333-8333-333333333333",
+        worktreePath: join(keelHome, "worktrees", "writer"),
+        workspaceRoot: join(keelHome, "worktrees", "writer"),
+      },
+    };
+    createSessionStore({ sessionId, workspace, runtime });
+
+    try {
+      const history = createAgentTreeHistory({ sessionId, runtime });
+      const foregroundRun = history.persistence.accepted(foreground);
+      expect(
+        history.reconcileForegroundReadOnlyDelegate({
+          parentRunId: foreground.parentRunId,
+          parentToolCallId: foreground.parentToolCallId,
+        }),
+      ).toMatchObject({
+        kind: "applied",
+        evidence: { status: "queued", result: null },
+      });
+      foregroundRun.transcript.initialize([]);
+      foregroundRun.running().terminal({
+        status: "completed",
+        finalText: "The inspected module is sound.",
+        error: null,
+        pendingInputCount: 0,
+        workspace: null,
+        usage: {
+          inputTokens: 1,
+          cachedInputTokens: 0,
+          uncachedInputTokens: 1,
+          outputTokens: 1,
+        },
+        turns: 1,
+        costUsd: 0,
+      });
+      history.persistence.accepted(background);
+      history.persistence.accepted(writer);
+
+      const reopened = createAgentTreeHistory({ sessionId, runtime });
+
+      expect(
+        reopened.reconcileForegroundReadOnlyDelegate({
+          parentRunId: foreground.parentRunId,
+          parentToolCallId: foreground.parentToolCallId,
+        }),
+      ).toMatchObject({
+        kind: "applied",
+        evidence: {
+          kind: "agent_tree_delegate",
+          sessionId,
+          delegationId: foreground.delegationId,
+          childAgentId: foreground.childAgentId,
+          childRunId: foreground.childRunId,
+          parentRunId: foreground.parentRunId,
+          parentToolCallId: foreground.parentToolCallId,
+          status: "completed",
+          result: {
+            status: "completed",
+            finalText: "The inspected module is sound.",
+            error: null,
+            pendingInputCount: 0,
+          },
+        },
+      });
+      expect(
+        reopened.reconcileForegroundReadOnlyDelegate({
+          parentRunId: foreground.parentRunId,
+          parentToolCallId: "wrong-tool-call",
+        }),
+      ).toEqual({ kind: "unknown" });
+      expect(
+        reopened.reconcileForegroundReadOnlyDelegate({
+          parentRunId: writer.parentRunId,
+          parentToolCallId: writer.parentToolCallId,
+        }),
+      ).toEqual({ kind: "unknown" });
+      expect(
+        reopened.reconcileForegroundReadOnlyDelegate({
+          parentRunId: background.parentRunId,
+          parentToolCallId: background.parentToolCallId,
+        }),
+      ).toEqual({ kind: "unknown" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a terminal child thread has durable context and result,
     When a follow-up is accepted under the same Agent ID,
     Then a new Run continues the context while the previous Run stays immutable`, async () => {

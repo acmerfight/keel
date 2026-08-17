@@ -375,6 +375,7 @@ interface PromptTurnRequest {
   readonly runtimeOutcome?: SessionGoalRuntimeOutcome;
   readonly recoveringTask?: {
     readonly provider: SessionModelSelection;
+    readonly runId: string;
   };
 }
 
@@ -1146,6 +1147,7 @@ export async function runInteractiveSession(
       savedSession?.taskRecovery !== undefined &&
       (request.runTrigger === "user_prompt" ||
         request.recoveringTask !== undefined);
+    let durableTaskRunId = request.recoveringTask?.runId;
     if (request.recoveringTask === undefined) {
       reserveMemoryProposalSource(currentUserMessage, turnProvider);
     }
@@ -1221,12 +1223,12 @@ export async function runInteractiveSession(
       const userMessageId = reservedSessionMessageIds.find(
         (reservation) => reservation.message === currentUserMessage,
       )?.id;
-      savedSession.taskRecovery.admit({
+      durableTaskRunId = savedSession.taskRecovery.admit({
         userMessage: currentUserMessage,
         provider: modelSelectionFromResolved(turnProvider),
         consumedInputIds: queuedInputIds(request.consumedInputLines),
         ...(userMessageId === undefined ? {} : { userMessageId }),
-      });
+      }).runId;
     }
     const messagesBeforeTurn = [...sessionLedgerMessages(ledger)];
     const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
@@ -1374,7 +1376,8 @@ export async function runInteractiveSession(
               workspace: options.workspace,
               workspaceLeasesRoot: options.workspaceLeasesRoot,
               platform: options.platform,
-              parentRunId: `interactive-${randomUUID()}`,
+              /* v8 ignore next -- the fallback is the pre-existing ephemeral parent identity; C2 changes only durable Task correlation. */
+              parentRunId: durableTaskRunId ?? `interactive-${randomUUID()}`,
               provider: resolved.provider,
               providerId: resolved.providerId,
               model: resolved.model,
@@ -2009,7 +2012,10 @@ export async function runInteractiveSession(
               userMessageOrigin: userMessage.origin,
               consumedInputLines: [],
               runTrigger: "user_prompt",
-              recoveringTask: { provider: recovery.task.provider },
+              recoveringTask: {
+                provider: recovery.task.provider,
+                runId: recovery.task.runId,
+              },
             });
             reportRecorder.endTask(
               turnResult.kind === "aborted"

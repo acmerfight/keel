@@ -249,6 +249,186 @@ describe("CLI Main - Session Task Recovery", () => {
     }
   });
 
+  test(`Given a named session is SIGKILLed while a foreground read-only delegate is running,
+    When the user resumes without enabling delegation again,
+    Then agent-tree evidence continues the same Task without a duplicate child or recovery decision`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-delegate-recovery-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-delegate-recovery-home-"));
+    const sessionId = "foreground-delegate-recovery";
+    const completed = "Continued the original Task from agent-tree evidence.";
+    const reportPath = join(workspace, "delegate-recovery-report.json");
+    const requestBodies: string[] = [];
+    const childStarted = Promise.withResolvers<void>();
+    const server = createServer((request, response) => {
+      if (request.url !== "/chat/completions") {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      request.on("end", () => {
+        requestBodies.push(Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        if (requestBodies.length === 1) {
+          response.end(
+            `${sseToolCall("delegate_interrupted", "delegate", {
+              task: "Inspect the workspace until the parent owner exits.",
+            })}${sseToolFinish()}data: [DONE]\n\n`,
+          );
+          return;
+        }
+        if (requestBodies.length === 2) {
+          childStarted.resolve();
+          response.write(
+            `data: ${JSON.stringify({
+              choices: [{ delta: { content: "partial child work" } }],
+            })}\n\n`,
+          );
+          return;
+        }
+        response.end(sseTextReplyWithUsage(completed));
+      });
+    });
+    await listen(server);
+    const environment = {
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      KEEL_FORCE_INTERACTIVE: "1",
+      KEEL_HOME: home,
+      KEEL_PROVIDER: "deepseek",
+    };
+    const original = runCliProcess(
+      [
+        "--session",
+        sessionId,
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "--no-skills",
+      ],
+      { cwd: workspace, env: environment, stdin: "pipe" },
+    );
+    original.child.stdin?.on("error", () => {});
+
+    try {
+      original.child.stdin?.end("Use one read-only subagent to investigate.\n");
+      await withTimeout(
+        childStarted.promise,
+        5_000,
+        "foreground child did not start",
+      );
+      original.child.kill("SIGKILL");
+      expect(
+        (
+          await withTimeout(
+            original.result,
+            5_000,
+            "original delegate process did not terminate",
+          )
+        ).signal,
+      ).toBe("SIGKILL");
+
+      // When
+      const resumed = runCliProcess(
+        ["--resume", sessionId, "--no-skills", "--report", reportPath],
+        { cwd: workspace, env: environment, stdin: "pipe" },
+      );
+      resumed.child.stdin?.end();
+      const resumedResult = await withTimeout(
+        resumed.result,
+        5_000,
+        "delegate recovery process did not finish",
+      );
+
+      // Then
+      expect(resumedResult.exitCode, resumedResult.stderr).toBe(0);
+      expect(resumedResult.stdout).toContain(completed);
+      expect(resumedResult.stderr).not.toContain("recovery_blocked");
+      expect(requestBodies).toHaveLength(3);
+      expect(requestBodies[1]).toContain("Delegation ID:");
+      expect(requestBodies[2]).toContain("interrupted_effect_unknown");
+      expect(requestBodies[2]).toContain("agent_tree");
+      const recoveredRequest = z
+        .object({
+          messages: z.array(
+            z
+              .object({
+                role: z.string(),
+                content: z.unknown(),
+              })
+              .passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(requestBodies[2] ?? "{}"));
+      const recoveredToolContent = z
+        .string()
+        .parse(
+          recoveredRequest.messages.find((message) => message.role === "tool")
+            ?.content,
+        );
+      expect(JSON.parse(recoveredToolContent)).toMatchObject({
+        status: "interrupted_effect_unknown",
+        reconciliation: {
+          ownerKey: "agent_tree",
+          effect: "applied",
+          evidence: {
+            kind: "agent_tree_delegate",
+            status: "interrupted",
+            result: {
+              status: "interrupted",
+              finalText: null,
+              error:
+                "Child was interrupted when its foreground session owner exited.",
+            },
+          },
+        },
+      });
+      const ledger = await readFile(
+        join(home, "sessions", sessionId, "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger.match(/"type":"effect_reconciled"/gu)).toHaveLength(1);
+      expect(ledger).not.toContain('"type":"task_recovery_disposition"');
+      expect(ledger).toContain('"outcome":"completed"');
+      const report = z
+        .object({
+          tasks: z.array(
+            z
+              .object({
+                outcome: z.string(),
+              })
+              .passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(await readFile(reportPath, "utf8")));
+      expect(report.tasks).toMatchObject([{ outcome: "completed" }]);
+      const agentEvents = await readFile(
+        join(home, "sessions", sessionId, "agents", "events.jsonl"),
+        "utf8",
+      );
+      expect(agentEvents.match(/"type":"agent_run_accepted"/gu)).toHaveLength(
+        1,
+      );
+      expect(agentEvents.match(/"type":"agent_result"/gu)).toHaveLength(1);
+    } finally {
+      original.child.kill("SIGKILL");
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a named session accepts unknown effects before a bash effect is interrupted,
     When the host resumes the session after SIGKILL,
     Then Keel continues the same Task without replay or an end-user recovery decision`, async () => {

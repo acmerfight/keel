@@ -18,6 +18,7 @@ import {
   persistSessionTaskRecoveryState,
   persistSessionTaskStep,
   persistSessionTaskTerminal,
+  persistSessionToolEffectReconciliation,
   persistSessionToolIntents,
   persistSessionToolSettlement,
   resumeSessionStore,
@@ -367,6 +368,485 @@ describe("Session Store Task Recovery", () => {
     }
   });
 
+  test(`Given agent-tree evidence was persisted before the process died again,
+    When recovery replays that evidence from a snapshot,
+    Then it does not query the owner again and commits one resolved interruption`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "delegate-effect-reconciled",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      const admittedTask = recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "recover the accepted delegate",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      expect(() =>
+        persistSessionToolEffectReconciliation({
+          session,
+          toolCallId: "delegate_reconciled",
+          reconciliation: {
+            ownerKey: "agent_tree",
+            effect: "applied",
+            evidence: {
+              kind: "agent_tree_delegate",
+              sessionId: session.id,
+              delegationId: `${admittedTask.runId}:delegate_reconciled`,
+              childAgentId: "agent-11111111-1111-4111-8111-111111111111",
+              childRunId: "subagent-11111111-1111-4111-8111-111111111111",
+              parentRunId: admittedTask.runId,
+              parentToolCallId: "delegate_reconciled",
+              status: "queued",
+              result: null,
+            },
+          },
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(/has no active tool execution/u);
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCall = {
+        id: "delegate_reconciled",
+        tool: "delegate",
+        profile: "explorer",
+        mode: "foreground",
+        task: "Inspect one module.",
+      } as const;
+      const companionRead = {
+        id: "read_after_delegate",
+        tool: "read",
+        path: "module.ts",
+      } as const;
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls: [toolCall, companionRead],
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls([toolCall, companionRead]);
+      const pendingTask = activeSessionTask(session);
+      if (pendingTask?.phase !== "tool_execution") {
+        throw new Error("expected delegate tool execution");
+      }
+      const pendingInvocation = pendingTask.toolInvocations.find(
+        (invocation) => invocation.toolCallId === toolCall.id,
+      );
+      if (pendingInvocation?.phase !== "effect_pending") {
+        throw new Error("expected effect-pending delegate");
+      }
+      expect(() =>
+        persistSessionToolEffectReconciliation({
+          session,
+          toolCallId: toolCall.id,
+          reconciliation: {
+            ownerKey: "agent_tree",
+            effect: "applied",
+            evidence: {
+              kind: "agent_tree_delegate",
+              sessionId: "another-session",
+              delegationId: `${pendingInvocation.runId}:${toolCall.id}`,
+              childAgentId: "agent-11111111-1111-4111-8111-111111111111",
+              childRunId: "subagent-11111111-1111-4111-8111-111111111111",
+              parentRunId: pendingInvocation.runId,
+              parentToolCallId: toolCall.id,
+              status: "interrupted",
+              result: {
+                status: "interrupted",
+                finalText: null,
+                error: "Child owner exited.",
+                pendingInputCount: 0,
+              },
+            },
+          },
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(/cannot accept this effect reconciliation/u);
+      expect(() =>
+        persistSessionToolEffectReconciliation({
+          session,
+          toolCallId: toolCall.id,
+          reconciliation: {
+            ownerKey: "agent_tree",
+            effect: "applied",
+            evidence: {
+              kind: "agent_tree_delegate",
+              sessionId: session.id,
+              delegationId: `${pendingInvocation.runId}:${toolCall.id}`,
+              childAgentId: "agent-11111111-1111-4111-8111-111111111111",
+              childRunId: "subagent-11111111-1111-4111-8111-111111111111",
+              parentRunId: pendingInvocation.runId,
+              parentToolCallId: toolCall.id,
+              status: "queued",
+              result: {
+                status: "interrupted",
+                finalText: null,
+                error: "inconsistent result",
+                pendingInputCount: 0,
+              },
+            },
+          },
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(/cannot accept this effect reconciliation/u);
+      persistSessionToolEffectReconciliation({
+        session,
+        toolCallId: toolCall.id,
+        reconciliation: {
+          ownerKey: "agent_tree",
+          effect: "applied",
+          evidence: {
+            kind: "agent_tree_delegate",
+            sessionId: session.id,
+            delegationId: `${pendingInvocation.runId}:${toolCall.id}`,
+            childAgentId: "agent-11111111-1111-4111-8111-111111111111",
+            childRunId: "subagent-11111111-1111-4111-8111-111111111111",
+            parentRunId: pendingInvocation.runId,
+            parentToolCallId: toolCall.id,
+            status: "interrupted",
+            result: {
+              status: "interrupted",
+              finalText: null,
+              error: "Child owner exited.",
+              pendingInputCount: 0,
+            },
+          },
+        },
+        runtime: runtime(home, 2),
+      });
+      const reconciledTask = activeSessionTask(session);
+      if (reconciledTask?.phase !== "tool_execution") {
+        throw new Error("expected reconciled delegate tool execution");
+      }
+      await appendFile(
+        session.filePath,
+        `${JSON.stringify({
+          schemaVersion: 10,
+          type: "snapshot",
+          timestamp: "1970-01-01T00:00:02.000Z",
+          reason: "size_threshold",
+          messages: sessionStoredMessages(session),
+          pendingInputs: [],
+          skillStateCheckpoints: [
+            { messageOrdinal: 0, skillActivations: [], activeSkillIds: [] },
+          ],
+          activeTask: reconciledTask,
+        })}\n`,
+        "utf8",
+      );
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 3),
+      });
+      messages = opened.messages;
+      let ownerQueries = 0;
+      const directive = createSessionTaskRecovery({
+        session: () => opened,
+        runtime: runtime(home, 4),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+        toolEffectRecoveryOwners: () =>
+          new Map([
+            [
+              "agent_tree",
+              {
+                reconcile: () => {
+                  ownerQueries++;
+                  return { kind: "unknown" as const };
+                },
+              },
+            ],
+          ]),
+      }).resume();
+
+      expect(directive.kind).toBe("run");
+      expect(ownerQueries).toBe(0);
+      if (directive.kind !== "run") throw new Error("expected fresh Run");
+      expect(directive.recoveredMessages[1]).toMatchObject({
+        role: "tool",
+        recovery: { kind: "interrupted_effect_unknown" },
+      });
+      expect(
+        JSON.parse(directive.recoveredMessages[1]?.content ?? "{}"),
+      ).toMatchObject({
+        reconciliation: {
+          ownerKey: "agent_tree",
+          effect: "applied",
+          evidence: { status: "interrupted" },
+        },
+      });
+      const ledger = await readFile(session.filePath, "utf8");
+      expect(ledger.match(/"type":"effect_reconciled"/gu)).toHaveLength(1);
+      expect(ledger.match(/"type":"tool_settled"/gu)).toHaveLength(2);
+      expect(ledger).not.toContain('"type":"task_recovery_disposition"');
+      expect(
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 5),
+        }).activeTask,
+      ).toMatchObject({ phase: "provider_ready", recovered: true });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      name: "a different Task identity",
+      scenario: "identity" as const,
+      expected: /effect_reconciled does not match the active tool plan/u,
+    },
+    {
+      name: "forged owner evidence",
+      scenario: "evidence" as const,
+      expected: /effect_reconciled is not a canonical transition/u,
+    },
+  ])(
+    `Given an effect_reconciled record contains $name,
+    When the session replays it,
+    Then recovery fails closed before changing effect truth`,
+    async ({ scenario, expected }) => {
+      const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+      const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+      let messages: readonly SessionMessage[] = [];
+
+      try {
+        const session = createSessionStore({
+          sessionId: `invalid-effect-reconciliation-${scenario}`,
+          workspace,
+          runtime: runtime(home),
+        });
+        const recovery = createSessionTaskRecovery({
+          session: () => session,
+          runtime: runtime(home, 1),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+        });
+        recovery.admit({
+          userMessage: {
+            role: "user",
+            content: "reject forged reconciliation evidence",
+            origin: { type: "user_prompt" },
+          },
+          provider: PROVIDER,
+          consumedInputIds: [],
+        });
+        const lifecycle = recovery.providerLifecycle(PROVIDER);
+        lifecycle.providerRequestAttempts
+          .begin()
+          .finish({ outcome: "completed", usage: USAGE });
+        const toolCall = {
+          id: "delegate_forged_reconciliation",
+          tool: "delegate",
+          profile: "explorer",
+          mode: "foreground",
+          task: "Inspect one module.",
+        } as const;
+        lifecycle.settled({
+          assistantMessage: {
+            role: "assistant",
+            content: "",
+            toolCalls: [toolCall],
+          },
+          usage: USAGE,
+          stopReason: "stop",
+        });
+        lifecycle.beforeToolCalls([toolCall]);
+        const pendingTask = activeSessionTask(session);
+        if (pendingTask?.phase !== "tool_execution") {
+          throw new Error("expected delegate tool execution");
+        }
+        const pendingInvocation = pendingTask.toolInvocations[0];
+        if (pendingInvocation?.phase !== "effect_pending") {
+          throw new Error("expected effect-pending delegate");
+        }
+        const reconciliation = {
+          ownerKey: "agent_tree" as const,
+          effect: "applied" as const,
+          evidence: {
+            kind: "agent_tree_delegate" as const,
+            sessionId: scenario === "evidence" ? "forged-session" : session.id,
+            delegationId: `${pendingInvocation.runId}:${toolCall.id}`,
+            childAgentId: "agent-11111111-1111-4111-8111-111111111111",
+            childRunId: "subagent-11111111-1111-4111-8111-111111111111",
+            parentRunId: pendingInvocation.runId,
+            parentToolCallId: toolCall.id,
+            status: "interrupted" as const,
+            result: {
+              status: "interrupted" as const,
+              finalText: null,
+              error: "Child owner exited.",
+              pendingInputCount: 0,
+            },
+          },
+        };
+        const reconciledTask = {
+          ...pendingTask,
+          ...(scenario === "identity" ? { taskId: "task_forged" } : {}),
+          toolInvocations: pendingTask.toolInvocations.map((invocation) =>
+            invocation.toolCallId === toolCall.id
+              ? { ...pendingInvocation, reconciliation }
+              : invocation,
+          ),
+        };
+        await appendFile(
+          session.filePath,
+          `${JSON.stringify({
+            schemaVersion: 10,
+            type: "effect_reconciled",
+            timestamp: "1970-01-01T00:00:02.000Z",
+            task: reconciledTask,
+            operationId: pendingInvocation.operationId,
+            reconciliation,
+          })}\n`,
+          "utf8",
+        );
+
+        expect(() =>
+          resumeSessionStore({
+            sessionId: session.id,
+            workspace,
+            runtime: runtime(home, 3),
+          }),
+        ).toThrow(expected);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each([
+    { name: "missing owner", ownerMode: "missing" as const },
+    { name: "failing owner", ownerMode: "throws" as const },
+  ])(
+    `Given a started delegate has $name,
+    When the named session resumes,
+    Then it preserves unknown truth and the existing block policy`,
+    async ({ ownerMode }) => {
+      const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+      const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+      let messages: readonly SessionMessage[] = [];
+
+      try {
+        const session = createSessionStore({
+          sessionId: "delegate-owner-unavailable",
+          workspace,
+          runtime: runtime(home),
+        });
+        const recovery = createSessionTaskRecovery({
+          session: () => session,
+          runtime: runtime(home, 1),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+        });
+        recovery.admit({
+          userMessage: {
+            role: "user",
+            content: "delegate without owner evidence",
+            origin: { type: "user_prompt" },
+          },
+          provider: PROVIDER,
+          consumedInputIds: [],
+        });
+        const lifecycle = recovery.providerLifecycle(PROVIDER);
+        lifecycle.providerRequestAttempts
+          .begin()
+          .finish({ outcome: "completed", usage: USAGE });
+        const toolCall = {
+          id: "delegate_without_owner",
+          tool: "delegate",
+          profile: "explorer",
+          mode: "foreground",
+          task: "Inspect one module.",
+        } as const;
+        lifecycle.settled({
+          assistantMessage: {
+            role: "assistant",
+            content: "",
+            toolCalls: [toolCall],
+          },
+          usage: USAGE,
+          stopReason: "stop",
+        });
+        lifecycle.beforeToolCalls([toolCall]);
+
+        const directive = createSessionTaskRecovery({
+          session: () => session,
+          runtime: runtime(home, 2),
+          currentMessages: () => messages,
+          onMessagesPersisted: (persisted) => {
+            messages = persisted;
+          },
+          ...(ownerMode === "missing"
+            ? {}
+            : {
+                toolEffectRecoveryOwners: () =>
+                  new Map([
+                    [
+                      "agent_tree",
+                      {
+                        reconcile: () => {
+                          throw new Error("agent-tree owner unavailable");
+                        },
+                      },
+                    ],
+                  ]),
+              }),
+        }).resume();
+
+        expect(directive).toMatchObject({
+          kind: "blocked",
+          task: {
+            reason: "tool_effect",
+            toolInvocations: [
+              {
+                phase: "settled",
+                kind: "interrupted_effect_unknown",
+              },
+            ],
+          },
+        });
+        const ledger = await readFile(session.filePath, "utf8");
+        expect(ledger).not.toContain('"type":"effect_reconciled"');
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
   test(`Given accept_unknown was captured before an opaque effect and its disposition is durable,
     When recovery restarts between disposition and continuation,
     Then it reuses that decision once and terminalizes with disclosed unknown effects`, async () => {
@@ -451,7 +931,7 @@ describe("Session Store Task Recovery", () => {
       const ledgerBeforeDisposition = await readFile(session.filePath, "utf8");
       const noncanonicalDispositionLedger = `${ledgerBeforeDisposition}${JSON.stringify(
         {
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "task_recovery_disposition",
           timestamp: "1970-01-01T00:00:03.000Z",
           task: {
@@ -502,7 +982,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:03.000Z",
           reason: "size_threshold",
@@ -568,7 +1048,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         opened.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:06.000Z",
           reason: "size_threshold",
@@ -1305,7 +1785,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "provider_attempt_settled",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -1371,7 +1851,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "task_recovery_started",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -1484,7 +1964,7 @@ describe("Session Store Task Recovery", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 9,
+            schemaVersion: 10,
             type: "task_recovery_started",
             timestamp: "1970-01-01T00:00:03.000Z",
             task: nextTask,
@@ -2706,7 +3186,7 @@ describe("Session Store Task Recovery", () => {
         providerSettled,
       ];
       const invalidToolRecovery = {
-        schemaVersion: 9,
+        schemaVersion: 10,
         type: "task_recovery_started",
         timestamp: "1970-01-01T00:00:00.009Z",
         task: {
@@ -2970,7 +3450,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "task_terminal",
           timestamp: "1970-01-01T00:00:03.000Z",
           taskId: recovered.taskId,
@@ -3263,7 +3743,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.003Z",
           task: {
@@ -3305,7 +3785,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "task_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           task: {
@@ -3403,7 +3883,7 @@ describe("Session Store Task Recovery", () => {
         activeTask: unknown,
         stored = sourceMessages,
       ) => ({
-        schemaVersion: 9,
+        schemaVersion: 10,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.010Z",
         reason: "size_threshold",
@@ -3775,7 +4255,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -3841,7 +4321,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -4259,7 +4739,7 @@ describe("Session Store Task Recovery", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 9,
+            schemaVersion: 10,
             type: "snapshot",
             timestamp: "1970-01-01T00:00:00.001Z",
             reason: "size_threshold",
@@ -4307,7 +4787,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -4561,7 +5041,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.009Z",
           task: {
@@ -5033,7 +5513,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:03.000Z",
           reason: "size_threshold",
