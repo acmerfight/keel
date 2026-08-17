@@ -47,7 +47,10 @@ import {
   type StableInteractiveDisplay,
 } from "./interactive-session/display.ts";
 import type { InteractiveLineInput } from "./interactive-session/line-reader.ts";
-import { createSessionTaskRecovery } from "./interactive-session/task-recovery.ts";
+import {
+  createSessionTaskRecovery,
+  type SessionToolEffectRecoveryOwner,
+} from "./interactive-session/task-recovery.ts";
 import {
   type InteractiveActiveSession,
   type InteractiveActiveSessionState,
@@ -1001,6 +1004,10 @@ async function runActiveSessionCli(
         );
       }
       let savedInteractiveSession: SavedInteractiveSession | null = null;
+      let toolEffectRecoveryOwners: ReadonlyMap<
+        string,
+        SessionToolEffectRecoveryOwner
+      > = new Map();
       let initialActiveSessionState: InteractiveActiveSessionState = {
         messages: [],
         taskProgress: { tasks: [] },
@@ -1114,6 +1121,7 @@ async function runActiveSessionCli(
             session: activeSessionForPersistence,
             runtime,
             toolEffectRecoveryPolicy: cliArgs.recoveryPolicy,
+            toolEffectRecoveryOwners: () => toolEffectRecoveryOwners,
             currentMessages: () => persistedMessages,
             onMessagesPersisted: (messages) => {
               persistedMessages = [...messages];
@@ -1294,6 +1302,8 @@ async function runActiveSessionCli(
                 },
                 entries: () => requireHistory().entries(),
                 runs: (id) => requireHistory().runs(id),
+                reconcileForegroundReadOnlyDelegate: (input) =>
+                  requireHistory().reconcileForegroundReadOnlyDelegate(input),
                 pendingResultDeliveries: (parentMessages) =>
                   opened?.pendingResultDeliveries(parentMessages) ?? [],
                 deliveredResult: (delivery) => {
@@ -1303,6 +1313,36 @@ async function runActiveSessionCli(
                 messages: (entry) => requireHistory().messages(entry),
               };
             })();
+      toolEffectRecoveryOwners = new Map();
+      /* v8 ignore else -- ephemeral runs have no durable Task or recovery owner; their agent-history absence is covered by the existing ephemeral-session suites. */
+      if (agentHistory !== undefined) {
+        toolEffectRecoveryOwners = new Map([
+          [
+            "agent_tree",
+            {
+              reconcile: (input) => {
+                const result = agentHistory.reconcileForegroundReadOnlyDelegate(
+                  {
+                    parentRunId: input.runId,
+                    parentToolCallId: input.toolCallId,
+                  },
+                );
+                /* v8 ignore next -- owner unknown/failure is covered at the task-recovery boundary; this branch only preserves that discriminant through the concrete registry. */
+                return result.kind === "unknown"
+                  ? result
+                  : {
+                      kind: "resolved" as const,
+                      reconciliation: {
+                        ownerKey: "agent_tree" as const,
+                        effect: "applied" as const,
+                        evidence: result.evidence,
+                      },
+                    };
+              },
+            },
+          ],
+        ]);
+      }
       const displaySession =
         activeSessionId === undefined
           ? ({ kind: "ephemeral" } as const)

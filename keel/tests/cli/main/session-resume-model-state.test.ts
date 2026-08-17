@@ -106,7 +106,7 @@ describe("CLI Main - Session Resume Model State", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(sourceLedgerLines).toContainEqual({
-        schemaVersion: 9,
+        schemaVersion: 10,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.000Z",
         from: { providerId: "fake", model: "fake" },
@@ -224,7 +224,7 @@ describe("CLI Main - Session Resume Model State", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(sourceLedgerLines).toContainEqual({
-        schemaVersion: 9,
+        schemaVersion: 10,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.000Z",
         from: null,
@@ -311,7 +311,7 @@ describe("CLI Main - Session Resume Model State", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(sourceLedgerLines).toContainEqual({
-        schemaVersion: 9,
+        schemaVersion: 10,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.000Z",
         from: null,
@@ -410,7 +410,7 @@ describe("CLI Main - Session Resume Model State", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(sourceLedgerLines).toContainEqual({
-        schemaVersion: 9,
+        schemaVersion: 10,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.000Z",
         from: { providerId: "qwen", model: "qwen3.7-plus" },
@@ -500,7 +500,7 @@ describe("CLI Main - Session Resume Model State", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(sourceLedgerLines).toContainEqual({
-        schemaVersion: 9,
+        schemaVersion: 10,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.000Z",
         from: { providerId: "qwen", model: "qwen3.7-plus" },

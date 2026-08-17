@@ -71,6 +71,10 @@ type ToolRisk =
 
 export type ToolRecoveryCapability =
   | { readonly kind: "no_effect" }
+  | {
+      readonly kind: "owner_reconciled";
+      readonly ownerKey: "agent_tree";
+    }
   | { readonly kind: "opaque" };
 
 interface BuiltinToolCallInput {
@@ -621,7 +625,7 @@ const delegateTool = defineTool({
     formatLabel: (args) => `delegate ${args.task}`,
   },
   risk: { kind: "agent-state" },
-  recovery: { kind: "opaque" },
+  recovery: { kind: "owner_reconciled", ownerKey: "agent_tree" },
 });
 
 const agentListTool = defineTool({

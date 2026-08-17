@@ -1509,12 +1509,16 @@ describe("CLI Main - Durable Subagent History", () => {
           );
           return;
         }
-        childStarted.resolve(body);
-        response.write(
-          `data: ${JSON.stringify({
-            choices: [{ delta: { content: "partial child work" } }],
-          })}\n\n`,
-        );
+        if (requestCount === 2) {
+          childStarted.resolve(body);
+          response.write(
+            `data: ${JSON.stringify({
+              choices: [{ delta: { content: "partial child work" } }],
+            })}\n\n`,
+          );
+          return;
+        }
+        response.end(sseTextReplyWithUsage("Recovered the parent Task."));
       });
     });
     await listen(server);
@@ -1563,6 +1567,8 @@ describe("CLI Main - Durable Subagent History", () => {
           env: {
             KEEL_HOME: keelHome,
             KEEL_FORCE_INTERACTIVE: "1",
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
           },
         },
       );
@@ -1586,7 +1592,7 @@ describe("CLI Main - Durable Subagent History", () => {
       );
       expect(events.match(/"type":"agent_result"/gu)).toHaveLength(1);
       expect(events.match(/"type":"agent_run_terminal"/gu)).toHaveLength(1);
-      expect(requestCount).toBe(2);
+      expect(requestCount).toBe(3);
     } finally {
       child.kill("SIGKILL");
       await close(server);

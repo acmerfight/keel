@@ -14,7 +14,7 @@ import type {
 import type { ToolJsonValue } from "../../tools/tool-call.ts";
 import type { ToolRecoveryCapability } from "../../tools/tool-definitions.ts";
 
-export const SESSION_SCHEMA_VERSION = 9;
+export const SESSION_SCHEMA_VERSION = 10;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 export const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -161,6 +161,45 @@ type SessionToolSettlementKind =
   | "interrupted_no_effect"
   | "interrupted_effect_unknown";
 
+export interface SessionToolEffectReconciliation {
+  readonly ownerKey: "agent_tree";
+  readonly effect: "applied";
+  readonly evidence: {
+    readonly kind: "agent_tree_delegate";
+    readonly sessionId: string;
+    readonly delegationId: string;
+    readonly childAgentId: string;
+    readonly childRunId: string;
+    readonly parentRunId: string;
+    readonly parentToolCallId: string;
+    readonly status:
+      | "queued"
+      | "running"
+      | "completed"
+      | "failed"
+      | "turn_limited"
+      | "timed_out"
+      | "budget_limited"
+      | "provider_blocked"
+      | "cancelled"
+      | "interrupted";
+    readonly result: null | {
+      readonly status:
+        | "completed"
+        | "failed"
+        | "turn_limited"
+        | "timed_out"
+        | "budget_limited"
+        | "provider_blocked"
+        | "cancelled"
+        | "interrupted";
+      readonly finalText: string | null;
+      readonly error: string | null;
+      readonly pendingInputCount: number;
+    };
+  };
+}
+
 export type ActiveSessionToolInvocation = ActiveSessionToolInvocationBase &
   (
     | {
@@ -174,6 +213,7 @@ export type ActiveSessionToolInvocation = ActiveSessionToolInvocationBase &
     | {
         readonly phase: "effect_pending";
         readonly startedAt: string;
+        readonly reconciliation?: SessionToolEffectReconciliation;
         readonly settledAt?: never;
         readonly kind?: never;
         readonly toolMessage?: never;
@@ -184,6 +224,7 @@ export type ActiveSessionToolInvocation = ActiveSessionToolInvocationBase &
         readonly startedAt?: string;
         readonly settledAt: string;
         readonly kind: SessionToolSettlementKind;
+        readonly reconciliation?: SessionToolEffectReconciliation;
         readonly toolMessage: StoredMessage;
         readonly effects: SessionToolContinuationEffects;
       }
@@ -437,6 +478,18 @@ interface ToolSettledSessionRecord {
   readonly operationId: string;
 }
 
+interface EffectReconciledSessionRecord {
+  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  readonly type: "effect_reconciled";
+  readonly timestamp: string;
+  readonly task: Extract<
+    ActiveSessionTask,
+    { readonly phase: "tool_execution" }
+  >;
+  readonly operationId: string;
+  readonly reconciliation: SessionToolEffectReconciliation;
+}
+
 interface TaskRecoveryDispositionSessionRecord {
   readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "task_recovery_disposition";
@@ -533,6 +586,7 @@ export type SessionMutationRecord =
   | ProviderAttemptSettledSessionRecord
   | ProviderSettledSessionRecord
   | ToolIntentSessionRecord
+  | EffectReconciledSessionRecord
   | ToolSettledSessionRecord
   | TaskRecoveryDispositionSessionRecord
   | TaskRecoveryStartedSessionRecord

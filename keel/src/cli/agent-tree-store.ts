@@ -288,11 +288,37 @@ export type AgentHistoryEntry = AgentHistoryEntryBase &
       }
   );
 
+type AgentTreeDelegateEffectReconciliation =
+  | {
+      readonly kind: "applied";
+      readonly evidence: {
+        readonly kind: "agent_tree_delegate";
+        readonly sessionId: string;
+        readonly delegationId: string;
+        readonly childAgentId: string;
+        readonly childRunId: string;
+        readonly parentRunId: string;
+        readonly parentToolCallId: string;
+        readonly status: AgentRunMutableStatus | SubagentTerminalStatus;
+        readonly result: null | {
+          readonly status: SubagentTerminalStatus;
+          readonly finalText: string | null;
+          readonly error: string | null;
+          readonly pendingInputCount: number;
+        };
+      };
+    }
+  | { readonly kind: "unknown" };
+
 export interface AgentTreeHistory {
   readonly sessionId: string;
   readonly persistence: SubagentLifecyclePersistence;
   readonly entries: () => readonly AgentHistoryEntry[];
   readonly runs: (id: AgentId) => readonly AgentHistoryEntry[];
+  readonly reconcileForegroundReadOnlyDelegate: (input: {
+    readonly parentRunId: string;
+    readonly parentToolCallId: string;
+  }) => AgentTreeDelegateEffectReconciliation;
   readonly pendingResultDeliveries: (
     parentMessages: readonly SessionMessage[],
   ) => readonly SubagentResultDelivery[];
@@ -1472,11 +1498,55 @@ export function createAgentTreeHistory(options: {
     );
   };
 
+  const reconcileForegroundReadOnlyDelegate = (input: {
+    readonly parentRunId: string;
+    readonly parentToolCallId: string;
+  }): AgentTreeDelegateEffectReconciliation => {
+    const matches = [...runs.values()].filter(
+      (run) =>
+        run.accepted.parentRunId === input.parentRunId &&
+        run.accepted.parentToolCallId === input.parentToolCallId,
+    );
+    const [run] = matches;
+    if (
+      run === undefined ||
+      matches.length !== 1 ||
+      run.accepted.mode !== "foreground" ||
+      run.accepted.workspace !== null
+    ) {
+      return { kind: "unknown" };
+    }
+    const state = historyEntryState(run);
+    return {
+      kind: "applied",
+      evidence: {
+        kind: "agent_tree_delegate",
+        sessionId: options.sessionId,
+        delegationId: run.accepted.delegationId,
+        childAgentId: run.accepted.childAgentId,
+        childRunId: run.accepted.childRunId,
+        parentRunId: run.accepted.parentRunId,
+        parentToolCallId: run.accepted.parentToolCallId,
+        status: state.status,
+        result:
+          state.result === null
+            ? null
+            : {
+                status: state.result.status,
+                finalText: state.result.finalText,
+                error: state.result.error,
+                pendingInputCount: state.result.pendingInputCount,
+              },
+      },
+    };
+  };
+
   return {
     sessionId: options.sessionId,
     persistence,
     entries: () => historyEntries(runs),
     runs: (id) => threadRunEntries(runs, id),
+    reconcileForegroundReadOnlyDelegate,
     pendingResultDeliveries,
     deliveredResult,
     transcript: (entry) => {

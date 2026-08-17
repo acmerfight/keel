@@ -45,7 +45,7 @@ function skillState(workflowSkill: WorkflowSkill) {
 
 function modelSwitchRecordLine(timestamp: string): string {
   return JSON.stringify({
-    schemaVersion: 9,
+    schemaVersion: 10,
     type: "model_switch",
     timestamp,
     from: null,
@@ -55,7 +55,7 @@ function modelSwitchRecordLine(timestamp: string): string {
 
 function bashApprovalGrantedRecordLine(timestamp: string, cwd: string): string {
   return JSON.stringify({
-    schemaVersion: 9,
+    schemaVersion: 10,
     type: "bash_approval_granted",
     timestamp,
     grant: {
@@ -126,7 +126,7 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-08-16T00:00:00.000Z",
       records: [
         JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "snapshot",
           timestamp: "2026-08-16T00:00:01.000Z",
           reason: "size_threshold",
@@ -1290,7 +1290,7 @@ describe("CLI Main - Sessions Command", () => {
       }),
       records: [
         JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "append",
           timestamp: "2026-02-05T00:00:01.000Z",
           reason: "turn",
@@ -1328,7 +1328,7 @@ describe("CLI Main - Sessions Command", () => {
           ],
         }),
         JSON.stringify({
-          schemaVersion: 9,
+          schemaVersion: 10,
           type: "model_switch",
           timestamp: "2026-02-05T00:00:02.000Z",
           from: null,

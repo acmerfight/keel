@@ -27,6 +27,7 @@ import {
   persistSessionTaskRecoveryState,
   persistSessionTaskStep,
   persistSessionTaskTerminal,
+  persistSessionToolEffectReconciliation,
   persistSessionToolIntents,
   persistSessionToolSettlement,
   type SessionLastTaskOutcome,
@@ -34,9 +35,25 @@ import {
   type SessionProviderAttemptSettlement,
   type SessionState,
   type SessionStoreRuntime,
+  type SessionToolEffectReconciliation,
   type SessionToolEffectRecoveryPolicy,
   sessionStoredMessages,
 } from "../session-store.ts";
+
+export interface SessionToolEffectRecoveryOwner {
+  readonly reconcile: (input: {
+    readonly sessionId: string;
+    readonly taskId: string;
+    readonly runId: string;
+    readonly operationId: string;
+    readonly toolCallId: string;
+  }) =>
+    | {
+        readonly kind: "resolved";
+        readonly reconciliation: SessionToolEffectReconciliation;
+      }
+    | { readonly kind: "unknown" };
+}
 
 type SessionTaskResumeDirective =
   | { readonly kind: "none" }
@@ -133,6 +150,10 @@ export function createSessionTaskRecovery(options: {
   readonly currentMessages: () => readonly SessionMessage[];
   readonly onMessagesPersisted: (messages: readonly SessionMessage[]) => void;
   readonly toolEffectRecoveryPolicy?: SessionToolEffectRecoveryPolicy;
+  readonly toolEffectRecoveryOwners?: () => ReadonlyMap<
+    string,
+    SessionToolEffectRecoveryOwner
+  >;
 }): SessionTaskRecovery {
   const { runtime } = options;
   let checkpointOwnerId: string | undefined;
@@ -210,6 +231,42 @@ export function createSessionTaskRecovery(options: {
       if (activeTask.phase === "tool_execution") {
         for (const invocation of activeTask.toolInvocations) {
           if (invocation.phase === "settled") continue;
+          let reconciliation =
+            invocation.phase === "effect_pending"
+              ? invocation.reconciliation
+              : undefined;
+          if (
+            invocation.phase === "effect_pending" &&
+            invocation.recovery.kind === "owner_reconciled" &&
+            reconciliation === undefined
+          ) {
+            const owner = options
+              .toolEffectRecoveryOwners?.()
+              .get(invocation.recovery.ownerKey);
+            let result:
+              | ReturnType<SessionToolEffectRecoveryOwner["reconcile"]>
+              | undefined;
+            try {
+              result = owner?.reconcile({
+                sessionId: session.id,
+                taskId: activeTask.taskId,
+                runId: invocation.runId,
+                operationId: invocation.operationId,
+                toolCallId: invocation.toolCallId,
+              });
+            } catch {
+              result = { kind: "unknown" };
+            }
+            if (result?.kind === "resolved") {
+              persistSessionToolEffectReconciliation({
+                session,
+                toolCallId: invocation.toolCallId,
+                reconciliation: result.reconciliation,
+                runtime,
+              });
+              reconciliation = result.reconciliation;
+            }
+          }
           const settlementKind =
             invocation.phase === "planned"
               ? "not_executed_after_restart"
@@ -220,9 +277,12 @@ export function createSessionTaskRecovery(options: {
             status: settlementKind,
             operationId: invocation.operationId,
             tool: invocation.toolName,
+            ...(reconciliation === undefined ? {} : { reconciliation }),
             message:
               settlementKind === "interrupted_effect_unknown"
-                ? "The prior process ended after this invocation started. Its effect is unknown; the old invocation was not repeated."
+                ? reconciliation === undefined
+                  ? "The prior process ended after this invocation started. Its effect is unknown; the old invocation was not repeated."
+                  : "The prior process ended after this invocation started. The durable owner reconciled its effect; the old invocation was not repeated."
                 : settlementKind === "interrupted_no_effect"
                   ? "The prior process ended during this no-effect invocation. It was not repeated."
                   : "The prior process ended before this invocation started. It was not executed.",
@@ -261,6 +321,7 @@ export function createSessionTaskRecovery(options: {
             (invocation) =>
               invocation.phase === "settled" &&
               invocation.kind === "interrupted_effect_unknown" &&
+              invocation.reconciliation === undefined &&
               !acceptedUnknownEffects.has(invocation.operationId),
           )
           .sort((left, right) => left.sourceIndex - right.sourceIndex)

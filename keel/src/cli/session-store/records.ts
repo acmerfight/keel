@@ -264,8 +264,62 @@ const activeSessionProviderAttemptSchema = z
 
 const toolRecoveryCapabilitySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("no_effect") }).strict(),
+  z
+    .object({
+      kind: z.literal("owner_reconciled"),
+      ownerKey: z.literal("agent_tree"),
+    })
+    .strict(),
   z.object({ kind: z.literal("opaque") }).strict(),
 ]);
+
+const sessionToolEffectReconciliationSchema = z
+  .object({
+    ownerKey: z.literal("agent_tree"),
+    effect: z.literal("applied"),
+    evidence: z
+      .object({
+        kind: z.literal("agent_tree_delegate"),
+        sessionId: z.string().min(1),
+        delegationId: z.string().min(1),
+        childAgentId: z.string().min(1),
+        childRunId: z.string().min(1),
+        parentRunId: z.string().min(1),
+        parentToolCallId: z.string().min(1),
+        status: z.enum([
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "turn_limited",
+          "timed_out",
+          "budget_limited",
+          "provider_blocked",
+          "cancelled",
+          "interrupted",
+        ]),
+        result: z
+          .object({
+            status: z.enum([
+              "completed",
+              "failed",
+              "turn_limited",
+              "timed_out",
+              "budget_limited",
+              "provider_blocked",
+              "cancelled",
+              "interrupted",
+            ]),
+            finalText: z.string().nullable(),
+            error: z.string().nullable(),
+            pendingInputCount: z.number().int().nonnegative(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+  })
+  .strict();
 
 const checkpointModeOwnershipSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("unowned") }).strict(),
@@ -345,6 +399,7 @@ const activeSessionToolInvocationSchema = z.discriminatedUnion("phase", [
     .extend({
       phase: z.literal("effect_pending"),
       startedAt: z.string(),
+      reconciliation: sessionToolEffectReconciliationSchema.optional(),
     })
     .strict(),
   activeSessionToolInvocationBaseSchema
@@ -358,6 +413,7 @@ const activeSessionToolInvocationSchema = z.discriminatedUnion("phase", [
         "interrupted_no_effect",
         "interrupted_effect_unknown",
       ]),
+      reconciliation: sessionToolEffectReconciliationSchema.optional(),
       toolMessage: storedMessageSchema,
       effects: sessionToolContinuationEffectsSchema,
     })
@@ -688,6 +744,17 @@ const toolSettledRecordSchema = z
   })
   .strict();
 
+const effectReconciledRecordSchema = z
+  .object({
+    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
+    type: z.literal("effect_reconciled"),
+    timestamp: z.string(),
+    task: toolExecutionTaskSchema,
+    operationId: z.string().min(1),
+    reconciliation: sessionToolEffectReconciliationSchema,
+  })
+  .strict();
+
 const taskRecoveryDispositionRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -799,6 +866,7 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   providerAttemptSettledRecordSchema,
   providerSettledRecordSchema,
   toolIntentRecordSchema,
+  effectReconciledRecordSchema,
   toolSettledRecordSchema,
   taskRecoveryDispositionRecordSchema,
   taskRecoveryStartedRecordSchema,
@@ -1178,6 +1246,9 @@ function copyActiveSessionToolInvocation(
         ...base,
         phase: "effect_pending",
         startedAt: invocation.startedAt,
+        ...(invocation.reconciliation === undefined
+          ? {}
+          : { reconciliation: structuredClone(invocation.reconciliation) }),
       };
     case "settled":
       return {
@@ -1188,6 +1259,9 @@ function copyActiveSessionToolInvocation(
           : { startedAt: invocation.startedAt }),
         settledAt: invocation.settledAt,
         kind: invocation.kind,
+        ...(invocation.reconciliation === undefined
+          ? {}
+          : { reconciliation: structuredClone(invocation.reconciliation) }),
         toolMessage: copyStoredMessage(invocation.toolMessage),
         effects: copySessionToolContinuationEffects(invocation.effects),
       };
@@ -1377,6 +1451,9 @@ function toActiveSessionToolInvocation(
         ...base,
         phase: "effect_pending",
         startedAt: invocation.startedAt,
+        ...(invocation.reconciliation === undefined
+          ? {}
+          : { reconciliation: structuredClone(invocation.reconciliation) }),
       };
     case "settled":
       return {
@@ -1387,6 +1464,9 @@ function toActiveSessionToolInvocation(
           : { startedAt: invocation.startedAt }),
         settledAt: invocation.settledAt,
         kind: invocation.kind,
+        ...(invocation.reconciliation === undefined
+          ? {}
+          : { reconciliation: structuredClone(invocation.reconciliation) }),
         toolMessage: toStoredMessage(invocation.toolMessage),
         effects: {
           checkpointOperations: invocation.effects.checkpointOperations.map(
@@ -2463,6 +2543,15 @@ function toSessionMutationRecord(
         timestamp: record.timestamp,
         task: toToolExecutionSessionTask(record.task),
         operationIds: [...record.operationIds],
+      };
+    case "effect_reconciled":
+      return {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        type: "effect_reconciled",
+        timestamp: record.timestamp,
+        task: toToolExecutionSessionTask(record.task),
+        operationId: record.operationId,
+        reconciliation: structuredClone(record.reconciliation),
       };
     case "tool_settled":
       return {
