@@ -96,7 +96,7 @@ function history(
     },
     entries: () => entries,
     runs: (id) => entries.filter((entry) => entry.childAgentId === id),
-    reconcileForegroundReadOnlyDelegate: () => ({ kind: "unknown" }),
+    reconcileBuiltInReadOnlyDelegate: () => ({ kind: "unknown" }),
     pendingResultDeliveries: () => [],
     deliveredResult: () => {},
     transcript,

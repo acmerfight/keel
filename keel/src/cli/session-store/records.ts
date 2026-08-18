@@ -333,7 +333,7 @@ const sessionToolEffectReconciliationSchema = z.discriminatedUnion("effect", [
           parentRunId: z.string().min(1),
           parentToolCallId: z.string().min(1),
           profile: z.enum(["explorer", "reviewer"]),
-          mode: z.literal("foreground"),
+          mode: z.enum(["foreground", "background"]),
           argumentsSha256: z.string().regex(/^[a-f0-9]{64}$/u),
         })
         .strict(),

@@ -25,7 +25,7 @@ function emptyHistory(): AgentTreeHistory {
     },
     entries: () => [],
     runs: () => [],
-    reconcileForegroundReadOnlyDelegate: () => ({ kind: "unknown" }),
+    reconcileBuiltInReadOnlyDelegate: () => ({ kind: "unknown" }),
     pendingResultDeliveries: () => [],
     deliveredResult: () => {},
     transcript: () => "",

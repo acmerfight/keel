@@ -435,18 +435,19 @@ describe("CLI Main - Session Task Recovery", () => {
     }
   });
 
-  test(`Given a named session is SIGKILLed after a foreground read-only delegate intent but before child acceptance,
+  test(`Given a named session is SIGKILLed after a background read-only delegate is accepted,
     When the user resumes without enabling delegation again,
-    Then agent-tree absence continues the same Task without a duplicate child or recovery decision`, async () => {
+    Then agent-tree evidence continues the same Task without a duplicate child or recovery decision`, async () => {
     // Given
     const workspace = await mkdtemp(
-      join(tmpdir(), "keel-delegate-not-applied-"),
+      join(tmpdir(), "keel-background-delegate-recovery-"),
     );
     const home = await mkdtemp(
-      join(tmpdir(), "keel-delegate-not-applied-home-"),
+      join(tmpdir(), "keel-background-delegate-recovery-home-"),
     );
-    const sessionId = "foreground-delegate-not-applied";
-    const completed = "Continued after proving the child was never accepted.";
+    const sessionId = "background-delegate-recovery";
+    const completed =
+      "Continued the original Task from background agent-tree evidence.";
     const requestBodies: string[] = [];
     const server = createServer((request, response) => {
       if (request.url !== "/chat/completions") {
@@ -471,7 +472,7 @@ describe("CLI Main - Session Task Recovery", () => {
         "--experimental-strip-types",
         join(
           process.cwd(),
-          "tests/fixtures/session-task-recovery-pre-acceptance.ts",
+          "tests/fixtures/session-task-recovery-background-accepted.ts",
         ),
         home,
         workspace,
@@ -480,7 +481,7 @@ describe("CLI Main - Session Task Recovery", () => {
       { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] },
     );
     if (fixture.stdout === null || fixture.stderr === null) {
-      throw new Error("pre-acceptance fixture requires piped output");
+      throw new Error("accepted background fixture requires piped output");
     }
     let fixtureStdout = "";
     let fixtureStderr = "";
@@ -515,7 +516,7 @@ describe("CLI Main - Session Task Recovery", () => {
       await withTimeout(
         fixtureReady.promise,
         5_000,
-        `pre-acceptance fixture did not become ready: ${fixtureStderr}`,
+        `accepted background fixture did not become ready: ${fixtureStderr}`,
       );
       fixture.kill("SIGKILL");
       expect(
@@ -523,7 +524,7 @@ describe("CLI Main - Session Task Recovery", () => {
           await withTimeout(
             fixtureExit,
             5_000,
-            "pre-acceptance fixture did not terminate",
+            "accepted background fixture did not terminate",
           )
         ).signal,
       ).toBe("SIGKILL");
@@ -539,7 +540,7 @@ describe("CLI Main - Session Task Recovery", () => {
       const exitCode = await withTimeout(
         runCliMain(resumed.runtime),
         5_000,
-        "pre-acceptance recovery process did not finish",
+        "accepted background recovery process did not finish",
       );
 
       // Then
@@ -547,21 +548,63 @@ describe("CLI Main - Session Task Recovery", () => {
       expect(resumed.stdout()).toContain(completed);
       expect(resumed.stderr()).not.toContain("recovery_blocked");
       expect(requestBodies).toHaveLength(1);
-      expect(requestBodies[0]).toContain("interrupted_effect_unknown");
-      expect(requestBodies[0]).toContain("agent_tree_delegate_not_accepted");
+      const recoveredRequest = z
+        .object({
+          messages: z.array(
+            z
+              .object({
+                role: z.string(),
+                content: z.unknown(),
+              })
+              .passthrough(),
+          ),
+        })
+        .passthrough()
+        .parse(JSON.parse(requestBodies[0] ?? "{}"));
+      const recoveredToolContent = z
+        .string()
+        .parse(
+          recoveredRequest.messages.find((message) => message.role === "tool")
+            ?.content,
+        );
+      expect(JSON.parse(recoveredToolContent)).toMatchObject({
+        status: "interrupted_effect_unknown",
+        reconciliation: {
+          ownerKey: "agent_tree",
+          effect: "applied",
+          evidence: {
+            kind: "agent_tree_delegate",
+            status: "interrupted",
+            result: {
+              status: "interrupted",
+              finalText: null,
+              error:
+                "Child was interrupted when its background session owner exited.",
+            },
+          },
+        },
+      });
       const ledger = await readFile(
         join(home, "sessions", sessionId, "ledger.jsonl"),
         "utf8",
       );
       expect(ledger.match(/"type":"effect_reconciled"/gu)).toHaveLength(1);
-      expect(ledger).toContain('"effect":"not_applied"');
       expect(ledger).not.toContain('"type":"task_recovery_disposition"');
       expect(ledger).toContain('"outcome":"completed"');
       const agentEvents = await readFile(
         join(home, "sessions", sessionId, "agents", "events.jsonl"),
         "utf8",
       );
-      expect(agentEvents).not.toContain('"type":"agent_run_accepted"');
+      expect(agentEvents.match(/"type":"agent_run_accepted"/gu)).toHaveLength(
+        1,
+      );
+      expect(agentEvents.match(/"type":"agent_result"/gu)).toHaveLength(1);
+      expect(
+        agentEvents.match(/"type":"agent_result_delivery_pending"/gu),
+      ).toHaveLength(1);
+      expect(
+        agentEvents.match(/"type":"agent_result_delivery_delivered"/gu),
+      ).toHaveLength(1);
     } finally {
       fixture.kill("SIGKILL");
       await close(server);
@@ -569,6 +612,149 @@ describe("CLI Main - Session Task Recovery", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  test.each(["foreground", "background"] as const)(
+    `Given a named session is SIGKILLed after a %s read-only delegate intent but before child acceptance,
+    When the user resumes without enabling delegation again,
+    Then agent-tree absence continues the same Task without a duplicate child or recovery decision`,
+    async (mode) => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-delegate-not-applied-"),
+      );
+      const home = await mkdtemp(
+        join(tmpdir(), "keel-delegate-not-applied-home-"),
+      );
+      const sessionId = `${mode}-delegate-not-applied`;
+      const completed = "Continued after proving the child was never accepted.";
+      const requestBodies: string[] = [];
+      const server = createServer((request, response) => {
+        if (request.url !== "/chat/completions") {
+          response.writeHead(404);
+          response.end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        request.on("end", () => {
+          requestBodies.push(Buffer.concat(chunks).toString("utf8"));
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.end(sseTextReplyWithUsage(completed));
+        });
+      });
+      await listen(server);
+      const fixture = spawn(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          join(
+            process.cwd(),
+            "tests/fixtures/session-task-recovery-pre-acceptance.ts",
+          ),
+          home,
+          workspace,
+          sessionId,
+          mode,
+        ],
+        { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] },
+      );
+      if (fixture.stdout === null || fixture.stderr === null) {
+        throw new Error("pre-acceptance fixture requires piped output");
+      }
+      let fixtureStdout = "";
+      let fixtureStderr = "";
+      fixture.stdout.setEncoding("utf8");
+      fixture.stderr.setEncoding("utf8");
+      const fixtureReady = Promise.withResolvers<void>();
+      fixture.stdout.on("data", (chunk: string) => {
+        fixtureStdout += chunk;
+        if (fixtureStdout.includes("ready\n")) fixtureReady.resolve();
+      });
+      fixture.stderr.on("data", (chunk: string) => {
+        fixtureStderr += chunk;
+      });
+      const fixtureExit = new Promise<{
+        readonly code: number | null;
+        readonly signal: NodeJS.Signals | null;
+      }>((resolve, reject) => {
+        fixture.once("error", reject);
+        fixture.once("exit", (code, signal) => {
+          resolve({ code, signal });
+        });
+      });
+      const environment = {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
+        KEEL_PROVIDER: "deepseek",
+      };
+
+      try {
+        await withTimeout(
+          fixtureReady.promise,
+          5_000,
+          `pre-acceptance fixture did not become ready: ${fixtureStderr}`,
+        );
+        fixture.kill("SIGKILL");
+        expect(
+          (
+            await withTimeout(
+              fixtureExit,
+              5_000,
+              "pre-acceptance fixture did not terminate",
+            )
+          ).signal,
+        ).toBe("SIGKILL");
+
+        // When
+        const input = new PassThrough();
+        input.end();
+        const resumed = createCliRuntime(
+          ["--resume", sessionId, "--no-skills"],
+          {
+            cwd: workspace,
+            env: environment,
+            input,
+          },
+        );
+        const exitCode = await withTimeout(
+          runCliMain(resumed.runtime),
+          5_000,
+          "pre-acceptance recovery process did not finish",
+        );
+
+        // Then
+        expect(exitCode, resumed.stderr()).toBe(0);
+        expect(resumed.stdout()).toContain(completed);
+        expect(resumed.stderr()).not.toContain("recovery_blocked");
+        expect(requestBodies).toHaveLength(1);
+        expect(requestBodies[0]).toContain("interrupted_effect_unknown");
+        expect(requestBodies[0]).toContain("agent_tree_delegate_not_accepted");
+        const ledger = await readFile(
+          join(home, "sessions", sessionId, "ledger.jsonl"),
+          "utf8",
+        );
+        expect(ledger.match(/"type":"effect_reconciled"/gu)).toHaveLength(1);
+        expect(ledger).toContain('"effect":"not_applied"');
+        expect(ledger).toContain(`"mode":"${mode}"`);
+        expect(ledger).not.toContain('"type":"task_recovery_disposition"');
+        expect(ledger).toContain('"outcome":"completed"');
+        const agentEvents = await readFile(
+          join(home, "sessions", sessionId, "agents", "events.jsonl"),
+          "utf8",
+        );
+        expect(agentEvents).not.toContain('"type":"agent_run_accepted"');
+      } finally {
+        fixture.kill("SIGKILL");
+        await close(server);
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given a named session accepts unknown effects before a bash effect is interrupted,
     When the host resumes the session after SIGKILL,
