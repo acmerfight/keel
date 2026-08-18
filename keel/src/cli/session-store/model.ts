@@ -210,7 +210,7 @@ export type SessionToolEffectReconciliation =
         readonly parentRunId: string;
         readonly parentToolCallId: string;
         readonly profile: "explorer" | "reviewer";
-        readonly mode: "foreground";
+        readonly mode: "foreground" | "background";
         readonly argumentsSha256: string;
       };
     };

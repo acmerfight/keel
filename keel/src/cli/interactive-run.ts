@@ -1302,8 +1302,8 @@ async function runActiveSessionCli(
                 },
                 entries: () => requireHistory().entries(),
                 runs: (id) => requireHistory().runs(id),
-                reconcileForegroundReadOnlyDelegate: (input) =>
-                  requireHistory().reconcileForegroundReadOnlyDelegate(input),
+                reconcileBuiltInReadOnlyDelegate: (input) =>
+                  requireHistory().reconcileBuiltInReadOnlyDelegate(input),
                 pendingResultDeliveries: (parentMessages) =>
                   opened?.pendingResultDeliveries(parentMessages) ?? [],
                 deliveredResult: (delivery) => {
@@ -1321,15 +1321,13 @@ async function runActiveSessionCli(
             "agent_tree",
             {
               reconcile: (input) => {
-                const result = agentHistory.reconcileForegroundReadOnlyDelegate(
-                  {
-                    parentRunId: input.runId,
-                    parentToolCallId: input.toolCallId,
-                    toolName: input.toolName,
-                    canonicalArguments: input.canonicalArguments,
-                    argumentsSha256: input.argumentsSha256,
-                  },
-                );
+                const result = agentHistory.reconcileBuiltInReadOnlyDelegate({
+                  parentRunId: input.runId,
+                  parentToolCallId: input.toolCallId,
+                  toolName: input.toolName,
+                  canonicalArguments: input.canonicalArguments,
+                  argumentsSha256: input.argumentsSha256,
+                });
                 /* v8 ignore next -- owner unknown/failure is covered at the task-recovery boundary; this branch only preserves that discriminant through the concrete registry. */
                 if (result.kind === "unknown") return result;
                 if (result.kind === "applied") {

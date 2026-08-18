@@ -318,7 +318,7 @@ type AgentTreeDelegateEffectReconciliation =
         readonly parentRunId: string;
         readonly parentToolCallId: string;
         readonly profile: "explorer" | "reviewer";
-        readonly mode: "foreground";
+        readonly mode: "foreground" | "background";
         readonly argumentsSha256: string;
       };
     }
@@ -329,7 +329,7 @@ export interface AgentTreeHistory {
   readonly persistence: SubagentLifecyclePersistence;
   readonly entries: () => readonly AgentHistoryEntry[];
   readonly runs: (id: AgentId) => readonly AgentHistoryEntry[];
-  readonly reconcileForegroundReadOnlyDelegate: (input: {
+  readonly reconcileBuiltInReadOnlyDelegate: (input: {
     readonly parentRunId: string;
     readonly parentToolCallId: string;
     readonly toolName: string;
@@ -1103,8 +1103,7 @@ function repairInterruptedRuns(input: {
       snapshot: {
         status: "interrupted",
         finalText: null,
-        error:
-          "Child was interrupted when its foreground session owner exited.",
+        error: `Child was interrupted when its ${run.accepted.mode} session owner exited.`,
         pendingInputCount,
         workspace:
           interruptedWorkspace === null
@@ -1515,7 +1514,7 @@ export function createAgentTreeHistory(options: {
     );
   };
 
-  const reconcileForegroundReadOnlyDelegate = (input: {
+  const reconcileBuiltInReadOnlyDelegate = (input: {
     readonly parentRunId: string;
     readonly parentToolCallId: string;
     readonly toolName: string;
@@ -1532,7 +1531,7 @@ export function createAgentTreeHistory(options: {
     if (run === undefined && matches.length === 0) {
       if (
         input.toolName !== "delegate" ||
-        mode !== "foreground" ||
+        (mode !== "foreground" && mode !== "background") ||
         (profile !== "explorer" && profile !== "reviewer")
       ) {
         return { kind: "unknown" };
@@ -1546,7 +1545,7 @@ export function createAgentTreeHistory(options: {
           parentRunId: input.parentRunId,
           parentToolCallId: input.parentToolCallId,
           profile,
-          mode: "foreground",
+          mode,
           argumentsSha256: input.argumentsSha256,
         },
       };
@@ -1555,9 +1554,9 @@ export function createAgentTreeHistory(options: {
       run === undefined ||
       matches.length !== 1 ||
       input.toolName !== "delegate" ||
-      mode !== "foreground" ||
+      (mode !== "foreground" && mode !== "background") ||
       run.accepted.capability.profile !== profile ||
-      run.accepted.mode !== "foreground" ||
+      run.accepted.mode !== mode ||
       run.accepted.workspace !== null
     ) {
       return { kind: "unknown" };
@@ -1592,7 +1591,7 @@ export function createAgentTreeHistory(options: {
     persistence,
     entries: () => historyEntries(runs),
     runs: (id) => threadRunEntries(runs, id),
-    reconcileForegroundReadOnlyDelegate,
+    reconcileBuiltInReadOnlyDelegate,
     pendingResultDeliveries,
     deliveredResult,
     transcript: (entry) => {

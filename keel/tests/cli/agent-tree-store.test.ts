@@ -177,7 +177,7 @@ function delegateRecoveryInput(
 describe("Agent Tree Store", () => {
   test(`Given accepted, absent, and unsupported delegate attempts,
     When the authoritative owner reconciles by the original parent Run and tool call,
-    Then it proves applied or not-applied only for supported foreground read-only children`, async () => {
+    Then it proves applied or not-applied only for supported built-in read-only children`, async () => {
     const workspace = await mkdtemp(join(tmpdir(), "keel-agent-tree-"));
     const keelHome = join(workspace, ".keel-home");
     const runtime = {
@@ -220,7 +220,7 @@ describe("Agent Tree Store", () => {
       const history = createAgentTreeHistory({ sessionId, runtime });
       const foregroundRun = history.persistence.accepted(foreground);
       expect(
-        history.reconcileForegroundReadOnlyDelegate(
+        history.reconcileBuiltInReadOnlyDelegate(
           delegateRecoveryInput(foreground),
         ),
       ).toMatchObject({
@@ -249,7 +249,7 @@ describe("Agent Tree Store", () => {
       const reopened = createAgentTreeHistory({ sessionId, runtime });
 
       expect(
-        reopened.reconcileForegroundReadOnlyDelegate(
+        reopened.reconcileBuiltInReadOnlyDelegate(
           delegateRecoveryInput(foreground),
         ),
       ).toMatchObject({
@@ -272,7 +272,7 @@ describe("Agent Tree Store", () => {
         },
       });
       expect(
-        reopened.reconcileForegroundReadOnlyDelegate({
+        reopened.reconcileBuiltInReadOnlyDelegate({
           ...delegateRecoveryInput(foreground),
           parentToolCallId: "wrong-tool-call",
         }),
@@ -290,7 +290,7 @@ describe("Agent Tree Store", () => {
         },
       });
       expect(
-        reopened.reconcileForegroundReadOnlyDelegate({
+        reopened.reconcileBuiltInReadOnlyDelegate({
           ...delegateRecoveryInput(foreground, { profile: "reviewer" }),
           parentToolCallId: "unaccepted-reviewer",
         }),
@@ -299,23 +299,43 @@ describe("Agent Tree Store", () => {
         evidence: { profile: "reviewer", mode: "foreground" },
       });
       expect(
-        reopened.reconcileForegroundReadOnlyDelegate(
+        reopened.reconcileBuiltInReadOnlyDelegate(
           delegateRecoveryInput(writer, { profile: "writer" }),
         ),
       ).toEqual({ kind: "unknown" });
       expect(
-        reopened.reconcileForegroundReadOnlyDelegate(
+        reopened.reconcileBuiltInReadOnlyDelegate(
           delegateRecoveryInput(background, { mode: "background" }),
         ),
-      ).toEqual({ kind: "unknown" });
+      ).toMatchObject({
+        kind: "applied",
+        evidence: {
+          delegationId: background.delegationId,
+          status: "interrupted",
+          result: {
+            status: "interrupted",
+            error:
+              "Child was interrupted when its background session owner exited.",
+          },
+        },
+      });
       expect(
-        reopened.reconcileForegroundReadOnlyDelegate({
+        reopened.reconcileBuiltInReadOnlyDelegate({
+          ...delegateRecoveryInput(background, { mode: "background" }),
+          parentToolCallId: "unaccepted-background",
+        }),
+      ).toMatchObject({
+        kind: "not_applied",
+        evidence: { profile: "explorer", mode: "background" },
+      });
+      expect(
+        reopened.reconcileBuiltInReadOnlyDelegate({
           ...delegateRecoveryInput(foreground, { profile: "repo:reader" }),
           parentToolCallId: "unaccepted-project-profile",
         }),
       ).toEqual({ kind: "unknown" });
       expect(
-        reopened.reconcileForegroundReadOnlyDelegate({
+        reopened.reconcileBuiltInReadOnlyDelegate({
           ...delegateRecoveryInput(foreground, { toolName: "agent_resume" }),
           parentToolCallId: "unaccepted-agent-control",
         }),

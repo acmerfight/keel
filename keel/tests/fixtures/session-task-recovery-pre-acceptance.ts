@@ -2,8 +2,13 @@ import type { SessionMessage } from "../../src/agent/session-message.ts";
 import { createSessionTaskRecovery } from "../../src/cli/interactive-session/task-recovery.ts";
 import { createSessionStore } from "../../src/cli/session-store.ts";
 
-const [home, workspace, sessionId] = process.argv.slice(2);
-if (home === undefined || workspace === undefined || sessionId === undefined) {
+const [home, workspace, sessionId, mode] = process.argv.slice(2);
+if (
+  home === undefined ||
+  workspace === undefined ||
+  sessionId === undefined ||
+  (mode !== "foreground" && mode !== "background")
+) {
   throw new Error("missing pre-acceptance recovery fixture argument");
 }
 
@@ -50,7 +55,7 @@ const toolCall = {
   id: "delegate_pre_acceptance",
   tool: "delegate",
   profile: "explorer",
-  mode: "foreground",
+  mode,
   task: "Inspect note.txt and report its exact content.",
 } as const;
 lifecycle.settled({

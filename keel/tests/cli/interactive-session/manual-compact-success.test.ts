@@ -819,7 +819,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       },
       entries: () => [],
       runs: () => [],
-      reconcileForegroundReadOnlyDelegate: () => ({ kind: "unknown" }),
+      reconcileBuiltInReadOnlyDelegate: () => ({ kind: "unknown" }),
       pendingResultDeliveries: () => [],
       deliveredResult: () => {},
       transcript: () => {
