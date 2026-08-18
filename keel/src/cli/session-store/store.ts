@@ -2149,15 +2149,35 @@ function toolEffectReconciliationIsCanonical(
   >,
   reconciliation: SessionToolEffectReconciliation,
 ): boolean {
+  if (
+    invocation.recovery.kind !== "owner_reconciled" ||
+    invocation.recovery.ownerKey !== reconciliation.ownerKey
+  ) {
+    return false;
+  }
+  if (reconciliation.effect === "not_applied") {
+    const { mode, profile } = invocation.canonicalArguments;
+    return isDeepStrictEqual(reconciliation, {
+      ownerKey: invocation.recovery.ownerKey,
+      effect: "not_applied",
+      evidence: {
+        kind: "agent_tree_delegate_not_accepted",
+        sessionId,
+        delegationId: `${invocation.runId}:${invocation.toolCallId}`,
+        parentRunId: invocation.runId,
+        parentToolCallId: invocation.toolCallId,
+        profile,
+        mode,
+        argumentsSha256: invocation.argumentsSha256,
+      },
+    });
+  }
   const evidence = reconciliation.evidence;
   const resultMatchesStatus =
     evidence.status === "queued" || evidence.status === "running"
       ? evidence.result === null
       : evidence.result !== null && evidence.result.status === evidence.status;
   return (
-    invocation.recovery.kind === "owner_reconciled" &&
-    invocation.recovery.ownerKey === reconciliation.ownerKey &&
-    reconciliation.effect === "applied" &&
     evidence.kind === "agent_tree_delegate" &&
     evidence.sessionId === sessionId &&
     evidence.delegationId === `${invocation.runId}:${invocation.toolCallId}` &&

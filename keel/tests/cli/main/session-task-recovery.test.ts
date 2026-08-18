@@ -1,17 +1,23 @@
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
+import { runCliMain } from "../../../src/cli/index.ts";
 import { createSessionTaskRecovery } from "../../../src/cli/interactive-session/task-recovery.ts";
 import {
   createSessionStore,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
 import { runCliProcess } from "../../../src/testing/cli-harness.ts";
-import { withTimeout } from "../../../src/testing/cli-runtime-fixtures.ts";
+import {
+  createRuntime as createCliRuntime,
+  withTimeout,
+} from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
   getPort,
@@ -423,6 +429,141 @@ describe("CLI Main - Session Task Recovery", () => {
       expect(agentEvents.match(/"type":"agent_result"/gu)).toHaveLength(1);
     } finally {
       original.child.kill("SIGKILL");
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a named session is SIGKILLed after a foreground read-only delegate intent but before child acceptance,
+    When the user resumes without enabling delegation again,
+    Then agent-tree absence continues the same Task without a duplicate child or recovery decision`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-delegate-not-applied-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-delegate-not-applied-home-"),
+    );
+    const sessionId = "foreground-delegate-not-applied";
+    const completed = "Continued after proving the child was never accepted.";
+    const requestBodies: string[] = [];
+    const server = createServer((request, response) => {
+      if (request.url !== "/chat/completions") {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      request.on("end", () => {
+        requestBodies.push(Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(sseTextReplyWithUsage(completed));
+      });
+    });
+    await listen(server);
+    const fixture = spawn(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        join(
+          process.cwd(),
+          "tests/fixtures/session-task-recovery-pre-acceptance.ts",
+        ),
+        home,
+        workspace,
+        sessionId,
+      ],
+      { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] },
+    );
+    if (fixture.stdout === null || fixture.stderr === null) {
+      throw new Error("pre-acceptance fixture requires piped output");
+    }
+    let fixtureStdout = "";
+    let fixtureStderr = "";
+    fixture.stdout.setEncoding("utf8");
+    fixture.stderr.setEncoding("utf8");
+    const fixtureReady = Promise.withResolvers<void>();
+    fixture.stdout.on("data", (chunk: string) => {
+      fixtureStdout += chunk;
+      if (fixtureStdout.includes("ready\n")) fixtureReady.resolve();
+    });
+    fixture.stderr.on("data", (chunk: string) => {
+      fixtureStderr += chunk;
+    });
+    const fixtureExit = new Promise<{
+      readonly code: number | null;
+      readonly signal: NodeJS.Signals | null;
+    }>((resolve, reject) => {
+      fixture.once("error", reject);
+      fixture.once("exit", (code, signal) => {
+        resolve({ code, signal });
+      });
+    });
+    const environment = {
+      DEEPSEEK_API_KEY: "test-key",
+      DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+      KEEL_FORCE_INTERACTIVE: "1",
+      KEEL_HOME: home,
+      KEEL_PROVIDER: "deepseek",
+    };
+
+    try {
+      await withTimeout(
+        fixtureReady.promise,
+        5_000,
+        `pre-acceptance fixture did not become ready: ${fixtureStderr}`,
+      );
+      fixture.kill("SIGKILL");
+      expect(
+        (
+          await withTimeout(
+            fixtureExit,
+            5_000,
+            "pre-acceptance fixture did not terminate",
+          )
+        ).signal,
+      ).toBe("SIGKILL");
+
+      // When
+      const input = new PassThrough();
+      input.end();
+      const resumed = createCliRuntime(["--resume", sessionId, "--no-skills"], {
+        cwd: workspace,
+        env: environment,
+        input,
+      });
+      const exitCode = await withTimeout(
+        runCliMain(resumed.runtime),
+        5_000,
+        "pre-acceptance recovery process did not finish",
+      );
+
+      // Then
+      expect(exitCode, resumed.stderr()).toBe(0);
+      expect(resumed.stdout()).toContain(completed);
+      expect(resumed.stderr()).not.toContain("recovery_blocked");
+      expect(requestBodies).toHaveLength(1);
+      expect(requestBodies[0]).toContain("interrupted_effect_unknown");
+      expect(requestBodies[0]).toContain("agent_tree_delegate_not_accepted");
+      const ledger = await readFile(
+        join(home, "sessions", sessionId, "ledger.jsonl"),
+        "utf8",
+      );
+      expect(ledger.match(/"type":"effect_reconciled"/gu)).toHaveLength(1);
+      expect(ledger).toContain('"effect":"not_applied"');
+      expect(ledger).not.toContain('"type":"task_recovery_disposition"');
+      expect(ledger).toContain('"outcome":"completed"');
+      const agentEvents = await readFile(
+        join(home, "sessions", sessionId, "agents", "events.jsonl"),
+        "utf8",
+      );
+      expect(agentEvents).not.toContain('"type":"agent_run_accepted"');
+    } finally {
+      fixture.kill("SIGKILL");
       await close(server);
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

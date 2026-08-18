@@ -161,44 +161,59 @@ type SessionToolSettlementKind =
   | "interrupted_no_effect"
   | "interrupted_effect_unknown";
 
-export interface SessionToolEffectReconciliation {
-  readonly ownerKey: "agent_tree";
-  readonly effect: "applied";
-  readonly evidence: {
-    readonly kind: "agent_tree_delegate";
-    readonly sessionId: string;
-    readonly delegationId: string;
-    readonly childAgentId: string;
-    readonly childRunId: string;
-    readonly parentRunId: string;
-    readonly parentToolCallId: string;
-    readonly status:
-      | "queued"
-      | "running"
-      | "completed"
-      | "failed"
-      | "turn_limited"
-      | "timed_out"
-      | "budget_limited"
-      | "provider_blocked"
-      | "cancelled"
-      | "interrupted";
-    readonly result: null | {
-      readonly status:
-        | "completed"
-        | "failed"
-        | "turn_limited"
-        | "timed_out"
-        | "budget_limited"
-        | "provider_blocked"
-        | "cancelled"
-        | "interrupted";
-      readonly finalText: string | null;
-      readonly error: string | null;
-      readonly pendingInputCount: number;
+export type SessionToolEffectReconciliation =
+  | {
+      readonly ownerKey: "agent_tree";
+      readonly effect: "applied";
+      readonly evidence: {
+        readonly kind: "agent_tree_delegate";
+        readonly sessionId: string;
+        readonly delegationId: string;
+        readonly childAgentId: string;
+        readonly childRunId: string;
+        readonly parentRunId: string;
+        readonly parentToolCallId: string;
+        readonly status:
+          | "queued"
+          | "running"
+          | "completed"
+          | "failed"
+          | "turn_limited"
+          | "timed_out"
+          | "budget_limited"
+          | "provider_blocked"
+          | "cancelled"
+          | "interrupted";
+        readonly result: null | {
+          readonly status:
+            | "completed"
+            | "failed"
+            | "turn_limited"
+            | "timed_out"
+            | "budget_limited"
+            | "provider_blocked"
+            | "cancelled"
+            | "interrupted";
+          readonly finalText: string | null;
+          readonly error: string | null;
+          readonly pendingInputCount: number;
+        };
+      };
+    }
+  | {
+      readonly ownerKey: "agent_tree";
+      readonly effect: "not_applied";
+      readonly evidence: {
+        readonly kind: "agent_tree_delegate_not_accepted";
+        readonly sessionId: string;
+        readonly delegationId: string;
+        readonly parentRunId: string;
+        readonly parentToolCallId: string;
+        readonly profile: "explorer" | "reviewer";
+        readonly mode: "foreground";
+        readonly argumentsSha256: string;
+      };
     };
-  };
-}
 
 export type ActiveSessionToolInvocation = ActiveSessionToolInvocationBase &
   (

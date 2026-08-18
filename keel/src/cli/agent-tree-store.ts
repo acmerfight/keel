@@ -27,6 +27,7 @@ import {
 import type { SubagentWriteWorkspaceReference } from "../agent/subagent-workspace.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import type { SubagentTerminalStatus } from "../core/subagent-status.ts";
+import type { ToolJsonValue } from "../tools/tool-call.ts";
 import {
   agentTreeError,
   createDurableJsonlWriter,
@@ -308,6 +309,19 @@ type AgentTreeDelegateEffectReconciliation =
         };
       };
     }
+  | {
+      readonly kind: "not_applied";
+      readonly evidence: {
+        readonly kind: "agent_tree_delegate_not_accepted";
+        readonly sessionId: string;
+        readonly delegationId: string;
+        readonly parentRunId: string;
+        readonly parentToolCallId: string;
+        readonly profile: "explorer" | "reviewer";
+        readonly mode: "foreground";
+        readonly argumentsSha256: string;
+      };
+    }
   | { readonly kind: "unknown" };
 
 export interface AgentTreeHistory {
@@ -318,6 +332,9 @@ export interface AgentTreeHistory {
   readonly reconcileForegroundReadOnlyDelegate: (input: {
     readonly parentRunId: string;
     readonly parentToolCallId: string;
+    readonly toolName: string;
+    readonly canonicalArguments: Readonly<Record<string, ToolJsonValue>>;
+    readonly argumentsSha256: string;
   }) => AgentTreeDelegateEffectReconciliation;
   readonly pendingResultDeliveries: (
     parentMessages: readonly SessionMessage[],
@@ -1501,16 +1518,45 @@ export function createAgentTreeHistory(options: {
   const reconcileForegroundReadOnlyDelegate = (input: {
     readonly parentRunId: string;
     readonly parentToolCallId: string;
+    readonly toolName: string;
+    readonly canonicalArguments: Readonly<Record<string, ToolJsonValue>>;
+    readonly argumentsSha256: string;
   }): AgentTreeDelegateEffectReconciliation => {
+    const { mode, profile } = input.canonicalArguments;
     const matches = [...runs.values()].filter(
       (run) =>
         run.accepted.parentRunId === input.parentRunId &&
         run.accepted.parentToolCallId === input.parentToolCallId,
     );
     const [run] = matches;
+    if (run === undefined && matches.length === 0) {
+      if (
+        input.toolName !== "delegate" ||
+        mode !== "foreground" ||
+        (profile !== "explorer" && profile !== "reviewer")
+      ) {
+        return { kind: "unknown" };
+      }
+      return {
+        kind: "not_applied",
+        evidence: {
+          kind: "agent_tree_delegate_not_accepted",
+          sessionId: options.sessionId,
+          delegationId: `${input.parentRunId}:${input.parentToolCallId}`,
+          parentRunId: input.parentRunId,
+          parentToolCallId: input.parentToolCallId,
+          profile,
+          mode: "foreground",
+          argumentsSha256: input.argumentsSha256,
+        },
+      };
+    }
     if (
       run === undefined ||
       matches.length !== 1 ||
+      input.toolName !== "delegate" ||
+      mode !== "foreground" ||
+      run.accepted.capability.profile !== profile ||
       run.accepted.mode !== "foreground" ||
       run.accepted.workspace !== null
     ) {

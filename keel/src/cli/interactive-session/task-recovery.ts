@@ -16,6 +16,7 @@ import type {
   Usage,
 } from "../../llm/types.ts";
 import type { SkillLifecycleState } from "../../skills/model.ts";
+import type { ToolJsonValue } from "../../tools/tool-call.ts";
 import {
   type ActiveSessionTask,
   activeSessionTask,
@@ -47,6 +48,9 @@ export interface SessionToolEffectRecoveryOwner {
     readonly runId: string;
     readonly operationId: string;
     readonly toolCallId: string;
+    readonly toolName: string;
+    readonly canonicalArguments: Readonly<Record<string, ToolJsonValue>>;
+    readonly argumentsSha256: string;
   }) =>
     | {
         readonly kind: "resolved";
@@ -253,6 +257,9 @@ export function createSessionTaskRecovery(options: {
                 runId: invocation.runId,
                 operationId: invocation.operationId,
                 toolCallId: invocation.toolCallId,
+                toolName: invocation.toolName,
+                canonicalArguments: invocation.canonicalArguments,
+                argumentsSha256: invocation.argumentsSha256,
               });
             } catch {
               result = { kind: "unknown" };

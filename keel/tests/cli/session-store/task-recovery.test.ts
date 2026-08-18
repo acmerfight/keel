@@ -617,6 +617,249 @@ describe("Session Store Task Recovery", () => {
     }
   });
 
+  test(`Given a no-effect tool invocation is pending,
+    When agent-tree evidence is offered for that invocation,
+    Then the session store rejects evidence from an owner that does not own the effect`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+
+    try {
+      const session = createSessionStore({
+        sessionId: "no-effect-owner-mismatch",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => [],
+        onMessagesPersisted: () => {},
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "read one module",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCall = {
+        id: "read_no_effect",
+        tool: "read",
+        path: "module.ts",
+      } as const;
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls: [toolCall],
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls([toolCall]);
+      const pendingTask = activeSessionTask(session);
+      if (pendingTask?.phase !== "tool_execution") {
+        throw new Error("expected read tool execution");
+      }
+      const pendingInvocation = pendingTask.toolInvocations[0];
+      if (pendingInvocation?.phase !== "effect_pending") {
+        throw new Error("expected effect-pending read");
+      }
+
+      expect(() =>
+        persistSessionToolEffectReconciliation({
+          session,
+          toolCallId: toolCall.id,
+          reconciliation: {
+            ownerKey: "agent_tree",
+            effect: "not_applied",
+            evidence: {
+              kind: "agent_tree_delegate_not_accepted",
+              sessionId: session.id,
+              delegationId: `${pendingInvocation.runId}:${toolCall.id}`,
+              parentRunId: pendingInvocation.runId,
+              parentToolCallId: toolCall.id,
+              profile: "explorer",
+              mode: "foreground",
+              argumentsSha256: pendingInvocation.argumentsSha256,
+            },
+          },
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(/cannot accept this effect reconciliation/u);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given agent-tree absence was persisted before the process died again,
+    When recovery reopens the interrupted foreground reviewer delegate,
+    Then it reuses not-applied evidence without querying the owner or applying host policy`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-task-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-task-home-"));
+    let messages: readonly SessionMessage[] = [];
+
+    try {
+      const session = createSessionStore({
+        sessionId: "delegate-effect-not-applied",
+        workspace,
+        runtime: runtime(home),
+      });
+      const recovery = createSessionTaskRecovery({
+        session: () => session,
+        runtime: runtime(home, 1),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+      });
+      recovery.admit({
+        userMessage: {
+          role: "user",
+          content: "recover the unaccepted reviewer delegate",
+          origin: { type: "user_prompt" },
+        },
+        provider: PROVIDER,
+        consumedInputIds: [],
+      });
+      const lifecycle = recovery.providerLifecycle(PROVIDER);
+      lifecycle.providerRequestAttempts
+        .begin()
+        .finish({ outcome: "completed", usage: USAGE });
+      const toolCall = {
+        id: "delegate_not_accepted",
+        tool: "delegate",
+        profile: "reviewer",
+        mode: "foreground",
+        task: "Review one module.",
+      } as const;
+      lifecycle.settled({
+        assistantMessage: {
+          role: "assistant",
+          content: "",
+          toolCalls: [toolCall],
+        },
+        usage: USAGE,
+        stopReason: "stop",
+      });
+      lifecycle.beforeToolCalls([toolCall]);
+      const pendingTask = activeSessionTask(session);
+      if (pendingTask?.phase !== "tool_execution") {
+        throw new Error("expected delegate tool execution");
+      }
+      const pendingInvocation = pendingTask.toolInvocations[0];
+      if (pendingInvocation?.phase !== "effect_pending") {
+        throw new Error("expected effect-pending delegate");
+      }
+      expect(() =>
+        persistSessionToolEffectReconciliation({
+          session,
+          toolCallId: toolCall.id,
+          reconciliation: {
+            ownerKey: "agent_tree",
+            effect: "not_applied",
+            evidence: {
+              kind: "agent_tree_delegate_not_accepted",
+              sessionId: session.id,
+              delegationId: `${pendingInvocation.runId}:${toolCall.id}`,
+              parentRunId: pendingInvocation.runId,
+              parentToolCallId: toolCall.id,
+              profile: "explorer",
+              mode: "foreground",
+              argumentsSha256: pendingInvocation.argumentsSha256,
+            },
+          },
+          runtime: runtime(home, 2),
+        }),
+      ).toThrow(/cannot accept this effect reconciliation/u);
+      persistSessionToolEffectReconciliation({
+        session,
+        toolCallId: toolCall.id,
+        reconciliation: {
+          ownerKey: "agent_tree",
+          effect: "not_applied",
+          evidence: {
+            kind: "agent_tree_delegate_not_accepted",
+            sessionId: session.id,
+            delegationId: `${pendingInvocation.runId}:${toolCall.id}`,
+            parentRunId: pendingInvocation.runId,
+            parentToolCallId: toolCall.id,
+            profile: "reviewer",
+            mode: "foreground",
+            argumentsSha256: pendingInvocation.argumentsSha256,
+          },
+        },
+        runtime: runtime(home, 3),
+      });
+
+      const opened = resumeSessionStore({
+        sessionId: session.id,
+        workspace,
+        runtime: runtime(home, 4),
+      });
+      messages = opened.messages;
+      let ownerQueries = 0;
+      const directive = createSessionTaskRecovery({
+        session: () => opened,
+        runtime: runtime(home, 5),
+        currentMessages: () => messages,
+        onMessagesPersisted: (persisted) => {
+          messages = persisted;
+        },
+        toolEffectRecoveryOwners: () =>
+          new Map([
+            [
+              "agent_tree",
+              {
+                reconcile: () => {
+                  ownerQueries++;
+                  return { kind: "unknown" as const };
+                },
+              },
+            ],
+          ]),
+      }).resume();
+
+      expect(directive.kind).toBe("run");
+      expect(ownerQueries).toBe(0);
+      if (directive.kind !== "run") throw new Error("expected fresh Run");
+      expect(
+        JSON.parse(directive.recoveredMessages[1]?.content ?? "{}"),
+      ).toMatchObject({
+        status: "interrupted_effect_unknown",
+        reconciliation: {
+          ownerKey: "agent_tree",
+          effect: "not_applied",
+          evidence: {
+            kind: "agent_tree_delegate_not_accepted",
+            profile: "reviewer",
+          },
+        },
+      });
+      const ledger = await readFile(session.filePath, "utf8");
+      expect(ledger.match(/"type":"effect_reconciled"/gu)).toHaveLength(1);
+      expect(ledger.match(/"type":"tool_settled"/gu)).toHaveLength(1);
+      expect(ledger).not.toContain('"type":"task_recovery_disposition"');
+      expect(
+        resumeSessionStore({
+          sessionId: session.id,
+          workspace,
+          runtime: runtime(home, 6),
+        }).activeTask,
+      ).toMatchObject({ phase: "provider_ready", recovered: true });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     {
       name: "a different Task identity",
