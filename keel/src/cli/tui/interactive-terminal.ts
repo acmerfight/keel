@@ -9,7 +9,7 @@ import {
   type SlashCommand,
   type Terminal,
   Text,
-  TUI,
+  TuiMainScreen,
 } from "@earendil-works/pi-tui";
 import type { SkillDescriptor } from "../../skills/model.ts";
 import type { InteractiveDiffInspection } from "../interactive-session/diff-inspection.ts";
@@ -104,7 +104,7 @@ export function createInteractiveTerminalDisplay(
     readonly skillCompletions?: readonly SkillDescriptor[];
   },
 ): InteractiveTerminalDisplay {
-  const tui = new TUI(terminal, true);
+  const tui = new TuiMainScreen(terminal, true);
   const theme = createInteractiveTerminalTheme(options.colorMode);
   const transcript = new InteractiveTranscript(theme);
   const activityStatus = new Text("", 0, 0);
