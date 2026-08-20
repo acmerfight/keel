@@ -213,6 +213,11 @@ describe("Interactive Session - Bash Approvals Command", () => {
           cwd: workspace,
           argvPrefix: ["git", "status"],
         },
+        {
+          type: "command_family",
+          cwd: workspace,
+          commandFamily: "pnpm_vitest_run_workspace_test_selectors",
+        },
       ],
       projectRoot: workspace,
       initialProjectBashApprovalGrants: [
@@ -220,6 +225,11 @@ describe("Interactive Session - Bash Approvals Command", () => {
           projectRoot: workspace,
           cwd: workspace,
           argvPrefix: ["pnpm", "test"],
+        },
+        {
+          projectRoot: workspace,
+          cwd: workspace,
+          commandFamily: "pnpm_vitest_run_workspace_test_selectors",
         },
       ],
       input,
@@ -258,6 +268,10 @@ describe("Interactive Session - Bash Approvals Command", () => {
       expect(stdout).toContain("     command: printf 'x\\x1b[2Jy'\n");
       expect(stdout).toContain("  2. command family\n");
       expect(stdout).toContain("     argv prefix: git status\n");
+      expect(stdout).toContain("  3. command family\n");
+      expect(stdout).toContain(
+        "     family: pnpm vitest run <workspace test selectors>\n",
+      );
       expect(stdout).toContain(
         "Use /approvals revoke <index> or /approvals clear to remove approvals.\n",
       );
@@ -265,6 +279,10 @@ describe("Interactive Session - Bash Approvals Command", () => {
       expect(stdout).toContain(`     project: ${workspace}\n`);
       expect(stdout).toContain(`     approved from: ${workspace}\n`);
       expect(stdout).toContain("     argv prefix: pnpm test\n");
+      expect(stdout).toContain("  2. command family\n");
+      expect(stdout).toContain(
+        "     family: pnpm vitest run <workspace test selectors>\n",
+      );
       expect(stdout).toContain(
         "Use keel approvals revoke <index> or keel approvals clear to remove project approvals.\n",
       );

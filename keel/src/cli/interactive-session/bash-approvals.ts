@@ -1,4 +1,7 @@
-import type { BashApprovalGrant } from "../../permissions/bash.ts";
+import {
+  type BashApprovalGrant,
+  bashCommandFamilyDisplay,
+} from "../../permissions/bash.ts";
 import { escapeApprovalText } from "../bash-approval-text.ts";
 
 export function formatBashApprovalList(
@@ -23,6 +26,15 @@ export function formatBashApprovalList(
           `  ${index + 1}. command family`,
           `     cwd: ${escapeApprovalText(grant.cwd)}`,
           `     argv prefix: ${escapeApprovalText(grant.argvPrefix.join(" "))}`,
+        );
+        break;
+      case "command_family":
+        approvalLines.push(
+          `  ${index + 1}. command family`,
+          `     cwd: ${escapeApprovalText(grant.cwd)}`,
+          `     family: ${escapeApprovalText(
+            bashCommandFamilyDisplay(grant.commandFamily),
+          )}`,
         );
         break;
     }

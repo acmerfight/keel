@@ -605,11 +605,17 @@ export async function runInteractiveSession(
   ): void => {
     activeProjectBashApprovalGrants = [
       ...activeProjectBashApprovalGrants,
-      {
-        projectRoot: grant.projectRoot,
-        cwd: grant.cwd,
-        argvPrefix: [...grant.argvPrefix],
-      },
+      grant.commandFamily === undefined
+        ? {
+            projectRoot: grant.projectRoot,
+            cwd: grant.cwd,
+            argvPrefix: [...grant.argvPrefix],
+          }
+        : {
+            projectRoot: grant.projectRoot,
+            cwd: grant.cwd,
+            commandFamily: grant.commandFamily,
+          },
     ];
   };
   const input =

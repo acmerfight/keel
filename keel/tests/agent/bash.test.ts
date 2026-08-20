@@ -682,9 +682,9 @@ describe("Bash Commands", () => {
       command: "pnpm test",
     } satisfies BashApprovalGrant;
     const familyGrant = {
-      type: "prefix",
+      type: "command_family",
       cwd: workspace,
-      argvPrefix: ["git", "status"],
+      commandFamily: "pnpm_vitest_run_workspace_test_selectors",
     } satisfies BashApprovalGrant;
     let promptCount = 0;
     const bashPermission = createSessionBashPermissionPolicy({
@@ -709,7 +709,7 @@ describe("Bash Commands", () => {
         signal: freshSignal(),
       });
       const familyDecision = await bashPermission.review({
-        command: "git status --short",
+        command: "pnpm vitest run tests/revoked.test.ts",
         cwd: workspace,
         signal: freshSignal(),
       });
@@ -779,6 +779,163 @@ describe("Bash Commands", () => {
         type: "text",
         text: "Checked status twice.",
       });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a workspace Vitest selector family is approved for the session,
+    When later commands use safe and unsafe selectors,
+    Then only safe workspace-relative selectors reuse the approval`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    const promptedCommands: string[] = [];
+    const offeredFamilies: Array<string | null> = [];
+    const bashPermission = createSessionBashPermissionPolicy({
+      prompt: (request) => {
+        promptedCommands.push(request.command);
+        offeredFamilies.push(request.prefixApproval?.display ?? null);
+        if (promptedCommands.length === 1) {
+          return (
+            request.prefixApproval ?? {
+              type: "deny",
+              message: "family was not offered",
+            }
+          );
+        }
+        return { type: "deny", message: "unsafe selector" };
+      },
+    });
+
+    try {
+      // When
+      await bashPermission.review({
+        command: "pnpm vitest run tests/first.test.ts",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      const safeDecision = await bashPermission.review({
+        command: "pnpm vitest run packages/app/tests/second.test.ts",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      const safeLocationDecision = await bashPermission.review({
+        command: "pnpm vitest run tests/located.test.ts:12",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      const safeDotRelativeDecision = await bashPermission.review({
+        command: "pnpm vitest run ./tests/dot-relative.test.ts:12",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      for (const command of [
+        "pnpm vitest run ../outside.test.ts",
+        "pnpm vitest run /tmp/outside.test.ts",
+        "pnpm vitest run C:/outside.test.ts",
+        "pnpm vitest run ..:12",
+        "pnpm vitest run tests/..:12",
+        "pnpm vitest run .:12",
+        "pnpm vitest run :12",
+        "pnpm vitest run tests/inside.test.ts --update",
+      ]) {
+        await bashPermission.review({
+          command,
+          cwd: workspace,
+          signal: freshSignal(),
+        });
+      }
+
+      // Then
+      expect(safeDecision).toEqual({
+        type: "allow",
+        scope: "session-prefix",
+      });
+      expect(safeLocationDecision).toEqual({
+        type: "allow",
+        scope: "session-prefix",
+      });
+      expect(safeDotRelativeDecision).toEqual({
+        type: "allow",
+        scope: "session-prefix",
+      });
+      expect(promptedCommands).toEqual([
+        "pnpm vitest run tests/first.test.ts",
+        "pnpm vitest run ../outside.test.ts",
+        "pnpm vitest run /tmp/outside.test.ts",
+        "pnpm vitest run C:/outside.test.ts",
+        "pnpm vitest run ..:12",
+        "pnpm vitest run tests/..:12",
+        "pnpm vitest run .:12",
+        "pnpm vitest run :12",
+        "pnpm vitest run tests/inside.test.ts --update",
+      ]);
+      expect(offeredFamilies).toEqual([
+        "pnpm vitest run <workspace test selectors>",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+      ]);
+      expect(bashPermission.grants()).toEqual([
+        {
+          type: "command_family",
+          cwd: workspace,
+          commandFamily: "pnpm_vitest_run_workspace_test_selectors",
+        },
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given only the exact pnpm vitest run prefix was approved,
+    When a later command adds a test selector,
+    Then the old exact approval does not gain broader authority`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-agent-bash-"));
+    let promptCount = 0;
+    const bashPermission = createSessionBashPermissionPolicy({
+      initialGrants: [
+        {
+          type: "prefix",
+          cwd: workspace,
+          argvPrefix: ["pnpm", "vitest", "run"],
+        },
+      ],
+      prompt: () => {
+        promptCount++;
+        return { type: "deny", message: "new authority needs approval" };
+      },
+    });
+
+    try {
+      // When
+      const exactDecision = await bashPermission.review({
+        command: "pnpm vitest run",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+      const selectorDecision = await bashPermission.review({
+        command: "pnpm vitest run tests/new.test.ts",
+        cwd: workspace,
+        signal: freshSignal(),
+      });
+
+      // Then
+      expect(exactDecision).toEqual({
+        type: "allow",
+        scope: "session-prefix",
+      });
+      expect(selectorDecision).toEqual({
+        type: "deny",
+        message: "new authority needs approval",
+      });
+      expect(promptCount).toBe(1);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

@@ -666,9 +666,18 @@ const prefixBashApprovalGrantSchema = z
   })
   .strict();
 
+const commandFamilyBashApprovalGrantSchema = z
+  .object({
+    type: z.literal("command_family"),
+    cwd: z.string(),
+    commandFamily: z.literal("pnpm_vitest_run_workspace_test_selectors"),
+  })
+  .strict();
+
 const bashApprovalGrantSchema = z.discriminatedUnion("type", [
   exactBashApprovalGrantSchema,
   prefixBashApprovalGrantSchema,
+  commandFamilyBashApprovalGrantSchema,
 ]);
 
 const bashApprovalGrantedRecordSchema = z
@@ -2347,6 +2356,12 @@ function copyBashApprovalGrant(grant: BashApprovalGrant): BashApprovalGrant {
         cwd: grant.cwd,
         argvPrefix: [...grant.argvPrefix],
       };
+    case "command_family":
+      return {
+        type: "command_family",
+        cwd: grant.cwd,
+        commandFamily: grant.commandFamily,
+      };
   }
 }
 
@@ -2366,6 +2381,12 @@ function redactBashApprovalGrantForPersistence(
         cwd: grant.cwd,
         argvPrefix: grant.argvPrefix.map(redactTextForPersistence),
       };
+    case "command_family":
+      return {
+        type: "command_family",
+        cwd: grant.cwd,
+        commandFamily: grant.commandFamily,
+      };
   }
 }
 
@@ -2377,6 +2398,8 @@ function bashApprovalGrantHasRedactionMarker(
       return hasPersistenceRedactionMarker(grant.command);
     case "prefix":
       return grant.argvPrefix.some(hasPersistenceRedactionMarker);
+    case "command_family":
+      return false;
   }
 }
 
