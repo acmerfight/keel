@@ -1,8 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
@@ -223,6 +230,175 @@ describe("CLI Main - Bash Project Approvals", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given ask mode receives workspace Vitest selectors,
+    When the user saves that safe command family for the project,
+    Then later safe selectors run without a prompt while traversal fails closed`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-main-bash-project-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "keel-home-bash-project-"));
+    const fakeBin = await mkdtemp(join(tmpdir(), "keel-fake-pnpm-"));
+    const commandLog = join(fakeBin, "commands.log");
+    const fakePnpm = join(fakeBin, "pnpm");
+    const pathEnvironmentKey = "PATH";
+    const logEnvironmentKey = "KEEL_TEST_PNPM_LOG";
+    const originalPath = process.env[pathEnvironmentKey];
+    const originalLog = process.env[logEnvironmentKey];
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: workspace,
+      stdio: "ignore",
+    });
+    await mkdir(join(workspace, "tests"), { recursive: true });
+    await writeFile(join(workspace, "tests", "first.test.ts"), "first\n");
+    await writeFile(join(workspace, "tests", "second.test.ts"), "second\n");
+    await writeFile(
+      fakePnpm,
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$KEEL_TEST_PNPM_LOG"\n',
+      "utf8",
+    );
+    await chmod(fakePnpm, 0o755);
+    process.env[pathEnvironmentKey] =
+      `${fakeBin}${delimiter}${originalPath ?? ""}`;
+    process.env[logEnvironmentKey] = commandLog;
+
+    try {
+      const firstCommand = "pnpm vitest run tests/first.test.ts";
+      const firstServer = bashCommandServer({
+        command: firstCommand,
+        toolCallId: "call_vitest_first",
+        finalText: "Saved Vitest approval.",
+        capturedBodies: [],
+      });
+      await listen(firstServer);
+      const input = new PassThrough();
+      let approvalPrompts = 0;
+      const firstRun = createRuntime(
+        ["--bash-policy", "ask", "run the first test"],
+        {
+          cwd: workspace,
+          env: providerEnv(firstServer, home),
+          input,
+          inputIsTTY: true,
+          onStderr: (text) => {
+            if (text.includes("Approve bash command?")) {
+              approvalPrompts++;
+              input.write("r\n");
+              input.end();
+            }
+          },
+        },
+      );
+      try {
+        const firstExitCode = await runCliMain(firstRun.runtime);
+        expect(firstExitCode).toBe(0);
+      } finally {
+        await close(firstServer);
+      }
+
+      // When
+      const secondCommand = "pnpm vitest run ./tests/second.test.ts";
+      const secondCapturedBodies: unknown[] = [];
+      const secondServer = bashCommandServer({
+        command: secondCommand,
+        toolCallId: "call_vitest_second",
+        finalText: "Used Vitest approval.",
+        capturedBodies: secondCapturedBodies,
+      });
+      await listen(secondServer);
+      const secondRun = createRuntime(
+        ["--bash-policy", "ask", "run the second test"],
+        {
+          cwd: workspace,
+          env: providerEnv(secondServer, home),
+        },
+      );
+      try {
+        const secondExitCode = await runCliMain(secondRun.runtime);
+        expect(secondExitCode).toBe(0);
+      } finally {
+        await close(secondServer);
+      }
+
+      const unsafeCommand = "pnpm vitest run tests/..:12";
+      const unsafeCapturedBodies: unknown[] = [];
+      const unsafeServer = bashCommandServer({
+        command: unsafeCommand,
+        toolCallId: "call_vitest_outside",
+        finalText: "Rejected unsafe selector.",
+        capturedBodies: unsafeCapturedBodies,
+      });
+      await listen(unsafeServer);
+      const unsafeRun = createRuntime(
+        ["--bash-policy", "ask", "run an outside test"],
+        {
+          cwd: workspace,
+          env: providerEnv(unsafeServer, home),
+        },
+      );
+      try {
+        const unsafeExitCode = await runCliMain(unsafeRun.runtime);
+        expect(unsafeExitCode).toBe(0);
+      } finally {
+        await close(unsafeServer);
+      }
+
+      // Then
+      expect(approvalPrompts).toBe(1);
+      expect(firstRun.stdout()).toBe("Saved Vitest approval.\n");
+      expect(firstRun.stderr()).toContain(
+        "[r] allow command family for this project: pnpm vitest run <workspace test selectors>",
+      );
+      expect(secondRun.stdout()).toBe("Used Vitest approval.\n");
+      expect(secondRun.stderr()).toBe(`Tool: bash ${secondCommand}\n`);
+      const secondRequest = requestWithMessagesSchema.parse(
+        secondCapturedBodies[1],
+      );
+      expect(secondRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_vitest_second",
+          content: expect.stringContaining("Exit code: 0"),
+        }),
+      );
+      expect(unsafeRun.stdout()).toBe("Rejected unsafe selector.\n");
+      expect(unsafeRun.stderr()).toBe(
+        `Tool: bash ${unsafeCommand}\nTool failed: bash ${unsafeCommand}\n`,
+      );
+      const unsafeRequest = requestWithMessagesSchema.parse(
+        unsafeCapturedBodies[1],
+      );
+      expect(unsafeRequest.messages).toContainEqual(
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_vitest_outside",
+          content: expect.stringContaining("bash permission denied"),
+        }),
+      );
+      expect(await readFile(commandLog, "utf8")).toBe(
+        [
+          "vitest run tests/first.test.ts",
+          "vitest run ./tests/second.test.ts",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env[pathEnvironmentKey];
+      } else {
+        process.env[pathEnvironmentKey] = originalPath;
+      }
+      if (originalLog === undefined) {
+        delete process.env[logEnvironmentKey];
+      } else {
+        process.env[logEnvironmentKey] = originalLog;
+      }
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+      await rm(fakeBin, { recursive: true, force: true });
     }
   });
 

@@ -2,7 +2,10 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import type { BashProjectApprovalGrant } from "../permissions/bash.ts";
+import {
+  type BashProjectApprovalGrant,
+  bashCommandFamilyDisplay,
+} from "../permissions/bash.ts";
 import { escapeApprovalText } from "./bash-approval-text.ts";
 import { projectRoot } from "./project-root.ts";
 import { sessionHome } from "./session-store.ts";
@@ -11,13 +14,24 @@ interface BashProjectApprovalRuntime {
   readonly env: (key: string) => string | undefined;
 }
 
-const bashProjectApprovalGrantSchema = z
+const prefixBashProjectApprovalGrantSchema = z
   .object({
     projectRoot: z.string().min(1),
     cwd: z.string().min(1),
     argvPrefix: z.array(z.string().min(1)).min(1),
   })
   .strict();
+const commandFamilyBashProjectApprovalGrantSchema = z
+  .object({
+    projectRoot: z.string().min(1),
+    cwd: z.string().min(1),
+    commandFamily: z.literal("pnpm_vitest_run_workspace_test_selectors"),
+  })
+  .strict();
+const bashProjectApprovalGrantSchema = z.union([
+  prefixBashProjectApprovalGrantSchema,
+  commandFamilyBashProjectApprovalGrantSchema,
+]);
 const bashProjectApprovalsFileSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -108,6 +122,13 @@ function writeApprovalsFile(
 export const bashApprovalProjectRoot = projectRoot;
 
 function copyGrant(grant: BashProjectApprovalGrant): BashProjectApprovalGrant {
+  if (grant.commandFamily !== undefined) {
+    return {
+      projectRoot: grant.projectRoot,
+      cwd: grant.cwd,
+      commandFamily: grant.commandFamily,
+    };
+  }
   return {
     projectRoot: grant.projectRoot,
     cwd: grant.cwd,
@@ -118,6 +139,13 @@ function copyGrant(grant: BashProjectApprovalGrant): BashProjectApprovalGrant {
 function fileGrantFromGrant(
   grant: BashProjectApprovalGrant,
 ): BashProjectApprovalsFileGrant {
+  if (grant.commandFamily !== undefined) {
+    return {
+      projectRoot: grant.projectRoot,
+      cwd: grant.cwd,
+      commandFamily: grant.commandFamily,
+    };
+  }
   return {
     projectRoot: grant.projectRoot,
     cwd: grant.cwd,
@@ -126,7 +154,13 @@ function fileGrantFromGrant(
 }
 
 function grantKey(grant: BashProjectApprovalGrant): string {
-  return JSON.stringify([grant.projectRoot, grant.argvPrefix]);
+  return grant.commandFamily === undefined
+    ? JSON.stringify([grant.projectRoot, "prefix", grant.argvPrefix])
+    : JSON.stringify([
+        grant.projectRoot,
+        "command_family",
+        grant.commandFamily,
+      ]);
 }
 
 function grantsForProject(
@@ -207,11 +241,17 @@ export function formatBashProjectApprovalList(
 
   const approvalLines: string[] = [];
   for (const [index, grant] of grants.entries()) {
+    const details =
+      grant.commandFamily === undefined
+        ? `     argv prefix: ${escapeApprovalText(grant.argvPrefix.join(" "))}`
+        : `     family: ${escapeApprovalText(
+            bashCommandFamilyDisplay(grant.commandFamily),
+          )}`;
     approvalLines.push(
       `  ${index + 1}. command family`,
       `     project: ${escapeApprovalText(grant.projectRoot)}`,
       `     approved from: ${escapeApprovalText(grant.cwd)}`,
-      `     argv prefix: ${escapeApprovalText(grant.argvPrefix.join(" "))}`,
+      details,
     );
   }
 

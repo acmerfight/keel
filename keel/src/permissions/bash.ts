@@ -1,3 +1,5 @@
+import { posix, win32 } from "node:path";
+
 export type BashPolicy = "ask" | "deny" | "trusted";
 
 // BashPolicy is the user-facing CLI vocabulary; BashMode is the internal state
@@ -10,6 +12,8 @@ type BashCommandRisk =
   | "workspace-write"
   | "unknown-or-dangerous";
 
+export type BashCommandFamily = "pnpm_vitest_run_workspace_test_selectors";
+
 export type BashApprovalGrant =
   | {
       readonly type: "exact";
@@ -20,12 +24,32 @@ export type BashApprovalGrant =
       readonly type: "prefix";
       readonly cwd: string;
       readonly argvPrefix: readonly string[];
+    }
+  | {
+      readonly type: "command_family";
+      readonly cwd: string;
+      readonly commandFamily: BashCommandFamily;
     };
 
-export interface BashProjectApprovalGrant {
-  readonly projectRoot: string;
-  readonly cwd: string;
-  readonly argvPrefix: readonly string[];
+export type BashProjectApprovalGrant =
+  | {
+      readonly projectRoot: string;
+      readonly cwd: string;
+      readonly argvPrefix: readonly string[];
+      readonly commandFamily?: never;
+    }
+  | {
+      readonly projectRoot: string;
+      readonly cwd: string;
+      readonly commandFamily: BashCommandFamily;
+      readonly argvPrefix?: never;
+    };
+
+export function bashCommandFamilyDisplay(family: BashCommandFamily): string {
+  switch (family) {
+    case "pnpm_vitest_run_workspace_test_selectors":
+      return "pnpm vitest run <workspace test selectors>";
+  }
 }
 
 export function bashModeFromPolicy(policy: BashPolicy): BashMode {
@@ -54,6 +78,7 @@ interface BashPermissionRequestBase {
 interface BashPermissionApprovalMetadata {
   readonly type: "allow";
   readonly argvPrefix: readonly string[];
+  readonly commandFamily: BashCommandFamily | undefined;
   readonly display: string;
   readonly promptLabel: "command family" | "this command";
 }
@@ -70,15 +95,18 @@ class BashPermissionPrefixApproval<RequestToken>
   readonly type = "allow" as const;
   readonly scope = "session-prefix" as const;
   readonly argvPrefix: readonly string[];
+  readonly commandFamily: BashCommandFamily | undefined;
   readonly display: string;
   readonly promptLabel: "command family" | "this command";
 
   constructor(
     argvPrefix: readonly string[],
+    commandFamily: BashCommandFamily | undefined,
     display: string,
     promptLabel: "command family" | "this command",
   ) {
     this.argvPrefix = Object.freeze([...argvPrefix]);
+    this.commandFamily = commandFamily;
     this.display = display;
     this.promptLabel = promptLabel;
     Object.freeze(this);
@@ -94,17 +122,20 @@ class BashPermissionProjectApproval<RequestToken>
   readonly type = "allow" as const;
   readonly scope = "project-prefix" as const;
   readonly argvPrefix: readonly string[];
+  readonly commandFamily: BashCommandFamily | undefined;
   readonly display: string;
   readonly promptLabel: "command family" | "this command";
   readonly projectRoot: string;
 
   constructor(
     argvPrefix: readonly string[],
+    commandFamily: BashCommandFamily | undefined,
     display: string,
     promptLabel: "command family" | "this command",
     projectRoot: string,
   ) {
     this.argvPrefix = Object.freeze([...argvPrefix]);
+    this.commandFamily = commandFamily;
     this.display = display;
     this.promptLabel = promptLabel;
     this.projectRoot = projectRoot;
@@ -190,6 +221,8 @@ export function bashApprovalGrantKey(grant: BashApprovalGrant): string {
       return JSON.stringify(["exact", grant.cwd, grant.command]);
     case "prefix":
       return JSON.stringify(["prefix", grant.cwd, grant.argvPrefix]);
+    case "command_family":
+      return JSON.stringify(["command_family", grant.cwd, grant.commandFamily]);
   }
 }
 
@@ -207,6 +240,12 @@ function copyBashApprovalGrant(grant: BashApprovalGrant): BashApprovalGrant {
         cwd: grant.cwd,
         argvPrefix: [...grant.argvPrefix],
       };
+    case "command_family":
+      return {
+        type: "command_family",
+        cwd: grant.cwd,
+        commandFamily: grant.commandFamily,
+      };
   }
 }
 
@@ -220,10 +259,21 @@ interface ProjectPrefixApprovalRule {
   readonly argvPrefix: readonly string[];
 }
 
+interface CommandFamilyApprovalRule {
+  readonly cwd: string;
+  readonly commandFamily: BashCommandFamily;
+}
+
+interface ProjectCommandFamilyApprovalRule {
+  readonly projectRoot: string;
+  readonly commandFamily: BashCommandFamily;
+}
+
 interface PrefixApprovalCandidate {
   readonly argvPrefix: readonly string[];
   readonly risk: BashCommandRisk;
-  readonly trailing: "any" | "exact";
+  readonly trailing: "any" | "exact" | "workspace-test-selectors";
+  readonly commandFamily?: BashCommandFamily;
 }
 
 const SIMPLE_COMMAND_TOKEN_PATTERN = /^[A-Za-z0-9_./:@%+=,-]+$/u;
@@ -233,6 +283,12 @@ const PREFIX_APPROVAL_CANDIDATES: readonly PrefixApprovalCandidate[] = [
     argvPrefix: ["pnpm", "vitest", "run"],
     risk: "project-verification",
     trailing: "exact",
+  },
+  {
+    argvPrefix: ["pnpm", "vitest", "run"],
+    risk: "project-verification",
+    trailing: "workspace-test-selectors",
+    commandFamily: "pnpm_vitest_run_workspace_test_selectors",
   },
   {
     argvPrefix: ["pnpm", "test"],
@@ -332,9 +388,47 @@ function argvMatchesPrefixCandidate(
   if (!argvStartsWith(argv, candidate.argvPrefix)) {
     return false;
   }
+  switch (candidate.trailing) {
+    case "any":
+      return true;
+    case "exact":
+      return argv.length === candidate.argvPrefix.length;
+    case "workspace-test-selectors": {
+      const selectors = argv.slice(candidate.argvPrefix.length);
+      return (
+        selectors.length > 0 && selectors.every(isSafeWorkspaceTestSelector)
+      );
+    }
+  }
+}
+
+function isSafeWorkspaceTestSelector(selector: string): boolean {
+  const filename = vitestSelectorFilename(selector);
+  if (
+    selector.startsWith("-") ||
+    filename === "" ||
+    posix.isAbsolute(filename) ||
+    win32.isAbsolute(filename) ||
+    /^[A-Za-z]:/u.test(selector)
+  ) {
+    return false;
+  }
+  const pathSegments = filename.split("/");
   return (
-    candidate.trailing === "any" || argv.length === candidate.argvPrefix.length
+    pathSegments.every((segment) => segment !== "..") &&
+    pathSegments.some((segment) => segment !== "" && segment !== ".")
   );
+}
+
+function vitestSelectorFilename(selector: string): string {
+  // Mirror Vitest's location-filter parse: a final numeric suffix is a line
+  // number, so path safety must be checked against the filename before it.
+  const colonIndex = selector.lastIndexOf(":");
+  if (colonIndex === -1) {
+    return selector;
+  }
+  const lineNumber = selector.slice(colonIndex + 1);
+  return /^\d+$/u.test(lineNumber) ? selector.slice(0, colonIndex) : selector;
 }
 
 function matchingPrefixApprovalCandidate(
@@ -360,8 +454,11 @@ function commandPrefixApproval<RequestToken>(
   }
   return new BashPermissionPrefixApproval<RequestToken>(
     candidate.argvPrefix,
-    candidate.argvPrefix.join(" "),
-    candidate.trailing === "any" ? "command family" : "this command",
+    candidate.commandFamily,
+    candidate.commandFamily === undefined
+      ? candidate.argvPrefix.join(" ")
+      : bashCommandFamilyDisplay(candidate.commandFamily),
+    candidate.trailing === "exact" ? "this command" : "command family",
   );
 }
 
@@ -371,6 +468,7 @@ function commandProjectApproval<RequestToken>(
 ): BashPermissionProjectApproval<RequestToken> {
   return new BashPermissionProjectApproval<RequestToken>(
     prefixApproval.argvPrefix,
+    prefixApproval.commandFamily,
     prefixApproval.display,
     prefixApproval.promptLabel,
     projectRoot,
@@ -471,9 +569,26 @@ function projectPrefixKey(rule: ProjectPrefixApprovalRule): string {
   return JSON.stringify([rule.projectRoot, rule.argvPrefix]);
 }
 
+function commandFamilyKey(rule: CommandFamilyApprovalRule): string {
+  return JSON.stringify([rule.cwd, rule.commandFamily]);
+}
+
+function projectCommandFamilyKey(
+  rule: ProjectCommandFamilyApprovalRule,
+): string {
+  return JSON.stringify([rule.projectRoot, rule.commandFamily]);
+}
+
 function copyBashProjectApprovalGrant(
   grant: BashProjectApprovalGrant,
 ): BashProjectApprovalGrant {
+  if (grant.commandFamily !== undefined) {
+    return {
+      projectRoot: grant.projectRoot,
+      cwd: grant.cwd,
+      commandFamily: grant.commandFamily,
+    };
+  }
   return {
     projectRoot: grant.projectRoot,
     cwd: grant.cwd,
@@ -491,7 +606,9 @@ export function createSessionBashPermissionPolicy(options: {
 }): SessionBashPermissionPolicy {
   const approved = new Set<string>();
   const approvedPrefixes = new Set<string>();
+  const approvedCommandFamilies = new Set<string>();
   const approvedProjectPrefixes = new Set<string>();
+  const approvedProjectCommandFamilies = new Set<string>();
   const grantsByKey = new Map<string, BashApprovalGrant>();
   const addGrant = (grant: BashApprovalGrant): boolean => {
     const key = bashApprovalGrantKey(grant);
@@ -512,6 +629,14 @@ export function createSessionBashPermissionPolicy(options: {
           }),
         );
         break;
+      case "command_family":
+        approvedCommandFamilies.add(
+          commandFamilyKey({
+            cwd: copiedGrant.cwd,
+            commandFamily: copiedGrant.commandFamily,
+          }),
+        );
+        break;
     }
     return true;
   };
@@ -519,7 +644,11 @@ export function createSessionBashPermissionPolicy(options: {
     addGrant(grant);
   }
   for (const grant of options.initialProjectGrants ?? []) {
-    approvedProjectPrefixes.add(projectPrefixKey(grant));
+    if (grant.commandFamily === undefined) {
+      approvedProjectPrefixes.add(projectPrefixKey(grant));
+    } else {
+      approvedProjectCommandFamilies.add(projectCommandFamilyKey(grant));
+    }
   }
 
   return {
@@ -545,6 +674,14 @@ export function createSessionBashPermissionPolicy(options: {
             }),
           );
           break;
+        case "command_family":
+          approvedCommandFamilies.delete(
+            commandFamilyKey({
+              cwd: activeGrant.cwd,
+              commandFamily: activeGrant.commandFamily,
+            }),
+          );
+          break;
       }
       return true;
     },
@@ -553,6 +690,7 @@ export function createSessionBashPermissionPolicy(options: {
       grantsByKey.clear();
       approved.clear();
       approvedPrefixes.clear();
+      approvedCommandFamilies.clear();
       return cleared;
     },
     review: async (request) => {
@@ -565,6 +703,7 @@ export function createSessionBashPermissionPolicy(options: {
       const matchingPrefix = matchingPrefixApprovalCandidate(assessment);
       if (
         matchingPrefix !== undefined &&
+        matchingPrefix.commandFamily === undefined &&
         approvedPrefixes.has(
           prefixKey({
             cwd: request.cwd,
@@ -575,12 +714,36 @@ export function createSessionBashPermissionPolicy(options: {
         return { type: "allow", scope: "session-prefix" };
       }
       if (
+        matchingPrefix?.commandFamily !== undefined &&
+        approvedCommandFamilies.has(
+          commandFamilyKey({
+            cwd: request.cwd,
+            commandFamily: matchingPrefix.commandFamily,
+          }),
+        )
+      ) {
+        return { type: "allow", scope: "session-prefix" };
+      }
+      if (
         matchingPrefix !== undefined &&
+        matchingPrefix.commandFamily === undefined &&
         options.projectRoot !== undefined &&
         approvedProjectPrefixes.has(
           projectPrefixKey({
             projectRoot: options.projectRoot,
             argvPrefix: matchingPrefix.argvPrefix,
+          }),
+        )
+      ) {
+        return { type: "allow", scope: "project-prefix" };
+      }
+      if (
+        matchingPrefix?.commandFamily !== undefined &&
+        options.projectRoot !== undefined &&
+        approvedProjectCommandFamilies.has(
+          projectCommandFamilyKey({
+            projectRoot: options.projectRoot,
+            commandFamily: matchingPrefix.commandFamily,
           }),
         )
       ) {
@@ -632,11 +795,18 @@ export function createSessionBashPermissionPolicy(options: {
                 message: "Command family approval did not match this request.",
               };
             }
-            const grant = {
-              type: "prefix",
-              cwd: request.cwd,
-              argvPrefix: [...prefixApproval.argvPrefix],
-            } satisfies BashApprovalGrant;
+            const grant: BashApprovalGrant =
+              prefixApproval.commandFamily === undefined
+                ? {
+                    type: "prefix",
+                    cwd: request.cwd,
+                    argvPrefix: [...prefixApproval.argvPrefix],
+                  }
+                : {
+                    type: "command_family",
+                    cwd: request.cwd,
+                    commandFamily: prefixApproval.commandFamily,
+                  };
             if (addGrant(grant)) {
               options.onGrant?.(grant);
             }
@@ -650,12 +820,25 @@ export function createSessionBashPermissionPolicy(options: {
                 message: "Project command approval did not match this request.",
               };
             }
-            const grant = {
-              projectRoot: projectApproval.projectRoot,
-              cwd: request.cwd,
-              argvPrefix: [...projectApproval.argvPrefix],
-            } satisfies BashProjectApprovalGrant;
-            approvedProjectPrefixes.add(projectPrefixKey(grant));
+            const grant: BashProjectApprovalGrant =
+              projectApproval.commandFamily === undefined
+                ? {
+                    projectRoot: projectApproval.projectRoot,
+                    cwd: request.cwd,
+                    argvPrefix: [...projectApproval.argvPrefix],
+                  }
+                : {
+                    projectRoot: projectApproval.projectRoot,
+                    cwd: request.cwd,
+                    commandFamily: projectApproval.commandFamily,
+                  };
+            if (grant.commandFamily === undefined) {
+              approvedProjectPrefixes.add(projectPrefixKey(grant));
+            } else {
+              approvedProjectCommandFamilies.add(
+                projectCommandFamilyKey(grant),
+              );
+            }
             options.onProjectGrant?.(copyBashProjectApprovalGrant(grant));
             return { type: "allow", scope: "project-prefix" };
           }
