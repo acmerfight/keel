@@ -682,9 +682,9 @@ describe("Bash Commands", () => {
       command: "pnpm test",
     } satisfies BashApprovalGrant;
     const familyGrant = {
-      type: "prefix",
+      type: "command_family",
       cwd: workspace,
-      argvPrefix: ["git", "status"],
+      commandFamily: "pnpm_vitest_run_workspace_test_selectors",
     } satisfies BashApprovalGrant;
     let promptCount = 0;
     const bashPermission = createSessionBashPermissionPolicy({
@@ -709,7 +709,7 @@ describe("Bash Commands", () => {
         signal: freshSignal(),
       });
       const familyDecision = await bashPermission.review({
-        command: "git status --short",
+        command: "pnpm vitest run tests/revoked.test.ts",
         cwd: workspace,
         signal: freshSignal(),
       });

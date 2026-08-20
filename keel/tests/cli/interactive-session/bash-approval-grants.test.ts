@@ -191,21 +191,23 @@ describe("Interactive Session - Bash Approval Grants", () => {
     }
   });
 
-  test(`Given an interactive user approves a bash command family for the project,
+  test(`Given an interactive user approves two bash command families for the project,
     When the user lists approvals in the same session,
-    Then the new project approval appears immediately`, async () => {
+    Then both project approval representations appear immediately`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-interactive-bash-"));
-    const command = "git status --short";
+    const prefixCommand = "git status --short";
+    const vitestCommand = "pnpm vitest run tests/example.test.ts";
     const provider = createFakeProvider([
-      fakeToolResponse("bash", { command }),
-      fakeResponse("Saved project approval."),
+      fakeToolResponse("bash", { command: prefixCommand }),
+      fakeToolResponse("bash", { command: vitestCommand }),
+      fakeResponse("Saved project approvals."),
     ]);
     const input = new PassThrough();
     let stdout = "";
     let stderr = "";
     const persistedProjectGrants: unknown[] = [];
-    let approvalAnswered = false;
+    let approvalPrompts = 0;
     const session = runInteractiveSession({
       cliArgs: { bashMode: "ask" },
       workspace,
@@ -218,10 +220,14 @@ describe("Interactive Session - Bash Approval Grants", () => {
       },
       writeStderr: (text) => {
         stderr += text;
-        if (text.includes("Approve bash command") && !approvalAnswered) {
-          approvalAnswered = true;
-          input.write("r\n/approvals\n");
-          input.end();
+        if (text.includes("Approve bash command")) {
+          approvalPrompts++;
+          if (approvalPrompts === 1) {
+            input.write("r\n");
+          } else if (approvalPrompts === 2) {
+            input.write("r\n/approvals\n");
+            input.end();
+          }
         }
       },
       onSigint: () => {},
@@ -260,7 +266,7 @@ describe("Interactive Session - Bash Approval Grants", () => {
       });
 
       // When
-      input.write("check status\n");
+      input.write("approve project commands\n");
 
       // Then
       await withTimeout(
@@ -268,20 +274,32 @@ describe("Interactive Session - Bash Approval Grants", () => {
         5000,
         "project approval listing did not finish",
       );
-      expect(stdout).toContain("Saved project approval.\n");
+      expect(stdout).toContain("Saved project approvals.\n");
       expect(stdout).toContain("No bash approvals for this session.\n");
       expect(stdout).toContain("Bash project approvals:\n");
       expect(stdout).toContain(`     project: ${workspace}\n`);
       expect(stdout).toContain(`     approved from: ${workspace}\n`);
       expect(stdout).toContain("     argv prefix: git status\n");
+      expect(stdout).toContain(
+        "     family: pnpm vitest run <workspace test selectors>\n",
+      );
       expect(stderr).toContain(
         "[r] allow command family for this project: git status",
       );
+      expect(stderr).toContain(
+        "[r] allow command family for this project: pnpm vitest run <workspace test selectors>",
+      );
+      expect(approvalPrompts).toBe(2);
       expect(persistedProjectGrants).toEqual([
         {
           projectRoot: workspace,
           cwd: workspace,
           argvPrefix: ["git", "status"],
+        },
+        {
+          projectRoot: workspace,
+          cwd: workspace,
+          commandFamily: "pnpm_vitest_run_workspace_test_selectors",
         },
       ]);
     } finally {
