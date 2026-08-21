@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -361,6 +368,142 @@ describe("project skills catalog", () => {
       await rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test(`Given a repository Skill package has distinct requested and canonical paths inside the workspace,
+    When the catalog resolves paths that child file tools must hide,
+    Then it returns both discovery-authorized representations`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-skill-paths-local-"));
+    const skillRoot = join(workspace, ".agents", "skills");
+    const canonicalPackage = join(skillRoot, ".review-authority");
+    const requestedPackage = join(skillRoot, "review");
+    await mkdir(canonicalPackage, { recursive: true });
+    await writeFile(
+      join(canonicalPackage, "SKILL.md"),
+      "---\nname: review\ndescription: Review changes.\n---\nReview the diff.\n",
+    );
+    await symlink(canonicalPackage, requestedPackage, "dir");
+
+    try {
+      const catalog = discoverSkillCatalog({ workspace });
+      const review = catalog.skills.find(
+        (skill) => skill.qualifiedName === "repo:review",
+      );
+
+      // When
+      const workspacePaths = catalog.repositoryPackageWorkspacePaths(
+        workspace,
+        review === undefined ? [] : [review.packageId],
+      );
+
+      // Then
+      expect(review).toBeDefined();
+      expect(workspacePaths).toEqual([
+        requestedPackage,
+        await realpath(canonicalPackage),
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a repository Skill package is above a nested workspace,
+    When the catalog resolves paths that child file tools must hide,
+    Then it returns no path because workspace tools cannot reach the parent package`, async () => {
+    // Given
+    const repository = await mkdtemp(
+      join(tmpdir(), "keel-skill-paths-parent-"),
+    );
+    const workspace = join(repository, "packages", "app");
+    const skillDirectory = join(repository, ".agents", "skills", "review");
+    await mkdir(join(repository, ".git"));
+    await mkdir(workspace, { recursive: true });
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(
+      join(skillDirectory, "SKILL.md"),
+      "---\nname: review\ndescription: Review changes.\n---\nReview the diff.\n",
+    );
+
+    try {
+      const catalog = discoverSkillCatalog({ workspace });
+      const review = catalog.skills.find(
+        (skill) => skill.qualifiedName === "repo:review",
+      );
+
+      // When
+      const workspacePaths = catalog.repositoryPackageWorkspacePaths(
+        workspace,
+        review === undefined ? [] : [review.packageId],
+      );
+
+      // Then
+      expect(review).toBeDefined();
+      expect(workspacePaths).toEqual([]);
+    } finally {
+      await rm(repository, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      change: "disappears",
+      mutate: async (packagePath: string): Promise<void> => {
+        await rm(packagePath, { recursive: true });
+      },
+    },
+    {
+      change: "is replaced",
+      mutate: async (packagePath: string): Promise<void> => {
+        await rm(packagePath, { recursive: true });
+        await mkdir(packagePath);
+      },
+    },
+    {
+      change: "resolves elsewhere",
+      mutate: async (packagePath: string): Promise<void> => {
+        const replacementPath = `${packagePath}-replacement`;
+        await rm(packagePath, { recursive: true });
+        await mkdir(replacementPath);
+        await symlink(replacementPath, packagePath, "dir");
+      },
+    },
+  ])(
+    `Given an in-workspace repository Skill $change after catalog discovery,
+    When the catalog resolves paths that child file tools must hide,
+    Then it fails closed instead of returning stale authority`,
+    async ({ mutate }) => {
+      // Given
+      const workspace = await mkdtemp(
+        join(tmpdir(), "keel-skill-workspace-boundary-race-"),
+      );
+      const packagePath = join(workspace, ".agents", "skills", "review");
+      await mkdir(packagePath, { recursive: true });
+      await writeFile(
+        join(packagePath, "SKILL.md"),
+        "---\nname: review\ndescription: Review changes.\n---\nReview the diff.\n",
+      );
+      const catalog = discoverSkillCatalog({ workspace });
+      const review = catalog.skills.find(
+        (skill) => skill.qualifiedName === "repo:review",
+      );
+      expect(review).toBeDefined();
+      await mutate(packagePath);
+
+      try {
+        // When / Then
+        expect(() =>
+          catalog.repositoryPackageWorkspacePaths(
+            workspace,
+            review === undefined ? [] : [review.packageId],
+          ),
+        ).toThrow(
+          'Error: cannot enforce the workflow skill workspace boundary for "repo:review" because its canonical package path is unavailable.',
+        );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test(`Given one valid project skill is cataloged,
     When lookup requests an unknown name and activation repeats the same digest,

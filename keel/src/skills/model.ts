@@ -63,6 +63,13 @@ export interface SkillCatalog {
   ) => string;
 }
 
+export interface DiscoveredSkillCatalog extends SkillCatalog {
+  readonly repositoryPackageWorkspacePaths: (
+    workspace: string,
+    packageIds: "all" | readonly string[],
+  ) => readonly string[];
+}
+
 export interface SkillActivationRecord {
   readonly name: string;
   readonly relativePath: string;

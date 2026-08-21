@@ -26,7 +26,7 @@ import {
   type SkillPackageAudit,
 } from "./audit.ts";
 import type {
-  SkillCatalog,
+  DiscoveredSkillCatalog,
   SkillCatalogWarning,
   SkillDescriptor,
   SkillScope,
@@ -441,11 +441,8 @@ function unsafeSkillFileError(): WorkflowSkillError {
   );
 }
 
-function canonicalPathIsInsideRoot(
-  canonicalRootPath: string,
-  canonicalFilePath: string,
-): boolean {
-  const relativeRealPath = relative(canonicalRootPath, canonicalFilePath);
+function pathIsInsideRoot(rootPath: string, candidatePath: string): boolean {
+  const relativeRealPath = relative(rootPath, candidatePath);
   return !relativeRealPath.startsWith("..") && !isAbsolute(relativeRealPath);
 }
 
@@ -456,6 +453,53 @@ function directoryMatchesLocation(location: SkillPackageLocation): boolean {
     realpathSync(location.directoryPath) === location.canonicalPath &&
     filesystemIdentity(currentStat) === location.identity
   );
+}
+
+function repositoryPackageWorkspacePaths(
+  workspace: string,
+  skills: readonly CatalogedSkill[],
+  packageIds: "all" | readonly string[],
+): readonly string[] {
+  const requestedWorkspacePath = resolve(workspace);
+  const canonicalWorkspacePath = realpathSync(workspace);
+  const selectedPackages =
+    packageIds === "all" ? undefined : new Set(packageIds);
+  return [
+    ...new Set(
+      skills.flatMap(({ descriptor, packageLocation }) => {
+        if (
+          descriptor.scope !== "repo" ||
+          (selectedPackages !== undefined &&
+            !selectedPackages.has(descriptor.packageId))
+        ) {
+          return [];
+        }
+        const workspacePaths = [
+          ...(pathIsInsideRoot(
+            requestedWorkspacePath,
+            packageLocation.directoryPath,
+          )
+            ? [packageLocation.directoryPath]
+            : []),
+          ...(pathIsInsideRoot(
+            canonicalWorkspacePath,
+            packageLocation.canonicalPath,
+          )
+            ? [packageLocation.canonicalPath]
+            : []),
+        ];
+        if (workspacePaths.length === 0) return [];
+        try {
+          if (directoryMatchesLocation(packageLocation)) return workspacePaths;
+        } catch {
+          // A filesystem race is reported through the same bounded contract.
+        }
+        throw new WorkflowSkillError(
+          `Error: cannot enforce the workflow skill workspace boundary for ${JSON.stringify(descriptor.qualifiedName)} because its canonical package path is unavailable.`,
+        );
+      }),
+    ),
+  ];
 }
 
 function rootMatchesValidation(root: ValidatedSkillRoot): boolean {
@@ -478,7 +522,7 @@ function captureSkillPackageLocation(
   const canonicalPath = realpathSync(directoryPath);
   const directoryStat = statSync(directoryPath);
   if (
-    !canonicalPathIsInsideRoot(root.canonicalPath, canonicalPath) ||
+    !pathIsInsideRoot(root.canonicalPath, canonicalPath) ||
     !directoryStat.isDirectory()
   ) {
     throw unsafeSkillFileError();
@@ -500,7 +544,7 @@ function assertOpenedFileInsideRoot(options: {
   const openedStat = fstatSync(options.fd);
   if (
     !directoryMatchesLocation(options.packageLocation) ||
-    !canonicalPathIsInsideRoot(
+    !pathIsInsideRoot(
       options.packageLocation.canonicalPath,
       realpathSync(options.filePath),
     ) ||
@@ -944,7 +988,7 @@ function invalidPackageErrorMessage(
 
 export function discoverSkillCatalog(
   options: SkillDiscoveryOptions,
-): SkillCatalog {
+): DiscoveredSkillCatalog {
   const seenRoots = new Set<string>();
   const skills: CatalogedSkill[] = [];
   const discoveredAudits: DiscoveredSkillAudit[] = [];
@@ -1148,6 +1192,12 @@ export function discoverSkillCatalog(
     implicitSkills,
     warnings,
     audits,
+    repositoryPackageWorkspacePaths: (workspace, packageIds) =>
+      repositoryPackageWorkspacePaths(
+        workspace,
+        sortedCatalogedSkills,
+        packageIds,
+      ),
     load: (lookup) => loadWithWarning(sortedCatalogedSkills, lookup),
     loadImplicit: (lookup) => loadWithWarning(implicitCatalogedSkills, lookup),
     loadPackage: (packageId) => {

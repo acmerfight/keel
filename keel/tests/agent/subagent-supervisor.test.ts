@@ -248,6 +248,7 @@ function supervisorFixture(
     readonly onProgress?: (event: SubagentProgressEvent) => void;
     readonly providerAbortSignalSupport?: boolean;
     readonly hiddenWorkspacePaths?: readonly string[];
+    readonly additionalHiddenWorkspacePaths?: () => readonly string[];
     readonly projectInstructions?: ProjectInstructions;
     readonly onContinuationLease?: (
       input: Parameters<SharedCostBudgetedProvider["leaseContinuation"]>[0],
@@ -367,6 +368,12 @@ function supervisorFixture(
       onProgress: options.onProgress ?? (() => {}),
       ...(options.hiddenWorkspacePaths !== undefined
         ? { hiddenWorkspacePaths: options.hiddenWorkspacePaths }
+        : {}),
+      ...(options.additionalHiddenWorkspacePaths !== undefined
+        ? {
+            additionalHiddenWorkspacePaths:
+              options.additionalHiddenWorkspacePaths,
+          }
         : {}),
       ...(options.projectInstructions !== undefined
         ? { projectInstructions: options.projectInstructions }
@@ -4249,6 +4256,127 @@ describe("Subagent Supervisor", () => {
       expect(result.content).toContain('"status":"timed_out"');
       expect(fixture.supervisor.activeChildRunCount()).toBe(0);
       expect(artifacts.inputs).toHaveLength(1);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given discovery-owned hidden paths fail validation after a child Run is accepted,
+    When Supervisor resolves the child workspace authority,
+    Then provider work never starts and durable lifecycle plus child resources settle`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-child-hidden-authority-failure-"),
+    );
+    let providerCalls = 0;
+    let mcpCloseCalls = 0;
+    const terminalSnapshots: SubagentTerminalSnapshot[] = [];
+    const authorityError =
+      'Cannot enforce workflow Skill package "repo:review" because its discovered directory is no longer available.';
+    const mcpSnapshot = {
+      serverId: "catalog",
+      rawToolName: "search",
+      serverIncarnation: "server-v1",
+      configurationDigest: "a".repeat(64),
+      authorizationIdentity: { kind: "anonymous" as const },
+    };
+    const childMcpRuntime: McpRuntime = {
+      prepareTurn: async () => {},
+      exposureSnapshot: async () => ({
+        snapshotId: "empty",
+        catalogAvailable: true,
+        tools: [],
+      }),
+      search: async () => ({ ok: false, content: "unused" }),
+      execute: async () => ({
+        identity: "unidentified",
+        content: "unused",
+        ok: false,
+      }),
+      close: async () => {
+        mcpCloseCalls++;
+      },
+    };
+    const profileRegistry = createSubagentProfileRegistry({
+      execution: { providerId: "fake", model: "test-model" },
+      repoProfiles: [
+        {
+          name: "repo:remote",
+          base: "explorer",
+          mcp: [{ server: "catalog", tool: "search" }],
+        },
+      ],
+      mcpRuntime: {
+        kind: "enabled",
+        resolveTool: () => mcpSnapshot,
+        resolveCurrent: async () => [mcpSnapshot],
+        createRuntime: () => childMcpRuntime,
+      },
+    });
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      profileRegistry,
+      additionalHiddenWorkspacePaths: () => {
+        throw new Error(authorityError);
+      },
+      lifecyclePersistence: {
+        accepted: () => {
+          const transcript = {
+            initialize: () => {},
+            append: () => {},
+            replace: () => {},
+          };
+          const terminal = (snapshot: SubagentTerminalSnapshot) => {
+            terminalSnapshots.push(snapshot);
+          };
+          return {
+            transcriptRef: "agent-transcript:test/authority-failure",
+            transcript,
+            pendingInput: () => {},
+            running: () => ({
+              transcriptRef: "agent-transcript:test/authority-failure",
+              transcript,
+              pendingInput: () => {},
+              accounting: () => {},
+              terminal,
+            }),
+            terminal,
+          };
+        },
+        rejected: () => {},
+      },
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "hidden-authority-failure",
+        profile: "repo:remote",
+        mode: "foreground",
+        task: "Inspect with discovery-owned Skill authority.",
+        mcp: [{ server: "catalog", tool: "search" }],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ delivery: "fresh", ok: false });
+      expect(JSON.parse(deliveredContent(result))).toMatchObject({
+        error: authorityError,
+      });
+      expect(providerCalls).toBe(0);
+      expect(mcpCloseCalls).toBe(1);
+      expect(terminalSnapshots).toEqual([
+        expect.objectContaining({
+          status: "failed",
+          error: authorityError,
+        }),
+      ]);
+      expect(fixture.supervisor.activeChildRunCount()).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

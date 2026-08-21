@@ -1,14 +1,5 @@
-import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import {
-  delimiter,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { delimiter, join } from "node:path";
 import { redactSecretLikeText } from "../core/secret-text.ts";
 import type { SkillPackageAudit } from "../skills/audit.ts";
 import {
@@ -16,7 +7,7 @@ import {
   type SkillCatalogExposure,
 } from "../skills/catalog.ts";
 import {
-  type SkillCatalog,
+  type DiscoveredSkillCatalog,
   type SkillDescriptor,
   type WorkflowSkill,
   WorkflowSkillError,
@@ -83,59 +74,24 @@ function skillDiscoveryOptions(
 export function discoverWorkflowSkillCatalog(
   runtime: Pick<CliRuntime, "env">,
   workspace: string,
-): SkillCatalog {
+): DiscoveredSkillCatalog {
   return discoverSkillCatalog(skillDiscoveryOptions(runtime, workspace));
 }
 
 export function disabledWorkflowSkillWorkspacePaths(
   workspace: string,
-  catalog: SkillCatalog,
+  catalog: DiscoveredSkillCatalog,
   disabledPackageIds: readonly string[],
 ): readonly string[] {
   const disabled = new Set(disabledPackageIds);
-  return workflowSkillWorkspacePaths(
+  return catalog.repositoryPackageWorkspacePaths(
     workspace,
-    catalog.skills.filter(
-      (skill) => skill.scope === "repo" && disabled.has(skill.packageId),
-    ),
+    catalog.skills
+      .filter(
+        (skill) => skill.scope === "repo" && disabled.has(skill.packageId),
+      )
+      .map((skill) => skill.packageId),
   );
-}
-
-export function workflowSkillWorkspacePaths(
-  workspace: string,
-  skills: readonly SkillDescriptor[],
-): readonly string[] {
-  const workspacePath = realpathSync(workspace);
-  return [
-    ...new Set(
-      skills
-        .filter((skill) => skill.scope === "repo")
-        .flatMap((skill) => {
-          const requestedPackagePath = resolve(
-            workspacePath,
-            dirname(skill.relativePath),
-          );
-          let resolvedPackagePath: string;
-          try {
-            resolvedPackagePath = realpathSync(requestedPackagePath);
-          } catch {
-            throw new WorkflowSkillError(
-              `Error: cannot enforce the workflow skill workspace boundary for ${JSON.stringify(skill.qualifiedName)} because its canonical package path is unavailable.`,
-            );
-          }
-          return [requestedPackagePath, resolvedPackagePath];
-        })
-        .filter((skillPath) => {
-          const relativePath = relative(workspacePath, skillPath);
-          return (
-            relativePath === "" ||
-            (!relativePath.startsWith(`..${sep}`) &&
-              relativePath !== ".." &&
-              !isAbsolute(relativePath))
-          );
-        }),
-    ),
-  ];
 }
 
 function disabledSkillMessage(qualifiedName: string): string {
@@ -143,9 +99,9 @@ function disabledSkillMessage(qualifiedName: string): string {
 }
 
 export function filterWorkflowSkillCatalog(
-  catalog: SkillCatalog,
+  catalog: DiscoveredSkillCatalog,
   disabledPackageIds: readonly string[],
-): SkillCatalog {
+): DiscoveredSkillCatalog {
   if (disabledPackageIds.length === 0) return catalog;
   const disabled = new Set(disabledPackageIds);
   const enabledSkills = catalog.skills.filter(
@@ -190,6 +146,7 @@ export function filterWorkflowSkillCatalog(
     implicitSkills: enabledImplicitSkills,
     warnings: catalog.warnings,
     audits: catalog.audits,
+    repositoryPackageWorkspacePaths: catalog.repositoryPackageWorkspacePaths,
     load: (lookup) => {
       const descriptor = resolveEnabled(
         enabledSkills,
