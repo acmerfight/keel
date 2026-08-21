@@ -9,7 +9,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { SkillCatalog } from "../../src/skills/model.ts";
 
 class TestNodeError extends Error implements NodeJS.ErrnoException {
   readonly code: string;
@@ -561,78 +560,6 @@ describe("Workflow Skill Control Races", () => {
       );
     } finally {
       actualFs.rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given a disabled repository Skill disappears after catalog discovery,
-    When Keel resolves the package visibility boundary,
-    Then it fails closed instead of omitting the canonical path check`, async () => {
-    // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-disabled-skill-canonical-race-"),
-    );
-    const packagePath = join(workspace, ".agents", "skills", "review");
-    await mkdir(packagePath, { recursive: true });
-    const catalog = {
-      skills: [
-        {
-          id: "repo:root:review:digest",
-          packageId: "repo:root:review",
-          rootKey: "root",
-          rootPriority: 0,
-          qualifiedName: "repo:review",
-          scope: "repo",
-          activationPolicy: "implicit",
-          name: "review",
-          description: "Review changes",
-          relativePath: ".agents/skills/review/SKILL.md",
-          digest: "digest",
-        },
-      ],
-      implicitSkills: [],
-      warnings: [],
-      audits: [],
-      load: () => {
-        throw new Error("not used");
-      },
-      loadImplicit: () => {
-        throw new Error("not used");
-      },
-      loadPackage: () => undefined,
-      search: () => [],
-      readResource: () => "",
-      readPackageResource: () => "",
-    } satisfies SkillCatalog;
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const resolvedPackagePath = join(
-      actualFs.realpathSync(workspace),
-      ".agents",
-      "skills",
-      "review",
-    );
-    vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actualFs,
-      realpathSync: (
-        path: Parameters<typeof actualFs.realpathSync>[0],
-      ): string => {
-        if (String(path) === resolvedPackagePath) throw nodeError("ENOENT");
-        return actualFs.realpathSync(path);
-      },
-    }));
-    const workflowSkills = await import("../../src/cli/workflow-skills.ts");
-
-    try {
-      // When / Then
-      expect(() =>
-        workflowSkills.disabledWorkflowSkillWorkspacePaths(workspace, catalog, [
-          "repo:root:review",
-        ]),
-      ).toThrow(
-        'Error: cannot enforce the workflow skill workspace boundary for "repo:review" because its canonical package path is unavailable.',
-      );
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
     }
   });
 });

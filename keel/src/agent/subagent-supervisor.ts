@@ -382,6 +382,7 @@ interface CreateSubagentSupervisorOptionsBase {
   readonly admission?: SubagentTreeAdmission;
   readonly projectInstructions?: ProjectInstructions;
   readonly hiddenWorkspacePaths?: readonly string[];
+  readonly additionalHiddenWorkspacePaths?: () => readonly string[];
   readonly modelMaxOutputTokens?: number | undefined;
   readonly modelOperations?: MainModelOperationInstrumentation;
   readonly transcriptStore: AbortableToolOutputArtifactStore;
@@ -1471,15 +1472,23 @@ export function createSubagentSupervisor(
             : {}),
         };
       }
-      const hiddenWorkspacePaths =
-        input.workspace.kind === "isolated_write"
-          ? childHiddenWorkspacePaths(
-              options.workspace,
-              childWorkspace,
-              options.hiddenWorkspacePaths ?? [],
-            )
-          : options.hiddenWorkspacePaths;
       try {
+        const resolvedHiddenWorkspacePaths = [
+          ...new Set([
+            ...(options.hiddenWorkspacePaths ?? []),
+            ...(options.additionalHiddenWorkspacePaths?.() ?? []),
+          ]),
+        ];
+        const hiddenWorkspacePaths =
+          resolvedHiddenWorkspacePaths.length === 0
+            ? undefined
+            : input.workspace.kind === "isolated_write"
+              ? childHiddenWorkspacePaths(
+                  options.workspace,
+                  childWorkspace,
+                  resolvedHiddenWorkspacePaths,
+                )
+              : resolvedHiddenWorkspacePaths;
         for await (const event of runAgent({
           workspace: childWorkspace,
           provider: input.execution.provider,

@@ -56,13 +56,13 @@ import type {
 } from "../mcp/runtime-types.ts";
 import { createSkillActivation } from "../skills/lifecycle.ts";
 import type {
+  DiscoveredSkillCatalog,
   SkillActivationCapability,
   SkillCatalog,
 } from "../skills/model.ts";
 import { WorkflowSkillError } from "../skills/model.ts";
 import { loadRepoSubagentProfiles } from "./subagent-profile-config.ts";
 import { createCliSubagentWriteWorkspaceRuntime } from "./subagent-workspace.ts";
-import { workflowSkillWorkspacePaths } from "./workflow-skills.ts";
 
 interface CreateCliSubagentRuntimeOptionsBase {
   readonly workspace: string;
@@ -78,7 +78,7 @@ interface CreateCliSubagentRuntimeOptionsBase {
   readonly policy: DelegatingAgentPolicy;
   readonly projectInstructions: ProjectInstructions | undefined;
   readonly hiddenWorkspacePaths: readonly string[];
-  readonly skillCatalog?: SkillCatalog;
+  readonly skillCatalog?: DiscoveredSkillCatalog;
   readonly mcp?: {
     readonly servers: readonly McpRuntimeServer[];
     readonly connectionFactory: (
@@ -645,17 +645,7 @@ export async function createCliSubagentRuntime(
           lifecyclePersistence: options.attachedSession.lifecyclePersistence,
           backgroundModelOperations: options.attachedSession.modelOperations,
         };
-  const childHiddenWorkspacePaths = [
-    ...new Set([
-      ...options.hiddenWorkspacePaths,
-      ...(options.skillCatalog === undefined
-        ? []
-        : workflowSkillWorkspacePaths(
-            options.workspace,
-            options.skillCatalog.skills,
-          )),
-    ]),
-  ];
+  const discoveredSkillCatalog = options.skillCatalog;
   return {
     costBudgetProvider: rootBudget.provider,
     supervisor: createSubagentSupervisor({
@@ -687,7 +677,16 @@ export async function createCliSubagentRuntime(
       ...(options.projectInstructions !== undefined
         ? { projectInstructions: options.projectInstructions }
         : {}),
-      hiddenWorkspacePaths: childHiddenWorkspacePaths,
+      hiddenWorkspacePaths: options.hiddenWorkspacePaths,
+      ...(discoveredSkillCatalog === undefined
+        ? {}
+        : {
+            additionalHiddenWorkspacePaths: () =>
+              discoveredSkillCatalog.repositoryPackageWorkspacePaths(
+                options.workspace,
+                "all",
+              ),
+          }),
       ...(options.modelMaxOutputTokens !== undefined
         ? { modelMaxOutputTokens: options.modelMaxOutputTokens }
         : {}),

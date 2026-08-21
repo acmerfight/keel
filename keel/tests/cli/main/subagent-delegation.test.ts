@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { symlinkSync, unlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -428,6 +429,241 @@ describe("CLI Main - Subagent Delegation", () => {
       expect(await readFile(join(workspace, "message.txt"), "utf8")).toBe(
         "before\n",
       );
+    } finally {
+      await close(server);
+      await rm(workspace, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given repository Skills live above a nested workspace,
+    When the user explicitly delegates a read-only investigation,
+    Then the child completes without requiring Skills to be disabled`, async () => {
+    // Given
+    const repository = await mkdtemp(
+      join(tmpdir(), "keel-subagent-parent-skills-"),
+    );
+    const workspace = join(repository, "packages", "app");
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-subagent-parent-skills-home-"),
+    );
+    await mkdir(join(repository, ".git"));
+    await mkdir(join(repository, ".agents", "skills", "review"), {
+      recursive: true,
+    });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      join(repository, ".agents", "skills", "review", "SKILL.md"),
+      [
+        "---",
+        "name: review",
+        "description: Review repository changes.",
+        "---",
+        "Inspect relevant source before reporting findings.",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(workspace, "module.ts"),
+      "export const answer = 42;\n",
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            response.end(
+              [
+                sseToolCall("delegate_nested_workspace", "delegate", {
+                  profile: "explorer",
+                  task: "Read module.ts and report the exported answer.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              [
+                sseToolCall("read_nested_module", "read", {
+                  path: "module.ts",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 3:
+            response.end(
+              sseTextReplyWithUsage("module.ts exports answer with value 42."),
+            );
+            return;
+          case 4:
+            response.end(
+              sseTextReplyWithUsage(
+                "The delegated investigation confirmed answer equals 42.",
+              ),
+            );
+            return;
+          default:
+            response.writeHead(500);
+            response.end("unexpected request");
+        }
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "Use a read-only subagent to inspect module.ts.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(4);
+      expect(requestText(requests[2])).toContain("export const answer = 42;");
+      expect(fixture.stderr()).toContain(
+        "Tool: delegate Read module.ts and report the exported answer.",
+      );
+      expect(fixture.stdout()).toBe(
+        "The delegated investigation confirmed answer equals 42.\n",
+      );
+    } finally {
+      await close(server);
+      await rm(repository, { recursive: true, force: true });
+      await rm(keelHome, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an in-workspace Skill changes canonical target after Main starts,
+    When Main delegates a read-only investigation,
+    Then the stale package authority fails closed before the child provider is called`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-subagent-skill-admission-race-"),
+    );
+    const keelHome = await mkdtemp(
+      join(tmpdir(), "keel-subagent-skill-admission-race-home-"),
+    );
+    const skillRoot = join(workspace, ".agents", "skills");
+    const firstPackage = join(skillRoot, ".review-first");
+    const secondPackage = join(skillRoot, ".review-second");
+    const requestedPackage = join(skillRoot, "review");
+    await mkdir(firstPackage, { recursive: true });
+    await mkdir(secondPackage, { recursive: true });
+    for (const packagePath of [firstPackage, secondPackage]) {
+      await writeFile(
+        join(packagePath, "SKILL.md"),
+        "---\nname: review\ndescription: Review repository changes.\n---\nReview the diff.\n",
+      );
+    }
+    symlinkSync(firstPackage, requestedPackage, "dir");
+    await writeFile(
+      join(workspace, "module.ts"),
+      "export const answer = 42;\n",
+    );
+    const requests: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push(JSON.parse(body));
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        switch (requests.length) {
+          case 1:
+            unlinkSync(requestedPackage);
+            symlinkSync(secondPackage, requestedPackage, "dir");
+            response.end(
+              [
+                sseToolCall("delegate_skill_race", "delegate", {
+                  profile: "explorer",
+                  task: "Read module.ts and report the exported answer.",
+                }),
+                sseToolFinish(),
+                "data: [DONE]\n\n",
+              ].join(""),
+            );
+            return;
+          case 2:
+            response.end(
+              sseTextReplyWithUsage("Delegation was rejected safely."),
+            );
+            return;
+          default:
+            response.end(
+              sseTextReplyWithUsage("Unexpected child provider request."),
+            );
+        }
+      });
+    });
+    await listen(server);
+    const fixture = createRuntime(
+      [
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "Use a read-only subagent to inspect module.ts.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          KEEL_HOME: keelHome,
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        },
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode, fixture.stderr()).toBe(0);
+      expect(requests).toHaveLength(2);
+      const recoveryRequest = requestText(requests[1]);
+      expect(recoveryRequest).toContain(
+        "cannot enforce the workflow skill workspace boundary",
+      );
+      expect(recoveryRequest).toContain("repo:review");
+      expect(recoveryRequest).toContain(
+        "because its canonical package path is unavailable",
+      );
+      expect(fixture.stdout()).toBe("Delegation was rejected safely.\n");
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });

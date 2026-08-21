@@ -28,9 +28,9 @@ import type {
   SessionBashPermissionPolicy,
 } from "../../permissions/bash.ts";
 import type {
+  DiscoveredSkillCatalog,
   SkillActivationCapability,
   SkillActivationRecord,
-  SkillCatalog,
   SkillDescriptor,
   SkillLifecycleState,
   WorkflowSkill,
@@ -233,7 +233,7 @@ export type InteractiveSkillRuntime =
   | {
       readonly kind: "managed";
       readonly activation: SkillActivationCapability;
-      readonly catalog: SkillCatalog;
+      readonly catalog: DiscoveredSkillCatalog;
       readonly implicitSkills: readonly SkillDescriptor[];
       readonly loadExplicit: (lookup: string) => WorkflowSkill;
       readonly initialActivationRecords: readonly SkillActivationRecord[];

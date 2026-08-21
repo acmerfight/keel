@@ -4,7 +4,7 @@ import {
   formatWorkflowSkillList,
 } from "../../src/cli/workflow-skills.ts";
 import type {
-  SkillCatalog,
+  DiscoveredSkillCatalog,
   SkillDescriptor,
   WorkflowSkill,
 } from "../../src/skills/model.ts";
@@ -52,11 +52,15 @@ describe("Workflow Skill Resource Contract", () => {
     const skills = [review, qa];
     const load = (lookup: string): WorkflowSkill =>
       workflowSkill(resolveSkillDescriptor(skills, lookup));
-    const catalog: SkillCatalog = {
+    const catalog: DiscoveredSkillCatalog = {
       skills,
       implicitSkills: skills,
       warnings: [],
       audits: [],
+      repositoryPackageWorkspacePaths: (_workspace, packageIds) =>
+        packageIds === "all"
+          ? skills.map((skill) => skill.packageId)
+          : packageIds,
       load,
       loadImplicit: load,
       loadPackage: (packageId) => {
@@ -75,6 +79,15 @@ describe("Workflow Skill Resource Contract", () => {
 
     // When / Then
     expect(filtered.skills).toEqual([qa]);
+    expect(
+      filtered.repositoryPackageWorkspacePaths("/workspace", [
+        review.packageId,
+        qa.packageId,
+      ]),
+    ).toEqual([review.packageId, qa.packageId]);
+    expect(
+      filtered.repositoryPackageWorkspacePaths("/workspace", "all"),
+    ).toEqual([review.packageId, qa.packageId]);
     expect(() => filtered.load("review")).toThrow(
       'workflow skill "repo:review" is disabled by user configuration',
     );
