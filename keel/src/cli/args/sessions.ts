@@ -8,12 +8,28 @@ import {
 import type {
   SessionsCliArgs,
   SessionsForkCliArgs,
+  SessionsLifecycleCliArgs,
   SessionsRepairCliArgs,
   SessionsShowCliArgs,
 } from "./types.ts";
 
 const DEFAULT_SESSIONS_SHOW_TIMELINE_LIMIT = 20;
 const SESSIONS_FORK_OPTIONS = ["--before-message"];
+
+function parseSessionsLifecycleArgs(
+  mode: SessionsLifecycleCliArgs["mode"],
+  args: readonly string[],
+): ParseResult<SessionsLifecycleCliArgs> {
+  const sessionId = args[0];
+  if (sessionId === undefined || sessionId === "") {
+    return parseError(`Error: sessions ${mode} requires <id>.`);
+  }
+  const extraArg = args[1];
+  if (extraArg !== undefined) {
+    return parseError(`Error: unknown sessions ${mode} option "${extraArg}"`);
+  }
+  return parseOk({ command: "sessions", mode, sessionId });
+}
 
 function parsePositiveShowLimit(
   value: string | undefined,
@@ -176,6 +192,14 @@ export function parseSessionsArgs(
   }
   if (subcommand === "fork") {
     return parseSessionsForkArgs(args.slice(1));
+  }
+  if (subcommand === "archived") {
+    return args.length === 1
+      ? parseOk({ command: "sessions", mode: "archived" })
+      : parseError(`Error: unknown sessions archived option "${args[1]}"`);
+  }
+  if (subcommand === "archive" || subcommand === "unarchive") {
+    return parseSessionsLifecycleArgs(subcommand, args.slice(1));
   }
   if (subcommand === "show") {
     return parseSessionsShowArgs(args.slice(1));

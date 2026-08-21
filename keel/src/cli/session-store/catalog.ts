@@ -1,5 +1,4 @@
 import { readdirSync, realpathSync } from "node:fs";
-import { join } from "node:path";
 import type { SessionMessage } from "../../agent/session-message.ts";
 import { errorMessage } from "../../core/error.ts";
 import { copySessionGoal } from "../../core/session-goal.ts";
@@ -45,7 +44,11 @@ import {
   SUMMARY_CLOSE,
   SUMMARY_OPEN,
 } from "./model.ts";
-import { sessionFilePath, sessionHome } from "./paths.ts";
+import {
+  type SessionStorageLocation,
+  sessionFilePathAtLocation,
+  sessionRootPath,
+} from "./paths.ts";
 import {
   copySessionGraphRecord,
   copySessionLastTaskOutcome,
@@ -443,11 +446,16 @@ function compareSessionCatalogEntries(
   return left.id.localeCompare(right.id);
 }
 
-function readCatalogHeader(options: {
+export function readSessionHeaderAtLocation(options: {
   readonly sessionId: string;
   readonly runtime: SessionStoreRuntime;
+  readonly location: SessionStorageLocation;
 }): SessionHeaderRecord {
-  const filePath = sessionFilePath(options.runtime, options.sessionId);
+  const filePath = sessionFilePathAtLocation(
+    options.runtime,
+    options.sessionId,
+    options.location,
+  );
   const ledgerSize = sessionLedgerSize(filePath);
   const header = parseSessionHeaderRecord(
     filePath,
@@ -465,16 +473,22 @@ function readCatalogHeader(options: {
 function readCatalogRecords(options: {
   readonly sessionId: string;
   readonly runtime: SessionStoreRuntime;
+  readonly location: SessionStorageLocation;
 }): SessionRecords {
-  const filePath = sessionFilePath(options.runtime, options.sessionId);
+  const filePath = sessionFilePathAtLocation(
+    options.runtime,
+    options.sessionId,
+    options.location,
+  );
   // Use the resume reader so catalog previews follow append/replace/snapshot replay exactly.
   return readSessionRecords(filePath);
 }
 
 function listSessionDirectories(
   runtime: SessionStoreRuntime,
+  location: SessionStorageLocation,
 ): readonly string[] {
-  const sessionsPath = join(sessionHome(runtime), "sessions");
+  const sessionsPath = sessionRootPath(runtime, location);
   try {
     return readdirSync(sessionsPath, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
@@ -489,19 +503,24 @@ function listSessionDirectories(
   }
 }
 
-export function listSessionCatalog(options: {
+function listSessionCatalogAtLocation(options: {
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
+  readonly location: SessionStorageLocation;
 }): SessionCatalog {
   const workspace = realpathSync(options.workspace);
   const sessions: SessionCatalogEntry[] = [];
   const warnings: SessionCatalogWarning[] = [];
 
-  for (const sessionId of listSessionDirectories(options.runtime)) {
+  for (const sessionId of listSessionDirectories(
+    options.runtime,
+    options.location,
+  )) {
     try {
-      const header = readCatalogHeader({
+      const header = readSessionHeaderAtLocation({
         sessionId,
         runtime: options.runtime,
+        location: options.location,
       });
       if (header.workspace !== workspace) {
         continue;
@@ -511,6 +530,7 @@ export function listSessionCatalog(options: {
           readCatalogRecords({
             sessionId,
             runtime: options.runtime,
+            location: options.location,
           }),
         ),
       );
@@ -533,10 +553,25 @@ export function listSessionCatalog(options: {
   };
 }
 
-export function readSessionCatalogEntry(options: {
+export function listSessionCatalog(options: {
+  readonly workspace: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionCatalog {
+  return listSessionCatalogAtLocation({ ...options, location: "active" });
+}
+
+export function listArchivedSessionCatalog(options: {
+  readonly workspace: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionCatalog {
+  return listSessionCatalogAtLocation({ ...options, location: "archived" });
+}
+
+function readSessionCatalogEntryAtLocation(options: {
   readonly sessionId: string;
   readonly workspace: string;
   readonly runtime: SessionStoreRuntime;
+  readonly location: SessionStorageLocation;
 }): SessionCatalogEntry {
   const workspace = realpathSync(options.workspace);
   let records: SessionRecords;
@@ -544,6 +579,7 @@ export function readSessionCatalogEntry(options: {
     records = readCatalogRecords({
       sessionId: options.sessionId,
       runtime: options.runtime,
+      location: options.location,
     });
   } catch (error) {
     /* v8 ignore next 3: catalog detail readers convert supported load failures to SessionStoreError. */
@@ -565,4 +601,15 @@ export function readSessionCatalogEntry(options: {
     );
   }
   return sessionCatalogEntry(records);
+}
+
+export function readSessionCatalogEntry(options: {
+  readonly sessionId: string;
+  readonly workspace: string;
+  readonly runtime: SessionStoreRuntime;
+}): SessionCatalogEntry {
+  return readSessionCatalogEntryAtLocation({
+    ...options,
+    location: "active",
+  });
 }

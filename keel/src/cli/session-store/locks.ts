@@ -15,13 +15,14 @@ import { errorMessage } from "../../core/error.ts";
 import { hasNodeErrorCode, sessionStoreError } from "./errors.ts";
 import type { SessionLock, SessionStoreRuntime } from "./model.ts";
 import {
+  sessionDirectoryPath,
   sessionFilePath,
   sessionLockOwnerPath,
   sessionLockPath,
 } from "./paths.ts";
 import { isoTimestamp } from "./runtime.ts";
 
-const legacySessionLockOwnerSchema = z
+const pidOnlySessionLockOwnerSchema = z
   .object({
     pid: z.number().int().positive(),
     token: z.string(),
@@ -29,14 +30,14 @@ const legacySessionLockOwnerSchema = z
   })
   .strict();
 
-const identifiedSessionLockOwnerSchema = legacySessionLockOwnerSchema.extend({
+const identifiedSessionLockOwnerSchema = pidOnlySessionLockOwnerSchema.extend({
   hostname: z.string().min(1),
   processStartTime: z.string().min(1),
 });
 
 const sessionLockOwnerSchema = z.union([
   identifiedSessionLockOwnerSchema,
-  legacySessionLockOwnerSchema,
+  pidOnlySessionLockOwnerSchema,
 ]);
 const linuxProcProcessStartTimeSchema = z.string().regex(/^\d+$/);
 const psProcessStartTimeOutputSchema = z.string().min(1);
@@ -259,7 +260,6 @@ function releaseSessionLock(lockPath: string, token: string): void {
       `Error: cannot release session lock ${lockPath}: ${errorMessage(error)}`,
     );
   }
-  removeEmptySessionDirectory(lockPath);
 }
 
 function isBenignEmptyDirectoryRemovalError(error: unknown): boolean {
@@ -268,20 +268,6 @@ function isBenignEmptyDirectoryRemovalError(error: unknown): boolean {
     hasNodeErrorCode(error, "ENOTEMPTY") ||
     hasNodeErrorCode(error, "EEXIST")
   );
-}
-
-function removeEmptySessionDirectory(lockPath: string): void {
-  const sessionDirectory = dirname(lockPath);
-  try {
-    rmdirSync(sessionDirectory);
-  } catch (error) {
-    if (isBenignEmptyDirectoryRemovalError(error)) {
-      return;
-    }
-    sessionStoreError(
-      `Error: cannot remove empty session directory ${sessionDirectory}: ${errorMessage(error)}`,
-    );
-  }
 }
 
 function removeIncompleteSessionLock(lockPath: string): void {
@@ -363,6 +349,27 @@ export function ensureSessionCanBeCreated(options: {
   readonly sessionId: string;
   readonly runtime: SessionStoreRuntime;
 }): void {
+  const archivedDirectory = sessionDirectoryPath(
+    options.runtime,
+    options.sessionId,
+    "archived",
+  );
+  let archivedSessionExists = false;
+  try {
+    statSync(archivedDirectory);
+    archivedSessionExists = true;
+  } catch (error) {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      sessionStoreError(
+        `Error: cannot inspect archived session ${archivedDirectory}: ${errorMessage(error)}`,
+      );
+    }
+  }
+  if (archivedSessionExists) {
+    sessionStoreError(
+      `Error: session "${options.sessionId}" is archived. Run keel sessions unarchive ${options.sessionId} or choose another session id.`,
+    );
+  }
   const filePath = sessionFilePath(options.runtime, options.sessionId);
   try {
     statSync(filePath);

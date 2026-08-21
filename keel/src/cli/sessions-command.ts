@@ -2,22 +2,28 @@ import { listUndoCheckpoints } from "../core/git.ts";
 import type { CliArgs } from "./args.ts";
 import type { CliRuntime } from "./runtime.ts";
 import {
+  formatArchivedSessionCatalog,
+  formatSessionArchived,
   formatSessionCatalog,
   formatSessionCatalogWarnings,
   formatSessionDetail,
   formatSessionForkCreated,
   formatSessionRepairResult,
+  formatSessionUnarchived,
 } from "./session-catalog-format.ts";
 import {
   acquireSessionLock,
+  archiveSessionStore,
   ensureSessionCanBeCreated,
   forkSessionStore,
+  listArchivedSessionCatalog,
   listSessionCatalog,
   readSessionCatalogEntry,
   repairSessionStore,
   resumeSessionStore,
   type SessionLock,
   SessionStoreError,
+  unarchiveSessionStore,
 } from "./session-store.ts";
 
 type SessionsCliArgs = Extract<CliArgs, { readonly command: "sessions" }>;
@@ -26,6 +32,34 @@ export function runSessionsCommand(
   cliArgs: SessionsCliArgs,
   runtime: CliRuntime,
 ): number {
+  if (cliArgs.mode === "archive" || cliArgs.mode === "unarchive") {
+    try {
+      if (cliArgs.mode === "archive") {
+        archiveSessionStore({
+          sessionId: cliArgs.sessionId,
+          workspace: runtime.cwd(),
+          runtime,
+        });
+        runtime.writeStdout(formatSessionArchived(cliArgs.sessionId));
+      } else {
+        unarchiveSessionStore({
+          sessionId: cliArgs.sessionId,
+          workspace: runtime.cwd(),
+          runtime,
+        });
+        runtime.writeStdout(formatSessionUnarchived(cliArgs.sessionId));
+      }
+      return 0;
+    } catch (error) {
+      /* v8 ignore next 3 -- unexpected faults are handled by the outer CLI runtime boundary. */
+      if (!(error instanceof SessionStoreError)) {
+        throw error;
+      }
+      runtime.writeStderr(`${error.message}\n`);
+      return 1;
+    }
+  }
+
   if (cliArgs.mode === "repair") {
     let sessionLock: SessionLock | undefined;
     try {
@@ -137,6 +171,15 @@ export function runSessionsCommand(
   }
 
   try {
+    if (cliArgs.mode === "archived") {
+      const catalog = listArchivedSessionCatalog({
+        workspace: runtime.cwd(),
+        runtime,
+      });
+      runtime.writeStdout(formatArchivedSessionCatalog(catalog));
+      runtime.writeStderr(formatSessionCatalogWarnings(catalog.warnings));
+      return 0;
+    }
     const catalog = listSessionCatalog({
       workspace: runtime.cwd(),
       runtime,

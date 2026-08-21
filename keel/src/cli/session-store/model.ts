@@ -16,7 +16,7 @@ import type { ToolRecoveryCapability } from "../../tools/tool-definitions.ts";
 
 export const SESSION_SCHEMA_VERSION = 10;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
-export const SESSION_LOCK_DIRECTORY_NAME = "active.lock";
+export const SESSION_LOCKS_DIRECTORY_NAME = "session-locks";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
 export const SESSION_LEDGER_RESUME_MAX_BYTES = 32 * 1024 * 1024;
 export const SESSION_LEDGER_SNAPSHOT_THRESHOLD_BYTES = 16 * 1024 * 1024;

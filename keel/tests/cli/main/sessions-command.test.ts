@@ -1,5 +1,6 @@
 import {
   appendFile,
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
+import { acquireSessionLock } from "../../../src/cli/session-store.ts";
 import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
 import type { WorkflowSkill } from "../../../src/skills/model.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
@@ -71,6 +73,242 @@ function detailTimestamp(index: number): string {
 }
 
 describe("CLI Main - Sessions Command", () => {
+  test(`Given a saved session has transcript and agent history,
+    When the user archives, lists, and unarchives it,
+    Then normal discovery hides it and restoration preserves the complete session`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionId = "finished-task";
+    const activeDirectory = join(home, "sessions", sessionId);
+    const archivedDirectory = join(home, "archived-sessions", sessionId);
+    const agentTranscriptPath = join(
+      activeDirectory,
+      "agents",
+      "transcripts",
+      "child.jsonl",
+    );
+    const agentTranscript = '{"type":"child_result","content":"kept"}\n';
+    await writeSessionLedger({
+      home,
+      id: sessionId,
+      workspace: ledgerWorkspace,
+      createdAt: "2026-08-21T00:00:00.000Z",
+      records: [
+        appendSessionRecordLine("2026-08-21T00:00:01.000Z", [
+          {
+            role: "user",
+            content: "preserve this completed task",
+            origin: { type: "user_prompt" },
+          },
+          {
+            role: "assistant",
+            content: "The task is complete.",
+            toolCalls: [],
+          },
+        ]),
+      ],
+    });
+    await mkdir(join(activeDirectory, "agents", "transcripts"), {
+      recursive: true,
+    });
+    await writeFile(agentTranscriptPath, agentTranscript, "utf8");
+    const activeLedger = await readFile(join(activeDirectory, "ledger.jsonl"));
+    const archive = createRuntime(["sessions", "archive", sessionId], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      // When
+      expect(await runCliMain(archive.runtime)).toBe(0);
+
+      // Then
+      expect(archive.stderr()).toBe("");
+      expect(archive.stdout()).toBe(
+        `Archived session "${sessionId}".\nunarchive: keel sessions unarchive ${sessionId}\n`,
+      );
+      await expect(
+        readFile(join(activeDirectory, "ledger.jsonl")),
+      ).rejects.toThrow();
+      expect(await readFile(join(archivedDirectory, "ledger.jsonl"))).toEqual(
+        activeLedger,
+      );
+      expect(
+        await readFile(
+          join(archivedDirectory, "agents", "transcripts", "child.jsonl"),
+          "utf8",
+        ),
+      ).toBe(agentTranscript);
+
+      const activeList = createRuntime(["sessions"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(activeList.runtime)).toBe(0);
+      expect(activeList.stdout()).toBe(
+        `No sessions for workspace ${ledgerWorkspace}.\n`,
+      );
+
+      await writeSessionLedger({
+        home,
+        id: "current-task",
+        workspace: ledgerWorkspace,
+        createdAt: "2026-08-21T00:00:02.000Z",
+      });
+      const pickerInput = new PassThrough();
+      pickerInput.end("q\n");
+      const picker = createRuntime(["--resume", "--pick"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home, KEEL_PROVIDER: "fake" },
+        input: pickerInput,
+        inputIsTTY: true,
+        stderrIsTTY: false,
+      });
+      expect(await runCliMain(picker.runtime)).toBe(0);
+      expect(picker.stdout()).toContain(
+        "Select session [1-1], or q to cancel:\n",
+      );
+      expect(picker.stdout()).toContain("1. current-task  updated");
+      expect(picker.stdout()).not.toContain(sessionId);
+
+      const archivedList = createRuntime(["sessions", "archived"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(archivedList.runtime)).toBe(0);
+      expect(archivedList.stderr()).toBe("");
+      expect(archivedList.stdout()).toContain(
+        `Archived sessions for workspace ${ledgerWorkspace}:\n`,
+      );
+      expect(archivedList.stdout()).toContain(
+        `${sessionId}  updated 2026-08-21T00:00:01.000Z\n`,
+      );
+      expect(archivedList.stdout()).toContain(
+        `   unarchive: keel sessions unarchive ${sessionId}\n`,
+      );
+      expect(archivedList.stdout()).not.toContain("resume: keel --resume");
+
+      const archivedResume = createRuntime(
+        ["--resume", sessionId, "--fork-points"],
+        {
+          cwd: workspace,
+          env: { KEEL_HOME: home },
+        },
+      );
+      expect(await runCliMain(archivedResume.runtime)).toBe(1);
+      expect(archivedResume.stdout()).toBe("");
+      expect(archivedResume.stderr()).toContain(
+        `Error: cannot resume session "${sessionId}": session ledger not found at ${join(activeDirectory, "ledger.jsonl")}.`,
+      );
+
+      const unarchive = createRuntime(["sessions", "unarchive", sessionId], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(unarchive.runtime)).toBe(0);
+      expect(unarchive.stderr()).toBe("");
+      expect(unarchive.stdout()).toBe(
+        `Unarchived session "${sessionId}".\nresume: keel --resume ${sessionId}\n`,
+      );
+
+      const restored = createRuntime(["sessions", "show", sessionId, "--all"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(restored.runtime)).toBe(0);
+      expect(restored.stderr()).toBe("");
+      expect(restored.stdout()).toContain("preserve this completed task");
+      expect(await readFile(agentTranscriptPath, "utf8")).toBe(agentTranscript);
+
+      const emptyArchive = createRuntime(["sessions", "archived"], {
+        cwd: workspace,
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(emptyArchive.runtime)).toBe(0);
+      expect(emptyArchive.stdout()).toBe(
+        `No archived sessions for workspace ${ledgerWorkspace}.\n`,
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      args: ["sessions", "archive"],
+      error: "Error: sessions archive requires <id>.\n",
+    },
+    {
+      args: ["sessions", "unarchive"],
+      error: "Error: sessions unarchive requires <id>.\n",
+    },
+    {
+      args: ["sessions", "archive", "task", "--force"],
+      error: 'Error: unknown sessions archive option "--force"\n',
+    },
+    {
+      args: ["sessions", "archived", "extra"],
+      error: 'Error: unknown sessions archived option "extra"\n',
+    },
+  ])(
+    `Given an incomplete or unsupported session lifecycle command,
+    When the CLI parses $args,
+    Then it rejects the command without moving session data`,
+    async ({ args, error }) => {
+      const fixture = createRuntime(args);
+
+      expect(await runCliMain(fixture.runtime)).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(error);
+    },
+  );
+
+  test(`Given a saved session is owned by a live process,
+    When the user tries to archive it,
+    Then the CLI refuses without moving any session data`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-"));
+    const ledgerWorkspace = await realpath(workspace);
+    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
+    const sessionId = "active-task";
+    const ledgerPath = join(home, "sessions", sessionId, "ledger.jsonl");
+    await writeSessionLedger({
+      home,
+      id: sessionId,
+      workspace: ledgerWorkspace,
+      createdAt: "2026-08-21T00:00:00.000Z",
+    });
+    const fixture = createRuntime(["sessions", "archive", sessionId], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+    const lock = acquireSessionLock({ sessionId, runtime: fixture.runtime });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toBe(
+        `Error: session "${sessionId}" is already active. Stop the other Keel process before using it again.\n`,
+      );
+      expect(lock.lockPath).toBe(join(home, "session-locks", sessionId));
+      await expect(readFile(ledgerPath)).resolves.not.toHaveLength(0);
+      await expect(
+        readFile(join(home, "archived-sessions", sessionId, "ledger.jsonl")),
+      ).rejects.toThrow();
+    } finally {
+      lock.release();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a completed Task accepted an interrupted opaque effect,
     When the host lists or inspects the saved session after a later state mutation,
     Then the catalog preserves and displays the unknown-effect outcome`, async () => {
@@ -1981,6 +2219,7 @@ describe("CLI Main - Sessions Command", () => {
           "     resume: keel --resume branch-a",
           "     fork-points: keel --resume branch-a --fork-points",
           "     fork: keel sessions fork branch-a <new-id>",
+          "     archive: keel sessions archive branch-a",
           "  branch-b  updated 2026-01-02T00:00:06.000Z",
         ].join("\n"),
       );

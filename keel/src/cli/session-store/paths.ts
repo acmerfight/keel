@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { sessionStoreError } from "./errors.ts";
 import {
   SESSION_ID_PATTERN,
-  SESSION_LOCK_DIRECTORY_NAME,
   SESSION_LOCK_OWNER_FILE_NAME,
+  SESSION_LOCKS_DIRECTORY_NAME,
   type SessionStoreRuntime,
 } from "./model.ts";
 
@@ -25,29 +25,51 @@ function validateSessionId(sessionId: string): void {
   }
 }
 
-function sessionDirectoryPath(
+export type SessionStorageLocation = "active" | "archived";
+
+export function sessionRootPath(
+  runtime: Pick<SessionStoreRuntime, "env">,
+  location: SessionStorageLocation,
+): string {
+  return join(
+    sessionHome(runtime),
+    location === "active" ? "sessions" : "archived-sessions",
+  );
+}
+
+export function sessionDirectoryPath(
   runtime: SessionStoreRuntime,
   sessionId: string,
+  location: SessionStorageLocation,
 ): string {
   validateSessionId(sessionId);
-  return join(sessionHome(runtime), "sessions", sessionId);
+  return join(sessionRootPath(runtime, location), sessionId);
+}
+
+export function sessionFilePathAtLocation(
+  runtime: SessionStoreRuntime,
+  sessionId: string,
+  location: SessionStorageLocation,
+): string {
+  return join(
+    sessionDirectoryPath(runtime, sessionId, location),
+    "ledger.jsonl",
+  );
 }
 
 export function sessionFilePath(
   runtime: SessionStoreRuntime,
   sessionId: string,
 ): string {
-  return join(sessionDirectoryPath(runtime, sessionId), "ledger.jsonl");
+  return sessionFilePathAtLocation(runtime, sessionId, "active");
 }
 
 export function sessionLockPath(
   runtime: SessionStoreRuntime,
   sessionId: string,
 ): string {
-  return join(
-    sessionDirectoryPath(runtime, sessionId),
-    SESSION_LOCK_DIRECTORY_NAME,
-  );
+  validateSessionId(sessionId);
+  return join(sessionHome(runtime), SESSION_LOCKS_DIRECTORY_NAME, sessionId);
 }
 
 export function sessionLockOwnerPath(lockPath: string): string {

@@ -30,6 +30,7 @@ import type {
 function sessionCatalogEntryLines(
   entry: SessionCatalogEntry,
   depth: number,
+  location: "active" | "archived",
 ): readonly string[] {
   const indent = "  ".repeat(depth);
   const detailIndent = `${indent}   `;
@@ -58,10 +59,15 @@ function sessionCatalogEntryLines(
       : []),
     `${detailIndent}preview: ${formatSessionDetailText(entry.preview)}`,
     ...sessionRecoveryStateLines(entry, detailIndent),
-    `${detailIndent}show: keel sessions show ${entry.id}`,
-    `${detailIndent}resume: keel --resume ${entry.id}`,
-    `${detailIndent}fork-points: keel --resume ${entry.id} --fork-points`,
-    `${detailIndent}fork: keel sessions fork ${entry.id} <new-id>`,
+    ...(location === "active"
+      ? [
+          `${detailIndent}show: keel sessions show ${entry.id}`,
+          `${detailIndent}resume: keel --resume ${entry.id}`,
+          `${detailIndent}fork-points: keel --resume ${entry.id} --fork-points`,
+          `${detailIndent}fork: keel sessions fork ${entry.id} <new-id>`,
+          `${detailIndent}archive: keel sessions archive ${entry.id}`,
+        ]
+      : [`${detailIndent}unarchive: keel sessions unarchive ${entry.id}`]),
   ];
 }
 
@@ -236,9 +242,10 @@ function sessionCatalogTreeEntries(
 
 function sessionCatalogTreeLines(
   entries: readonly SessionCatalogEntry[],
+  location: "active" | "archived",
 ): readonly string[] {
   return sessionCatalogTreeEntries(entries).flatMap(({ entry, depth }) =>
-    sessionCatalogEntryLines(entry, depth),
+    sessionCatalogEntryLines(entry, depth, location),
   );
 }
 
@@ -265,7 +272,21 @@ export function formatSessionCatalog(catalog: SessionCatalog): string {
     lines.push(
       `graph ${group.graphId} root ${group.rootSessionId}  updated ${group.updatedAt}`,
     );
-    lines.push(...sessionCatalogTreeLines(group.entries));
+    lines.push(...sessionCatalogTreeLines(group.entries, "active"));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function formatArchivedSessionCatalog(catalog: SessionCatalog): string {
+  if (catalog.sessions.length === 0) {
+    return `No archived sessions for workspace ${catalog.workspace}.\n`;
+  }
+  const lines = [`Archived sessions for workspace ${catalog.workspace}:`];
+  for (const group of sessionCatalogGraphGroups(catalog.sessions)) {
+    lines.push(
+      `graph ${group.graphId} root ${group.rootSessionId}  updated ${group.updatedAt}`,
+    );
+    lines.push(...sessionCatalogTreeLines(group.entries, "archived"));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -493,6 +514,10 @@ export function formatSessionDetail(options: {
           command: `keel sessions fork ${options.entry.id} <new-id>`,
         },
         {
+          label: "archive",
+          command: `keel sessions archive ${options.entry.id}`,
+        },
+        {
           label: "undo-list",
           command: "keel /undo --list",
         },
@@ -515,6 +540,7 @@ export function formatSessionDetail(options: {
     `  resume: keel --resume ${options.entry.id}`,
     `  fork-points: keel --resume ${options.entry.id} --fork-points`,
     `  fork: keel sessions fork ${options.entry.id} <new-id>`,
+    `  archive: keel sessions archive ${options.entry.id}`,
     ...formatSessionDetailTimeline({
       session: options.session,
       timelineLimit: options.timelineLimit,
@@ -544,6 +570,14 @@ export function formatSessionForkCreated(options: {
       ? `Forked session "${options.sourceSessionId}" to "${options.targetSessionId}".`
       : `Forked session "${options.sourceSessionId}" to "${options.targetSessionId}" before message ${options.forkBeforeMessage}.`;
   return `${forkLine}\nresume: keel --resume ${options.targetSessionId}\n`;
+}
+
+export function formatSessionArchived(sessionId: string): string {
+  return `Archived session "${sessionId}".\nunarchive: keel sessions unarchive ${sessionId}\n`;
+}
+
+export function formatSessionUnarchived(sessionId: string): string {
+  return `Unarchived session "${sessionId}".\nresume: keel --resume ${sessionId}\n`;
 }
 
 export function formatSessionRepairResult(options: {

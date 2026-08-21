@@ -107,7 +107,7 @@ describe("Session Store Filesystem Races", () => {
     Then acquisition fails closed with the inspection error`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-lock-race-"));
-    const lockPath = join(home, "sessions", "inspection-race", "active.lock");
+    const lockPath = join(home, "session-locks", "inspection-race");
     await mkdir(lockPath, { recursive: true });
     const actualFs = await vi.importActual<FsModule>("node:fs");
     const sessionStore = await importSessionStoreWithFs({
@@ -137,7 +137,7 @@ describe("Session Store Filesystem Races", () => {
     Then acquisition removes the partial lock and reports the write failure`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-lock-race-"));
-    const lockPath = join(home, "sessions", "owner-write-race", "active.lock");
+    const lockPath = join(home, "session-locks", "owner-write-race");
     const sessionStore = await importSessionStoreWithFs({
       writeFileSync: () => {
         throw new TestNodeError("EACCES", "write");
@@ -163,7 +163,7 @@ describe("Session Store Filesystem Races", () => {
     Then it preserves the successor's valid lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-lock-race-"));
-    const lockPath = join(home, "sessions", "owner-replacement", "active.lock");
+    const lockPath = join(home, "session-locks", "owner-replacement");
     const ownerPath = join(lockPath, "owner.json");
     const successorOwner = `${JSON.stringify({
       pid: 999_999_999,
@@ -203,7 +203,7 @@ describe("Session Store Filesystem Races", () => {
     Then it reports the cleanup failure and leaves the lock fail-closed`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-lock-race-"));
-    const lockPath = join(home, "sessions", "cleanup-blocked", "active.lock");
+    const lockPath = join(home, "session-locks", "cleanup-blocked");
     const actualFs = await vi.importActual<FsModule>("node:fs");
     const sessionStore = await importSessionStoreWithFs({
       writeFileSync: () => {

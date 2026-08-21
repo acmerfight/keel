@@ -151,6 +151,17 @@ interface SessionsListCliArgs {
   readonly mode: "list";
 }
 
+interface SessionsArchivedCliArgs {
+  readonly command: "sessions";
+  readonly mode: "archived";
+}
+
+export interface SessionsLifecycleCliArgs {
+  readonly command: "sessions";
+  readonly mode: "archive" | "unarchive";
+  readonly sessionId: string;
+}
+
 export interface SessionsForkCliArgs {
   readonly command: "sessions";
   readonly mode: "fork";
@@ -175,6 +186,8 @@ export interface SessionsRepairCliArgs {
 
 export type SessionsCliArgs =
   | SessionsListCliArgs
+  | SessionsArchivedCliArgs
+  | SessionsLifecycleCliArgs
   | SessionsForkCliArgs
   | SessionsShowCliArgs
   | SessionsRepairCliArgs;

@@ -93,6 +93,10 @@ What a user can do today:
   consumed, active model switches, durable workflow-skill activation snapshots,
   and independent fork ledgers that continue from completed restored history
   without copying the source session's pending queued input.
+  `keel sessions archive <id>` reversibly removes an inactive session from
+  normal catalog, picker, and resume discovery while preserving its complete
+  ledger and agent tree; `keel sessions archived` lists archived work and
+  `keel sessions unarchive <id>` restores it under the same reserved identity.
 - Interactive `/compact [focus]` — manually replace older conversation with
   a model-generated checkpoint summary; automatic compaction also runs before
   oversized requests and retries once after provider context overflow before
@@ -474,6 +478,9 @@ Codex/Claude Code — or directly moves the eval numbers.
   persistence boundaries. Two product-graduation windows did not prove stable
   selection or measurable value; the second prompt candidate was reverted, so
   broader governed write and nesting modes remain gated.
+  Inactive sessions can be archived and unarchived as whole directory
+  aggregates. Session locks are keyed by identity outside active/archive
+  storage, so lifecycle moves cannot bypass a live owner.
 - **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
   prompts in real TTY one-shot runs and interactive sessions, fails closed
   without an approval UI, records exact command + cwd approvals, supports

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  access,
   chmod,
   mkdir,
   mkdtemp,
@@ -114,12 +115,41 @@ describe("Session Store Locks And Validation", () => {
     }
   });
 
+  test(`Given a session identity lock is the only lock under the shared root,
+    When that identity releases its lock,
+    Then the shared root remains available for another identity`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const firstLock = acquireSessionLock({
+      sessionId: "first-identity",
+      runtime: runtime(home),
+    });
+
+    try {
+      // When
+      firstLock.release();
+      const sharedRoot = join(home, "session-locks");
+
+      // Then
+      await expect(access(sharedRoot)).resolves.toBeUndefined();
+      const secondLock = acquireSessionLock({
+        sessionId: "second-identity",
+        runtime: runtime(home, 1),
+      });
+
+      expect(secondLock.lockPath).toBe(join(sharedRoot, "second-identity"));
+      secondLock.release();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a previous process left a stale session lock,
     When the same session lock is acquired again,
     Then the store recovers the stale lock and acquires a fresh one`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "stale", "active.lock");
+    const lockPath = join(home, "session-locks", "stale");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -157,7 +187,7 @@ describe("Session Store Locks And Validation", () => {
     Then the store recovers the stale lock using the owner process identity`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "reused-pid", "active.lock");
+    const lockPath = join(home, "session-locks", "reused-pid");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -197,7 +227,7 @@ describe("Session Store Locks And Validation", () => {
     Then the store recovers the stale lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "identified-stale", "active.lock");
+    const lockPath = join(home, "session-locks", "identified-stale");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -231,7 +261,7 @@ describe("Session Store Locks And Validation", () => {
     Then the store fails closed instead of reclaiming it locally`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "foreign-host", "active.lock");
+    const lockPath = join(home, "session-locks", "foreign-host");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -284,8 +314,8 @@ describe("Session Store Locks And Validation", () => {
     Then lock acquisition fails closed`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const sessionPath = join(home, "sessions", "stale-blocked");
-    const lockPath = join(sessionPath, "active.lock");
+    const lockRoot = join(home, "session-locks");
+    const lockPath = join(lockRoot, "stale-blocked");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -296,7 +326,7 @@ describe("Session Store Locks And Validation", () => {
       })}\n`,
       "utf8",
     );
-    await chmod(sessionPath, 0o500);
+    await chmod(lockRoot, 0o500);
 
     try {
       // When / Then
@@ -307,7 +337,7 @@ describe("Session Store Locks And Validation", () => {
         }),
       ).toThrow(SessionStoreError);
     } finally {
-      await chmod(sessionPath, 0o700);
+      await chmod(lockRoot, 0o700);
       await rm(home, { recursive: true, force: true });
     }
   });
@@ -317,12 +347,7 @@ describe("Session Store Locks And Validation", () => {
     Then the store treats the lock as active during owner creation`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(
-      home,
-      "sessions",
-      "fresh-missing-owner",
-      "active.lock",
-    );
+    const lockPath = join(home, "session-locks", "fresh-missing-owner");
     await mkdir(lockPath, { recursive: true });
 
     try {
@@ -343,7 +368,7 @@ describe("Session Store Locks And Validation", () => {
     Then the store recovers the abandoned lock and acquires a fresh one`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "missing-owner", "active.lock");
+    const lockPath = join(home, "session-locks", "missing-owner");
     await mkdir(lockPath, { recursive: true });
     const staleTime = new Date(0);
     await utimes(lockPath, staleTime, staleTime);
@@ -374,7 +399,7 @@ describe("Session Store Locks And Validation", () => {
     Then lock acquisition fails closed instead of reclaiming it`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "unreadable-owner", "active.lock");
+    const lockPath = join(home, "session-locks", "unreadable-owner");
     await mkdir(lockPath, { recursive: true });
     await mkdir(join(lockPath, "owner.json"));
     const staleTime = new Date(0);
@@ -398,7 +423,7 @@ describe("Session Store Locks And Validation", () => {
     Then the store recovers the abandoned lock and acquires a fresh one`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "bad-owner", "active.lock");
+    const lockPath = join(home, "session-locks", "bad-owner");
     await mkdir(lockPath, { recursive: true });
     await writeFile(join(lockPath, "owner.json"), "{not-json", "utf8");
     const staleTime = new Date(0);
@@ -430,7 +455,7 @@ describe("Session Store Locks And Validation", () => {
     Then the store recovers the abandoned lock and acquires a fresh one`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "invalid-owner", "active.lock");
+    const lockPath = join(home, "session-locks", "invalid-owner");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -470,12 +495,12 @@ describe("Session Store Locks And Validation", () => {
     Then release fails closed`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const sessionPath = join(home, "sessions", "release-blocked");
+    const lockRoot = join(home, "session-locks");
     const lock = acquireSessionLock({
       sessionId: "release-blocked",
       runtime: runtime(home),
     });
-    await chmod(sessionPath, 0o500);
+    await chmod(lockRoot, 0o500);
 
     try {
       // When / Then
@@ -483,7 +508,7 @@ describe("Session Store Locks And Validation", () => {
         lock.release();
       }).toThrow(SessionStoreError);
     } finally {
-      await chmod(sessionPath, 0o700);
+      await chmod(lockRoot, 0o700);
       await rm(home, { recursive: true, force: true });
     }
   });
@@ -497,7 +522,7 @@ describe("Session Store Locks And Validation", () => {
       sessionId: "token-mismatch",
       runtime: runtime(home),
     });
-    const lockPath = join(home, "sessions", "token-mismatch", "active.lock");
+    const lockPath = join(home, "session-locks", "token-mismatch");
     await writeFile(
       join(lockPath, "owner.json"),
       `${JSON.stringify({
@@ -600,6 +625,26 @@ describe("Session Store Locks And Validation", () => {
       expect(() =>
         ensureSessionCanBeCreated({
           sessionId: "blocked",
+          runtime: runtime(home),
+        }),
+      ).toThrow(SessionStoreError);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given archived session storage cannot be inspected,
+    When a user checks whether the session id can be created,
+    Then the store fails closed before creating a duplicate identity`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    await writeFile(join(home, "archived-sessions"), "not a directory");
+
+    try {
+      // When / Then
+      expect(() =>
+        ensureSessionCanBeCreated({
+          sessionId: "blocked-archive",
           runtime: runtime(home),
         }),
       ).toThrow(SessionStoreError);

@@ -74,7 +74,15 @@ keel --doctor
 keel auth status
 keel config show
 keel sessions
+keel sessions archive <id>
+keel sessions archived
+keel sessions unarchive <id>
 ```
+
+Archiving a saved session removes it from normal listing, startup picking, and
+resume without deleting its ledger or agent history. Archived session IDs stay
+reserved; use `keel sessions archived` to find one and unarchive it before
+resuming.
 
 ## Subagent Profiles
 
