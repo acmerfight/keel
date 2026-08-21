@@ -1,8 +1,13 @@
 export {
+  listArchivedSessionCatalog,
   listSessionCatalog,
   readSessionCatalogEntry,
 } from "./session-store/catalog.ts";
 export { SessionStoreError } from "./session-store/errors.ts";
+export {
+  archiveSessionStore,
+  unarchiveSessionStore,
+} from "./session-store/lifecycle.ts";
 export {
   acquireSessionLock,
   ensureSessionCanBeCreated,

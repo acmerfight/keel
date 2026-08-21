@@ -129,7 +129,7 @@ describe("Session Lock Process Identity Races", () => {
 
       // Then
       expect(lock.lockPath).toBe(
-        join(home, "sessions", "current-identity-unknown", "active.lock"),
+        join(home, "session-locks", "current-identity-unknown"),
       );
       expect(() =>
         acquireSessionLock({
@@ -252,12 +252,7 @@ describe("Session Lock Process Identity Races", () => {
     Then the store recovers the abandoned lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(
-      home,
-      "sessions",
-      "linux-owner-exited",
-      "active.lock",
-    );
+    const lockPath = join(home, "session-locks", "linux-owner-exited");
     const exitedPid = 999_999_999;
     await mkdir(lockPath, { recursive: true });
     await writeFile(
@@ -299,12 +294,7 @@ describe("Session Lock Process Identity Races", () => {
     Then the store recovers the abandoned lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(
-      home,
-      "sessions",
-      "linux-owner-malformed",
-      "active.lock",
-    );
+    const lockPath = join(home, "session-locks", "linux-owner-malformed");
     const exitedPid = 999_999_999;
     await mkdir(lockPath, { recursive: true });
     await writeFile(
@@ -378,12 +368,7 @@ describe("Session Lock Process Identity Races", () => {
     Then the store recovers the abandoned lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(
-      home,
-      "sessions",
-      "unknown-platform-stale",
-      "active.lock",
-    );
+    const lockPath = join(home, "session-locks", "unknown-platform-stale");
     const exitedPid = 999_999_999;
     await mkdir(lockPath, { recursive: true });
     await writeFile(
@@ -454,12 +439,7 @@ describe("Session Lock Process Identity Races", () => {
     Then the store fails closed instead of reclaiming the lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(
-      home,
-      "sessions",
-      "owner-identity-unknown",
-      "active.lock",
-    );
+    const lockPath = join(home, "session-locks", "owner-identity-unknown");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -504,7 +484,7 @@ describe("Session Lock Process Identity Races", () => {
     Then the store fails closed instead of treating the owner as stale`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(home, "sessions", "owner-start-empty", "active.lock");
+    const lockPath = join(home, "session-locks", "owner-start-empty");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
@@ -545,12 +525,7 @@ describe("Session Lock Process Identity Races", () => {
     Then the store recovers the abandoned lock`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const lockPath = join(
-      home,
-      "sessions",
-      "exited-start-empty",
-      "active.lock",
-    );
+    const lockPath = join(home, "session-locks", "exited-start-empty");
     await mkdir(lockPath, { recursive: true });
     await writeFile(
       join(lockPath, "owner.json"),
