@@ -136,7 +136,8 @@ What a user can do today:
   deterministic risk labels for workspace-read, project-verification,
   workspace-write, and unknown/dangerous commands, and verification-family
   approvals cover common project checks such as `pnpm test`, `pnpm typecheck`,
-  `pnpm lint`, and `pnpm build`.
+  `pnpm lint`, and `pnpm build`, plus safe workspace-relative Vitest selectors
+  through `pnpm vitest run` and `pnpm exec vitest run`.
 - `keel --max-cost <usd>` — one-shot or interactive best-effort session cost
   budget with conservative request admission, provider output bounds, and
   post-response accounting.
@@ -486,13 +487,14 @@ Codex/Claude Code — or directly moves the eval numbers.
   without an approval UI, records exact command + cwd approvals, supports
   conservative command-family approvals, restores active grants for
   named-session resume, saves project-scoped approvals for conservative command
-  families, and exposes `/approvals` plus `keel approvals` to list, revoke, or
-  clear active or project grants. Prompts now show deterministic risk labels so
-  users can distinguish workspace-read commands, project verification commands,
-  workspace-writing commands, and unknown/dangerous shell syntax before
-  approving. Remaining work is deeper shell parsing, family-specific validators
-  for additional commands where safe, and user-global approval rules. OS
-  sandboxing remains P2.
+  families (including validated workspace-relative selectors for both
+  `pnpm vitest run` and `pnpm exec vitest run`), and exposes `/approvals` plus
+  `keel approvals` to list, revoke, or clear active or project grants. Prompts
+  now show deterministic risk labels so users can distinguish workspace-read
+  commands, project verification commands, workspace-writing commands, and
+  unknown/dangerous shell syntax before approving. Remaining work is deeper
+  shell parsing, family-specific validators for additional commands where safe,
+  and user-global approval rules. OS sandboxing remains P2.
 - **Whole-task undo** — ✅ Partial (2026-07): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint, while
   `/undo --list` and `/undo --to <index>` let users choose an older listed

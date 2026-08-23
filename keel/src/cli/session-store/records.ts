@@ -36,6 +36,7 @@ import {
   sessionTaskProgressSchema,
 } from "../../core/task-progress.ts";
 import type { BashApprovalGrant } from "../../permissions/bash.ts";
+import { bashCommandFamilyIds } from "../../permissions/bash-command-families.ts";
 import {
   copySkillActivation,
   copySkillLifecycleState,
@@ -670,7 +671,7 @@ const commandFamilyBashApprovalGrantSchema = z
   .object({
     type: z.literal("command_family"),
     cwd: z.string(),
-    commandFamily: z.literal("pnpm_vitest_run_workspace_test_selectors"),
+    commandFamily: z.enum(bashCommandFamilyIds),
   })
   .strict();
 

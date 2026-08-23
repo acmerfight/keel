@@ -47,38 +47,44 @@ describe("CLI - Bash Project Approval Store", () => {
     }
   });
 
-  test(`Given the same Vitest command family is approved from different project cwd values,
+  test.each([
+    "pnpm_vitest_run_workspace_test_selectors",
+    "pnpm_exec_vitest_run_workspace_test_selectors",
+  ] as const)(
+    `Given the same $commandFamily command family is approved from different project cwd values,
     When Keel writes and reads the project approval store,
-    Then the store keeps one explicit command-family grant`, async () => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-home-bash-project-"));
-    const workspace = await mkdtemp(join(tmpdir(), "keel-bash-project-"));
-    const nestedWorkspace = join(workspace, "packages", "app");
-    await mkdir(nestedWorkspace, { recursive: true });
-    const runtime = {
-      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
-    };
-    const grant = {
-      projectRoot: workspace,
-      cwd: workspace,
-      commandFamily: "pnpm_vitest_run_workspace_test_selectors" as const,
-    };
-    const nestedGrant = { ...grant, cwd: nestedWorkspace };
+    Then the store keeps one explicit command-family grant`,
+    async (commandFamily) => {
+      // Given
+      const home = await mkdtemp(join(tmpdir(), "keel-home-bash-project-"));
+      const workspace = await mkdtemp(join(tmpdir(), "keel-bash-project-"));
+      const nestedWorkspace = join(workspace, "packages", "app");
+      await mkdir(nestedWorkspace, { recursive: true });
+      const runtime = {
+        env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+      };
+      const grant = {
+        projectRoot: workspace,
+        cwd: workspace,
+        commandFamily,
+      };
+      const nestedGrant = { ...grant, cwd: nestedWorkspace };
 
-    try {
-      // When
-      const firstSave = saveBashProjectApprovalGrant(runtime, grant);
-      const secondSave = saveBashProjectApprovalGrant(runtime, nestedGrant);
+      try {
+        // When
+        const firstSave = saveBashProjectApprovalGrant(runtime, grant);
+        const secondSave = saveBashProjectApprovalGrant(runtime, nestedGrant);
 
-      // Then
-      expect(firstSave).toBe(true);
-      expect(secondSave).toBe(false);
-      expect(listBashProjectApprovalGrants(runtime, workspace)).toEqual([
-        grant,
-      ]);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-      await rm(workspace, { recursive: true, force: true });
-    }
-  });
+        // Then
+        expect(firstSave).toBe(true);
+        expect(secondSave).toBe(false);
+        expect(listBashProjectApprovalGrants(runtime, workspace)).toEqual([
+          grant,
+        ]);
+      } finally {
+        await rm(home, { recursive: true, force: true });
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 });
