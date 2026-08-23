@@ -7,6 +7,7 @@ import type { AgentEvent } from "../../../src/agent/events.ts";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   formatInteractiveGoal,
+  formatInteractiveGoalCommandOutput,
   formatInteractiveHelp,
   parseInteractiveCommand,
 } from "../../../src/cli/interactive-session/commands.ts";
@@ -119,6 +120,29 @@ function redactionExpandingText(maxLength: number): string {
 }
 
 describe("Interactive Session - Goals", () => {
+  test(`Given a child authority cannot expose Bash,
+    When a verification command is configured,
+    Then the output directs verification to the parent or the user`, () => {
+    const rendered = formatInteractiveGoalCommandOutput(
+      {
+        kind: "verification_set",
+        goal: {
+          objective: "Verify the release",
+          status: "active",
+          budget: {},
+          usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
+          completion: { kind: "command", command: "pnpm test" },
+        },
+      },
+      { bashToolVisible: false },
+    );
+
+    expect(rendered).toEqual({
+      stream: "stdout",
+      text: "Goal verification command set: pnpm test\nNote: bash is unavailable under the current tool authority, so the agent cannot run this verification command. Ask the parent agent to verify it, or use /goal complete after checking it manually.\n",
+    });
+  });
+
   test(`Given the user opens interactive help,
     When Keel documents atomic goal launch,
     Then every supported timeout and budget option is visible`, () => {

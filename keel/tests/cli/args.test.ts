@@ -691,6 +691,21 @@ describe("CLI Args", () => {
     });
   });
 
+  test(`Given a one-shot invocation opts into reviewed execution with inline syntax,
+    When the CLI parses the command,
+    Then it selects the reviewed invocation posture`, () => {
+    expect(
+      parseCliArgs(["--approval-policy=ask", "review this run"]),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        command: "run",
+        mode: "one-shot",
+        executionPosture: "reviewed",
+      },
+    });
+  });
+
   test(`Given every headless Goal contract option uses inline syntax,
     When the CLI parses the command,
     Then it produces one normalized command-backed Goal contract`, () => {
