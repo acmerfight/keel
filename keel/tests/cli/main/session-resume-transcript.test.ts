@@ -12,10 +12,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
-import {
-  createRuntime,
-  withTimeout,
-} from "../../../src/testing/cli-runtime-fixtures.ts";
+import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
   getPort,
@@ -24,11 +21,7 @@ import {
   sseToolCall,
   sseToolFinish,
 } from "../../../src/testing/provider-sse-fixtures.ts";
-import {
-  appendSessionRecordLine,
-  rootGraph,
-  writeSessionLedger,
-} from "../../../src/testing/session-ledger-fixtures.ts";
+import { rootGraph } from "../../../src/testing/session-ledger-fixtures.ts";
 
 describe("CLI Main - Session Resume Transcript", () => {
   test(`Given a provider emits invalid update_plan arguments,
@@ -138,7 +131,7 @@ describe("CLI Main - Session Resume Transcript", () => {
         ledgerLines.filter((line) => line.type === "task_progress"),
       ).toEqual([
         {
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "task_progress",
           timestamp: expect.any(String),
           messageOrdinal: 5,
@@ -247,7 +240,7 @@ describe("CLI Main - Session Resume Transcript", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ledgerLines).toContainEqual({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "task_progress",
         timestamp: expect.any(String),
         messageOrdinal: 3,
@@ -331,350 +324,6 @@ describe("CLI Main - Session Resume Transcript", () => {
     }
   });
 
-  test(`Given a named interactive session approved a bash command for the session,
-    When the user resumes and the provider repeats that command,
-    Then the resumed CLI run executes it without another approval prompt`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-bash-"));
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    const command =
-      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
-    let requestCount = 0;
-    const server = createServer((req, res) => {
-      if (req.url !== "/chat/completions") {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-
-      req.resume();
-      requestCount++;
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      if (requestCount === 1 || requestCount === 3) {
-        res.write(
-          sseToolCall(`call_bash_${requestCount}`, "bash", { command }),
-        );
-        res.write(sseToolFinish());
-        res.write("data: [DONE]\n\n");
-        res.end();
-        return;
-      }
-      res.end(
-        sseTextReplyWithUsage(
-          requestCount === 2 ? "First bash done." : "Second bash done.",
-        ),
-      );
-    });
-    await listen(server);
-
-    const firstInput = new PassThrough();
-    Object.defineProperty(firstInput, "isTTY", { value: true });
-    let firstApprovalPrompts = 0;
-    let resolveFirstApprovalPrompt: () => void = () => {};
-    const firstApprovalPrompt = new Promise<void>((resolve) => {
-      resolveFirstApprovalPrompt = resolve;
-    });
-    const firstRun = createRuntime(
-      ["--session", "bash-resume", "--bash-policy", "ask"],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_HOME: home,
-        },
-        input: firstInput,
-        onStderr: (text) => {
-          if (text.includes("Approve bash command")) {
-            firstApprovalPrompts++;
-            resolveFirstApprovalPrompt();
-          }
-        },
-      },
-    );
-
-    try {
-      const firstRunPromise = runCliMain(firstRun.runtime);
-      firstInput.write("run bash\n");
-      await withTimeout(
-        firstApprovalPrompt,
-        5000,
-        "first bash approval prompt was not shown",
-      );
-      firstInput.write("s\n");
-      firstInput.end();
-      const firstExitCode = await withTimeout(
-        firstRunPromise,
-        5000,
-        "first bash approval run did not finish",
-      );
-
-      const secondInput = new PassThrough();
-      Object.defineProperty(secondInput, "isTTY", { value: true });
-      let secondApprovalPrompts = 0;
-      const secondRun = createRuntime(
-        ["--resume", "bash-resume", "--bash-policy", "ask"],
-        {
-          cwd: workspace,
-          env: {
-            DEEPSEEK_API_KEY: "test-key",
-            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-            KEEL_HOME: home,
-          },
-          input: secondInput,
-          onStderr: (text) => {
-            if (text.includes("Approve bash command")) {
-              secondApprovalPrompts++;
-            }
-          },
-        },
-      );
-
-      // When
-      const secondRunPromise = runCliMain(secondRun.runtime);
-      secondInput.end("run bash again\n");
-      const secondExitCode = await withTimeout(
-        secondRunPromise,
-        5000,
-        "second resumed bash run did not finish",
-      );
-
-      // Then
-      expect(firstExitCode).toBe(0);
-      expect(secondExitCode).toBe(0);
-      expect(firstApprovalPrompts).toBe(1);
-      expect(secondApprovalPrompts).toBe(0);
-      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("xx");
-      expect(firstRun.stdout()).toBe("First bash done.\n");
-      expect(secondRun.stdout()).toBe("Second bash done.\n");
-      const ledger = await readFile(
-        join(home, "sessions", "bash-resume", "ledger.jsonl"),
-        "utf8",
-      );
-      expect(ledger).toContain('"type":"bash_approval_granted"');
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given a named interactive session is resumed before approving bash,
-    When the user approves a bash command for the resumed session,
-    Then the resumed CLI run persists that approval grant`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-session-bash-"));
-    const ledgerWorkspace = await realpath(workspace);
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    const command =
-      "node -e \"require('node:fs').appendFileSync('runs.txt', 'x')\"";
-    await writeSessionLedger({
-      home,
-      id: "resumed-bash-new-grant",
-      workspace: ledgerWorkspace,
-      createdAt: "1970-01-01T00:00:00.000Z",
-      records: [
-        appendSessionRecordLine("1970-01-01T00:00:00.001Z", [
-          {
-            role: "user",
-            content: "remember alpha",
-            origin: { type: "user_prompt" },
-          },
-          { role: "assistant", content: "Remembered alpha.", toolCalls: [] },
-        ]),
-      ],
-    });
-    let requestCount = 0;
-    const server = createServer((req, res) => {
-      if (req.url !== "/chat/completions") {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-
-      req.resume();
-      requestCount++;
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      if (requestCount === 1) {
-        res.write(sseToolCall("call_bash_resumed", "bash", { command }));
-        res.write(sseToolFinish());
-        res.write("data: [DONE]\n\n");
-        res.end();
-        return;
-      }
-      res.end(sseTextReplyWithUsage("Resumed bash done."));
-    });
-    await listen(server);
-
-    const input = new PassThrough();
-    Object.defineProperty(input, "isTTY", { value: true });
-    let approvalPrompts = 0;
-    let resolveApprovalPrompt: () => void = () => {};
-    const approvalPrompt = new Promise<void>((resolve) => {
-      resolveApprovalPrompt = resolve;
-    });
-    const fixture = createRuntime(
-      ["--resume", "resumed-bash-new-grant", "--bash-policy", "ask"],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_HOME: home,
-        },
-        input,
-        onStderr: (text) => {
-          if (text.includes("Approve bash command")) {
-            approvalPrompts++;
-            resolveApprovalPrompt();
-          }
-        },
-      },
-    );
-
-    try {
-      // When
-      const run = runCliMain(fixture.runtime);
-      input.write("run bash after resume\n");
-      await withTimeout(
-        approvalPrompt,
-        5000,
-        "resumed bash approval prompt was not shown",
-      );
-      input.write("s\n");
-      input.end();
-      const exitCode = await withTimeout(
-        run,
-        5000,
-        "resumed bash approval run did not finish",
-      );
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(approvalPrompts).toBe(1);
-      expect(await readFile(join(workspace, "runs.txt"), "utf8")).toBe("x");
-      expect(fixture.stdout()).toBe("Resumed bash done.\n");
-      const ledgerLines = (
-        await readFile(
-          join(home, "sessions", "resumed-bash-new-grant", "ledger.jsonl"),
-          "utf8",
-        )
-      )
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(ledgerLines).toContainEqual({
-        schemaVersion: 10,
-        type: "bash_approval_granted",
-        timestamp: "1970-01-01T00:00:00.000Z",
-        grant: {
-          type: "exact",
-          cwd: workspace,
-          command,
-        },
-      });
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given a resumed named session has active bash approvals,
-    When the user revokes and clears approvals with local commands,
-    Then the resumed CLI run persists the approval audit mutations`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-approvals-"));
-    const ledgerWorkspace = await realpath(workspace);
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    const exactGrant = {
-      type: "exact",
-      cwd: ledgerWorkspace,
-      command: "pnpm test",
-    };
-    const prefixGrant = {
-      type: "prefix",
-      cwd: ledgerWorkspace,
-      argvPrefix: ["git", "status"],
-    };
-    await writeSessionLedger({
-      home,
-      id: "approval-management",
-      workspace: ledgerWorkspace,
-      createdAt: "1970-01-01T00:00:00.000Z",
-      records: [
-        JSON.stringify({
-          schemaVersion: 10,
-          type: "bash_approval_granted",
-          timestamp: "1970-01-01T00:00:00.001Z",
-          grant: exactGrant,
-        }),
-        JSON.stringify({
-          schemaVersion: 10,
-          type: "bash_approval_granted",
-          timestamp: "1970-01-01T00:00:00.002Z",
-          grant: prefixGrant,
-        }),
-      ],
-    });
-    const input = new PassThrough();
-    input.end("/approvals revoke 1\n/approvals clear\n");
-    const fixture = createRuntime(["--resume", "approval-management"], {
-      cwd: workspace,
-      env: {
-        KEEL_FORCE_INTERACTIVE: "1",
-        KEEL_HOME: home,
-      },
-      input,
-    });
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(fixture.stdout()).toBe(
-        "Revoked bash approval 1.\nCleared 1 bash approval.\n",
-      );
-      expect(fixture.stderr()).toBe("");
-      const ledgerLines = (
-        await readFile(
-          join(home, "sessions", "approval-management", "ledger.jsonl"),
-          "utf8",
-        )
-      )
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(ledgerLines).toContainEqual({
-        schemaVersion: 10,
-        type: "bash_approval_revoked",
-        timestamp: "1970-01-01T00:00:00.000Z",
-        grant: exactGrant,
-      });
-      expect(ledgerLines).toContainEqual(
-        expect.objectContaining({
-          schemaVersion: 10,
-          type: "bash_approvals_cleared",
-          timestamp: "1970-01-01T00:00:00.000Z",
-          consumedInputIds: expect.any(Array),
-        }),
-      );
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
   test(`Given a named session has queued input from an interrupted process,
     When the user resumes with no new stdin,
     Then the queued input runs once and is marked consumed`, async () => {
@@ -687,7 +336,7 @@ describe("CLI Main - Session Resume Transcript", () => {
       join(home, "sessions", "queued", "ledger.jsonl"),
       `${[
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "session",
           id: "queued",
           createdAt: "1970-01-01T00:00:00.000Z",
@@ -695,7 +344,7 @@ describe("CLI Main - Session Resume Transcript", () => {
           graph: rootGraph("queued"),
         }),
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "queued-input-1",
@@ -765,7 +414,7 @@ describe("CLI Main - Session Resume Transcript", () => {
       await writeFile(
         sourceLedgerPath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "input_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           id: "queued-source-input",

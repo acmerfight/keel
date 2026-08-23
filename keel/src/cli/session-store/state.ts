@@ -12,7 +12,6 @@ import {
   sessionTaskProgressesEqual,
 } from "../../core/task-progress.ts";
 import type { ToolCall } from "../../llm/types.ts";
-import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import type {
   SkillActivation,
   SkillLifecycleState,
@@ -44,14 +43,12 @@ import {
 } from "./model.ts";
 import {
   copyActiveSessionTask,
-  copyBashApprovalGrant,
   copyMessage,
   copySessionGraphRecord,
   copySessionLastTaskOutcome,
   copySkillActivation,
   copyStoredMessage,
   messagesFromStoredMessages,
-  redactBashApprovalGrantForPersistence,
   redactSessionQueuedInputForPersistence,
   redactSessionSkillStateCheckpointForPersistence,
   redactSessionTaskProgressCheckpointForPersistence,
@@ -220,7 +217,6 @@ function sessionStateFromReplay(options: {
   readonly graph: SessionGraphRecord;
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputsById: ReadonlyMap<string, SessionQueuedInput>;
-  readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly taskProgress: SessionTaskProgress;
   readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
   readonly title?: string;
@@ -237,9 +233,6 @@ function sessionStateFromReplay(options: {
   const storedMessages = options.storedMessages.map(copyStoredMessage);
   const messages = messagesFromStoredMessages(storedMessages);
   const pendingInputsById = new Map(options.pendingInputsById);
-  const bashApprovalGrants = options.bashApprovalGrants.map(
-    copyBashApprovalGrant,
-  );
   const taskProgressCheckpoints = (options.taskProgressCheckpoints ?? []).map(
     copySessionTaskProgressCheckpoint,
   );
@@ -274,7 +267,6 @@ function sessionStateFromReplay(options: {
   const replayState = {
     storedMessages: storedMessages.map(copyStoredMessage),
     pendingInputsById,
-    bashApprovalGrants,
     taskProgress: copySessionTaskProgress(taskProgress),
     taskProgressCheckpoints: taskProgressCheckpoints.map(
       copySessionTaskProgressCheckpoint,
@@ -300,7 +292,6 @@ function sessionStateFromReplay(options: {
     messages,
     storedMessages,
     pendingInputs: pendingInputsInReplayOrder(pendingInputsById),
-    bashApprovalGrants,
     taskProgress,
     ...(title !== undefined ? { title } : {}),
     ...(goal !== undefined ? { goal: copySessionGoal(goal) } : {}),
@@ -490,9 +481,6 @@ function appendSessionSnapshotIfNeeded(options: {
   }
 
   const replayState = replayStateForSession(options.session);
-  const bashApprovalGrants = replayState.bashApprovalGrants.map(
-    redactBashApprovalGrantForPersistence,
-  );
   appendJsonLine(options.session.filePath, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     type: "snapshot",
@@ -506,7 +494,6 @@ function appendSessionSnapshotIfNeeded(options: {
     pendingInputs: pendingInputsInReplayOrder(
       replayState.pendingInputsById,
     ).map(redactSessionQueuedInputForPersistence),
-    ...(bashApprovalGrants.length > 0 ? { bashApprovalGrants } : {}),
     ...(replayState.activeModel !== undefined
       ? { activeModel: copySessionModelSelection(replayState.activeModel) }
       : {}),

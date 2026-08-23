@@ -11,6 +11,23 @@ import {
 import { createRuntime } from "../../src/testing/cli-runtime-fixtures.ts";
 
 describe("CLI Args", () => {
+  test(`Given the removed approvals command,
+    When the user runs the CLI,
+    Then Keel rejects it instead of treating it as a provider prompt`, async () => {
+    // Given
+    const fixture = createRuntime(["approvals"], {
+      env: { KEEL_PROVIDER: "fake" },
+    });
+
+    // When
+    const exitCode = await runCliMain(fixture.runtime);
+
+    // Then
+    expect(exitCode).toBe(1);
+    expect(fixture.stdout()).toBe("");
+    expect(fixture.stderr()).toBe('Error: unknown command "approvals".\n');
+  });
+
   test(`Given the undo list command,
     When the user runs the CLI,
     Then undo checkpoints are listed without starting a provider run`, async () => {
@@ -520,24 +537,11 @@ describe("CLI Args", () => {
 
   test.each([
     [
-      ["goal", "--objective", "Ship it", "--bash-policy", "trusted"],
+      ["goal", "--objective", "Ship it"],
       "Error: goal requires exactly one of --verify <command> or --done-when <criterion>.\n",
     ],
     [
-      [
-        "goal",
-        "--objective",
-        "Ship it",
-        "--verify",
-        "pnpm test",
-        "--bash-policy",
-        "trusted",
-        "--allow-bash",
-      ],
-      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
-    ],
-    [
-      ["goal", "--verify", "pnpm test", "--bash-policy", "trusted"],
+      ["goal", "--verify", "pnpm test"],
       "Error: goal requires --objective <objective>.\n",
     ],
     [
@@ -613,11 +617,7 @@ describe("CLI Args", () => {
       "0s",
       "Error: --time must be a positive duration using ms, s, m, or h.\n",
     ],
-    [
-      "--bash-policy",
-      "always",
-      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
-    ],
+    ["--approval-policy", "always", "Error: --approval-policy must be: ask.\n"],
     [
       "--provider",
       "unknown",
@@ -670,26 +670,25 @@ describe("CLI Args", () => {
     expect(fixture.stderr()).toBe("Error: --verify requires a value.\n");
   });
 
-  test(`Given a headless Goal omits shell authorization,
+  test(`Given a headless Goal omits an approval policy,
     When the complete contract is parsed,
-    Then Keel rejects execution before creating a session or spending provider tokens`, async () => {
+    Then Keel selects trusted local execution by default`, () => {
     // Given
-    const fixture = createRuntime([
+    const args = [
       "goal",
       "--objective=Ship it",
       "--verify=pnpm test",
       "--turns=2",
-    ]);
+    ];
 
     // When
-    const exitCode = await runCliMain(fixture.runtime);
+    const parsed = parseCliArgs(args);
 
     // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: headless command Goals require --bash-policy trusted or a matching saved project approval with --bash-policy ask.\n",
-    );
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: { command: "goal", executionPosture: "trusted" },
+    });
   });
 
   test(`Given every headless Goal contract option uses inline syntax,
@@ -704,7 +703,6 @@ describe("CLI Args", () => {
       "--turns=12",
       "--tokens=50000",
       "--time=2h",
-      "--allow-bash",
       "--provider=fake",
       "--model=test-model",
       "--skill=release",
@@ -733,7 +731,7 @@ describe("CLI Args", () => {
           tokens: 50_000,
           activeTimeMs: 7_200_000,
         },
-        bashMode: "trusted",
+        executionPosture: "trusted",
         providerId: "fake",
         model: "test-model",
         skillsEnabled: true,
@@ -747,7 +745,7 @@ describe("CLI Args", () => {
   });
 
   test(`Given a headless Goal has a subjective completion condition,
-    When the CLI parses --done-when without shell authorization,
+    When the CLI parses --done-when without an approval option,
     Then it produces one normalized assertion-backed Goal contract`, () => {
     // When
     const parsed = parseCliArgs([
@@ -771,7 +769,7 @@ describe("CLI Args", () => {
           assertion: "the release notes are clear and complete",
         },
         budget: { turns: 12 },
-        bashMode: "disabled",
+        executionPosture: "trusted",
         skillsEnabled: true,
         memoryEnabled: true,
         providerId: "fake",
@@ -813,7 +811,6 @@ describe("CLI Args", () => {
         "goal",
         "resume",
         "checkout",
-        "--bash-policy=trusted",
         "--provider=fake",
         "--model=test-model",
         "--skill=release",
@@ -829,13 +826,13 @@ describe("CLI Args", () => {
       },
     ],
     [
-      ["goal", "resume", "--last", "--bash-policy=deny"],
+      ["goal", "resume", "--last", "--approval-policy=ask"],
       {
         kind: "latest",
       },
     ],
     [
-      ["goal", "resume", "checkout", "--allow-bash"],
+      ["goal", "resume", "checkout"],
       {
         kind: "id",
         sessionId: "checkout",
@@ -856,8 +853,8 @@ describe("CLI Args", () => {
           command: "goal",
           mode: "resume",
           resumeSession,
-          bashMode: args.includes("--bash-policy=deny")
-            ? "disabled"
+          executionPosture: args.includes("--approval-policy=ask")
+            ? "reviewed"
             : "trusted",
           skillsEnabled: true,
           memoryEnabled: true,
@@ -968,8 +965,8 @@ describe("CLI Args", () => {
       'Error: --model requires a value, but got option "--report".\n',
     ],
     [
-      ["goal", "resume", "checkout", "--bash-policy", "always"],
-      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
+      ["goal", "resume", "checkout", "--approval-policy", "always"],
+      "Error: --approval-policy must be: ask.\n",
     ],
     [
       ["goal", "resume", "checkout", "--time", "0s"],
@@ -986,28 +983,6 @@ describe("CLI Args", () => {
     [
       ["goal", "resume", "--last=true"],
       "Error: --last does not accept a value.\n",
-    ],
-    [
-      [
-        "goal",
-        "resume",
-        "checkout",
-        "--bash-policy",
-        "trusted",
-        "--allow-bash",
-      ],
-      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
-    ],
-    [
-      [
-        "goal",
-        "resume",
-        "checkout",
-        "--allow-bash",
-        "--bash-policy",
-        "trusted",
-      ],
-      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
     ],
   ])(
     `Given ambiguous headless Goal resume arguments %j,
@@ -1115,11 +1090,12 @@ describe("CLI Args", () => {
         "Ship it",
         "--verify",
         "pnpm test",
-        "--allow-bash",
-        "--bash-policy",
-        "trusted",
+        "--approval-policy",
+        "ask",
+        "--approval-policy",
+        "ask",
       ],
-      "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
+      'Error: duplicate goal option "--approval-policy".\n',
     ],
     [
       [
@@ -1128,12 +1104,12 @@ describe("CLI Args", () => {
         "Ship it",
         "--verify",
         "pnpm test",
-        "--allow-bash=yes",
+        "--approval-policy=always",
       ],
-      "Error: --allow-bash does not accept a value.\n",
+      "Error: --approval-policy must be: ask.\n",
     ],
   ])(
-    `Given a headless Goal has conflicting shell option arguments %j,
+    `Given a headless Goal has invalid approval option arguments %j,
     When the CLI parses the command,
     Then it reports the authorization contract error`,
     async (args, message) => {

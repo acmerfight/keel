@@ -981,7 +981,6 @@ describe("Interactive Terminal Display", () => {
       lineReader,
       display.writeStderr,
       {
-        scopeLabel: "session",
         onPromptStart: () => {
           display.setComposerMode("approval");
         },

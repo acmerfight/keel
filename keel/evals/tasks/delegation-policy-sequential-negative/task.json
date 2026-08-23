@@ -2,7 +2,6 @@
   "kind": "standard",
   "prompt": "Update pipeline.mjs and only that file. This is one dependent sequence: first make normalizeName trim and lowercase its input; then make nameKey compute its checksum from that normalized value; finally make formatRecord use nameKey so its output is `<normalized>:<checksum>`. Preserve the exports and make `node test.mjs` pass.",
   "timeoutMs": 240000,
-  "allowBash": false,
   "maxCostUsd": 0.1,
   "agentPolicy": "auto",
   "delegationPolicy": "forbid"

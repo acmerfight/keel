@@ -16,12 +16,7 @@ import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
-import {
-  type BashMode,
-  type BashPermissionDecision,
-  type BashRuntime,
-  createSessionBashPermissionPolicy,
-} from "../permissions/bash.ts";
+import type { ExecutionPosture, MainBashRuntime } from "../permissions/bash.ts";
 import {
   exposeSkillCatalog,
   formatSkillCatalogDegradation,
@@ -35,12 +30,6 @@ import { explicitSkillActivationRecord } from "../skills/model.ts";
 import { repositoryWorkflowSkillRootPaths } from "../skills/project.ts";
 import { createAgentProjectMemory } from "./agent-project-memory.ts";
 import type { CliArgs } from "./args.ts";
-import {
-  BashProjectApprovalsError,
-  bashApprovalProjectRoot,
-  listBashProjectApprovalGrants,
-  saveBashProjectApprovalGrant,
-} from "./bash-project-approvals.ts";
 import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
 import {
   createLineReader,
@@ -115,61 +104,20 @@ type OneShotRunCliArgs = Extract<
   { readonly command: "run"; readonly mode: "one-shot" }
 >;
 
-function denyOneShotBashPermissionDecision(): Extract<
-  BashPermissionDecision,
-  { readonly type: "deny" }
-> {
-  return {
-    type: "deny",
-    message:
-      "Shell command requires terminal approval; non-TTY one-shot runs cannot approve bash commands.",
-  };
-}
-
 function oneShotBashRuntime(
-  bashMode: BashMode,
-  runtime: CliRuntime,
-  workspace: string,
+  executionPosture: ExecutionPosture,
+  writeStderr: (text: string) => void,
   lineReader: LineReader | undefined,
-): BashRuntime {
-  if (bashMode === "disabled") {
-    return { kind: "disabled" };
-  }
-  if (bashMode === "trusted") {
+): MainBashRuntime {
+  if (executionPosture === "trusted") {
     return { kind: "trusted" };
-  }
-  const projectRoot = bashApprovalProjectRoot(workspace);
-  const initialProjectGrants = listBashProjectApprovalGrants(
-    runtime,
-    projectRoot,
-  );
-  if (runtime.input.isTTY !== true) {
-    return {
-      kind: "reviewed",
-      permission: createSessionBashPermissionPolicy({
-        projectRoot,
-        initialProjectGrants,
-        prompt: () => denyOneShotBashPermissionDecision(),
-      }),
-    };
   }
 
   /* v8 ignore next 3 -- TTY ask mode creates the shared approval reader before this private adapter is called. */
   if (lineReader === undefined) {
     throw new Error("TTY bash approval requires an approval line reader");
   }
-  const policy = createPromptedBashPermissionPolicy(
-    lineReader,
-    runtime.writeStderr,
-    {
-      scopeLabel: "this run",
-      projectRoot,
-      initialProjectGrants,
-      onProjectGrant: (grant) => {
-        saveBashProjectApprovalGrant(runtime, grant);
-      },
-    },
-  );
+  const policy = createPromptedBashPermissionPolicy(lineReader, writeStderr);
   return { kind: "reviewed", permission: policy };
 }
 
@@ -177,6 +125,12 @@ export async function runOneShotCli(
   cliArgs: OneShotRunCliArgs,
   runtime: CliRuntime,
 ): Promise<number> {
+  if (cliArgs.executionPosture === "reviewed" && runtime.input.isTTY !== true) {
+    runtime.writeStderr(
+      "Error: --approval-policy ask requires a real TTY and is unavailable to piped or non-TTY runs.\n",
+    );
+    return 1;
+  }
   const originalUserMessage = cliArgs.userMessage;
   const abortController = new AbortController();
   const abort = () => {
@@ -268,7 +222,7 @@ export async function runOneShotCli(
     const mcpLifecycle = createCliMcpLifecyclePolicy(runtime);
     const needsApprovalInput =
       runtime.input.isTTY === true &&
-      (cliArgs.bashMode === "ask" || mcpServers.length > 0);
+      (cliArgs.executionPosture === "reviewed" || mcpServers.length > 0);
     const approvalInput = needsApprovalInput
       ? createInterface({
           input: runtime.input,
@@ -281,9 +235,8 @@ export async function runOneShotCli(
         ? undefined
         : createLineReader(approvalInput, {});
     const bashRuntime = oneShotBashRuntime(
-      cliArgs.bashMode,
-      runtime,
-      workspace,
+      cliArgs.executionPosture,
+      runtime.writeStderr,
       approvalLineReader,
     );
     if (mcpServers.length > 0) {
@@ -605,6 +558,7 @@ export async function runOneShotCli(
         writeRunReportBestEffort(
           cliArgs.reportFile,
           {
+            executionPosture: cliArgs.executionPosture,
             tasks: reportRecorder.tasks(),
             modelOperations: reportRecorder.modelOperations(),
             subagents: reportSubagents(),
@@ -648,6 +602,7 @@ export async function runOneShotCli(
     if (cliArgs.reportFile !== undefined && finalEnd !== undefined) {
       assertEndEventHasCost(finalEnd);
       writeRunReport(cliArgs.reportFile, {
+        executionPosture: cliArgs.executionPosture,
         tasks: reportRecorder.tasks(),
         modelOperations: reportRecorder.modelOperations(),
         subagents: reportSubagents(),
@@ -704,10 +659,6 @@ export async function runOneShotCli(
       error instanceof WorkflowSkillError ||
       error instanceof SkillUserConfigError
     ) {
-      runtime.writeStderr(`${error.message}\n`);
-      return 1;
-    }
-    if (error instanceof BashProjectApprovalsError) {
       runtime.writeStderr(`${error.message}\n`);
       return 1;
     }

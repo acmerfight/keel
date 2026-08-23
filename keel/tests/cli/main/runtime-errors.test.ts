@@ -567,8 +567,6 @@ describe("CLI Main - Runtime Errors", () => {
         "true",
         "--session",
         "goal-failure-report",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
         "--report",
@@ -722,10 +720,6 @@ describe("CLI Main - Runtime Errors", () => {
       args: ["skills"],
     },
     {
-      command: "project approval listing",
-      args: ["approvals"],
-    },
-    {
       command: "project memory listing",
       args: ["memory", "list"],
     },
@@ -744,18 +738,6 @@ describe("CLI Main - Runtime Errors", () => {
     {
       command: "external session fork-point listing",
       args: ["--resume", "demo", "--fork-points"],
-    },
-    {
-      command: "headless Goal approval preflight",
-      args: [
-        "goal",
-        "--objective",
-        "verify the workspace",
-        "--verify",
-        "pnpm test",
-        "--bash-policy",
-        "ask",
-      ],
     },
   ])(
     `Given workspace lookup fails during $command,

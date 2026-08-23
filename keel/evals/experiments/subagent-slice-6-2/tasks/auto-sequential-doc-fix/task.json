@@ -3,7 +3,6 @@
   "prompt": "In README.md, change the documented default port from 8081 to 8080. Make no other change.",
   "timeoutMs": 180000,
   "scriptTimeoutMs": 60000,
-  "allowBash": false,
   "maxCostUsd": 0.01,
   "agentPolicy": "auto",
   "delegationPolicy": "forbid"

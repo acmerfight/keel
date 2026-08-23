@@ -1,7 +1,7 @@
 import type { AgentPolicyConfiguration } from "../../core/agent-policy.ts";
 import type { ApiKeyProviderId, ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoalBudget } from "../../core/session-goal.ts";
-import type { BashMode } from "../../permissions/bash.ts";
+import type { ExecutionPosture } from "../../permissions/bash.ts";
 import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 
 export interface EvalRunCliArgs {
@@ -200,21 +200,6 @@ interface ArtifactsShowCliArgs {
 
 type ArtifactsCliArgs = ArtifactsShowCliArgs;
 
-export type ApprovalsCliArgs =
-  | {
-      readonly command: "approvals";
-      readonly mode: "list";
-    }
-  | {
-      readonly command: "approvals";
-      readonly mode: "clear";
-    }
-  | {
-      readonly command: "approvals";
-      readonly mode: "revoke";
-      readonly index: number;
-    };
-
 export type MemoryCliArgs =
   | {
       readonly command: "memory";
@@ -325,7 +310,7 @@ export type MemoryCliArgs =
 
 type RunCliCommonArgs = {
   readonly command: "run";
-  readonly bashMode: BashMode;
+  readonly executionPosture: ExecutionPosture;
   readonly skillsEnabled: boolean;
   readonly reportFile?: string;
   readonly memoryEnabled: boolean;
@@ -372,7 +357,7 @@ export type RunCliArgs =
 
 interface GoalCliCommonArgs {
   readonly command: "goal";
-  readonly bashMode: BashMode;
+  readonly executionPosture: ExecutionPosture;
   readonly skillsEnabled: boolean;
   readonly memoryEnabled: boolean;
   readonly maxCostUsd?: number;
@@ -437,7 +422,6 @@ export type CliArgs =
   | UndoCliArgs
   | SkillsCliArgs
   | ArtifactsCliArgs
-  | ApprovalsCliArgs
   | MemoryCliArgs
   | SessionsCliArgs
   | EvalCliArgs

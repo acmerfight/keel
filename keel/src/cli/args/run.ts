@@ -2,13 +2,13 @@ import type {
   AgentPolicy,
   AgentPolicyConfiguration,
 } from "../../core/agent-policy.ts";
-import { type BashMode, bashModeFromPolicy } from "../../permissions/bash.ts";
+import type { ExecutionPosture } from "../../permissions/bash.ts";
 import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 import {
   isRecognizedOptionToken,
   type ParseResult,
   parseAgentPolicy,
-  parseBashPolicy,
+  parseApprovalPolicy,
   parseError,
   parseForkBeforeMessage,
   parseMaxCost,
@@ -24,8 +24,7 @@ import {
 import type { InteractiveSessionCliIntent, RunCliArgs } from "./types.ts";
 
 const RUN_OPTIONS = [
-  "--allow-bash",
-  "--bash-policy",
+  "--approval-policy",
   "--provider",
   "--model",
   "--skill",
@@ -46,9 +45,7 @@ const RUN_OPTIONS = [
 ];
 
 export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
-  let bashMode: BashMode = "disabled";
-  let allowBashOptionSeen = false;
-  let bashPolicyOptionSeen = false;
+  let executionPosture: ExecutionPosture = "trusted";
   let maxCostUsd: number | undefined;
   let reportFile: string | undefined;
   let transcriptFile: string | undefined;
@@ -75,7 +72,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
   const maxCostPrefix = "--max-cost=";
   const reportPrefix = "--report=";
   const transcriptPrefix = "--transcript=";
-  const bashPolicyPrefix = "--bash-policy=";
+  const approvalPolicyPrefix = "--approval-policy=";
   const agentPolicyPrefix = "--agent-policy=";
   const recoveryPolicyPrefix = "--recovery-policy=";
   const sessionPrefix = "--session=";
@@ -93,41 +90,20 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
       continue;
     }
 
-    if (arg === "--allow-bash") {
-      if (bashPolicyOptionSeen) {
-        return parseError(
-          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
-        );
-      }
-      allowBashOptionSeen = true;
-      bashMode = "trusted";
-      continue;
-    }
-
-    if (arg === "--bash-policy") {
-      if (allowBashOptionSeen) {
-        return parseError(
-          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
-        );
-      }
-      const parsed = parseBashPolicy(args[index + 1]);
+    if (arg === "--approval-policy") {
+      const parsed = parseApprovalPolicy(args[index + 1]);
       if (!parsed.ok) return parsed;
-      bashPolicyOptionSeen = true;
-      bashMode = bashModeFromPolicy(parsed.value);
+      executionPosture = parsed.value;
       skipNext = true;
       continue;
     }
 
-    if (arg.startsWith(bashPolicyPrefix)) {
-      if (allowBashOptionSeen) {
-        return parseError(
-          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
-        );
-      }
-      const parsed = parseBashPolicy(arg.slice(bashPolicyPrefix.length));
+    if (arg.startsWith(approvalPolicyPrefix)) {
+      const parsed = parseApprovalPolicy(
+        arg.slice(approvalPolicyPrefix.length),
+      );
       if (!parsed.ok) return parsed;
-      bashPolicyOptionSeen = true;
-      bashMode = bashModeFromPolicy(parsed.value);
+      executionPosture = parsed.value;
       continue;
     }
 
@@ -546,7 +522,7 @@ export function parseRunArgs(args: readonly string[]): ParseResult<RunCliArgs> {
 
   const common = {
     command: "run",
-    bashMode,
+    executionPosture,
     skillsEnabled,
     ...agentPolicyConfiguration,
     ...(reportFile !== undefined ? { reportFile } : {}),

@@ -3,7 +3,6 @@
   "prompt": "Create release-command.txt containing only the current project release validation command and one trailing newline. The command is not stored in the repository; use project memory if available. If it is unavailable, do not guess.",
   "timeoutMs": 180000,
   "scriptTimeoutMs": 60000,
-  "allowBash": false,
   "maxCostUsd": 0.1,
   "memory": "The current project release validation command is `pnpm test:coverage`."
 }

@@ -35,8 +35,6 @@ import {
   sessionTaskPlanSchema,
   sessionTaskProgressSchema,
 } from "../../core/task-progress.ts";
-import type { BashApprovalGrant } from "../../permissions/bash.ts";
-import { bashCommandFamilyIds } from "../../permissions/bash-command-families.ts";
 import {
   copySkillActivation,
   copySkillLifecycleState,
@@ -47,7 +45,6 @@ import {
   MAX_WORKFLOW_SKILL_RESOURCE_PATHS,
 } from "../../skills/resources.ts";
 import {
-  hasPersistenceRedactionMarker,
   redactMessageForPersistence,
   redactTextForPersistence,
 } from "../persistence-redaction.ts";
@@ -85,14 +82,6 @@ import {
   type StoredMessage,
 } from "./model.ts";
 
-type BashApprovalRevokedSessionRecord = Extract<
-  SessionMutationRecord,
-  { readonly type: "bash_approval_revoked" }
->;
-type BashApprovalsClearedSessionRecord = Extract<
-  SessionMutationRecord,
-  { readonly type: "bash_approvals_cleared" }
->;
 type StepCommittedSessionRecord = Extract<
   SessionMutationRecord,
   { readonly type: "step_committed" }
@@ -116,7 +105,6 @@ const sessionForkPolicyRecordSchema = z
     transcript: z.literal("copy_prefix"),
     pendingInputs: z.literal("drop"),
     queuedInputs: z.literal("drop"),
-    bashApprovalGrants: z.literal("drop"),
   })
   .strict();
 
@@ -651,64 +639,6 @@ const inputConsumedRecordSchema = z
   })
   .strict();
 
-const exactBashApprovalGrantSchema = z
-  .object({
-    type: z.literal("exact"),
-    cwd: z.string(),
-    command: z.string(),
-  })
-  .strict();
-
-const prefixBashApprovalGrantSchema = z
-  .object({
-    type: z.literal("prefix"),
-    cwd: z.string(),
-    argvPrefix: z.array(z.string()),
-  })
-  .strict();
-
-const commandFamilyBashApprovalGrantSchema = z
-  .object({
-    type: z.literal("command_family"),
-    cwd: z.string(),
-    commandFamily: z.enum(bashCommandFamilyIds),
-  })
-  .strict();
-
-const bashApprovalGrantSchema = z.discriminatedUnion("type", [
-  exactBashApprovalGrantSchema,
-  prefixBashApprovalGrantSchema,
-  commandFamilyBashApprovalGrantSchema,
-]);
-
-const bashApprovalGrantedRecordSchema = z
-  .object({
-    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
-    type: z.literal("bash_approval_granted"),
-    timestamp: z.string(),
-    grant: bashApprovalGrantSchema,
-  })
-  .strict();
-
-const bashApprovalRevokedRecordSchema = z
-  .object({
-    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
-    type: z.literal("bash_approval_revoked"),
-    timestamp: z.string(),
-    grant: bashApprovalGrantSchema,
-    consumedInputIds: consumedInputIdsSchema.optional(),
-  })
-  .strict();
-
-const bashApprovalsClearedRecordSchema = z
-  .object({
-    schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
-    type: z.literal("bash_approvals_cleared"),
-    timestamp: z.string(),
-    consumedInputIds: consumedInputIdsSchema.optional(),
-  })
-  .strict();
-
 const taskAdmittedRecordSchema = z
   .object({
     schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -861,7 +791,6 @@ const snapshotRecordSchema = z
     goal: sessionGoalSchema.optional(),
     messages: z.array(storedMessageSchema),
     pendingInputs: z.array(queuedInputSchema),
-    bashApprovalGrants: z.array(bashApprovalGrantSchema).optional(),
     activeModel: sessionModelSelectionSchema.optional(),
     modelSwitches: z.array(sessionModelSwitchSchema).optional(),
     taskProgressCheckpoints: z
@@ -888,9 +817,6 @@ const sessionMutationRecordSchema = z.discriminatedUnion("type", [
   taskProgressRecordSchema,
   inputAdmittedRecordSchema,
   inputConsumedRecordSchema,
-  bashApprovalGrantedRecordSchema,
-  bashApprovalRevokedRecordSchema,
-  bashApprovalsClearedRecordSchema,
   taskAdmittedRecordSchema,
   providerIntentRecordSchema,
   providerAttemptSettledRecordSchema,
@@ -916,7 +842,6 @@ type RawUserMessageContextCompactionMetadata = z.infer<
   typeof userMessageContextCompactionSchema
 >;
 type RawSessionQueuedInput = z.infer<typeof queuedInputSchema>;
-type RawBashApprovalGrant = z.infer<typeof bashApprovalGrantSchema>;
 type RawSessionModelSelection = z.infer<typeof sessionModelSelectionSchema>;
 type RawSessionModelSwitch = z.infer<typeof sessionModelSwitchSchema>;
 type RawSessionGoal = z.infer<typeof sessionGoalSchema>;
@@ -1700,7 +1625,6 @@ function copySessionForkPolicyRecord(
     transcript: policy.transcript,
     pendingInputs: policy.pendingInputs,
     queuedInputs: policy.queuedInputs,
-    bashApprovalGrants: policy.bashApprovalGrants,
   };
 }
 
@@ -1872,14 +1796,6 @@ function appendConsumedInputIds(
   inputIds: readonly string[] | undefined,
 ): SessionGoalSessionRecord;
 function appendConsumedInputIds(
-  record: BashApprovalRevokedSessionRecord,
-  inputIds: readonly string[] | undefined,
-): BashApprovalRevokedSessionRecord;
-function appendConsumedInputIds(
-  record: BashApprovalsClearedSessionRecord,
-  inputIds: readonly string[] | undefined,
-): BashApprovalsClearedSessionRecord;
-function appendConsumedInputIds(
   record: SkillStateSessionRecord,
   inputIds: readonly string[] | undefined,
 ): SkillStateSessionRecord;
@@ -1898,8 +1814,6 @@ function appendConsumedInputIds(
     | ModelSwitchSessionRecord
     | SessionTitleSessionRecord
     | SessionGoalSessionRecord
-    | BashApprovalRevokedSessionRecord
-    | BashApprovalsClearedSessionRecord
     | SkillStateSessionRecord
     | StepCommittedSessionRecord
     | TaskTerminalSessionRecord,
@@ -1910,8 +1824,6 @@ function appendConsumedInputIds(
   | ModelSwitchSessionRecord
   | SessionTitleSessionRecord
   | SessionGoalSessionRecord
-  | BashApprovalRevokedSessionRecord
-  | BashApprovalsClearedSessionRecord
   | SkillStateSessionRecord
   | StepCommittedSessionRecord
   | TaskTerminalSessionRecord {
@@ -2343,67 +2255,6 @@ function toSessionQueuedInput(
   };
 }
 
-function copyBashApprovalGrant(grant: BashApprovalGrant): BashApprovalGrant {
-  switch (grant.type) {
-    case "exact":
-      return {
-        type: "exact",
-        cwd: grant.cwd,
-        command: grant.command,
-      };
-    case "prefix":
-      return {
-        type: "prefix",
-        cwd: grant.cwd,
-        argvPrefix: [...grant.argvPrefix],
-      };
-    case "command_family":
-      return {
-        type: "command_family",
-        cwd: grant.cwd,
-        commandFamily: grant.commandFamily,
-      };
-  }
-}
-
-function redactBashApprovalGrantForPersistence(
-  grant: BashApprovalGrant,
-): BashApprovalGrant {
-  switch (grant.type) {
-    case "exact":
-      return {
-        type: "exact",
-        cwd: grant.cwd,
-        command: redactTextForPersistence(grant.command),
-      };
-    case "prefix":
-      return {
-        type: "prefix",
-        cwd: grant.cwd,
-        argvPrefix: grant.argvPrefix.map(redactTextForPersistence),
-      };
-    case "command_family":
-      return {
-        type: "command_family",
-        cwd: grant.cwd,
-        commandFamily: grant.commandFamily,
-      };
-  }
-}
-
-function bashApprovalGrantHasRedactionMarker(
-  grant: BashApprovalGrant,
-): boolean {
-  switch (grant.type) {
-    case "exact":
-      return hasPersistenceRedactionMarker(grant.command);
-    case "prefix":
-      return grant.argvPrefix.some(hasPersistenceRedactionMarker);
-    case "command_family":
-      return false;
-  }
-}
-
 function redactSessionQueuedInputForPersistence(
   input: SessionQueuedInput,
 ): SessionQueuedInput {
@@ -2413,10 +2264,6 @@ function redactSessionQueuedInputForPersistence(
     sequence: input.sequence,
     line: redactTextForPersistence(input.line),
   };
-}
-
-function toBashApprovalGrant(grant: RawBashApprovalGrant): BashApprovalGrant {
-  return redactBashApprovalGrantForPersistence(grant);
 }
 
 function toSessionMutationRecord(
@@ -2522,32 +2369,6 @@ function toSessionMutationRecord(
         timestamp: record.timestamp,
         inputIds: [...record.inputIds],
       };
-    case "bash_approval_granted":
-      return {
-        schemaVersion: SESSION_SCHEMA_VERSION,
-        type: "bash_approval_granted",
-        timestamp: record.timestamp,
-        grant: toBashApprovalGrant(record.grant),
-      };
-    case "bash_approval_revoked":
-      return appendConsumedInputIds(
-        {
-          schemaVersion: SESSION_SCHEMA_VERSION,
-          type: "bash_approval_revoked",
-          timestamp: record.timestamp,
-          grant: toBashApprovalGrant(record.grant),
-        },
-        record.consumedInputIds,
-      );
-    case "bash_approvals_cleared":
-      return appendConsumedInputIds(
-        {
-          schemaVersion: SESSION_SCHEMA_VERSION,
-          type: "bash_approvals_cleared",
-          timestamp: record.timestamp,
-        },
-        record.consumedInputIds,
-      );
     case "task_admitted":
       return {
         schemaVersion: SESSION_SCHEMA_VERSION,
@@ -2689,12 +2510,6 @@ function toSessionMutationRecord(
           : {}),
         messages: record.messages.map(toStoredMessage),
         pendingInputs: record.pendingInputs.map(toSessionQueuedInput),
-        ...(record.bashApprovalGrants !== undefined
-          ? {
-              bashApprovalGrants:
-                record.bashApprovalGrants.map(toBashApprovalGrant),
-            }
-          : {}),
         ...(record.activeModel !== undefined
           ? { activeModel: toSessionModelSelection(record.activeModel) }
           : {}),
@@ -2910,9 +2725,7 @@ function validateCompletedTranscript(
 }
 
 export {
-  bashApprovalGrantHasRedactionMarker,
   copyActiveSessionTask,
-  copyBashApprovalGrant,
   copyMessage,
   copySessionForkPointRecord,
   copySessionGraphRecord,
@@ -2925,7 +2738,6 @@ export {
   parseSessionMessages,
   parseSessionMutationRecord,
   parseSnapshotSessionMutationRecord,
-  redactBashApprovalGrantForPersistence,
   redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
   redactSessionSkillStateCheckpointForPersistence,

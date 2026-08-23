@@ -80,7 +80,7 @@ describe("Interactive Session - Undo", () => {
     };
     const input = new PassThrough();
     const pending = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: {
@@ -144,7 +144,7 @@ describe("Interactive Session - Undo", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -202,7 +202,7 @@ describe("Interactive Session - Undo", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -367,7 +367,7 @@ describe("Interactive Session - Undo", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -445,7 +445,7 @@ describe("Interactive Session - Undo", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -516,7 +516,7 @@ describe("Interactive Session - Undo", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -631,7 +631,7 @@ describe("Interactive Session - Undo", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -776,7 +776,7 @@ describe("Interactive Session - Undo", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -873,7 +873,7 @@ describe("Interactive Session - Undo", () => {
     let firstStdout = "";
     let firstStderr = "";
     const firstRun = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -935,7 +935,7 @@ describe("Interactive Session - Undo", () => {
       const secondInput = new PassThrough();
       let secondStdout = "";
       const secondRun = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: EPHEMERAL_INTERACTIVE_SESSION,

@@ -102,7 +102,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20_000,
@@ -234,7 +234,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
@@ -378,7 +378,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
@@ -525,7 +525,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,
@@ -646,7 +646,7 @@ describe("Context Compaction Current Tool Suffix", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 20,

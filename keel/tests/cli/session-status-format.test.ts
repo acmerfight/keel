@@ -6,6 +6,28 @@ import {
 import { emptySessionTaskProgress } from "../../src/core/task-progress.ts";
 
 describe("CLI Session Status Format", () => {
+  test(`Given a trusted invocation can execute local and enabled integration effects,
+    When the current session status is formatted,
+    Then it names the posture, Bash OS authority, and MCP external-effect boundary`, () => {
+    const formatted = formatSessionStatusSnapshot({
+      session: "scratch",
+      workspace: "/tmp/workspace",
+      activeModel: "fake/model",
+      executionPosture: "trusted",
+      messages: [],
+      messageCount: 0,
+      pendingInputCount: 0,
+      taskProgress: emptySessionTaskProgress(),
+      modelSwitchCount: 0,
+      undoCheckpoints: [],
+      recoveryActions: [],
+    });
+
+    expect(formatted).toContain(
+      "  execution: trusted; Bash runs with current OS user authority; enabled MCP integrations may perform external effects\n",
+    );
+  });
+
   test(`Given no recovery actions are available,
     When the status snapshot is formatted,
     Then no recovery section is printed`, () => {
@@ -14,10 +36,10 @@ describe("CLI Session Status Format", () => {
       session: "scratch",
       workspace: "/tmp/workspace",
       activeModel: "(default for next prompt)",
+      executionPosture: null,
       messages: [],
       messageCount: 0,
       pendingInputCount: 0,
-      bashApprovalCount: 0,
       taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [],
@@ -49,6 +71,7 @@ describe("CLI Session Status Format", () => {
       session: "scratch",
       workspace: "/tmp/workspace",
       activeModel: "(default for next prompt)",
+      executionPosture: null,
       goal: {
         objective: "Ship the release notes",
         status: "completed",
@@ -63,7 +86,6 @@ describe("CLI Session Status Format", () => {
       messages: [],
       messageCount: 0,
       pendingInputCount: 0,
-      bashApprovalCount: 0,
       taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [],
@@ -96,6 +118,7 @@ describe("CLI Session Status Format", () => {
       session: "scratch",
       workspace: "/tmp/workspace",
       activeModel: "(default for next prompt)",
+      executionPosture: null,
       goal: {
         objective: longObjective,
         status: "completed",
@@ -106,7 +129,6 @@ describe("CLI Session Status Format", () => {
       messages: [],
       messageCount: 0,
       pendingInputCount: 0,
-      bashApprovalCount: 0,
       taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [],
@@ -132,10 +154,10 @@ describe("CLI Session Status Format", () => {
       session: "scratch",
       workspace: "/tmp/workspace",
       activeModel: "(default for next prompt)",
+      executionPosture: null,
       messages: [],
       messageCount: 0,
       pendingInputCount: 0,
-      bashApprovalCount: 0,
       taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [{ restoredLabel: "note.txt" }],
@@ -158,10 +180,10 @@ describe("CLI Session Status Format", () => {
       session: "scratch",
       workspace: "/tmp/workspace",
       activeModel: "(default for next prompt)",
+      executionPosture: null,
       messages: [],
       messageCount: 0,
       pendingInputCount: 0,
-      bashApprovalCount: 0,
       taskProgress: emptySessionTaskProgress(),
       modelSwitchCount: 0,
       undoCheckpoints: [],

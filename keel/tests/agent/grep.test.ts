@@ -64,7 +64,7 @@ describe("Searching Code", () => {
           userMessage: "find the alpha/beta block",
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

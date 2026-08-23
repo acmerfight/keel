@@ -213,7 +213,7 @@ export async function executeUpdateGoalTool(
   if (bash.kind === "disabled") {
     return rejectedGoalCompletion(
       sessionGoal,
-      `Tool failed: update_goal failed: Runtime cannot run command completion criterion ${JSON.stringify(expectedCommand)} because Bash is disabled.\nRecovery: Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after checking it manually.`,
+      `Tool failed: update_goal failed: Runtime cannot run command completion criterion ${JSON.stringify(expectedCommand)} because Bash is unavailable in this capability context.\nRecovery: Ask the parent to run the command or use /goal complete after checking it manually.`,
       `Completion was rejected because Runtime could not run command criterion ${JSON.stringify(expectedCommand)} while Bash was disabled.`,
     );
   }

@@ -2,6 +2,5 @@
   "kind": "standard",
   "prompt": "This workspace contains setup.sh, which recreates a small git repository in the current directory. Run setup.sh exactly once, then recover the redesign work by merging the redesign branch into main using normal git operations. When you are done, the repository should be on main and preserve the recovered redesign work in main's git history. site.txt on main must contain both the original welcome line and the redesign navigation line.",
   "timeoutMs": 240000,
-  "allowBash": true,
   "maxCostUsd": 0.05
 }

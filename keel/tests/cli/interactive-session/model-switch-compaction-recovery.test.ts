@@ -73,7 +73,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -157,7 +157,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
   test.each([
     {
       mode: "max-cost metered",
-      cliArgs: { bashMode: "disabled" as const, maxCostUsd: 1 },
+      cliArgs: { executionPosture: "trusted" as const, maxCostUsd: 1 },
       expectsCostOutput: true,
       summaryFailure: "truncated" as const,
       expectedFailure:
@@ -165,7 +165,10 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     },
     {
       mode: "report-only metered",
-      cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
+      cliArgs: {
+        executionPosture: "trusted" as const,
+        reportFile: "session.json",
+      },
       expectsCostOutput: false,
       summaryFailure: "truncated" as const,
       expectedFailure:
@@ -173,7 +176,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     },
     {
       mode: "unmetered",
-      cliArgs: { bashMode: "disabled" as const },
+      cliArgs: { executionPosture: "trusted" as const },
       expectsCostOutput: false,
       summaryFailure: "truncated" as const,
       expectedFailure:
@@ -181,7 +184,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     },
     {
       mode: "unmetered provider-error",
-      cliArgs: { bashMode: "disabled" as const },
+      cliArgs: { executionPosture: "trusted" as const },
       expectsCostOutput: false,
       summaryFailure: "thrown" as const,
       expectedFailure:
@@ -327,7 +330,10 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
   test.each([
     {
       mode: "metered",
-      cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
+      cliArgs: {
+        executionPosture: "trusted" as const,
+        reportFile: "session.json",
+      },
       expectedUsage: {
         inputTokens: 8,
         cachedInputTokens: 0,
@@ -337,7 +343,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     },
     {
       mode: "unmetered",
-      cliArgs: { bashMode: "disabled" as const },
+      cliArgs: { executionPosture: "trusted" as const },
       expectedUsage: undefined,
     },
   ])(
@@ -501,7 +507,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
     const input = new PassThrough();
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 0.001,
         reportFile: "session.json",
       },
@@ -596,7 +602,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -754,7 +760,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -913,7 +919,7 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

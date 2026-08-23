@@ -2,6 +2,5 @@
   "kind": "standard",
   "prompt": "Optimize my-sql-query.sql while preserving the exact output columns, values, and row order. The current query is slow because it repeatedly scans orders for each active user; improve that without changing the result.",
   "timeoutMs": 240000,
-  "allowBash": true,
   "maxCostUsd": 0.05
 }

@@ -142,7 +142,12 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 22,
+    schemaVersion: 23,
+    execution: {
+      posture: "trusted",
+      bashAuthority: "current_os_user",
+      enabledMcpIntegrationsMayPerformExternalEffects: true,
+    },
     tasks: [
       {
         ordinal: 1,

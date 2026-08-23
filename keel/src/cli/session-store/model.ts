@@ -6,7 +6,6 @@ import type {
   SessionTask,
   SessionTaskProgress,
 } from "../../core/task-progress.ts";
-import type { BashApprovalGrant } from "../../permissions/bash.ts";
 import type {
   SkillActivation,
   SkillLifecycleState,
@@ -14,7 +13,7 @@ import type {
 import type { ToolJsonValue } from "../../tools/tool-call.ts";
 import type { ToolRecoveryCapability } from "../../tools/tool-definitions.ts";
 
-export const SESSION_SCHEMA_VERSION = 10;
+export const SESSION_SCHEMA_VERSION = 11;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 export const SESSION_LOCKS_DIRECTORY_NAME = "session-locks";
 export const SESSION_LOCK_OWNER_FILE_NAME = "owner.json";
@@ -42,7 +41,6 @@ export interface SessionForkPolicyRecord {
   readonly transcript: "copy_prefix";
   readonly pendingInputs: "drop";
   readonly queuedInputs: "drop";
-  readonly bashApprovalGrants: "drop";
 }
 
 interface BeforeMessageForkPointRecord {
@@ -403,28 +401,6 @@ interface InputConsumedSessionRecord {
   readonly inputIds: readonly string[];
 }
 
-interface BashApprovalGrantedSessionRecord {
-  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
-  readonly type: "bash_approval_granted";
-  readonly timestamp: string;
-  readonly grant: BashApprovalGrant;
-}
-
-interface BashApprovalRevokedSessionRecord {
-  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
-  readonly type: "bash_approval_revoked";
-  readonly timestamp: string;
-  readonly grant: BashApprovalGrant;
-  readonly consumedInputIds?: readonly string[];
-}
-
-interface BashApprovalsClearedSessionRecord {
-  readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
-  readonly type: "bash_approvals_cleared";
-  readonly timestamp: string;
-  readonly consumedInputIds?: readonly string[];
-}
-
 interface TaskAdmittedSessionRecord {
   readonly schemaVersion: typeof SESSION_SCHEMA_VERSION;
   readonly type: "task_admitted";
@@ -561,7 +537,6 @@ export interface SnapshotSessionRecord {
   readonly goal?: SessionGoal;
   readonly messages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
-  readonly bashApprovalGrants?: readonly BashApprovalGrant[];
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches?: readonly SessionModelSwitch[];
   readonly taskProgressCheckpoints?: readonly SessionTaskProgressCheckpoint[];
@@ -593,9 +568,6 @@ export type SessionMutationRecord =
   | TaskProgressSessionRecord
   | InputAdmittedSessionRecord
   | InputConsumedSessionRecord
-  | BashApprovalGrantedSessionRecord
-  | BashApprovalRevokedSessionRecord
-  | BashApprovalsClearedSessionRecord
   | TaskAdmittedSessionRecord
   | ProviderIntentSessionRecord
   | ProviderAttemptSettledSessionRecord
@@ -635,7 +607,6 @@ export interface SessionState {
   readonly messages: readonly PersistedSessionMessage[];
   readonly storedMessages: readonly StoredMessage[];
   readonly pendingInputs: readonly SessionQueuedInput[];
-  readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly taskProgress: SessionTaskProgress;
   readonly activeModel?: SessionModelSelection;
   readonly modelSwitches: readonly SessionModelSwitch[];
@@ -703,7 +674,6 @@ export interface SessionCatalogReplayState {
 export interface SessionReplayState {
   readonly storedMessages: StoredMessage[];
   readonly pendingInputsById: Map<string, SessionQueuedInput>;
-  readonly bashApprovalGrants: BashApprovalGrant[];
   taskProgress: SessionTaskProgress;
   readonly taskProgressCheckpoints: SessionTaskProgressCheckpoint[];
   title?: string;

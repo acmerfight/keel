@@ -28,7 +28,6 @@ import type { ProviderId } from "../core/provider-id.ts";
 import type { SessionGoal } from "../core/session-goal.ts";
 import type { SessionTaskProgress } from "../core/task-progress.ts";
 import type { LLMProvider, Usage } from "../llm/types.ts";
-import type { BashApprovalGrant } from "../permissions/bash.ts";
 
 export const ZERO_USAGE: Usage = {
   inputTokens: 0,
@@ -83,7 +82,6 @@ export function runInteractiveSessionWithoutMemory(
     readonly initialModelSelection?: SessionModelSelection;
     readonly initialModelSwitchCount?: number;
     readonly initialQueuedInputs?: readonly SessionQueuedInput[];
-    readonly initialBashApprovalGrants?: readonly BashApprovalGrant[];
   },
 ): Promise<InteractiveSessionResult> {
   const {
@@ -96,7 +94,6 @@ export function runInteractiveSessionWithoutMemory(
     initialModelSelection,
     initialModelSwitchCount = 0,
     initialQueuedInputs = [],
-    initialBashApprovalGrants = [],
     ...sessionOptions
   } = options;
   const state: InteractiveActiveSessionState = {
@@ -111,7 +108,6 @@ export function runInteractiveSessionWithoutMemory(
       : {}),
     modelSwitchCount: initialModelSwitchCount,
     queuedInputs: initialQueuedInputs,
-    bashApprovalGrants: initialBashApprovalGrants,
   };
   const activeSession: InteractiveActiveSession =
     session.kind === "saved"
@@ -168,11 +164,6 @@ export function savedInteractiveSession(
         sessionId: options.id,
         points: [],
       })),
-    persistBashApprovalGrant: options.persistBashApprovalGrant ?? (() => {}),
-    persistBashApprovalRevoked:
-      options.persistBashApprovalRevoked ?? (() => {}),
-    persistBashApprovalsCleared:
-      options.persistBashApprovalsCleared ?? (() => {}),
   };
 }
 
@@ -436,7 +427,7 @@ export async function expectInterruptedTurnPreservesVisibleScopedInstructions(
   const sigintHandlers = new Set<() => void>();
   let stdout = "";
   const session = runInteractiveSessionWithoutMemory({
-    cliArgs: { bashMode: "disabled" },
+    cliArgs: { executionPosture: "trusted" },
     workspace,
     platform: process.platform,
     session: EPHEMERAL_INTERACTIVE_SESSION,

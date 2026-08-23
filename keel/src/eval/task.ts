@@ -43,7 +43,6 @@ const standardTaskBaseShape = {
     .int()
     .positive()
     .default(DEFAULT_SCRIPT_TIMEOUT_MS),
-  allowBash: z.boolean().default(false),
 };
 
 const standardTaskConfigSchema = z.discriminatedUnion("agentPolicy", [
@@ -82,7 +81,6 @@ const memoryPairTaskConfigSchema = z
     prompt: z.string().min(1),
     timeoutMs: z.number().int().positive(),
     scriptTimeoutMs: z.number().int().positive(),
-    allowBash: z.boolean(),
     maxCostUsd: z.number().positive(),
     memory: z.string().min(1),
   })
@@ -94,7 +92,6 @@ const delegationPairTaskConfigSchema = z
     prompt: z.string().min(1),
     timeoutMs: z.number().int().positive(),
     scriptTimeoutMs: z.number().int().positive(),
-    allowBash: z.boolean(),
     maxCostUsd: z.number().positive(),
     agentPolicy: z.enum(delegatingAgentPolicies),
     delegationPolicy: delegationPolicySchema,
@@ -142,7 +139,6 @@ interface EvalTaskBase {
   readonly prompt: string;
   readonly timeoutMs: number;
   readonly scriptTimeoutMs: number;
-  readonly allowBash: boolean;
 }
 
 interface StandardEvalTaskBase extends EvalTaskBase {
@@ -247,7 +243,6 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       prompt: config.prompt,
       timeoutMs: config.timeoutMs,
       scriptTimeoutMs: config.scriptTimeoutMs,
-      allowBash: config.allowBash,
       maxCostUsd: config.maxCostUsd,
       memory: config.memory,
     };
@@ -262,7 +257,6 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       prompt: config.prompt,
       timeoutMs: config.timeoutMs,
       scriptTimeoutMs: config.scriptTimeoutMs,
-      allowBash: config.allowBash,
       maxCostUsd: config.maxCostUsd,
       agentPolicy: config.agentPolicy,
       delegationPolicy: config.delegationPolicy,
@@ -278,7 +272,6 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       prompt: config.prompt,
       timeoutMs: config.timeoutMs,
       scriptTimeoutMs: config.scriptTimeoutMs,
-      allowBash: config.allowBash,
       agentPolicy: "off",
       ...(config.maxCostUsd === undefined
         ? {}
@@ -295,7 +288,6 @@ function loadTask(suiteDir: string, id: string): EvalTask {
       prompt: config.prompt,
       timeoutMs: config.timeoutMs,
       scriptTimeoutMs: config.scriptTimeoutMs,
-      allowBash: config.allowBash,
       agentPolicy: config.agentPolicy,
       maxCostUsd: config.maxCostUsd,
       delegationPolicy: config.delegationPolicy,
@@ -313,7 +305,6 @@ function loadTask(suiteDir: string, id: string): EvalTask {
     prompt: config.prompt,
     timeoutMs: config.timeoutMs,
     scriptTimeoutMs: config.scriptTimeoutMs,
-    allowBash: config.allowBash,
     agentPolicy: config.agentPolicy,
     maxCostUsd: config.maxCostUsd,
   };

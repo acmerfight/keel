@@ -907,7 +907,7 @@ describe("tool registry", () => {
     ).resolves.toEqual({
       ok: false,
       content:
-        "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.",
+        "Tool failed: bash is unavailable in the current tool authority context.\nRecovery: Continue using only tools exposed for this run.",
       effects: [],
     });
   });
@@ -948,7 +948,7 @@ describe("tool registry", () => {
     ).resolves.toEqual({
       ok: false,
       content:
-        "Tool failed: bash failed: shell commands are disabled. Re-run with --bash-policy ask, --bash-policy trusted, or --allow-bash to enable them.",
+        "Tool failed: bash is unavailable in the current tool authority context.\nRecovery: Continue using only tools exposed for this run.",
       effects: [],
     });
   });

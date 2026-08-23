@@ -345,7 +345,12 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 
 const runReportBaseSchema = z.object({
-  schemaVersion: z.literal(22),
+  schemaVersion: z.literal(23),
+  execution: z.object({
+    posture: z.enum(["trusted", "reviewed"]),
+    bashAuthority: z.literal("current_os_user"),
+    enabledMcpIntegrationsMayPerformExternalEffects: z.literal(true),
+  }),
   tasks: z.array(taskSchema),
   humanInterventionCount: z.number().int().nonnegative(),
   modelOperations: z.array(modelOperationSchema),

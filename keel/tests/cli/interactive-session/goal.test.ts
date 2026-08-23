@@ -57,7 +57,7 @@ async function runLocalGoalCommandScenario(options: {
   let stderr = "";
   const persistedGoals: SessionGoal[] = [];
   const session = runInteractiveSession({
-    cliArgs: { bashMode: "disabled" },
+    cliArgs: { executionPosture: "trusted" },
     workspace: process.cwd(),
     platform: process.platform,
     session:
@@ -729,7 +729,7 @@ describe("Interactive Session - Goals", () => {
     let stderr = "";
     const persistedGoals: SessionGoal[] = [];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -872,7 +872,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -944,9 +944,6 @@ describe("Interactive Session - Goals", () => {
       expect(stdout).toContain("Goal set: active\n");
       expect(stdout).toContain("Goal verification command set: pnpm test\n");
       expect(stdout).toContain(
-        "Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n",
-      );
-      expect(stdout).toContain(
         "  goal: active - Fix every failing checkout test and run the checkout suite; criterion(command): pnpm test\n",
       );
       expect(stdout).toContain("Continuing goal.\n");
@@ -959,9 +956,6 @@ describe("Interactive Session - Goals", () => {
         "Completion criterion (command): pnpm test",
       );
       expect(providerPrompts[0]).toContain(
-        "Bash is disabled in this run, so you cannot run the command completion criterion yourself.",
-      );
-      expect(providerPrompts[0]).not.toContain(
         "Runtime will run the exact configured command at the completion boundary",
       );
       expect(providerMessages).toEqual([
@@ -995,7 +989,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1101,7 +1095,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1189,7 +1183,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1296,7 +1290,7 @@ describe("Interactive Session - Goals", () => {
         },
       };
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace: process.cwd(),
         platform: process.platform,
         session: savedInteractiveSession({
@@ -1395,7 +1389,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1507,7 +1501,7 @@ describe("Interactive Session - Goals", () => {
     };
     const provider = unusedProvider("unused-goal-lifecycle-guards-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1648,7 +1642,7 @@ describe("Interactive Session - Goals", () => {
         },
       };
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace: process.cwd(),
         platform: process.platform,
         session: savedInteractiveSession({
@@ -1750,7 +1744,7 @@ describe("Interactive Session - Goals", () => {
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1811,7 +1805,7 @@ describe("Interactive Session - Goals", () => {
     };
     const provider = unusedProvider("unused-assertion-criterion-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1888,7 +1882,7 @@ describe("Interactive Session - Goals", () => {
     };
     const provider = unusedProvider("unused-goal-subcommand-typo-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1967,7 +1961,7 @@ describe("Interactive Session - Goals", () => {
     };
     const provider = unusedProvider("unused-enabled-goal-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2043,7 +2037,7 @@ describe("Interactive Session - Goals", () => {
     };
     const provider = unusedProvider("unused-goal-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2103,7 +2097,7 @@ describe("Interactive Session - Goals", () => {
     let stderr = "";
     const provider = unusedProvider("unused-ephemeral-goal-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -2155,7 +2149,7 @@ describe("Interactive Session - Goals", () => {
     let stderr = "";
     const provider = unusedProvider("unused-empty-goal-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2206,7 +2200,7 @@ describe("Interactive Session - Goals", () => {
     let stderr = "";
     const provider = unusedProvider("unused-failing-goal-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2266,7 +2260,7 @@ describe("Interactive Session - Goals", () => {
     let stderr = "";
     const provider = unusedProvider("unused-failing-goal-resume-provider");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2344,7 +2338,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2487,7 +2481,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2648,7 +2642,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2801,7 +2795,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2914,7 +2908,7 @@ describe("Interactive Session - Goals", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({

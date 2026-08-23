@@ -174,14 +174,11 @@ describe("CLI Main - Session Task Recovery", () => {
       KEEL_HOME: home,
       KEEL_PROVIDER: "deepseek",
     };
-    const original = runCliProcess(
-      ["--session", "tool-effect-recovery", "--bash-policy", "trusted"],
-      {
-        cwd: workspace,
-        env: environment,
-        stdin: "pipe",
-      },
-    );
+    const original = runCliProcess(["--session", "tool-effect-recovery"], {
+      cwd: workspace,
+      env: environment,
+      stdin: "pipe",
+    });
     original.child.stdin?.on("error", () => {});
 
     try {
@@ -209,14 +206,11 @@ describe("CLI Main - Session Task Recovery", () => {
       ).toBe("SIGKILL");
 
       // When
-      const resumed = runCliProcess(
-        ["--resume", "tool-effect-recovery", "--bash-policy", "trusted"],
-        {
-          cwd: workspace,
-          env: environment,
-          stdin: "pipe",
-        },
-      );
+      const resumed = runCliProcess(["--resume", "tool-effect-recovery"], {
+        cwd: workspace,
+        env: environment,
+        stdin: "pipe",
+      });
       resumed.child.stdin?.end();
       const resumedResult = await withTimeout(
         resumed.result,
@@ -807,8 +801,6 @@ describe("CLI Main - Session Task Recovery", () => {
       [
         "--session",
         "accept-unknown-effect",
-        "--bash-policy",
-        "trusted",
         "--recovery-policy",
         "accept-unknown",
       ],
@@ -848,14 +840,7 @@ describe("CLI Main - Session Task Recovery", () => {
 
       // When
       const resumed = runCliProcess(
-        [
-          "--resume",
-          "accept-unknown-effect",
-          "--bash-policy",
-          "trusted",
-          "--report",
-          reportPath,
-        ],
+        ["--resume", "accept-unknown-effect", "--report", reportPath],
         {
           cwd: workspace,
           env: environment,

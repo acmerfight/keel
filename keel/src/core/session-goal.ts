@@ -1152,8 +1152,8 @@ export function activeSessionGoalSystemPrompt(
     );
   } else {
     lines.push(
-      "- Bash is disabled in this run, so you cannot run the command completion criterion yourself.",
-      "- Do not call update_goal with status completed in this run. Ask the user to resume with --bash-policy ask or --bash-policy trusted, or to use /goal complete after manually verifying the command criterion.",
+      "- Bash is unavailable under your current tool authority, so you cannot run the command completion criterion yourself.",
+      "- Do not call update_goal with status completed in this run. Ask the parent agent to perform verification, or ask the user to use /goal complete after checking it manually.",
     );
   }
   return lines.join("\n");

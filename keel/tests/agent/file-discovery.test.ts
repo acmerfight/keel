@@ -62,7 +62,7 @@ describe("File Discovery", () => {
           userMessage: "find validator tests",
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -150,7 +150,7 @@ describe("File Discovery", () => {
           userMessage: "inspect src/tools",
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -234,7 +234,7 @@ describe("File Discovery", () => {
           userMessage: "inspect validator tests",
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

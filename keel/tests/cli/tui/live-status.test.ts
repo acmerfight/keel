@@ -34,7 +34,7 @@ describe("Interactive TUI live status", () => {
       res.end(sseTextReplyWithUsage("finished"));
     });
     await listen(server);
-    const pty = runCliPty(["--ephemeral", "--bash-policy", "trusted"], {
+    const pty = runCliPty(["--ephemeral"], {
       cwd: workspace,
       env: {
         KEEL_HOME: home,

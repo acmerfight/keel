@@ -1484,7 +1484,7 @@ describe("Session Goal Tool", () => {
       expect(execution).toMatchObject({
         ok: false,
         content: expect.stringContaining(
-          'Runtime cannot run command completion criterion "pnpm test" because Bash is disabled.',
+          'Runtime cannot run command completion criterion "pnpm test" because Bash is unavailable in this capability context.',
         ),
       });
       expect(sessionGoalUpdate(execution)).toMatchObject({

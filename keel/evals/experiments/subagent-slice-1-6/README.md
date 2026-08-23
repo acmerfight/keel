@@ -1,5 +1,10 @@
 # Explicit Subagent Completion Reliability — Slice 1.6
 
+> Historical reproducibility: authoritative scored runs must be reproduced
+> from their recorded freeze commit. Current-tree task fixtures follow Keel's
+> trusted-execution default and are not directly comparable with frozen runs
+> that used the removed `allowBash` task setting.
+
 This is the pre-registered completion-reliability window for issue #590 Slice
 1.6. It asks a narrower question than autonomous delegation selection: after
 the exact explicit prefix `使用 subagent 调研这个任务。` selects the experimental

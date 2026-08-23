@@ -169,6 +169,7 @@ describe("CLI File Editing", () => {
         "edit",
         "write",
         "apply_patch",
+        "bash",
       ]);
     } finally {
       await close(server);
@@ -255,6 +256,7 @@ describe("CLI File Editing", () => {
         "edit",
         "write",
         "apply_patch",
+        "bash",
       ]);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);

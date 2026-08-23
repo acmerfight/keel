@@ -8,10 +8,7 @@ import {
   type SessionGoal,
   type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
-import type {
-  BashApprovalGrant,
-  SessionBashPermissionPolicy,
-} from "../permissions/bash.ts";
+import type { BashPermissionPolicy } from "../permissions/bash.ts";
 import {
   activeSkillActivations,
   createSkillActivation,
@@ -29,12 +26,6 @@ import {
 } from "./agent-tree-store.ts";
 import type { CliArgs } from "./args.ts";
 import { USAGE } from "./args.ts";
-import {
-  BashProjectApprovalsError,
-  bashApprovalProjectRoot,
-  listBashProjectApprovalGrants,
-  saveBashProjectApprovalGrant,
-} from "./bash-project-approvals.ts";
 import { sessionForkPointsFromStoredMessages } from "./fork-points.ts";
 import {
   type HeadlessGoalOutcome,
@@ -122,9 +113,6 @@ import {
   ensureSessionCanBeCreated,
   forkSessionStore,
   listSessionCatalog,
-  persistSessionBashApprovalGrant,
-  persistSessionBashApprovalRevoked,
-  persistSessionBashApprovalsCleared,
   persistSessionGoal,
   persistSessionMessages,
   persistSessionModelSwitch,
@@ -249,12 +237,12 @@ type SessionCliMode =
   | {
       readonly kind: "headless-goal";
       readonly initialCommand: string;
-      readonly bashPermission?: SessionBashPermissionPolicy;
+      readonly bashPermission?: BashPermissionPolicy;
       readonly prepareResumedGoal?: (goal: SessionGoal | undefined) => Promise<
         | {
             readonly kind: "ready";
             readonly goal: ResumableSessionGoal;
-            readonly bashPermission?: SessionBashPermissionPolicy;
+            readonly bashPermission?: BashPermissionPolicy;
           }
         | { readonly kind: "rejected" }
       >;
@@ -617,20 +605,20 @@ async function runActiveSessionCli(
   }
   if (
     mode.kind === "interactive" &&
-    runtime.input.isTTY !== true &&
-    runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
+    cliArgs.executionPosture === "reviewed" &&
+    runtime.input.isTTY !== true
   ) {
-    runtime.writeStderr(`${USAGE}\n`);
+    runtime.writeStderr(
+      "Error: --approval-policy ask requires a real TTY and is unavailable to piped or non-TTY runs.\n",
+    );
     return activeSessionCliExit(mode, 1);
   }
   if (
     mode.kind === "interactive" &&
-    cliArgs.bashMode === "ask" &&
-    runtime.input.isTTY !== true
+    runtime.input.isTTY !== true &&
+    runtime.env("KEEL_FORCE_INTERACTIVE") !== "1"
   ) {
-    runtime.writeStderr(
-      "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
-    );
+    runtime.writeStderr(`${USAGE}\n`);
     return activeSessionCliExit(mode, 1);
   }
   let sessionLock: SessionLock | undefined = transition?.preacquiredSessionLock;
@@ -644,16 +632,6 @@ async function runActiveSessionCli(
       runtime,
       cliArgs.skillsEnabled,
     );
-    const projectBashApprovals =
-      cliArgs.bashMode === "ask" && mode.kind === "interactive"
-        ? (() => {
-            const projectRoot = bashApprovalProjectRoot(workspace);
-            return {
-              projectRoot,
-              grants: listBashProjectApprovalGrants(runtime, projectRoot),
-            };
-          })()
-        : undefined;
     const latestGoalResumeAssessment =
       mode.kind === "headless-goal"
         ? mode.latestGoalResumeAssessment
@@ -1013,7 +991,6 @@ async function runActiveSessionCli(
         taskProgress: { tasks: [] },
         modelSwitchCount: 0,
         queuedInputs: [],
-        bashApprovalGrants: [],
       };
       let headlessGoalActivated = false;
       if (savedSessionOwner !== null) {
@@ -1107,7 +1084,6 @@ async function runActiveSessionCli(
             : {}),
           modelSwitchCount: initialSession?.modelSwitches.length ?? 0,
           queuedInputs: initialSession?.pendingInputs ?? [],
-          bashApprovalGrants: initialSession?.bashApprovalGrants ?? [],
           ...(initialSession?.activeTask === undefined
             ? {}
             : { activeTask: initialSession.activeTask }),
@@ -1227,33 +1203,6 @@ async function runActiveSessionCli(
           },
           fork: forkActiveSession,
           listForkPoints: listActiveForkPoints,
-          persistBashApprovalGrant: (grant: BashApprovalGrant) => {
-            persistSessionBashApprovalGrant({
-              session: activeSessionForPersistence(),
-              grant,
-              runtime,
-            });
-          },
-          persistBashApprovalRevoked: (revocation: {
-            readonly grant: BashApprovalGrant;
-            readonly consumedInputIds: readonly string[];
-          }) => {
-            persistSessionBashApprovalRevoked({
-              session: activeSessionForPersistence(),
-              grant: revocation.grant,
-              runtime,
-              consumedInputIds: revocation.consumedInputIds,
-            });
-          },
-          persistBashApprovalsCleared: (clear: {
-            readonly consumedInputIds: readonly string[];
-          }) => {
-            persistSessionBashApprovalsCleared({
-              session: activeSessionForPersistence(),
-              runtime,
-              consumedInputIds: clear.consumedInputIds,
-            });
-          },
         };
       }
       const projectInstructions = loadProjectInstructions(workspace);
@@ -1624,15 +1573,6 @@ async function runActiveSessionCli(
               },
             }
           : {}),
-        ...(projectBashApprovals !== undefined
-          ? {
-              projectRoot: projectBashApprovals.projectRoot,
-              initialProjectBashApprovalGrants: projectBashApprovals.grants,
-              persistProjectBashApprovalGrant: (grant) => {
-                saveBashProjectApprovalGrant(runtime, grant);
-              },
-            }
-          : {}),
         toolOutputArtifacts,
         ...(agentHistory !== undefined ? { agentHistory } : {}),
         ...(cliArgs.agentPolicy !== "off"
@@ -1737,6 +1677,7 @@ async function runActiveSessionCli(
           writeRunReportBestEffort(
             failureReportFile,
             {
+              executionPosture: cliArgs.executionPosture,
               tasks: reportRecorder.tasks(),
               modelOperations: reportRecorder.modelOperations(),
               subagents: { status: "unavailable" },
@@ -1883,6 +1824,7 @@ async function runActiveSessionCli(
             ? headlessGoalRunReportStopReason(headlessGoalOutcome)
             : undefined;
         writeRunReport(cliArgs.reportFile, {
+          executionPosture: cliArgs.executionPosture,
           tasks: interactiveResult.report.tasks,
           modelOperations: interactiveResult.report.modelOperations,
           subagents: { status: "unavailable" },
@@ -1945,10 +1887,6 @@ async function runActiveSessionCli(
       runtime.writeStderr(`${error.message}\n`);
       return activeSessionCliExit(mode, 1);
     }
-    if (error instanceof BashProjectApprovalsError) {
-      runtime.writeStderr(`${error.message}\n`);
-      return activeSessionCliExit(mode, 1);
-    }
     if (error instanceof McpConfigError) {
       runtime.writeStderr(`${error.message}\n`);
       return activeSessionCliExit(mode, 1);
@@ -1994,13 +1932,13 @@ export async function runHeadlessSessionCli(
   cliArgs: HeadlessSessionCliArgs,
   runtime: CliRuntime,
   initialCommand: string,
-  bashPermission: SessionBashPermissionPolicy | undefined,
+  bashPermission: BashPermissionPolicy | undefined,
   onActivated: (sessionId: string) => void,
   prepareResumedGoal?: (goal: SessionGoal | undefined) => Promise<
     | {
         readonly kind: "ready";
         readonly goal: ResumableSessionGoal;
-        readonly bashPermission?: SessionBashPermissionPolicy;
+        readonly bashPermission?: BashPermissionPolicy;
       }
     | { readonly kind: "rejected" }
   >,

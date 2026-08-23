@@ -15,7 +15,6 @@ function defaultSessionForkPolicy(): SessionForkPolicyRecord {
     transcript: "copy_prefix",
     pendingInputs: "drop",
     queuedInputs: "drop",
-    bashApprovalGrants: "drop",
   };
 }
 

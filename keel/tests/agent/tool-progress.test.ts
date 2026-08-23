@@ -54,7 +54,7 @@ describe("Tool Progress", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -105,7 +105,7 @@ describe("Tool Progress", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -153,7 +153,7 @@ describe("Tool Progress", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

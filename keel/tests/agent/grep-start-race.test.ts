@@ -102,7 +102,7 @@ describe("Searching Code", () => {
           userMessage: "find needle",
           systemPrompt: "You are a helpful assistant.",
           signal: new AbortController().signal,
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

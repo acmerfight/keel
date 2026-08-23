@@ -28,6 +28,15 @@ import {
 } from "../../../src/testing/session-store-fixtures.ts";
 
 describe("Interactive Session - Task Progress", () => {
+  test(`Given the removed interactive approvals command,
+    When the command parser receives it,
+    Then it rejects it as an unknown local command`, () => {
+    expect(parseInteractiveCommand("/approvals")).toEqual({
+      kind: "invalid",
+      message: 'Error: unknown interactive command "/approvals".',
+    });
+  });
+
   test(`Given the tasks command receives extra arguments,
     When the interactive command is parsed,
     Then Keel rejects the command without treating it as a prompt`, () => {
@@ -72,7 +81,7 @@ describe("Interactive Session - Task Progress", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -182,7 +191,7 @@ describe("Interactive Session - Task Progress", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -311,7 +320,7 @@ describe("Interactive Session - Task Progress", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -490,7 +499,7 @@ describe("Interactive Session - Task Progress", () => {
       readonly taskProgress: unknown;
     }[] = [];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({

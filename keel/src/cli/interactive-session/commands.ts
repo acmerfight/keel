@@ -126,17 +126,6 @@ interface DiffCommand {
   readonly kind: "diff";
 }
 
-type ApprovalsCommand =
-  | {
-      readonly kind: "approvals";
-      readonly action: "list" | "clear";
-    }
-  | {
-      readonly kind: "approvals";
-      readonly action: "revoke";
-      readonly index: number;
-    };
-
 interface ForkCommand {
   readonly kind: "fork";
   readonly targetSessionId: string;
@@ -166,7 +155,6 @@ export type InteractiveCommand =
   | InteractiveGoalCommand
   | TasksCommand
   | DiffCommand
-  | ApprovalsCommand
   | ManualCompactCommand
   | ForkPointsCommand
   | ForkCommand
@@ -234,10 +222,6 @@ export function formatInteractiveHelp(): string {
     "  /goal clear        Clear the current session goal.",
     "  /tasks             Show current session tasks.",
     "  /diff              Show current git status and diff.",
-    "  /approvals         List active bash approvals.",
-    "  /approvals revoke <index>",
-    "                     Revoke one active bash approval.",
-    "  /approvals clear   Clear active bash approvals.",
     "  /compact [focus]   Summarize older conversation context with optional focus.",
     "  /fork <target-id> [--before-message <id>]",
     "                     Fork this saved session without switching to it.",
@@ -408,61 +392,6 @@ function parseUndoTargetIndex(raw: string | undefined): ParseResult<number> {
     };
   }
   return { ok: true, value: checkpointIndex };
-}
-
-function parseApprovalIndex(raw: string | undefined): ParseResult<number> {
-  if (raw === undefined || !/^[1-9][0-9]*$/u.test(raw)) {
-    return {
-      ok: false,
-      message: "Error: /approvals revoke requires a positive integer.",
-    };
-  }
-  const approvalIndex = Number(raw);
-  if (!Number.isSafeInteger(approvalIndex)) {
-    return {
-      ok: false,
-      message: "Error: /approvals revoke requires a positive integer.",
-    };
-  }
-  return { ok: true, value: approvalIndex };
-}
-
-function parseApprovalsCommandArgs(
-  rawArgs: string | undefined,
-): ApprovalsCommand | InvalidInteractiveCommand {
-  const trimmedArgs = rawArgs?.trim() ?? "";
-  if (trimmedArgs === "") {
-    return { kind: "approvals", action: "list" };
-  }
-
-  const args = trimmedArgs.split(/\s+/u);
-  if (args[0] === "clear") {
-    if (args.length > 1) {
-      return {
-        kind: "invalid",
-        message: `Error: unknown /approvals argument "${args[1]}".`,
-      };
-    }
-    return { kind: "approvals", action: "clear" };
-  }
-  if (args[0] === "revoke") {
-    const parsed = parseApprovalIndex(args[1]);
-    if (!parsed.ok) {
-      return { kind: "invalid", message: parsed.message };
-    }
-    if (args.length > 2) {
-      return {
-        kind: "invalid",
-        message: `Error: unknown /approvals argument "${args[2]}".`,
-      };
-    }
-    return { kind: "approvals", action: "revoke", index: parsed.value };
-  }
-
-  return {
-    kind: "invalid",
-    message: `Error: unknown /approvals argument "${args[0]}".`,
-  };
 }
 
 function parseGoalCommandArgs(
@@ -840,6 +769,13 @@ export function parseInteractiveCommand(
     return { kind: "help" };
   }
 
+  if (/^\/approvals(?:\s|$)/u.test(trimmed)) {
+    return {
+      kind: "invalid",
+      message: 'Error: unknown interactive command "/approvals".',
+    };
+  }
+
   const statusMatch = /^\/status(?:\s+(.*))?$/u.exec(trimmed);
   if (statusMatch !== null) {
     const extraArgs = statusMatch[1]?.trim();
@@ -986,11 +922,6 @@ export function parseInteractiveCommand(
       };
     }
     return { kind: "diff" };
-  }
-
-  const approvalsMatch = /^\/approvals(?:\s+(.*))?$/u.exec(trimmed);
-  if (approvalsMatch !== null) {
-    return parseApprovalsCommandArgs(approvalsMatch[1]);
   }
 
   const undoMatch = /^\/undo(?:\s+(.*))?$/u.exec(trimmed);
@@ -1229,7 +1160,7 @@ function formatInteractiveGoalVerificationSet(
   if (options.bashToolVisible) {
     return `${setMessage}${timeoutMessage}`;
   }
-  return `${setMessage}${timeoutMessage}Note: bash is disabled in this run, so the agent cannot run this verification command. Resume with --bash-policy ask or --bash-policy trusted, or use /goal complete after checking it manually.\n`;
+  return `${setMessage}${timeoutMessage}Note: bash is unavailable under the current tool authority, so the agent cannot run this verification command. Ask the parent agent to verify it, or use /goal complete after checking it manually.\n`;
 }
 
 function formatInteractiveGoalCriterionSet(

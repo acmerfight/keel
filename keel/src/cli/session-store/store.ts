@@ -14,10 +14,6 @@ import {
   sessionTaskProgressesEqual,
 } from "../../core/task-progress.ts";
 import {
-  type BashApprovalGrant,
-  bashApprovalGrantKey,
-} from "../../permissions/bash.ts";
-import {
   copySkillActivation,
   copySkillLifecycleState,
 } from "../../skills/lifecycle.ts";
@@ -73,15 +69,12 @@ import {
 } from "./model.ts";
 import { sessionFilePath } from "./paths.ts";
 import {
-  bashApprovalGrantHasRedactionMarker,
   copyActiveSessionTask,
-  copyBashApprovalGrant,
   copySessionLastTaskOutcome,
   copyStoredMessage,
   messagesFromStoredMessages,
   normalizeSessionTitleForPersistence,
   parseSessionMessages,
-  redactBashApprovalGrantForPersistence,
   redactSessionGoalForPersistence,
   redactSessionQueuedInputForPersistence,
   redactSessionTaskProgressForPersistence,
@@ -197,7 +190,6 @@ function createEmptySessionStore(options: {
     graph,
     storedMessages: [],
     pendingInputsById: new Map(),
-    bashApprovalGrants: [],
     taskProgress: emptySessionTaskProgress(),
     skillActivations: skillState.skillActivations,
     activeSkillIds: skillState.activeSkillIds,
@@ -216,29 +208,6 @@ function sessionModelSelectionsEqual(
   right: SessionModelSelection,
 ): boolean {
   return left.providerId === right.providerId && left.model === right.model;
-}
-
-function appendBashApprovalGrant(
-  grants: readonly BashApprovalGrant[],
-  grant: BashApprovalGrant,
-): BashApprovalGrant[] {
-  const key = bashApprovalGrantKey(grant);
-  if (
-    grants.some((existingGrant) => bashApprovalGrantKey(existingGrant) === key)
-  ) {
-    return [...grants];
-  }
-  return [...grants, copyBashApprovalGrant(grant)];
-}
-
-function removeBashApprovalGrant(
-  grants: readonly BashApprovalGrant[],
-  grant: BashApprovalGrant,
-): BashApprovalGrant[] {
-  const key = bashApprovalGrantKey(grant);
-  return grants.filter(
-    (existingGrant) => bashApprovalGrantKey(existingGrant) !== key,
-  );
 }
 
 function modelSwitchesForForkPoint(options: {
@@ -368,7 +337,6 @@ export function forkSessionStore(options: {
     graph,
     storedMessages,
     pendingInputsById: new Map(),
-    bashApprovalGrants: [],
     ...(activeModel !== undefined
       ? { activeModel: copySessionModelSelection(activeModel) }
       : {}),
@@ -440,7 +408,6 @@ function replaySessionStore(options: {
 
   let storedMessages: StoredMessage[] = [];
   const pendingInputsById = new Map<string, SessionQueuedInput>();
-  let bashApprovalGrants: BashApprovalGrant[] = [];
   let activeModel: SessionModelSelection | undefined;
   let modelSwitches: SessionModelSwitch[] = [];
   let taskProgress = emptySessionTaskProgress();
@@ -730,27 +697,6 @@ function replaySessionStore(options: {
         break;
       case "input_consumed":
         consumeReplayInputs(pendingInputsById, record.inputIds);
-        break;
-      case "bash_approval_granted":
-        if (!bashApprovalGrantHasRedactionMarker(record.grant)) {
-          bashApprovalGrants = appendBashApprovalGrant(
-            bashApprovalGrants,
-            record.grant,
-          );
-        }
-        break;
-      case "bash_approval_revoked":
-        if (!bashApprovalGrantHasRedactionMarker(record.grant)) {
-          bashApprovalGrants = removeBashApprovalGrant(
-            bashApprovalGrants,
-            record.grant,
-          );
-        }
-        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
-        break;
-      case "bash_approvals_cleared":
-        bashApprovalGrants = [];
-        consumeReplayInputs(pendingInputsById, record.consumedInputIds);
         break;
       case "task_admitted":
         if (activeTask !== undefined) {
@@ -1356,9 +1302,6 @@ function replaySessionStore(options: {
         for (const input of record.pendingInputs) {
           pendingInputsById.set(input.id, input);
         }
-        bashApprovalGrants = (record.bashApprovalGrants ?? []).filter(
-          (grant) => !bashApprovalGrantHasRedactionMarker(grant),
-        );
         const snapshotModelSwitches = record.modelSwitches ?? [];
         const snapshotActiveSwitch = snapshotModelSwitches.at(-1);
         if (
@@ -1667,7 +1610,6 @@ function replaySessionStore(options: {
     graph: records.header.graph,
     storedMessages,
     pendingInputsById,
-    bashApprovalGrants,
     taskProgress,
     taskProgressCheckpoints,
     ...(title !== undefined ? { title } : {}),
@@ -3136,83 +3078,6 @@ export function persistSessionSkillState(options: {
   });
   replayState.skillStateCheckpoints.push(checkpoint);
   consumeReplayInputs(replayState.pendingInputsById, options.consumedInputIds);
-  appendSessionSnapshotIfNeeded({
-    session: options.session,
-    runtime: options.runtime,
-  });
-}
-
-export function persistSessionBashApprovalGrant(options: {
-  readonly session: SessionState;
-  readonly grant: BashApprovalGrant;
-  readonly runtime: SessionStoreRuntime;
-}): void {
-  const grant = redactBashApprovalGrantForPersistence(options.grant);
-  appendJsonLine(options.session.filePath, {
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    type: "bash_approval_granted",
-    timestamp: isoTimestamp(options.runtime),
-    grant,
-  });
-  if (!bashApprovalGrantHasRedactionMarker(grant)) {
-    const replayState = replayStateForSession(options.session);
-    replayState.bashApprovalGrants.splice(
-      0,
-      replayState.bashApprovalGrants.length,
-      ...appendBashApprovalGrant(replayState.bashApprovalGrants, grant),
-    );
-  }
-  appendSessionSnapshotIfNeeded({
-    session: options.session,
-    runtime: options.runtime,
-  });
-}
-
-export function persistSessionBashApprovalRevoked(options: {
-  readonly session: SessionState;
-  readonly grant: BashApprovalGrant;
-  readonly runtime: SessionStoreRuntime;
-  readonly consumedInputIds?: readonly string[];
-}): void {
-  const grant = redactBashApprovalGrantForPersistence(options.grant);
-  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
-  appendJsonLine(options.session.filePath, {
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    type: "bash_approval_revoked",
-    timestamp: isoTimestamp(options.runtime),
-    grant,
-    ...(consumedInputIds.length > 0 ? { consumedInputIds } : {}),
-  });
-  const replayState = replayStateForSession(options.session);
-  if (!bashApprovalGrantHasRedactionMarker(grant)) {
-    replayState.bashApprovalGrants.splice(
-      0,
-      replayState.bashApprovalGrants.length,
-      ...removeBashApprovalGrant(replayState.bashApprovalGrants, grant),
-    );
-  }
-  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
-  appendSessionSnapshotIfNeeded({
-    session: options.session,
-    runtime: options.runtime,
-  });
-}
-
-export function persistSessionBashApprovalsCleared(options: {
-  readonly session: SessionState;
-  readonly runtime: SessionStoreRuntime;
-  readonly consumedInputIds?: readonly string[];
-}): void {
-  const consumedInputIds = uniqueInputIds(options.consumedInputIds ?? []);
-  appendJsonLine(options.session.filePath, {
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    type: "bash_approvals_cleared",
-    timestamp: isoTimestamp(options.runtime),
-    ...(consumedInputIds.length > 0 ? { consumedInputIds } : {}),
-  });
-  const replayState = replayStateForSession(options.session);
-  replayState.bashApprovalGrants.splice(0);
-  consumeReplayInputs(replayState.pendingInputsById, consumedInputIds);
   appendSessionSnapshotIfNeeded({
     session: options.session,
     runtime: options.runtime,

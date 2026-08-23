@@ -47,24 +47,11 @@ function skillState(workflowSkill: WorkflowSkill) {
 
 function modelSwitchRecordLine(timestamp: string): string {
   return JSON.stringify({
-    schemaVersion: 10,
+    schemaVersion: 11,
     type: "model_switch",
     timestamp,
     from: null,
     to: { providerId: "qwen", model: "qwen3.7-max" },
-  });
-}
-
-function bashApprovalGrantedRecordLine(timestamp: string, cwd: string): string {
-  return JSON.stringify({
-    schemaVersion: 10,
-    type: "bash_approval_granted",
-    timestamp,
-    grant: {
-      type: "exact",
-      cwd,
-      command: "pnpm test",
-    },
   });
 }
 
@@ -364,7 +351,7 @@ describe("CLI Main - Sessions Command", () => {
       createdAt: "2026-08-16T00:00:00.000Z",
       records: [
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "2026-08-16T00:00:01.000Z",
           reason: "size_threshold",
@@ -1293,10 +1280,6 @@ describe("CLI Main - Sessions Command", () => {
           id: "queued-detail-input",
           line: "continue later",
         }),
-        bashApprovalGrantedRecordLine(
-          "2026-02-01T00:00:04.000Z",
-          ledgerWorkspace,
-        ),
       ],
     });
     const fixture = createRuntime(["sessions", "show", "detail", "--all"], {
@@ -1316,7 +1299,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain('Session "detail":\n');
       expect(stdout).toContain(`workspace: ${ledgerWorkspace}\n`);
       expect(stdout).toContain("created: 2026-02-01T00:00:00.000Z\n");
-      expect(stdout).toContain("updated: 2026-02-01T00:00:04.000Z\n");
+      expect(stdout).toContain("updated: 2026-02-01T00:00:03.000Z\n");
       expect(stdout).toContain("branch: detail\n");
       expect(stdout).toContain("title: Fix login timeout\n");
       expect(stdout).toContain("parent: source\n");
@@ -1327,7 +1310,7 @@ describe("CLI Main - Sessions Command", () => {
         "fork point: full restored history from source through message source-last-message (message 7)\n",
       );
       expect(stdout).toContain(
-        "fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop\n",
+        "fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop\n",
       );
       expect(stdout).toContain("preview: Use [REDACTED_SECRET]");
       expect(stdout).toContain("status:\n");
@@ -1343,7 +1326,6 @@ describe("CLI Main - Sessions Command", () => {
       );
       expect(stdout).toContain("  messages: 4\n");
       expect(stdout).toContain("  pending inputs: 1\n");
-      expect(stdout).toContain("  bash approvals: 1\n");
       expect(stdout).toContain(
         "  tasks: 1/2 completed; current: Patch catalog status\n",
       );
@@ -1365,7 +1347,6 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("  pending inputs: 1\n");
       expect(stdout).toContain("  active model: qwen/qwen3.7-max\n");
       expect(stdout).toContain("  model switches: 1\n");
-      expect(stdout).toContain("  bash approvals: 1\n");
       expect(stdout).toContain("actions:\n");
       expect(stdout).toContain("  resume: keel --resume detail\n");
       expect(stdout).toContain(
@@ -1528,7 +1509,7 @@ describe("CLI Main - Sessions Command", () => {
       }),
       records: [
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "append",
           timestamp: "2026-02-05T00:00:01.000Z",
           reason: "turn",
@@ -1566,7 +1547,7 @@ describe("CLI Main - Sessions Command", () => {
           ],
         }),
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "model_switch",
           timestamp: "2026-02-05T00:00:02.000Z",
           from: null,
@@ -2213,7 +2194,7 @@ describe("CLI Main - Sessions Command", () => {
           "     branch: branch-a",
           "     parent: older",
           `     fork point: full restored history from older through message ${olderLastMessageId} (message 4)`,
-          "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop",
+          "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop",
           "     preview: remember branch-a",
           "     show: keel sessions show branch-a",
           "     resume: keel --resume branch-a",
@@ -2227,7 +2208,7 @@ describe("CLI Main - Sessions Command", () => {
       expect(stdout).toContain("     parent: older\n");
       expect(stdout).toContain("     preview: remember beta with spacing\n");
       expect(stdout).toContain(
-        "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop, bashApprovalGrants=drop\n",
+        "     fork policy: transcript=copy_prefix, pendingInputs=drop, queuedInputs=drop\n",
       );
       expect(stdout).toContain(
         "checkpoint-only  updated 2026-01-01T18:30:02.000Z\n",

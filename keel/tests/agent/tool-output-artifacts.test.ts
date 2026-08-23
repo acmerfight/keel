@@ -471,7 +471,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -631,7 +631,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -714,7 +714,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -797,7 +797,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -863,7 +863,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -940,7 +940,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -1051,7 +1051,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store,
@@ -1142,7 +1142,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -1221,7 +1221,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store: artifactStoreSavingTo(saved),
@@ -1305,7 +1305,7 @@ describe("Agent Tool Output Artifacts", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           toolOutputArtifacts: {
             store,

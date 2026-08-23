@@ -361,13 +361,6 @@ function applySessionCatalogMutation(
         ...state,
         updatedAt: record.timestamp,
       };
-    case "bash_approval_granted":
-      return {
-        ...state,
-        updatedAt: record.timestamp,
-      };
-    case "bash_approval_revoked":
-    case "bash_approvals_cleared":
     case "model_switch":
       return {
         ...state,

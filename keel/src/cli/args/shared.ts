@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { type AgentPolicy, agentPolicies } from "../../core/agent-policy.ts";
 import { type ProviderId, providerIds } from "../../core/provider-id.ts";
-import type { BashPolicy } from "../../permissions/bash.ts";
+import type { ExecutionPosture } from "../../permissions/bash.ts";
 import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 
 export type ParseErrorKind = "unknownOption";
@@ -33,7 +33,7 @@ const maxCostSchema = z
   .regex(/^(?:\d+(?:\.\d+)?|\.\d+)$/u)
   .transform((value) => Number(value))
   .pipe(z.number().finite().positive());
-const bashPolicySchema = z.enum(["ask", "deny", "trusted"]);
+const approvalPolicySchema = z.literal("ask");
 const agentPolicySchema = z.enum(agentPolicies);
 const recoveryPolicySchema = z.enum(["block", "accept-unknown"]);
 const providerIdSchema = z.enum(providerIds);
@@ -58,16 +58,14 @@ export function parseReportFile(raw: string | undefined): ParseResult<string> {
   return parseOk(raw);
 }
 
-export function parseBashPolicy(
+export function parseApprovalPolicy(
   raw: string | undefined,
-): ParseResult<BashPolicy> {
-  const result = bashPolicySchema.safeParse(raw);
+): ParseResult<ExecutionPosture> {
+  const result = approvalPolicySchema.safeParse(raw);
   if (!result.success) {
-    return parseError(
-      "Error: --bash-policy must be one of: ask, deny, trusted.",
-    );
+    return parseError("Error: --approval-policy must be: ask.");
   }
-  return parseOk(result.data);
+  return parseOk("reviewed");
 }
 
 export function parseAgentPolicy(

@@ -2,7 +2,6 @@
   "kind": "standard",
   "prompt": "Review the two independent subsystems described under services/api/ and services/worker/. Use a read-only subagent for one self-contained subsystem investigation, inspect the other yourself, then create review.md with exactly three lines using these keys: `api_risk: ...`, `worker_risk: ...`, and `cross_service_gap: ...`. The values must identify the concrete retry risk, the concrete worker delivery risk, and the missing correlation field shared by both descriptions.",
   "timeoutMs": 240000,
-  "allowBash": false,
   "maxCostUsd": 0.1,
   "agentPolicy": "explicit",
   "delegationPolicy": "require_one"

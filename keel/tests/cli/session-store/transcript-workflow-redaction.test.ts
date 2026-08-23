@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -6,13 +6,10 @@ import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   forkSessionStore,
-  persistSessionBashApprovalGrant,
   persistSessionMessages,
-  persistSessionQueuedInput,
   resumeSessionStore,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
-import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import { skillActivationFromWorkflowSkill } from "../../../src/skills/lifecycle.ts";
 import type { WorkflowSkill } from "../../../src/skills/model.ts";
 import {
@@ -325,14 +322,14 @@ describe("Session Store Transcript Workflow Redaction", () => {
       await writeFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "session",
           id: session.id,
           createdAt: "1970-01-01T00:00:00.000Z",
           workspace: session.workspace,
           graph: rootGraph(session.id),
         })}\n${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "skill_state",
           timestamp: "1970-01-01T00:00:00.001Z",
           messageOrdinal: 0,
@@ -510,159 +507,6 @@ describe("Session Store Transcript Workflow Redaction", () => {
           message.role === "tool" && message.toolCallId === "read_secret",
       );
       expect(resumedToolMessage?.sourceTruncated).toBe(true);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given queued input and bash approval contain secret-like values,
-    When the ledger and bounded snapshot are written,
-    Then persisted session metadata stores redacted markers instead of raw secrets`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
-    const ledgerWorkspace = await realpath(workspace);
-    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const largeMessages: readonly SessionMessage[] = [
-      {
-        role: "user",
-        content: "x".repeat(16 * 1024 * 1024),
-        origin: { type: "user_prompt" },
-      },
-    ];
-    const grant = {
-      type: "exact",
-      cwd: ledgerWorkspace,
-      command: "printf 'Bearer live-secret-approval-token'",
-    } satisfies BashApprovalGrant;
-
-    try {
-      const session = createSessionStore({
-        sessionId: "redacted-session-metadata",
-        workspace,
-        runtime: runtime(home),
-      });
-      const queuedInput = persistSessionQueuedInput({
-        session,
-        sequence: 4,
-        line: "continue with sk-secret-queued-214",
-        runtime: runtime(home, 1),
-      });
-      persistSessionBashApprovalGrant({
-        session,
-        grant,
-        runtime: runtime(home, 2),
-      });
-
-      // When
-      persistSessionMessages({
-        session,
-        previousMessages: [],
-        currentMessages: largeMessages,
-        runtime: runtime(home, 3),
-        reason: "turn",
-      });
-      const resumed = resumeSessionStore({
-        sessionId: "redacted-session-metadata",
-        workspace,
-        runtime: runtime(home, 4),
-      });
-
-      // Then
-      expect(queuedInput.line).toBe("continue with sk-secret-queued-214");
-
-      const ledger = await readFile(session.filePath, "utf8");
-      expect(ledger.includes("sk-secret-queued-214")).toBe(false);
-      expect(ledger.includes("live-secret-approval-token")).toBe(false);
-      expect(ledger.includes("[REDACTED_SECRET]")).toBe(true);
-
-      const lastLine = ledger.trimEnd().split("\n").at(-1);
-      expect(lastLine).toBeDefined();
-      if (lastLine === undefined) {
-        throw new Error("Expected snapshot line");
-      }
-      const snapshot = JSON.parse(lastLine);
-      expect(snapshot).toMatchObject({
-        type: "snapshot",
-        pendingInputs: expect.any(Array),
-      });
-      expect(snapshot.bashApprovalGrants ?? []).toEqual([]);
-      expect(JSON.stringify(snapshot).includes("sk-secret-queued-214")).toBe(
-        false,
-      );
-      expect(
-        JSON.stringify(snapshot).includes("live-secret-approval-token"),
-      ).toBe(false);
-      expect(JSON.stringify(snapshot).includes("[REDACTED_SECRET]")).toBe(true);
-      expect(
-        JSON.stringify(resumed.pendingInputs).includes("sk-secret-queued-214"),
-      ).toBe(false);
-      expect(
-        JSON.stringify(resumed.bashApprovalGrants).includes(
-          "live-secret-approval-token",
-        ),
-      ).toBe(false);
-      expect(resumed.bashApprovalGrants).toEqual([]);
-      expect(
-        JSON.stringify(resumed.pendingInputs).includes("[REDACTED_SECRET]"),
-      ).toBe(true);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given a bash approval audit record contains a secret-like command,
-    When the session is resumed before snapshot compaction,
-    Then the redacted audit record is not replayed as an active approval`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
-    const ledgerWorkspace = await realpath(workspace);
-    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const grant = {
-      type: "exact",
-      cwd: ledgerWorkspace,
-      command: "printf 'Bearer live-secret-approval-token'",
-    } satisfies BashApprovalGrant;
-
-    try {
-      const session = createSessionStore({
-        sessionId: "redacted-bash-approval-resume",
-        workspace,
-        runtime: runtime(home),
-      });
-      persistSessionBashApprovalGrant({
-        session,
-        grant,
-        runtime: runtime(home, 1),
-      });
-
-      // When
-      const resumed = resumeSessionStore({
-        sessionId: "redacted-bash-approval-resume",
-        workspace,
-        runtime: runtime(home, 2),
-      });
-
-      // Then
-      const ledgerLines = (await readFile(session.filePath, "utf8"))
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(ledgerLines).toHaveLength(2);
-      expect(ledgerLines[1]).toMatchObject({
-        type: "bash_approval_granted",
-        grant: {
-          type: "exact",
-          cwd: ledgerWorkspace,
-          command: "printf 'Bearer [REDACTED_SECRET]'",
-        },
-      });
-      expect(JSON.stringify(ledgerLines)).not.toContain(
-        "live-secret-approval-token",
-      );
-      expect(session.bashApprovalGrants).toEqual([]);
-      expect(resumed.bashApprovalGrants).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

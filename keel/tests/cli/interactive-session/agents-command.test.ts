@@ -305,7 +305,7 @@ describe("Interactive /agents command", () => {
       let stdout = "";
       let stderr = "";
       const pending = runInteractiveSession({
-        cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+        cliArgs: { executionPosture: "trusted", maxCostUsd: 1 },
         workspace,
         platform: process.platform,
         session: savedInteractiveSession({ id: sessionId }),
@@ -506,7 +506,7 @@ describe("Interactive /agents command", () => {
       let stderr = "";
       let providerResolved = false;
       const pending = runInteractiveSession({
-        cliArgs: { bashMode: "ask" },
+        cliArgs: { executionPosture: "reviewed" },
         workspace: process.cwd(),
         platform: process.platform,
         session: scenario.session,

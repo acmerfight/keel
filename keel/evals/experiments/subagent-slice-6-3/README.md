@@ -1,5 +1,10 @@
 # Subagent orchestration graduation — Slice 6.3
 
+> Historical reproducibility: authoritative scored runs must be reproduced
+> from their recorded freeze commit. Current-tree task fixtures follow Keel's
+> trusted-execution default and are not directly comparable with frozen runs
+> that used the removed `allowBash` task setting.
+
 This is the pre-registered V2 real-provider window for issue #590. It changes
 one product behavior: Main should decompose eligible independent scopes before
 substantial investigation, then coordinate and synthesize delegated work

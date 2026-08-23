@@ -51,7 +51,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -147,7 +147,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -225,7 +225,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -309,7 +309,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -401,7 +401,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -513,7 +513,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     let stderr = "";
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 1,
         reportFile: "session.json",
       },
@@ -608,13 +608,16 @@ describe("Interactive Session - Manual Compact Failures", () => {
   test.each([
     {
       mode: "unmetered",
-      cliArgs: { bashMode: "disabled" as const },
+      cliArgs: { executionPosture: "trusted" as const },
       expectedCostModelResolutions: 0,
       expectsReport: false,
     },
     {
       mode: "report-only metered",
-      cliArgs: { bashMode: "disabled" as const, reportFile: "session.json" },
+      cliArgs: {
+        executionPosture: "trusted" as const,
+        reportFile: "session.json",
+      },
       expectedCostModelResolutions: 2,
       expectsReport: true,
     },
@@ -727,7 +730,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const input = new PassThrough();
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 0.001,
         reportFile: "session.json",
       },
@@ -834,7 +837,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", reportFile: "session.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -946,7 +949,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const sigintHandlers = new Set<() => void>();
     const consumedInputIds: string[][] = [];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1050,7 +1053,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1134,7 +1137,7 @@ describe("Interactive Session - Manual Compact Failures", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

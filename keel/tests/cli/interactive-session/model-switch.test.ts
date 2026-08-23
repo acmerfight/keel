@@ -52,7 +52,7 @@ describe("Interactive Session - Model Switch", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -107,7 +107,7 @@ describe("Interactive Session - Model Switch", () => {
     let stdout = "";
     const resolvedSelections: ProviderSelection[] = [];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -174,7 +174,7 @@ describe("Interactive Session - Model Switch", () => {
     let stdout = "";
     const observedProviderVisibleContent: string[] = [];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -262,7 +262,7 @@ describe("Interactive Session - Model Switch", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -336,7 +336,7 @@ describe("Interactive Session - Model Switch", () => {
     let stderr = "";
     let targetProviderTurns = 0;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -415,7 +415,7 @@ describe("Interactive Session - Model Switch", () => {
     let stderr = "";
     let providerStreams = 0;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -482,7 +482,7 @@ describe("Interactive Session - Model Switch", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -568,7 +568,7 @@ describe("Interactive Session - Model Switch", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -627,7 +627,7 @@ describe("Interactive Session - Model Switch", () => {
     let stdout = "";
     const resolvedSelections: ProviderSelection[] = [];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -698,7 +698,7 @@ describe("Interactive Session - Model Switch", () => {
       readonly consumedInputIds: readonly string[];
     }> = [];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({

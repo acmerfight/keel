@@ -25,8 +25,9 @@ import type {
 import type { McpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import type { McpRuntime } from "../mcp/runtime-types.ts";
 import {
-  type BashRuntime,
   bashRuntimeExposesTool,
+  type ChildBashRuntime,
+  type MainBashRuntime,
 } from "../permissions/bash.ts";
 import { workflowSkillFromActivation } from "../skills/lifecycle.ts";
 import type {
@@ -186,7 +187,7 @@ interface MainRunAgentOptions {
   readonly memory?: Extract<AgentMemoryRuntime, { readonly kind: "direct" }>;
   readonly mcp?: AgentMcpRuntime;
   readonly userMessageOrigin?: OrdinaryUserMessageOrigin;
-  readonly bash: BashRuntime;
+  readonly bash: MainBashRuntime;
   readonly toolProfile?: "main";
   readonly delegation?: DelegationCapability;
   readonly costBudgetProvider?: LLMProvider;
@@ -198,7 +199,7 @@ interface MainRunAgentOptions {
 interface SubagentRunAgentOptionsBase {
   readonly memory?: never;
   readonly mcp?: AgentMcpRuntime;
-  readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
+  readonly bash: ChildBashRuntime;
   readonly toolProfile: "subagent";
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;
@@ -319,7 +320,7 @@ type MainAgentControlOptions =
 type MainRunAgentTurnOptions = MainAgentControlOptions & {
   readonly memory?: AgentMemoryRuntime;
   readonly mcp?: AgentMcpRuntime;
-  readonly bash: BashRuntime;
+  readonly bash: MainBashRuntime;
   readonly toolProfile?: "main";
   readonly delegation?: DelegationCapability;
   readonly costBudgetProvider?: LLMProvider;
@@ -335,7 +336,7 @@ type MainRunAgentTurnOptions = MainAgentControlOptions & {
 interface SubagentRunAgentTurnOptionsBase {
   readonly memory?: never;
   readonly mcp?: AgentMcpRuntime;
-  readonly bash: Extract<BashRuntime, { readonly kind: "disabled" }>;
+  readonly bash: ChildBashRuntime;
   readonly toolProfile: "subagent";
   readonly agentControl?: never;
   readonly agentControlResultBudget?: never;

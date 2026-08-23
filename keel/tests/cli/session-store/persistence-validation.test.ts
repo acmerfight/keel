@@ -27,7 +27,7 @@ describe("Session Store Persistence Validation", () => {
       [
         headerLine("bad-record", workspace),
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "append",
           timestamp: "1970-01-01T00:00:00.000Z",
           reason: "turn",
@@ -62,7 +62,7 @@ describe("Session Store Persistence Validation", () => {
     await writeFile(
       join(home, "sessions", "future", "ledger.jsonl"),
       `${JSON.stringify({
-        schemaVersion: 11,
+        schemaVersion: 12,
         type: "session",
         id: "future",
         createdAt: "1970-01-01T00:00:00.000Z",
@@ -79,7 +79,7 @@ describe("Session Store Persistence Validation", () => {
           workspace,
           runtime: runtime(home),
         }),
-      ).toThrow(/unsupported session schema version 11/u);
+      ).toThrow(/unsupported session schema version 12/u);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

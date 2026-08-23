@@ -14,7 +14,6 @@ import { describe, expect, test } from "vitest";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
-  persistSessionBashApprovalGrant,
   persistSessionMessages,
   persistSessionQueuedInput,
   persistSessionTitle,
@@ -22,7 +21,6 @@ import {
   type SessionQueuedInput,
   SessionStoreError,
 } from "../../../src/cli/session-store.ts";
-import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import {
   appendLine,
   expectedStoredMessages,
@@ -350,7 +348,7 @@ describe("Session Store Oversized Snapshot", () => {
     await writeFile(
       ledgerPath,
       `\n${JSON.stringify({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.001Z",
         reason: "size_threshold",
@@ -535,7 +533,7 @@ describe("Session Store Oversized Snapshot", () => {
         throw new Error("Expected snapshot line");
       }
       expect(JSON.parse(lastLine)).toEqual({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.004Z",
         reason: "size_threshold",
@@ -556,72 +554,6 @@ describe("Session Store Oversized Snapshot", () => {
         runtime: runtime(home, 5),
       });
       expect(resumed.title).toBe(title);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given session bash approval grants are snapshotted,
-    When the session is resumed from the bounded snapshot,
-    Then the approval grants are restored`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
-    const ledgerWorkspace = await realpath(workspace);
-    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const grant = {
-      type: "exact",
-      cwd: ledgerWorkspace,
-      command: "npm test",
-    } satisfies BashApprovalGrant;
-    const largeMessages: readonly SessionMessage[] = [
-      {
-        role: "user",
-        content: "x".repeat(16 * 1024 * 1024),
-        origin: { type: "user_prompt" },
-      },
-    ];
-
-    try {
-      const session = createSessionStore({
-        sessionId: "snapshot-bash-approvals",
-        workspace,
-        runtime: runtime(home),
-      });
-      persistSessionBashApprovalGrant({
-        session,
-        grant,
-        runtime: runtime(home, 1),
-      });
-
-      // When
-      persistSessionMessages({
-        session,
-        previousMessages: [],
-        currentMessages: largeMessages,
-        runtime: runtime(home, 2),
-        reason: "turn",
-      });
-      const resumed = resumeSessionStore({
-        sessionId: "snapshot-bash-approvals",
-        workspace,
-        runtime: runtime(home, 3),
-      });
-
-      // Then
-      expect(resumed.bashApprovalGrants).toEqual([grant]);
-      const ledgerLines = (await readFile(session.filePath, "utf8"))
-        .trimEnd()
-        .split("\n");
-      const lastLine = ledgerLines.at(-1);
-      expect(lastLine).toBeDefined();
-      if (lastLine === undefined) {
-        throw new Error("Expected snapshot line");
-      }
-      expect(JSON.parse(lastLine)).toMatchObject({
-        type: "snapshot",
-        bashApprovalGrants: [grant],
-      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });

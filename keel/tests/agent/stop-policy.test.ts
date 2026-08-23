@@ -120,7 +120,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit both files",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: maxTurnFallbackPolicy(3),
         }),
       );
@@ -181,7 +181,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit the file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -221,7 +221,7 @@ describe("Agent Stopping", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -261,7 +261,7 @@ describe("Agent Stopping", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -307,7 +307,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit the file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: maxTurnFallbackPolicy(1),
         }),
       );
@@ -356,7 +356,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit the file",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: stopAfterFirstRound,
         }),
       );
@@ -419,7 +419,7 @@ describe("Agent Stopping", () => {
           userMessage: "edit note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           costTracking: {
             model: budgetModel,
             maxCostUsd: 0.5,
@@ -482,7 +482,7 @@ describe("Agent Stopping", () => {
           userMessage: "fix the note",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -527,7 +527,7 @@ describe("Agent Stopping", () => {
           userMessage: "inspect the workspace",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -564,7 +564,7 @@ describe("Agent Stopping", () => {
           userMessage: "read the file forever",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: composeStopPolicies([
             repeatedToolCallPolicy(),
             maxTurnFallbackPolicy(100),
@@ -761,7 +761,7 @@ describe("Agent Stopping", () => {
           userMessage: "first task",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: sharedPolicy,
         }),
       );
@@ -772,7 +772,7 @@ describe("Agent Stopping", () => {
           userMessage: "second task",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: sharedPolicy,
         }),
       );
@@ -816,7 +816,7 @@ describe("Agent Stopping", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: repeatedToolCallPolicy(),
         }),
       );
@@ -828,7 +828,7 @@ describe("Agent Stopping", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: repeatedToolCallPolicy(),
         }),
       );
@@ -872,7 +872,7 @@ describe("Agent Stopping", () => {
             userMessage: "hi",
             systemPrompt: "You are helpful.",
             signal: freshSignal(),
-            bash: { kind: "disabled" },
+            bash: { kind: "trusted" },
             stopPolicy: neverStop,
           }),
         ),

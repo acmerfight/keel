@@ -22,7 +22,7 @@ describe("Interactive Session - Fork", () => {
     let forkBeforeMessageId: string | undefined;
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -87,7 +87,7 @@ describe("Interactive Session - Fork", () => {
     let providerResolved = false;
     let listCalls = 0;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -175,7 +175,7 @@ describe("Interactive Session - Fork", () => {
     let forkBeforeMessageId: string | undefined;
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -257,7 +257,7 @@ describe("Interactive Session - Fork", () => {
     let forkBeforeMessageId: string | undefined = "msg_alpha";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -328,7 +328,7 @@ describe("Interactive Session - Fork", () => {
     let forkCalled = false;
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -403,7 +403,7 @@ describe("Interactive Session - Fork", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -492,7 +492,7 @@ describe("Interactive Session - Fork", () => {
       },
     ];
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -567,7 +567,7 @@ describe("Interactive Session - Fork", () => {
     let forkCalled = false;
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -648,7 +648,7 @@ describe("Interactive Session - Fork", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -708,7 +708,7 @@ describe("Interactive Session - Fork", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -785,7 +785,7 @@ describe("Interactive Session - Fork", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({

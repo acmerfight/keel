@@ -14,12 +14,10 @@ import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import {
   createSessionStore,
   forkSessionStore,
-  persistSessionBashApprovalGrant,
   persistSessionMessages,
   persistSessionModelSwitch,
   resumeSessionStore,
 } from "../../../src/cli/session-store.ts";
-import type { BashApprovalGrant } from "../../../src/permissions/bash.ts";
 import {
   appendLine,
   headerLine,
@@ -132,7 +130,7 @@ describe("Session Store Fork", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toContainEqual({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "model_switch",
         timestamp: "1970-01-01T00:00:00.005Z",
         from: null,
@@ -219,53 +217,6 @@ describe("Session Store Fork", () => {
       expect(target.activeModel).toBeUndefined();
       expect(resumedTarget.activeModel).toBeUndefined();
       expect(resumedTarget.messages).toEqual([]);
-    } finally {
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given a source session has bash approval grants,
-    When it is forked into a new session,
-    Then the target session starts without source approval grants`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
-    const ledgerWorkspace = await realpath(workspace);
-    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
-    const grant = {
-      type: "prefix",
-      cwd: ledgerWorkspace,
-      argvPrefix: ["git", "status"],
-    } satisfies BashApprovalGrant;
-
-    try {
-      const source = createSessionStore({
-        sessionId: "source-with-approval",
-        workspace,
-        runtime: runtime(home),
-      });
-      persistSessionBashApprovalGrant({
-        session: source,
-        grant,
-        runtime: runtime(home, 1),
-      });
-
-      // When
-      const target = forkSessionStore({
-        source,
-        targetSessionId: "target-without-approval",
-        runtime: runtime(home, 2),
-      });
-      const resumedTarget = resumeSessionStore({
-        sessionId: "target-without-approval",
-        workspace,
-        runtime: runtime(home, 3),
-      });
-
-      // Then
-      expect(source.bashApprovalGrants).toEqual([grant]);
-      expect(target.bashApprovalGrants).toEqual([]);
-      expect(resumedTarget.bashApprovalGrants).toEqual([]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -394,7 +345,7 @@ describe("Session Store Fork", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toEqual([
         {
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "session",
           id: "empty-target",
           createdAt: "1970-01-01T00:00:00.001Z",
@@ -415,7 +366,6 @@ describe("Session Store Fork", () => {
               transcript: "copy_prefix",
               pendingInputs: "drop",
               queuedInputs: "drop",
-              bashApprovalGrants: "drop",
             },
           },
         },
@@ -494,7 +444,7 @@ describe("Session Store Fork", () => {
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines).toEqual([
         {
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "session",
           id: "target",
           createdAt: "1970-01-01T00:00:00.003Z",
@@ -515,7 +465,6 @@ describe("Session Store Fork", () => {
               transcript: "copy_prefix",
               pendingInputs: "drop",
               queuedInputs: "drop",
-              bashApprovalGrants: "drop",
             },
           },
         },
@@ -716,7 +665,7 @@ describe("Session Store Fork", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(targetLedgerLines[0]).toEqual({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "session",
         id: "target",
         createdAt: "1970-01-01T00:00:00.003Z",
@@ -737,12 +686,11 @@ describe("Session Store Fork", () => {
             transcript: "copy_prefix",
             pendingInputs: "drop",
             queuedInputs: "drop",
-            bashApprovalGrants: "drop",
           },
         },
       });
       expect(targetLedgerLines[1]).toEqual({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "append",
         timestamp: "1970-01-01T00:00:00.003Z",
         reason: "turn",

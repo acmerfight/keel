@@ -3,7 +3,6 @@
   "prompt": "使用 subagent 调研这个任务。\n\nAudit all API, security, rollout, rollback, compatibility-matrix, and token-audit material under the independent packages/payments/ and packages/identity/ directories. Create release-audit.json with this exact JSON shape: `{\"payments\":{\"priorAmountUnit\":\"integer_cents\",\"nextAmountFormat\":\"decimal_currency_string\",\"callersCompatible\":boolean,\"incompatibleCallerCount\":number,\"rollbackOwner\":string|null},\"identity\":{\"positiveClockSkewSeconds\":number,\"replayWindowExtended\":boolean,\"extendedWindowSamples\":number,\"rollbackOwner\":string|null},\"sharedReleaseGap\":{\"coordinatedRelease\":boolean,\"rollbackOwnersAssigned\":boolean}}`. Count incompatible rows in caller-compatibility.csv and accepted `positive_clock_skew` records in token-audit.jsonl; populate every field from checked-in evidence.",
   "timeoutMs": 240000,
   "scriptTimeoutMs": 60000,
-  "allowBash": false,
   "maxCostUsd": 0.04,
   "agentPolicy": "explicit",
   "delegationPolicy": "require_multiple"

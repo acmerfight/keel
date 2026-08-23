@@ -115,6 +115,7 @@ describe("CLI File Editing", () => {
         "edit",
         "write",
         "apply_patch",
+        "bash",
       ]);
 
       const secondRequest = requestWithMessagesSchema.parse(capturedBodies[1]);

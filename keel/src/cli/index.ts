@@ -20,7 +20,6 @@ import {
 } from "./runtime.ts";
 import { runSessionsCommand } from "./sessions-command.ts";
 import {
-  runApprovalsCommand,
   runArtifactsCommand,
   runAuthCommand,
   runConfigCommand,
@@ -82,10 +81,6 @@ async function runCliMainUnsafe(runtime: CliRuntime): Promise<number> {
 
   if (cliArgs.command === "skills") {
     return runSkillsCommand(cliArgs, runtime);
-  }
-
-  if (cliArgs.command === "approvals") {
-    return runApprovalsCommand(cliArgs, runtime);
   }
 
   if (cliArgs.command === "memory") {
