@@ -276,8 +276,8 @@ Execution model (mirrors Terminal-Bench/Harbor):
 - `verify.sh` grades only the final workspace state, never the agent's
   path to it. Any approach that produces the right outcome passes.
 
-Standard tasks declare `"kind": "standard"`; their existing timeout, bash,
-and cost options retain their ordinary defaults. The runner always passes
+Standard tasks declare `"kind": "standard"`; their timeout and cost options
+retain their ordinary defaults. Local Bash follows Keel's trusted default. The runner always passes
 `--no-memory` for these tasks so ambient developer memory cannot contaminate a
 baseline.
 
@@ -289,7 +289,6 @@ Memory-dependent tasks use a strict, explicit configuration:
   "prompt": "Create release-command.txt from the current project memory.",
   "timeoutMs": 180000,
   "scriptTimeoutMs": 60000,
-  "allowBash": false,
   "maxCostUsd": 0.03,
   "memory": "The current release validation command is `pnpm test:coverage`."
 }
@@ -307,7 +306,7 @@ scaling, and broader lifecycle corpora remain later parts of issue #462 rather
 than hidden modes in this task shape.
 
 Delegation calibration tasks use `"kind": "delegation_pair"` with explicit
-timeouts, bash policy, root max cost, and a treatment-only `delegationPolicy`:
+timeouts, root max cost, and a treatment-only `delegationPolicy`:
 
 ```json
 {
@@ -315,7 +314,6 @@ timeouts, bash policy, root max cost, and a treatment-only `delegationPolicy`:
   "prompt": "Review two independent modules and write review.md.",
   "timeoutMs": 240000,
   "scriptTimeoutMs": 60000,
-  "allowBash": false,
   "maxCostUsd": 0.03,
   "agentPolicy": "explicit",
   "delegationPolicy": "require_one"

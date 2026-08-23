@@ -77,14 +77,15 @@ What a user can do today:
   lines, and an `assistant:` header.
   Local commands include `/help`, `/undo`, `/model`, `/skill`,
   `/skills active`, `/skill deactivate`, `/skill reload`, `/status`,
-  `/approvals`, `/compact`, `/fork`, and `/fork-points`.
+  `/compact`, `/fork`, and `/fork-points`.
 - `keel goal --objective <text> --verify <command> ...` — run one saved,
   command-verified Goal without an interactive terminal. The command prints the
   resumable session id before provider work, preserves the interactive Goal
   state machine and Runtime-owned final verifier, returns stable exit codes for
   completed / blocked / limited outcomes, and adds bounded `goalOutcome`
-  metadata to `--report` output. Trusted Bash or a matching saved project
-  approval is required before provider spend.
+  metadata to `--report` output. Bash is trusted by default; the reviewed
+  invocation posture is unsupported for non-interactive Goal runs and is
+  rejected before provider spend.
 - `keel --session <id>` / `keel --resume <id>` / `keel sessions` /
   `keel sessions fork <source-id> <target-id> [--before-message <id>]` —
   name, resume, list, and fork interactive transcripts as JSONL session
@@ -119,25 +120,12 @@ What a user can do today:
   global and per-package controls without rewriting saved session snapshots.
   Bounded resource paths under `references/`, `scripts/`, and `assets/` remain
   unloaded until requested.
-- `keel --allow-bash` / `keel --bash-policy trusted` — trusted shell
-  mode (all-or-nothing).
-- `keel --bash-policy ask` — expose bash while requiring per-command
-  approval in real TTY one-shot runs and interactive sessions, with exact
-  command + cwd approval and conservative command-family + cwd approval
-  remembered for the current one-shot run or active interactive session, plus
-  project-scoped persistent approvals for conservative command families.
-  Non-TTY one-shot runs can use saved project approvals but still fail closed
-  when no matching approval already exists, so approvals cannot be read from
-  piped input. `keel approvals` lists, revokes, or clears project bash
-  approvals for the current project. Interactive grants are restored by
-  named-session resume. Interactive
-  `/approvals` lists active bash approvals and can revoke one approval or clear
-  all session approvals before later matching commands run. Approval prompts include
-  deterministic risk labels for workspace-read, project-verification,
-  workspace-write, and unknown/dangerous commands, and verification-family
-  approvals cover common project checks such as `pnpm test`, `pnpm typecheck`,
-  `pnpm lint`, and `pnpm build`, plus safe workspace-relative Vitest selectors
-  through `pnpm vitest run` and `pnpm exec vitest run`.
+- Bash is exposed and trusted by default. `keel --approval-policy ask` opts one
+  real-TTY one-shot or interactive invocation into exact command + cwd review
+  with only allow-once or deny. Every command is reviewed independently;
+  decisions are not reused or persisted. Non-TTY and Goal invocations using
+  the reviewed posture fail before provider work. Bash consent is not an OS
+  sandbox: trusted commands run with the current OS user's authority.
 - `keel --max-cost <usd>` — one-shot or interactive best-effort session cost
   budget with conservative request admission, provider output bounds, and
   post-response accounting.
@@ -275,7 +263,6 @@ Known limits that shape the priorities below:
   and cancel while the current owner remains alive. Crash-safe parent delivery
   and terminal follow-up/resume are implemented; cross-process live takeover
   remains absent by design.
-  Forks do not copy bash approval grants.
 - Provider selection supports DeepSeek, Kimi, and Qwen through one-shot and
   interactive `--provider` / `--model` overrides plus environment
   configuration (`KEEL_PROVIDER`, provider-specific API keys, base URLs, and
@@ -419,9 +406,9 @@ Known limits that shape the priorities below:
    user-visible retry notice, respects retry budgets, and surfaces provider
    `length` stops as `provider_length`; mid-stream replay remains out of
    scope. The 64-turn cap now ends with a summary instead of a thrown error.
-   `--bash-policy ask` supports
-   per-command approval in real TTY one-shot runs and interactive sessions,
-   and fails closed when no approval UI is available. These should inform
+   `--approval-policy ask` supports exact allow-once/deny Bash review in real
+   TTY one-shot runs and interactive sessions, and fails before provider work
+   when no approval UI is available. These should inform
    future slices but no longer determine the next P0 pick.
 
 ## P1 — Daily friction and the harness-quality competitive surface
@@ -482,19 +469,13 @@ Codex/Claude Code — or directly moves the eval numbers.
   Inactive sessions can be archived and unarchived as whole directory
   aggregates. Session locks are keyed by identity outside active/archive
   storage, so lifecycle moves cannot bypass a live owner.
-- **Bash approval hardening** — ✅ Partial (2026-06): `--bash-policy ask`
-  prompts in real TTY one-shot runs and interactive sessions, fails closed
-  without an approval UI, records exact command + cwd approvals, supports
-  conservative command-family approvals, restores active grants for
-  named-session resume, saves project-scoped approvals for conservative command
-  families (including validated workspace-relative selectors for both
-  `pnpm vitest run` and `pnpm exec vitest run`), and exposes `/approvals` plus
-  `keel approvals` to list, revoke, or clear active or project grants. Prompts
-  now show deterministic risk labels so users can distinguish workspace-read
-  commands, project verification commands, workspace-writing commands, and
-  unknown/dangerous shell syntax before approving. Remaining work is deeper
-  shell parsing, family-specific validators for additional commands where safe,
-  and user-global approval rules. OS sandboxing remains P2.
+- **Execution posture simplification** — ✅ Local execution complete
+  (2026-08): Bash is trusted by default, while one explicit
+  `--approval-policy ask` posture provides exact allow-once/deny review in a
+  real TTY. Command-family parsing, selector registries, reusable grants,
+  project approval files, session replay, revocation, and approval catalogs
+  have been removed. Enabled MCP integrations still need to adopt this shared
+  posture and remove their saved approval subsystem. OS sandboxing remains P2.
 - **Whole-task undo** — ✅ Partial (2026-07): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint, while
   `/undo --list` and `/undo --to <index>` let users choose an older listed
@@ -556,8 +537,8 @@ Not needed to switch; revisit once P0/P1 are done.
 - Expanded eval corpus, external agent runners, and cross-agent same-model
   comparisons
 - OS-level sandboxing for bash (Seatbelt on macOS, bubblewrap on Linux —
-  the codex pattern), upgrading **Bash approval hardening** from approval
-  to enforcement
+  the codex pattern), adding real containment independently of trusted or
+  reviewed consent
 - Prompt-cache-aware context layout (inject dynamic state at turn
   boundaries, keep the prefix stable — the codex/kimi pattern; shows up
   directly in the token eval metric)

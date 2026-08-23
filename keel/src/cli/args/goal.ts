@@ -6,7 +6,6 @@ import {
   SESSION_GOAL_OBJECTIVE_MAX_LENGTH,
   type SessionGoalBudget,
 } from "../../core/session-goal.ts";
-import { bashModeFromPolicy } from "../../permissions/bash.ts";
 import {
   parseGoalDuration,
   parseGoalPositiveIntegerOption,
@@ -14,7 +13,7 @@ import {
 } from "../goal-options.ts";
 import {
   type ParseResult,
-  parseBashPolicy,
+  parseApprovalPolicy,
   parseError,
   parseMaxCost,
   parseOk,
@@ -32,8 +31,7 @@ const GOAL_OPTIONS = [
   "--turns",
   "--tokens",
   "--time",
-  "--allow-bash",
-  "--bash-policy",
+  "--approval-policy",
   "--provider",
   "--model",
   "--skill",
@@ -49,8 +47,7 @@ const GOAL_RESUME_OPTIONS = [
   "--turns",
   "--tokens",
   "--time",
-  "--allow-bash",
-  "--bash-policy",
+  "--approval-policy",
   "--provider",
   "--model",
   "--skill",
@@ -92,7 +89,7 @@ function parseGoalLaunchArgs(
     tokens?: number;
     activeTimeMs?: number;
   } = {};
-  let bashMode: GoalCliArgs["bashMode"] = "disabled";
+  let executionPosture: GoalCliArgs["executionPosture"] = "trusted";
   let providerId: GoalCliArgs["providerId"] | undefined;
   let model: string | undefined;
   const skillNames: string[] = [];
@@ -117,11 +114,7 @@ function parseGoalLaunchArgs(
       return duplicateOption(option);
     seen.add(option);
 
-    if (
-      option === "--allow-bash" ||
-      option === "--no-skills" ||
-      option === "--no-memory"
-    ) {
+    if (option === "--no-skills" || option === "--no-memory") {
       if (inlineValue !== undefined) {
         return parseError(`Error: ${option} does not accept a value.`);
       }
@@ -133,12 +126,6 @@ function parseGoalLaunchArgs(
         skillsEnabled = false;
         continue;
       }
-      if (seen.has("--bash-policy")) {
-        return parseError(
-          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
-        );
-      }
-      bashMode = "trusted";
       continue;
     }
 
@@ -180,15 +167,10 @@ function parseGoalLaunchArgs(
       budget.activeTimeMs = parsed.value;
       continue;
     }
-    if (option === "--bash-policy") {
-      if (seen.has("--allow-bash")) {
-        return parseError(
-          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
-        );
-      }
-      const parsed = parseBashPolicy(value);
+    if (option === "--approval-policy") {
+      const parsed = parseApprovalPolicy(value);
       if (!parsed.ok) return parsed;
-      bashMode = bashModeFromPolicy(parsed.value);
+      executionPosture = parsed.value;
       continue;
     }
     if (option === "--provider") {
@@ -269,7 +251,7 @@ function parseGoalLaunchArgs(
     objective,
     criterion,
     budget: budget satisfies SessionGoalBudget,
-    bashMode,
+    executionPosture,
     skillsEnabled,
     memoryEnabled,
     ...(providerId !== undefined ? { providerId } : {}),
@@ -286,7 +268,7 @@ function parseGoalResumeArgs(
 ): ParseResult<GoalCliArgs> {
   let sessionId: string | undefined;
   let useLast = false;
-  let bashMode: GoalCliArgs["bashMode"] = "disabled";
+  let executionPosture: GoalCliArgs["executionPosture"] = "trusted";
   let providerId: GoalCliArgs["providerId"] | undefined;
   let model: string | undefined;
   const skillNames: string[] = [];
@@ -325,7 +307,6 @@ function parseGoalResumeArgs(
 
     if (
       option === "--last" ||
-      option === "--allow-bash" ||
       option === "--no-skills" ||
       option === "--no-memory"
     ) {
@@ -344,12 +325,6 @@ function parseGoalResumeArgs(
         skillsEnabled = false;
         continue;
       }
-      if (seen.has("--bash-policy")) {
-        return parseError(
-          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
-        );
-      }
-      bashMode = "trusted";
       continue;
     }
 
@@ -364,15 +339,10 @@ function parseGoalResumeArgs(
     if (!parsedValue.ok) return parsedValue;
     const value = parsedValue.value;
 
-    if (option === "--bash-policy") {
-      if (seen.has("--allow-bash")) {
-        return parseError(
-          "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.",
-        );
-      }
-      const parsed = parseBashPolicy(value);
+    if (option === "--approval-policy") {
+      const parsed = parseApprovalPolicy(value);
       if (!parsed.ok) return parsed;
-      bashMode = bashModeFromPolicy(parsed.value);
+      executionPosture = parsed.value;
       continue;
     }
     if (option === "--turns" || option === "--tokens") {
@@ -429,7 +399,7 @@ function parseGoalResumeArgs(
     resumeSession:
       sessionId === undefined ? { kind: "latest" } : { kind: "id", sessionId },
     budget: budget satisfies SessionGoalBudget,
-    bashMode,
+    executionPosture,
     skillsEnabled,
     memoryEnabled,
     ...(providerId !== undefined ? { providerId } : {}),

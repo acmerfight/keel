@@ -5,16 +5,6 @@ import {
 } from "../core/git.ts";
 import { formatSkillCatalogDegradation } from "../skills/catalog.ts";
 import type { CliArgs } from "./args.ts";
-import {
-  BashProjectApprovalsError,
-  bashApprovalProjectRoot,
-  clearBashProjectApprovalGrants,
-  formatBashProjectApprovalClearResult,
-  formatBashProjectApprovalList,
-  formatBashProjectApprovalRevoked,
-  listBashProjectApprovalGrants,
-  revokeBashProjectApprovalGrant,
-} from "./bash-project-approvals.ts";
 import { formatUndoCheckpointList } from "./output.ts";
 import {
   runAuthCommand as runProviderAuthCommand,
@@ -41,7 +31,6 @@ type DoctorCliArgs = Extract<CliArgs, { readonly command: "doctor" }>;
 type EvalCliArgs = Extract<CliArgs, { readonly command: "eval" }>;
 type UndoCliArgs = Extract<CliArgs, { readonly command: "undo" }>;
 type ArtifactsCliArgs = Extract<CliArgs, { readonly command: "artifacts" }>;
-type ApprovalsCliArgs = Extract<CliArgs, { readonly command: "approvals" }>;
 type AuthCliArgs = Extract<CliArgs, { readonly command: "auth" }>;
 type ConfigCliArgs = Extract<CliArgs, { readonly command: "config" }>;
 type SetupCliArgs = Extract<CliArgs, { readonly command: "setup" }>;
@@ -208,51 +197,6 @@ export function runSkillsCommand(
       !(error instanceof WorkflowSkillError) &&
       !(error instanceof SkillUserConfigError)
     ) {
-      throw error;
-    }
-    runtime.writeStderr(`${error.message}\n`);
-    return 1;
-  }
-}
-
-export function runApprovalsCommand(
-  cliArgs: ApprovalsCliArgs,
-  runtime: CliRuntime,
-): number {
-  try {
-    const projectRoot = bashApprovalProjectRoot(runtime.cwd());
-    if (cliArgs.mode === "list") {
-      runtime.writeStdout(
-        formatBashProjectApprovalList(
-          listBashProjectApprovalGrants(runtime, projectRoot),
-        ),
-      );
-      return 0;
-    }
-    if (cliArgs.mode === "clear") {
-      runtime.writeStdout(
-        formatBashProjectApprovalClearResult(
-          clearBashProjectApprovalGrants(runtime, projectRoot),
-        ),
-      );
-      return 0;
-    }
-
-    const revoked = revokeBashProjectApprovalGrant(
-      runtime,
-      projectRoot,
-      cliArgs.index,
-    );
-    if (revoked === null) {
-      runtime.writeStderr(
-        `Error: bash project approval ${cliArgs.index} does not exist.\n`,
-      );
-      return 1;
-    }
-    runtime.writeStdout(formatBashProjectApprovalRevoked(cliArgs.index));
-    return 0;
-  } catch (error) {
-    if (!(error instanceof BashProjectApprovalsError)) {
       throw error;
     }
     runtime.writeStderr(`${error.message}\n`);

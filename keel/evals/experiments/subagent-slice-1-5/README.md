@@ -1,5 +1,10 @@
 # Subagent Slice 1.5 Calibration
 
+> Historical reproducibility: authoritative scored runs must be reproduced
+> from their recorded freeze commit. Current-tree task fixtures follow Keel's
+> trusted-execution default and are not directly comparable with frozen runs
+> that used the removed `allowBash` task setting.
+
 This is the pre-registered qualification gate for #590 Slice 1.5. It measures
 the existing single-child experiment. It does not add production runtime
 capability and does not claim or test parallel speedup.

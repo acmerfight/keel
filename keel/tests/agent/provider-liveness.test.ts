@@ -99,7 +99,7 @@ test(`Given the upstream accepts requests without returning response headers,
       userMessage: "finish the task",
       systemPrompt: "You are helpful.",
       signal: new AbortController().signal,
-      bash: { kind: "disabled" },
+      bash: { kind: "trusted" },
       stopPolicy: defaultStopPolicy(),
       modelOperations: {
         recorder: modelOperations,

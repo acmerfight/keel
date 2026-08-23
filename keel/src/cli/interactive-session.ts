@@ -71,13 +71,9 @@ import {
 } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpRuntime, McpRuntimeServer } from "../mcp/runtime-types.ts";
-import {
-  type BashApprovalGrant,
-  type BashProjectApprovalGrant,
-  type BashRuntime,
-  bashApprovalGrantKey,
-  bashRuntimeExposesTool,
-  type SessionBashPermissionPolicy,
+import type {
+  BashPermissionPolicy,
+  MainBashRuntime,
 } from "../permissions/bash.ts";
 import {
   exposeSkillCatalog,
@@ -108,17 +104,11 @@ import {
   formatAgentTranscript,
   resolveAgentHistoryEntry,
 } from "./agent-history-format.ts";
-import { formatBashProjectApprovalList } from "./bash-project-approvals.ts";
 import {
   formatInteractiveForkPicker,
   formatInteractiveSessionForkPoints,
 } from "./fork-points.ts";
-import { interactiveBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
-import {
-  formatBashApprovalClearResult,
-  formatBashApprovalList,
-  formatBashApprovalRevoked,
-} from "./interactive-session/bash-approvals.ts";
+import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
 import {
   formatForkRequiresNamedSession,
   formatInteractiveCommandFailure,
@@ -127,7 +117,6 @@ import {
   formatInteractiveTitle,
   formatInteractiveTitleSet,
   formatTitleRequiresSavedSession,
-  type InteractiveCommand,
   parseInteractiveCommand,
   undoRestoredContextMessage,
 } from "./interactive-session/commands.ts";
@@ -534,7 +523,7 @@ export async function runInteractiveSession(
           )
         : systemPrompt,
       sessionGoal,
-      bashRuntimeExposesTool(bash),
+      true,
     );
   const currentSystemPrompt = (): string =>
     appendWorkflowSkillsToSystemPrompt(
@@ -594,30 +583,6 @@ export async function runInteractiveSession(
     }
   };
   let resolved: InteractiveResolvedProvider | null = null;
-  let inactiveBashApprovalGrants: BashApprovalGrant[] = [
-    ...initialState.bashApprovalGrants,
-  ];
-  let activeProjectBashApprovalGrants: BashProjectApprovalGrant[] = [
-    ...(options.initialProjectBashApprovalGrants ?? []),
-  ];
-  const appendProjectBashApprovalGrant = (
-    grant: BashProjectApprovalGrant,
-  ): void => {
-    activeProjectBashApprovalGrants = [
-      ...activeProjectBashApprovalGrants,
-      grant.commandFamily === undefined
-        ? {
-            projectRoot: grant.projectRoot,
-            cwd: grant.cwd,
-            argvPrefix: [...grant.argvPrefix],
-          }
-        : {
-            projectRoot: grant.projectRoot,
-            cwd: grant.cwd,
-            commandFamily: grant.commandFamily,
-          },
-    ];
-  };
   const input =
     options.lineInput ??
     createInterface({
@@ -748,57 +713,26 @@ export async function runInteractiveSession(
       model: provider.model,
     });
   };
-  const bash: BashRuntime<SessionBashPermissionPolicy> =
-    options.cliArgs.bashMode === "disabled"
-      ? { kind: "disabled" }
-      : options.cliArgs.bashMode === "trusted"
-        ? { kind: "trusted" }
-        : {
-            kind: "reviewed",
-            permission:
-              options.bashPermission ??
-              interactiveBashPermissionPolicy(lineReader, options.writeStderr, {
-                initialGrants: initialState.bashApprovalGrants,
-                onGrant: (grant) => {
-                  savedSession?.persistBashApprovalGrant(grant);
-                },
-                ...(options.projectRoot !== undefined
-                  ? { projectRoot: options.projectRoot }
-                  : {}),
-                initialProjectGrants: activeProjectBashApprovalGrants,
-                onProjectGrant: (grant) => {
-                  appendProjectBashApprovalGrant(grant);
-                  options.persistProjectBashApprovalGrant?.(grant);
-                },
+  const bash: MainBashRuntime<BashPermissionPolicy> =
+    options.cliArgs.executionPosture === "trusted"
+      ? { kind: "trusted" }
+      : {
+          kind: "reviewed",
+          permission:
+            options.bashPermission ??
+            createPromptedBashPermissionPolicy(
+              lineReader,
+              options.writeStderr,
+              {
                 onPromptStart: () => {
                   setComposerMode("approval");
                 },
                 onPromptEnd: () => {
                   setComposerMode("steer");
                 },
-              }),
-          };
-  const bashPermission = bash.kind === "reviewed" ? bash.permission : undefined;
-  const activeBashApprovalGrants = (): readonly BashApprovalGrant[] =>
-    bashPermission?.grants() ?? inactiveBashApprovalGrants;
-  const revokeBashApprovalGrant = (grant: BashApprovalGrant): void => {
-    if (bashPermission !== undefined) {
-      bashPermission.revokeGrant(grant);
-      return;
-    }
-    const key = bashApprovalGrantKey(grant);
-    inactiveBashApprovalGrants = inactiveBashApprovalGrants.filter(
-      (approvalGrant) => bashApprovalGrantKey(approvalGrant) !== key,
-    );
-  };
-  const clearBashApprovalGrants = (): readonly BashApprovalGrant[] => {
-    if (bashPermission !== undefined) {
-      return bashPermission.clearGrants();
-    }
-    const cleared = inactiveBashApprovalGrants;
-    inactiveBashApprovalGrants = [];
-    return cleared;
-  };
+              },
+            ),
+        };
   let activeAbortController: AbortController | null = null;
   const initialInvocationAccounting = options.initialInvocationAccounting;
   let sessionUsage = initialInvocationAccounting?.usage ?? EMPTY_USAGE;
@@ -2166,6 +2100,7 @@ export async function runInteractiveSession(
             ...(sessionTitle !== undefined ? { title: sessionTitle } : {}),
             workspace: options.workspace,
             activeModel: activeModelStatus(),
+            executionPosture: options.cliArgs.executionPosture,
             ...(sessionGoal !== undefined ? { goal: sessionGoal } : {}),
             workflowSkills: activeWorkflowSkills(),
             skillCatalog: {
@@ -2177,9 +2112,6 @@ export async function runInteractiveSession(
             messages: sessionLedgerMessages(ledger),
             messageCount: sessionLedgerMessages(ledger).length,
             pendingInputCount: lineReader.pendingInputCount(),
-            bashApprovalCount:
-              activeBashApprovalGrants().length +
-              activeProjectBashApprovalGrants.length,
             taskProgress,
             modelSwitchCount,
             undoCheckpoints: listUndoCheckpoints(options.workspace),
@@ -2439,7 +2371,7 @@ export async function runInteractiveSession(
         });
         for (const output of result.output) {
           const rendered = formatInteractiveGoalCommandOutput(output, {
-            bashToolVisible: bashRuntimeExposesTool(bash),
+            bashToolVisible: true,
           });
           if (rendered.stream === "stdout") {
             options.writeStdout(rendered.text);
@@ -2498,60 +2430,6 @@ export async function runInteractiveSession(
           options.writeStdout(formatInteractiveDiffOutput(inspection));
         }
         consumeQueuedInputLines([rawInput]);
-        continue;
-      }
-      if (interactiveCommand?.kind === "approvals") {
-        const approvalsCommand: Extract<
-          InteractiveCommand,
-          { readonly kind: "approvals" }
-        > = interactiveCommand;
-        switch (approvalsCommand.action) {
-          case "list":
-            options.writeStdout(
-              [
-                formatBashApprovalList(activeBashApprovalGrants()),
-                formatBashProjectApprovalList(activeProjectBashApprovalGrants),
-              ].join(""),
-            );
-            consumeQueuedInputLines([rawInput]);
-            break;
-          case "clear": {
-            const cleared = clearBashApprovalGrants();
-            if (savedSession !== null) {
-              savedSession.persistBashApprovalsCleared({
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-            } else {
-              consumeQueuedInputLines([rawInput]);
-            }
-            options.writeStdout(formatBashApprovalClearResult(cleared.length));
-            break;
-          }
-          case "revoke": {
-            const grants = activeBashApprovalGrants();
-            const grant = grants[approvalsCommand.index - 1];
-            if (grant === undefined) {
-              options.writeStderr(
-                `Error: no bash approval at index ${approvalsCommand.index}.\n`,
-              );
-              consumeQueuedInputLines([rawInput]);
-              break;
-            }
-            revokeBashApprovalGrant(grant);
-            if (savedSession !== null) {
-              savedSession.persistBashApprovalRevoked({
-                grant,
-                consumedInputIds: queuedInputIds([rawInput]),
-              });
-            } else {
-              consumeQueuedInputLines([rawInput]);
-            }
-            options.writeStdout(
-              formatBashApprovalRevoked(approvalsCommand.index),
-            );
-            break;
-          }
-        }
         continue;
       }
       if (interactiveCommand?.kind === "invalid") {
@@ -2659,7 +2537,7 @@ export async function runInteractiveSession(
             systemPrompt: currentSystemPrompt(),
             messages: sessionLedgerMessages(ledger),
             target: nextResolved,
-            bashToolVisible: bashRuntimeExposesTool(bash),
+            bashToolVisible: true,
           };
           if (modelSwitchRequiresCompaction(modelSwitchCompaction)) {
             const currentResolved: InteractiveResolvedProvider =
@@ -2688,7 +2566,7 @@ export async function runInteractiveSession(
                   postCompactionReadToolCallId(postCompactionReadSequence++),
                 taskProgress,
                 options,
-                bashToolVisible: bashRuntimeExposesTool(bash),
+                bashToolVisible: true,
                 recordCompactionCost,
                 compactionCost: currentCompactionCost(currentResolved),
                 modelOperations,

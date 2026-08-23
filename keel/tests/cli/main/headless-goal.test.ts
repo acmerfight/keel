@@ -64,7 +64,6 @@ describe("CLI Main - Headless Goal", () => {
         "--verify=false",
         "--turns=1",
         "--session=headless-no-memory",
-        "--bash-policy=trusted",
         "--no-memory",
         `--report=${launchReportPath}`,
       ],
@@ -76,7 +75,6 @@ describe("CLI Main - Headless Goal", () => {
         "resume",
         "headless-no-memory",
         "--turns=2",
-        "--bash-policy=trusted",
         "--no-memory",
         `--report=${resumeReportPath}`,
       ],
@@ -293,7 +291,6 @@ describe("CLI Main - Headless Goal", () => {
         "--tokens=10000",
         "--time=1m",
         "--session=headless-resume-no-skills",
-        "--bash-policy=trusted",
         "--provider=deepseek",
         "--skill=review",
       ],
@@ -305,7 +302,6 @@ describe("CLI Main - Headless Goal", () => {
         "resume",
         "headless-resume-no-skills",
         "--turns=2",
-        "--bash-policy=trusted",
         "--provider=deepseek",
         "--no-skills",
         `--report=${disabledReportPath}`,
@@ -318,7 +314,6 @@ describe("CLI Main - Headless Goal", () => {
         "resume",
         "headless-resume-no-skills",
         "--turns=4",
-        "--bash-policy=trusted",
         "--provider=deepseek",
       ],
       runtimeOptions,
@@ -675,8 +670,6 @@ describe("CLI Main - Headless Goal", () => {
         "1m",
         "--session",
         "headless-checkout",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
         "--model",
@@ -752,8 +745,6 @@ describe("CLI Main - Headless Goal", () => {
         "false",
         "--session",
         "atomic-retry",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "fake",
       ],
@@ -774,8 +765,6 @@ describe("CLI Main - Headless Goal", () => {
           "1",
           "--session",
           "atomic-retry",
-          "--bash-policy",
-          "trusted",
           "--provider",
           "fake",
         ],
@@ -820,8 +809,6 @@ describe("CLI Main - Headless Goal", () => {
         "Reject an invalid verifier",
         "--verify",
         "v".repeat(SESSION_GOAL_COMPLETION_CRITERION_MAX_LENGTH + 1),
-        "--bash-policy",
-        "trusted",
         "--provider",
         "fake",
       ],
@@ -868,8 +855,6 @@ describe("CLI Main - Headless Goal", () => {
         "true",
         "--session",
         "headless-not-created",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "fake",
       ],
@@ -914,8 +899,6 @@ describe("CLI Main - Headless Goal", () => {
         "1",
         "--session",
         "headless-limited",
-        "--bash-policy",
-        "trusted",
         "--report",
         reportPath,
       ],
@@ -979,8 +962,6 @@ describe("CLI Main - Headless Goal", () => {
         "true",
         "--session",
         "headless-cost",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
         "--max-cost",
@@ -1085,8 +1066,6 @@ describe("CLI Main - Headless Goal", () => {
           "1m",
           "--session",
           "headless-resume",
-          "--bash-policy",
-          "trusted",
           "--provider",
           "deepseek",
           "--max-cost",
@@ -1111,8 +1090,6 @@ describe("CLI Main - Headless Goal", () => {
               "true",
               "--session",
               "headless-newer-completed",
-              "--bash-policy",
-              "trusted",
               "--provider",
               "deepseek",
               "--max-cost",
@@ -1126,8 +1103,6 @@ describe("CLI Main - Headless Goal", () => {
               "goal",
               "resume",
               "headless-newer-completed",
-              "--bash-policy",
-              "trusted",
               "--provider",
               "deepseek",
             ],
@@ -1146,8 +1121,6 @@ describe("CLI Main - Headless Goal", () => {
             "goal",
             "resume",
             ...resumeTarget,
-            "--bash-policy",
-            "trusted",
             "--provider",
             "deepseek",
             "--max-cost",
@@ -1224,87 +1197,7 @@ describe("CLI Main - Headless Goal", () => {
     },
   );
 
-  test(`Given a saved command Goal requires shell authorization,
-    When a headless resume has neither trusted Bash nor a matching saved approval,
-    Then Keel fails closed before provider spend or durable session mutation`, async () => {
-    // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-headless-resume-denied-"),
-    );
-    const home = await mkdtemp(
-      join(tmpdir(), "keel-headless-resume-denied-home-"),
-    );
-    let providerCalls = 0;
-    const server = createServer((_req, res) => {
-      providerCalls++;
-      res.writeHead(200, { "Content-Type": "text/event-stream" });
-      res.end(sseTextReplyWithUsage("This request must not be sent."));
-    });
-    await listen(server);
-    const runtimeOptions = {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-        KEEL_HOME: home,
-      },
-    } as const;
-    const launch = createRuntime(
-      [
-        "goal",
-        "--objective",
-        "Keep the command verifier authorized",
-        "--verify",
-        "true",
-        "--session",
-        "resume-denied",
-        "--bash-policy",
-        "trusted",
-        "--provider",
-        "deepseek",
-        "--max-cost",
-        "0.000001",
-      ],
-      runtimeOptions,
-    );
-
-    try {
-      expect(await runCliMain(launch.runtime)).toBe(4);
-      expect(providerCalls).toBe(0);
-      const ledgerPath = join(
-        home,
-        "sessions",
-        "resume-denied",
-        "ledger.jsonl",
-      );
-      const ledgerBeforeResume = await readFile(ledgerPath, "utf8");
-      const resume = createRuntime(
-        ["goal", "resume", "resume-denied", "--provider", "deepseek"],
-        runtimeOptions,
-      );
-
-      // When
-      const exitCode = await runCliMain(resume.runtime);
-
-      // Then
-      expect(exitCode).toBe(1);
-      expect(providerCalls).toBe(0);
-      expect(resume.stdout()).toBe("");
-      expect(resume.stderr()).toBe(
-        "Error: headless command Goals require --bash-policy trusted or a matching saved project approval with --bash-policy ask.\n",
-      );
-      expect(await readFile(ledgerPath, "utf8")).toBe(ledgerBeforeResume);
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test.each([
-    ["disabled Bash", []],
-    ["saved-approval-only Bash", ["--bash-policy", "ask"]],
-  ])(
+  test.each([["trusted execution", []]])(
     `Given an assertion Goal was configured interactively with %s,
     When automation resumes it without a command verifier,
     Then headless execution preserves the external assertion hard gate`,
@@ -1317,7 +1210,7 @@ describe("CLI Main - Headless Goal", () => {
         join(tmpdir(), "keel-headless-resume-assertion-home-"),
       );
       const reportPath = join(workspace, "assertion-resume-report.json");
-      const attemptsUnapprovedBash = _label === "saved-approval-only Bash";
+      const attemptsUnapprovedBash = false;
       await writeSessionLedger({
         home,
         id: "resume-assertion",
@@ -1488,8 +1381,6 @@ describe("CLI Main - Headless Goal", () => {
         "1m",
         "--session",
         "resume-turn-budget",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
       ],
@@ -1509,8 +1400,6 @@ describe("CLI Main - Headless Goal", () => {
           "resume-turn-budget",
           "--turns",
           "3",
-          "--bash-policy",
-          "trusted",
           "--provider",
           "deepseek",
           "--report",
@@ -1598,15 +1487,7 @@ describe("CLI Main - Headless Goal", () => {
     );
     const ledgerBeforeResume = await readFile(ledgerPath, "utf8");
     const fixture = createRuntime(
-      [
-        "goal",
-        "resume",
-        "--last",
-        "--bash-policy",
-        "trusted",
-        "--provider",
-        "fake",
-      ],
+      ["goal", "resume", "--last", "--provider", "fake"],
       {
         cwd: workspace,
         env: { KEEL_HOME: home },
@@ -1697,12 +1578,11 @@ describe("CLI Main - Headless Goal", () => {
       const exitCode = await runCliMain(fixture.runtime);
 
       // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        "Resuming latest session: older-ready\n" +
-          "Error: headless command Goals require --bash-policy trusted or a matching saved project approval with --bash-policy ask.\n",
+      expect(exitCode).toBe(4);
+      expect(fixture.stderr()).toContain(
+        "Resuming latest session: older-ready\n",
       );
+      expect(fixture.stderr()).not.toContain("newer-budget-limited");
     } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -1782,8 +1662,6 @@ describe("CLI Main - Headless Goal", () => {
         "true",
         "--session",
         "headless-overage",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
         "--max-cost",
@@ -1809,7 +1687,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(4);
       expect(providerCalls).toBe(1);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 22,
+        schemaVersion: 23,
         stopReason: "cost_budget",
         costBudgetUsd: 0.01,
         costUsd: 0.14,
@@ -1860,8 +1738,6 @@ describe("CLI Main - Headless Goal", () => {
         "test -f deployed.txt",
         "--session",
         "headless-blocked",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
         "--report",
@@ -1906,9 +1782,9 @@ describe("CLI Main - Headless Goal", () => {
     }
   });
 
-  test(`Given a headless verifier has no trusted or saved approval,
-    When the user starts the Goal with ask policy,
-    Then Keel fails closed before provider spend or session creation`, async () => {
+  test(`Given a headless Goal requests reviewed execution,
+    When CLI admission validates the unsupported posture,
+    Then Keel fails before provider spend or session creation`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-headless-denied-"));
     const home = await mkdtemp(join(tmpdir(), "keel-headless-denied-home-"));
@@ -1928,7 +1804,7 @@ describe("CLI Main - Headless Goal", () => {
         "pnpm test",
         "--session",
         "headless-denied",
-        "--bash-policy",
+        "--approval-policy",
         "ask",
         "--provider",
         "deepseek",
@@ -1952,7 +1828,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(providerCalls).toBe(0);
       expect(fixture.stdout()).toBe("");
       expect(fixture.stderr()).toBe(
-        "Error: Headless command approval is unavailable and no saved project approval matched.\n",
+        "Error: --approval-policy ask requires a real TTY and is unavailable to Goal runs.\n",
       );
       await expect(
         readFile(
@@ -1960,112 +1836,6 @@ describe("CLI Main - Headless Goal", () => {
           "utf8",
         ),
       ).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given a project verification family was approved earlier,
-    When an unnamed headless Goal uses ask policy,
-    Then Keel runs without prompting and prints the generated resumable session id`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-headless-approved-"));
-    const home = await mkdtemp(join(tmpdir(), "keel-headless-approved-home-"));
-    await writeFile(
-      join(workspace, "package.json"),
-      JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }),
-      "utf8",
-    );
-    await writeFile(
-      join(home, "bash-project-approvals.json"),
-      `${JSON.stringify({
-        schemaVersion: 1,
-        grants: [
-          {
-            projectRoot: workspace,
-            cwd: workspace,
-            argvPrefix: ["pnpm", "test"],
-          },
-        ],
-      })}\n`,
-      "utf8",
-    );
-    let providerCalls = 0;
-    const server = createServer((_req, res) => {
-      providerCalls++;
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      if (providerCalls === 1) {
-        res.write(
-          sseToolCall("unapproved_bash", "bash", {
-            command: "git status",
-          }),
-        );
-        res.write(sseToolFinish());
-        res.end("data: [DONE]\n\n");
-        return;
-      }
-      if (providerCalls === 2) {
-        res.write(
-          sseToolCall("complete_goal", "update_goal", {
-            status: "completed",
-          }),
-        );
-        res.write(sseToolFinish());
-        res.end("data: [DONE]\n\n");
-        return;
-      }
-      res.end(sseTextReplyWithUsage("Approved goal completed."));
-    });
-    await listen(server);
-    const fixture = createRuntime(
-      [
-        "goal",
-        "--objective",
-        "Verify the project",
-        "--verify",
-        "pnpm test",
-        "--bash-policy",
-        "ask",
-        "--provider",
-        "deepseek",
-      ],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_HOME: home,
-        },
-      },
-    );
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(providerCalls).toBe(3);
-      expect(fixture.stderr()).not.toContain("Approve bash command?");
-      const sessionId = /^Headless goal session: (session-[0-9a-f-]+)$/mu
-        .exec(fixture.stdout())
-        ?.at(1);
-      expect(sessionId).toBeDefined();
-      expect(fixture.stdout()).toContain(
-        `Headless goal outcome: completed; session: ${sessionId}\n`,
-      );
-      await expect(
-        readFile(
-          join(home, "sessions", sessionId ?? "", "ledger.jsonl"),
-          "utf8",
-        ),
-      ).resolves.toContain('"status":"completed"');
     } finally {
       await close(server);
       await rm(workspace, { recursive: true, force: true });
@@ -2098,8 +1868,6 @@ describe("CLI Main - Headless Goal", () => {
         "test -f done.txt",
         "--session",
         "headless-interrupted",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
       ],
@@ -2165,8 +1933,6 @@ describe("CLI Main - Headless Goal", () => {
         "false",
         "--session",
         "headless-cap",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "fake",
         "--report",
@@ -2245,8 +2011,6 @@ describe("CLI Main - Headless Goal", () => {
         "true",
         "--session",
         "headless-task-runs",
-        "--bash-policy",
-        "trusted",
         "--provider",
         "deepseek",
         "--report",
@@ -2270,7 +2034,7 @@ describe("CLI Main - Headless Goal", () => {
       expect(exitCode).toBe(0);
       expect(providerCalls).toBe(3);
       expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({
-        schemaVersion: 22,
+        schemaVersion: 23,
         agentLoopTurns: 3,
         tasks: [
           {
@@ -2303,57 +2067,6 @@ describe("CLI Main - Headless Goal", () => {
       });
     } finally {
       await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given the saved project approval file is invalid,
-    When a headless Goal requests ask policy,
-    Then Keel reports the approval-store error before creating a session`, async () => {
-    // Given
-    const workspace = await mkdtemp(
-      join(tmpdir(), "keel-headless-invalid-approval-"),
-    );
-    const home = await mkdtemp(
-      join(tmpdir(), "keel-headless-invalid-approval-home-"),
-    );
-    const approvalPath = join(home, "bash-project-approvals.json");
-    await writeFile(approvalPath, "{", "utf8");
-    const fixture = createRuntime(
-      [
-        "goal",
-        "--objective",
-        "Verify the project",
-        "--verify",
-        "pnpm test",
-        "--session",
-        "invalid-approval",
-        "--bash-policy",
-        "ask",
-        "--provider",
-        "fake",
-      ],
-      { cwd: workspace, env: { KEEL_HOME: home } },
-    );
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        `Error: cannot read bash project approvals ${approvalPath}: invalid JSON.\n`,
-      );
-      await expect(
-        readFile(
-          join(home, "sessions", "invalid-approval", "ledger.jsonl"),
-          "utf8",
-        ),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }

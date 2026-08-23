@@ -145,7 +145,7 @@ describe("Conversation History", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -193,7 +193,7 @@ describe("Conversation History", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -244,7 +244,7 @@ describe("Conversation History", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -312,7 +312,7 @@ describe("Conversation History", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => [
           { role: "user", content: "Also explain the scripts." },
@@ -415,7 +415,7 @@ describe("Conversation History", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 200,
@@ -499,7 +499,7 @@ describe("Conversation History", () => {
           mutation: UNUSED_MEMORY_MUTATION,
         },
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 200,
@@ -579,7 +579,7 @@ describe("Conversation History", () => {
           mutation: UNUSED_MEMORY_MUTATION,
         },
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: maxTurnFallbackPolicy(1),
       }),
     );

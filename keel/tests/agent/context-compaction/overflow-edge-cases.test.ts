@@ -316,7 +316,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -422,7 +422,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -531,7 +531,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
@@ -673,7 +673,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -836,7 +836,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           contextWindowTokens: 50,
@@ -899,7 +899,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 6,
@@ -957,7 +957,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -1003,7 +1003,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
           contextCompaction: {
             keepRecentTokens: 1,
@@ -1063,7 +1063,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1146,7 +1146,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,
@@ -1227,7 +1227,7 @@ describe("Context Compaction Overflow Edge Cases", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: maxTurnFallbackPolicy(1),
         contextCompaction: {
           keepRecentTokens: 1,

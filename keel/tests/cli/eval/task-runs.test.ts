@@ -57,7 +57,6 @@ describe("CLI Eval", () => {
         prompt: "create result.json",
         timeoutMs: 60_000,
         scriptTimeoutMs: 10_000,
-        allowBash: false,
         maxCostUsd: 0.05,
         memory,
       }),

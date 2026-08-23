@@ -836,7 +836,7 @@ describe("Session Store Locks And Validation", () => {
     await writeFile(
       join(home, "sessions", "no-header", "ledger.jsonl"),
       `${JSON.stringify({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "append",
         timestamp: "1970-01-01T00:00:00.000Z",
         reason: "turn",
@@ -966,7 +966,7 @@ describe("Session Store Locks And Validation", () => {
       [
         headerLine("malformed-origin", ledgerWorkspace),
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "append",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "turn",
@@ -1015,7 +1015,7 @@ describe("Session Store Locks And Validation", () => {
       [
         headerLine("missing-origin", ledgerWorkspace),
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "append",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "turn",

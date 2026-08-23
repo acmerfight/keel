@@ -204,7 +204,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -356,7 +356,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const sigintHandlers = new Set<() => void>();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -487,7 +487,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const sigintHandlers = new Set<() => void>();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -615,7 +615,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -703,7 +703,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     }> = [];
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -831,7 +831,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     const reports: CostReport[] = [];
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 0.05 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 0.05 },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -953,7 +953,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1116,7 +1116,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1236,7 +1236,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 0.1 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 0.1 },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1351,7 +1351,7 @@ describe("Interactive Session - Manual Compact Success", () => {
       outputPerMillionTokens: 200,
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", reportFile: "session.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1463,7 +1463,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     };
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 0.1,
         reportFile: "session.json",
       },
@@ -1575,7 +1575,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     };
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 0.1,
         reportFile: "session.json",
       },
@@ -1671,7 +1671,7 @@ describe("Interactive Session - Manual Compact Success", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

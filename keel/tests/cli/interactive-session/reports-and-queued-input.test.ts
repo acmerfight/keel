@@ -80,7 +80,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", reportFile: "report.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -193,7 +193,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     let stderr = "";
     let resolvedProviders = 0;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted", maxCostUsd: 1 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -262,7 +262,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const sigintHandlers = new Set<() => void>();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted", maxCostUsd: 1 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -354,7 +354,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -489,7 +489,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -608,7 +608,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         },
       };
       const firstRun = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: savedInteractiveSession({
@@ -675,7 +675,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       let resumedStdout = "";
       let resumedProviderCalls = 0;
       const secondRun = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -762,7 +762,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -836,7 +836,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     {
       name: "a workspace mutation",
       kind: "workspace" as const,
-      bashMode: "disabled" as const,
+      executionPosture: "trusted" as const,
       completion: {
         kind: "assertion" as const,
         assertion: "The final report exists.",
@@ -846,7 +846,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     {
       name: "an exact successful completion command",
       kind: "verification" as const,
-      bashMode: "trusted" as const,
+      executionPosture: "trusted" as const,
       completion: {
         kind: "command" as const,
         command: 'node -e "process.exit(0)"',
@@ -858,7 +858,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     `Given an active goal has an older recovery outcome,
     When a later goal turn produces $name,
     Then the observed fact replaces the older outcome`,
-    async ({ kind, bashMode, completion, expectedReason }) => {
+    async ({ kind, executionPosture, completion, expectedReason }) => {
       // Given
       const workspace = await mkdtemp(join(tmpdir(), "keel-goal-observation-"));
       try {
@@ -911,7 +911,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
           },
         };
         const session = runInteractiveSession({
-          cliArgs: { bashMode },
+          cliArgs: { executionPosture },
           workspace,
           platform: process.platform,
           session: savedInteractiveSession({
@@ -984,7 +984,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       completion: {
         kind: "command",
-        command: "pnpm test",
+        command: "false",
       },
     };
     let providerCalls = 0;
@@ -1026,7 +1026,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1179,7 +1179,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         },
       };
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace: process.cwd(),
         platform: process.platform,
         session: savedInteractiveSession({
@@ -1308,7 +1308,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       const input = new PassThrough();
       let stderr = "";
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: savedInteractiveSession({
@@ -1417,7 +1417,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 1 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 1 },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1542,7 +1542,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     let stderr = "";
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 0.5,
         reportFile: "session.json",
       },
@@ -1659,7 +1659,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1729,7 +1729,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let persistedGoal: SessionGoal | undefined;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -1809,7 +1809,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     });
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 1,
         reportFile: "report.json",
       },
@@ -1871,7 +1871,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     });
     const session = runInteractiveSession({
       cliArgs: {
-        bashMode: "disabled",
+        executionPosture: "trusted",
         maxCostUsd: 1,
         reportFile: "report.json",
       },
@@ -1934,7 +1934,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2070,7 +2070,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2210,7 +2210,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       };
       const input = new PassThrough();
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "trusted" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: savedInteractiveSession({
@@ -2324,7 +2324,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2425,7 +2425,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2539,7 +2539,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
         };
         const input = new PassThrough();
         const session = runInteractiveSession({
-          cliArgs: { bashMode: "trusted" },
+          cliArgs: { executionPosture: "trusted" },
           workspace,
           platform: process.platform,
           session: savedInteractiveSession({
@@ -2651,7 +2651,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       };
       const input = new PassThrough();
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "trusted" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: savedInteractiveSession({
@@ -2763,7 +2763,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -2843,7 +2843,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -2945,7 +2945,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -3049,7 +3049,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       usage: { turns: 0, tokens: 0, activeTimeMs: 0 },
       completion: {
         kind: "command",
-        command: "pnpm test",
+        command: "false",
       },
       latestRuntimeOutcome: {
         kind: "progress_observed",
@@ -3088,7 +3088,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -3167,7 +3167,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     let persistedMessages: readonly SessionMessage[] = [];
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -3243,7 +3243,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const consumedInputIds: string[][] = [];
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -3323,7 +3323,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const input = new PassThrough();
     const run = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -3446,7 +3446,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     };
     const firstInput = new PassThrough();
     const firstRun = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -3541,7 +3541,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
       let resumedPersistedMessages: readonly SessionMessage[] =
         resumed.messages;
       const secondRun = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: savedInteractiveSession({
@@ -3638,7 +3638,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted", reportFile: "session.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -3723,7 +3723,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "ask", reportFile: "report.json" },
+      cliArgs: { executionPosture: "reviewed", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -3832,7 +3832,7 @@ describe("Interactive Session - Reports And Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

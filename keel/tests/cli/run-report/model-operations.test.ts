@@ -128,7 +128,7 @@ const modelOperationSchema = z.discriminatedUnion("purpose", [
 
 const modelOperationReportSchema = z
   .object({
-    schemaVersion: z.literal(22),
+    schemaVersion: z.literal(23),
     modelOperations: z.array(modelOperationSchema),
     modelOperationCount: z.number().int().nonnegative(),
     providerRequestAttemptCount: z.number().int().nonnegative(),
@@ -433,7 +433,7 @@ describe("CLI Run Report - Model Operations", () => {
 
     // When
     const result = await runInteractiveSession({
-      cliArgs: { bashMode: "disabled", reportFile: "report.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -489,7 +489,7 @@ describe("CLI Run Report - Model Operations", () => {
     expect(stderr).toContain("Context compacted: manual");
     expect(result.report).toBeDefined();
     const rawReport = {
-      schemaVersion: 22,
+      schemaVersion: 23,
       tasks: result.report?.tasks ?? [],
       modelOperations: result.report?.modelOperations ?? [],
       modelOperationCount: result.report?.modelOperationCount ?? 0,

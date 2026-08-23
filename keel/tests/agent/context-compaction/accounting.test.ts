@@ -51,7 +51,7 @@ describe("Context Compaction Accounting", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         contextCompaction: {
           keepRecentTokens: 1,

@@ -3,6 +3,7 @@ import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { errorMessage, KeelError, type KeelErrorCode } from "../core/error.ts";
 import type { SubagentTerminalStatus } from "../core/subagent-status.ts";
 import type { UndoProtectionSummary } from "../core/undo-protection.ts";
+import type { ExecutionPosture } from "../permissions/bash.ts";
 import type {
   ActiveSkillStatus,
   SkillActivationRecord,
@@ -27,6 +28,7 @@ import type { SkillPolicyReport } from "./skill-user-config.ts";
 // script comparing runs across keel versions). Bump schemaVersion on any
 // breaking change to the shape.
 interface RunReportInputBase {
+  readonly executionPosture: ExecutionPosture;
   readonly tasks: readonly RunReportTask[];
   readonly modelOperations: readonly RunReportModelOperation[];
   readonly subagents: RunReportSubagents;
@@ -195,7 +197,12 @@ interface RunReportFailure {
 }
 
 interface RunReportBase {
-  readonly schemaVersion: 22;
+  readonly schemaVersion: 23;
+  readonly execution: {
+    readonly posture: ExecutionPosture;
+    readonly bashAuthority: "current_os_user";
+    readonly enabledMcpIntegrationsMayPerformExternalEffects: true;
+  };
   readonly tasks: readonly RunReportTask[];
   readonly humanInterventionCount: number;
   readonly modelOperations: readonly RunReportModelOperation[];
@@ -275,7 +282,12 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
         : 0
       : Math.max(0, accounting.costUsd - (outcome.maxCostUsd ?? Infinity));
   const reportBase: RunReportBase = {
-    schemaVersion: 22,
+    schemaVersion: 23,
+    execution: {
+      posture: input.executionPosture,
+      bashAuthority: "current_os_user",
+      enabledMcpIntegrationsMayPerformExternalEffects: true,
+    },
     tasks: input.tasks,
     humanInterventionCount: input.tasks.reduce(
       (total, task) => total + task.humanInterventionCount,

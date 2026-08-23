@@ -11,6 +11,7 @@ import {
   type SessionTaskProgress,
 } from "../core/task-progress.ts";
 import type { UndoProtectionSummary } from "../core/undo-protection.ts";
+import type { ExecutionPosture } from "../permissions/bash.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
 import type { RunReportMemory } from "./report.ts";
@@ -30,6 +31,7 @@ export interface SessionStatusSnapshotOptions {
   readonly title?: string;
   readonly workspace: string;
   readonly activeModel: string;
+  readonly executionPosture: ExecutionPosture | null;
   readonly goal?: SessionGoal;
   readonly workflowSkills?: readonly SessionStatusWorkflowSkill[];
   readonly skillCatalog?: {
@@ -41,7 +43,6 @@ export interface SessionStatusSnapshotOptions {
   readonly messages: readonly SessionMessage[];
   readonly messageCount: number;
   readonly pendingInputCount: number;
-  readonly bashApprovalCount: number;
   readonly taskProgress: SessionTaskProgress;
   readonly modelSwitchCount: number;
   readonly undoCheckpoints: readonly { readonly restoredLabel: string }[];
@@ -177,6 +178,16 @@ function formatMemoryStatus(memory: RunReportMemory | undefined): string {
   }
 }
 
+function formatExecutionStatus(posture: ExecutionPosture | null): string {
+  if (posture === null) {
+    return "not active; posture is recomputed from the next CLI invocation; enabled MCP integrations may perform external effects";
+  }
+  if (posture === "trusted") {
+    return "trusted; Bash runs with current OS user authority; enabled MCP integrations may perform external effects";
+  }
+  return "reviewed; each Bash command requires allow-once approval before running with current OS user authority; enabled MCP integrations may perform external effects";
+}
+
 export function formatSessionStatusSnapshot(
   options: SessionStatusSnapshotOptions,
 ): string {
@@ -192,6 +203,7 @@ export function formatSessionStatusSnapshot(
     ...formatStatusGoalLines(options.goal),
     `  workspace: ${formatStatusText(options.workspace)}`,
     `  active model: ${formatStatusText(options.activeModel)}`,
+    `  execution: ${formatExecutionStatus(options.executionPosture)}`,
     `  workflow skills: ${formatWorkflowSkills(options.workflowSkills)}`,
     `  skill catalog: ${
       options.skillCatalog === undefined
@@ -200,7 +212,6 @@ export function formatSessionStatusSnapshot(
     }`,
     `  messages: ${options.messageCount}`,
     `  pending inputs: ${options.pendingInputCount}`,
-    `  bash approvals: ${options.bashApprovalCount}`,
     `  memory: ${formatMemoryStatus(options.memory)}`,
     `  tasks: ${formatStatusText(formatSessionTaskProgressSummary(options.taskProgress))}`,
     `  model switches: ${options.modelSwitchCount}`,

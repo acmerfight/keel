@@ -93,7 +93,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -144,7 +144,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -265,7 +265,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "update the visible state",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -341,7 +341,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "update both files",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -429,7 +429,7 @@ describe("File Editing Read Before Edit", () => {
             userMessage: `${scenario.kind} the source`,
             systemPrompt: "You are a helpful assistant.",
             signal: freshSignal(),
-            bash: { kind: "disabled" },
+            bash: { kind: "trusted" },
             stopPolicy: defaultStopPolicy(),
           }),
         );
@@ -534,7 +534,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "update timeout and retry count",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -615,7 +615,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace the word",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -722,7 +722,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "read and update the API server",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -861,7 +861,7 @@ describe("File Editing Read Before Edit", () => {
           userMessage: "replace two words",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -961,7 +961,7 @@ describe("File Editing Read Before Edit", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

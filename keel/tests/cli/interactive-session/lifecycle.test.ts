@@ -55,7 +55,7 @@ async function runInteractiveLocalCommand(
   let stderr = "";
   let providerResolved = false;
   const session = runInteractiveSession({
-    cliArgs: { bashMode: "ask" },
+    cliArgs: { executionPosture: "reviewed" },
     workspace,
     platform: process.platform,
     session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -104,7 +104,7 @@ async function runInteractiveDiffReviewCommands(
   let providerResolved = false;
   const renderedInspections: InteractiveDiffInspection[] = [];
   const session = runInteractiveSession({
-    cliArgs: { bashMode: "ask" },
+    cliArgs: { executionPosture: "reviewed" },
     workspace,
     platform: process.platform,
     session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -192,7 +192,7 @@ describe("Interactive Session - Lifecycle", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "ask" },
+      cliArgs: { executionPosture: "reviewed" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({ id: "current" }),
@@ -253,7 +253,7 @@ describe("Interactive Session - Lifecycle", () => {
       let stderr = "";
       let providerResolved = false;
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "ask" },
+        cliArgs: { executionPosture: "reviewed" },
         workspace: process.cwd(),
         platform: process.platform,
         session: savedInteractiveSession({ id: "current" }),
@@ -275,7 +275,6 @@ describe("Interactive Session - Lifecycle", () => {
                   transcript: "copy_prefix",
                   pendingInputs: "drop",
                   queuedInputs: "drop",
-                  bashApprovalGrants: "drop",
                 },
               },
               workflowSkills: [],
@@ -580,7 +579,7 @@ describe("Interactive Session - Lifecycle", () => {
       "",
     );
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "ask" },
+      cliArgs: { executionPosture: "reviewed" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -602,13 +601,6 @@ describe("Interactive Session - Lifecycle", () => {
         providerId: "qwen",
         model: "qwen3.7-max",
       },
-      initialBashApprovalGrants: [
-        {
-          type: "exact",
-          cwd: workspace,
-          command: "pnpm test",
-        },
-      ],
       initialModelSwitchCount: 1,
 
       input,
@@ -654,7 +646,6 @@ describe("Interactive Session - Lifecycle", () => {
       );
       expect(stdout).toContain("  messages: 1\n");
       expect(stdout).toContain("  pending inputs: 0\n");
-      expect(stdout).toContain("  bash approvals: 1\n");
       expect(stdout).toContain("  model switches: 1\n");
       expect(stdout).toContain("  latest checkpoint: none\n");
       expect(stdout).toContain("  undo checkpoints: 0\n");
@@ -681,7 +672,7 @@ describe("Interactive Session - Lifecycle", () => {
     let stdout = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -763,7 +754,7 @@ describe("Interactive Session - Lifecycle", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -841,7 +832,7 @@ describe("Interactive Session - Lifecycle", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -914,7 +905,7 @@ describe("Interactive Session - Lifecycle", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -978,7 +969,7 @@ describe("Interactive Session - Lifecycle", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1022,7 +1013,7 @@ describe("Interactive Session - Lifecycle", () => {
     let stdout = "";
     let exitCode: number | undefined;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1073,7 +1064,7 @@ describe("Interactive Session - Lifecycle", () => {
     let stderr = "";
     let providerResolved = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1143,7 +1134,7 @@ describe("Interactive Session - Lifecycle", () => {
     };
     const input = new PassThrough();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1242,7 +1233,7 @@ describe("Interactive Session - Lifecycle", () => {
       return finalEnd;
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

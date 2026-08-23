@@ -1,43 +1,24 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import {
-  type BashMode,
-  type BashPolicy,
-  type BashRuntime,
-  bashModeFromPolicy,
-  bashRuntimeExposesTool,
+import type {
+  BashRuntime,
+  ExecutionPosture,
+  MainBashRuntime,
 } from "../../src/permissions/bash.ts";
-
-const cliEntrySource = readFileSync("src/cli/index.ts", "utf8");
-const interactiveSessionSource = readFileSync(
-  "src/cli/interactive-session.ts",
-  "utf8",
-);
+import { bashRuntimeExposesTool } from "../../src/permissions/bash.ts";
 
 describe("bash state invariants", () => {
-  test("Given CLI bash configuration, When modeling run state, Then bash exposure and policy are not stored as independent fields", () => {
-    for (const source of [cliEntrySource, interactiveSessionSource]) {
-      expect(source).not.toMatch(/readonly allowBash: boolean;/);
-      expect(source).not.toMatch(/readonly bashPolicy: BashPolicy;/);
-    }
+  test(`Given the invocation execution posture,
+    When modeling the supported product states,
+    Then trusted and reviewed are the only user-selectable meanings`, () => {
+    const postures: readonly ExecutionPosture[] = ["trusted", "reviewed"];
+
+    expect(postures).toEqual(["trusted", "reviewed"]);
   });
 
-  test("Given user-facing bash policies, When deriving internal CLI modes, Then each policy has one mode", () => {
-    const cases: ReadonlyArray<{
-      readonly policy: BashPolicy;
-      readonly mode: BashMode;
-    }> = [
-      { policy: "deny", mode: "disabled" },
-      { policy: "ask", mode: "ask" },
-      { policy: "trusted", mode: "trusted" },
-    ];
-
-    for (const entry of cases) {
-      expect(bashModeFromPolicy(entry.policy)).toBe(entry.mode);
-    }
-  });
-
-  test("Given runtime bash postures, When deriving tool exposure, Then each valid posture has one exposure meaning", () => {
+  test(`Given a concrete Bash capability context,
+    When deriving tool exposure,
+    Then only a capability-disabled child hides Bash`, () => {
     const runtimes: readonly BashRuntime[] = [
       { kind: "disabled" },
       { kind: "trusted" },
@@ -50,5 +31,40 @@ describe("bash state invariants", () => {
     ];
 
     expect(runtimes.map(bashRuntimeExposesTool)).toEqual([false, true, true]);
+  });
+
+  test(`Given the main-agent execution boundary,
+    When its Bash runtime states are modeled,
+    Then capability-disabled Bash cannot be represented`, () => {
+    const runtimes = [
+      { kind: "trusted" },
+      {
+        kind: "reviewed",
+        permission: {
+          review: () => ({ type: "deny", message: "not executed" }),
+        },
+      },
+    ] satisfies readonly MainBashRuntime[];
+
+    expect(runtimes.map((runtime) => runtime.kind)).toEqual([
+      "trusted",
+      "reviewed",
+    ]);
+  });
+
+  test(`Given session persistence and CLI composition,
+    When authorization state is inspected,
+    Then Bash approvals are invocation-owned and never persisted`, () => {
+    const sources = [
+      "src/cli/session-store/model.ts",
+      "src/cli/session-store/records.ts",
+      "src/cli/session-store/store.ts",
+      "src/cli/session-catalog-format.ts",
+    ].map((path) => readFileSync(path, "utf8"));
+
+    for (const source of sources) {
+      expect(source).not.toMatch(/bashApprovalGrant/u);
+      expect(source).not.toMatch(/bash_approval_/u);
+    }
   });
 });

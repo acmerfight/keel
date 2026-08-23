@@ -68,7 +68,7 @@ describe("Tool Error Boundary", () => {
             userMessage: "list the locked directory",
             systemPrompt: "You are a helpful assistant.",
             signal: new AbortController().signal,
-            bash: { kind: "disabled" },
+            bash: { kind: "trusted" },
             stopPolicy: defaultStopPolicy(),
           }),
         );

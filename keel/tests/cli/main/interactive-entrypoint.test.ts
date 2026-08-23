@@ -203,7 +203,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     const input = new PassThrough();
     input.end("/status\n");
     const fixture = createRuntime(
-      ["--provider=fake", "--model=configured-model", "--bash-policy=deny"],
+      ["--provider=fake", "--model=configured-model"],
       {
         env: { KEEL_PROVIDER: "deepseek", KEEL_FORCE_INTERACTIVE: "1" },
         input,
@@ -341,7 +341,6 @@ describe("CLI Main - Interactive Entrypoint", () => {
         "--provider=fake",
         "--agent-policy=explicit",
         "--max-cost=1",
-        "--bash-policy=deny",
       ],
       {
         cwd: workspace,
@@ -432,7 +431,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     input.write("/status\n");
     input.end("/goal resume\n");
     const fixture = createRuntime(
-      ["--resume", "goal-entrypoint", "--provider=fake", "--bash-policy=deny"],
+      ["--resume", "goal-entrypoint", "--provider=fake"],
       {
         cwd: workspace,
         env: {
@@ -572,7 +571,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     input.write("/goal budget --turns 1\n");
     input.end("/status\n");
     const fixture = createRuntime(
-      ["--session", "goal-command", "--provider=fake", "--bash-policy=deny"],
+      ["--session", "goal-command", "--provider=fake"],
       {
         cwd: workspace,
         env: {
@@ -626,12 +625,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     firstInput.write("/goal budget --turns 1\n");
     firstInput.end("/status\n");
     const firstRun = createRuntime(
-      [
-        "--session",
-        "goal-verify-command",
-        "--provider=fake",
-        "--bash-policy=deny",
-      ],
+      ["--session", "goal-verify-command", "--provider=fake"],
       {
         cwd: workspace,
         env: {
@@ -739,19 +733,16 @@ describe("CLI Main - Interactive Entrypoint", () => {
     input.end(
       '/goal --objective "Ship atomic checkout" --verify "node -e \\"process.exit(0)\\"" --turns 3 --tokens 5000 --time 5s --timeout 2s\n',
     );
-    const fixture = createRuntime(
-      ["--session", "goal-atomic-launch", "--bash-policy=trusted"],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_FORCE_INTERACTIVE: "1",
-          KEEL_HOME: home,
-        },
-        input,
+    const fixture = createRuntime(["--session", "goal-atomic-launch"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
       },
-    );
+      input,
+    });
 
     try {
       // When
@@ -840,19 +831,16 @@ describe("CLI Main - Interactive Entrypoint", () => {
       '/goal verify --timeout 20ms node -e "setTimeout(() => {}, 200)"\n',
     );
     input.end("/goal budget --turns 1\n");
-    const fixture = createRuntime(
-      ["--session", "goal-verifier-timeout", "--bash-policy=trusted"],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_FORCE_INTERACTIVE: "1",
-          KEEL_HOME: home,
-        },
-        input,
+    const fixture = createRuntime(["--session", "goal-verifier-timeout"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
       },
-    );
+      input,
+    });
 
     try {
       // When
@@ -955,19 +943,16 @@ describe("CLI Main - Interactive Entrypoint", () => {
     input.write("/goal verify pnpm test\n");
     input.write("continue the durable goal\n");
     input.end("/status\n");
-    const fixture = createRuntime(
-      ["--session", "goal-blocked-burst", "--bash-policy", "deny"],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_FORCE_INTERACTIVE: "1",
-          KEEL_HOME: home,
-        },
-        input,
+    const fixture = createRuntime(["--session", "goal-blocked-burst"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
       },
-    );
+      input,
+    });
 
     try {
       // When
@@ -1127,19 +1112,16 @@ describe("CLI Main - Interactive Entrypoint", () => {
     input.write("read note.txt\n");
     input.write("blocked again\n");
     input.end("/status\n");
-    const fixture = createRuntime(
-      ["--session", "goal-blocked-reset", "--bash-policy", "deny"],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_FORCE_INTERACTIVE: "1",
-          KEEL_HOME: home,
-        },
-        input,
+    const fixture = createRuntime(["--session", "goal-blocked-reset"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
       },
-    );
+      input,
+    });
 
     try {
       // When
@@ -1304,19 +1286,16 @@ describe("CLI Main - Interactive Entrypoint", () => {
     input.write("/goal Finish the continuation goal\n");
     input.write("/goal verify test -f done.txt\n");
     input.end("start the goal\n");
-    const fixture = createRuntime(
-      ["--session", "goal-auto-continue", "--bash-policy", "trusted"],
-      {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          KEEL_FORCE_INTERACTIVE: "1",
-          KEEL_HOME: home,
-        },
-        input,
+    const fixture = createRuntime(["--session", "goal-auto-continue"], {
+      cwd: workspace,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
+        KEEL_FORCE_INTERACTIVE: "1",
+        KEEL_HOME: home,
       },
-    );
+      input,
+    });
 
     try {
       // When
@@ -1383,11 +1362,11 @@ describe("CLI Main - Interactive Entrypoint", () => {
 
   test.each([
     {
-      args: ["--provider=fake", "--bash-policy=deny"],
+      args: ["--provider=fake"],
       expected: "  active model: fake/(default model)\n",
     },
     {
-      args: ["--model=configured-model", "--bash-policy=deny"],
+      args: ["--model=configured-model"],
       expected: "  active model: (default provider)/configured-model\n",
     },
   ])(
@@ -2709,7 +2688,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
           },
         ]),
         JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "model_switch",
           timestamp: "2026-01-03T00:00:05.000Z",
           from: null,
@@ -3467,162 +3446,6 @@ describe("CLI Main - Interactive Entrypoint", () => {
     }
   });
 
-  test(`Given the project bash approval store is invalid while bash ask mode is off,
-    When the user starts an interactive session,
-    Then Keel ignores the approval store and starts normally`, async () => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    await writeFile(join(home, "bash-project-approvals.json"), "{", "utf8");
-    const input = new PassThrough();
-    input.end("hello\n");
-    const fixture = createRuntime([], {
-      env: {
-        KEEL_PROVIDER: "fake",
-        KEEL_FORCE_INTERACTIVE: "1",
-        KEEL_HOME: home,
-      },
-      input,
-    });
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(fixture.stdout()).toBe("Remembered: hello\n");
-      expect(fixture.stderr()).toBe("");
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given the project bash approval store is invalid while bash ask mode is on,
-    When the user starts an interactive session,
-    Then Keel fails closed before resolving a provider`, async () => {
-    // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    const input = new PassThrough();
-    await writeFile(join(home, "bash-project-approvals.json"), "{", "utf8");
-    const fixture = createRuntime(["--bash-policy", "ask"], {
-      env: {
-        KEEL_HOME: home,
-      },
-      input,
-      inputIsTTY: true,
-    });
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(1);
-      expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        `Error: cannot read bash project approvals ${join(
-          home,
-          "bash-project-approvals.json",
-        )}: invalid JSON.\n`,
-      );
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test(`Given bash ask mode runs in a real interactive terminal session,
-    When the user approves a command family for the project,
-    Then the project approval is persisted for the current workspace`, async () => {
-    // Given
-    const workspace = await mkdtemp(join(tmpdir(), "keel-cli-main-tui-bash-"));
-    const home = await mkdtemp(join(tmpdir(), "keel-cli-home-"));
-    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
-      cwd: workspace,
-    });
-    const capturedBodies: unknown[] = [];
-    const server = createServer((req, res) => {
-      if (req.url !== "/chat/completions") {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-
-      let body = "";
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        capturedBodies.push(JSON.parse(body));
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        });
-        if (capturedBodies.length === 1) {
-          res.write(
-            sseToolCall("call_bash_project", "bash", {
-              command: "git status --short",
-            }),
-          );
-          res.write(sseToolFinish());
-          res.write("data: [DONE]\n\n");
-          res.end();
-          return;
-        }
-
-        res.end(sseTextReplyWithUsage("Saved."));
-      });
-    });
-    await listen(server);
-    const input = new PassThrough();
-    let approvalAnswered = false;
-    const fixture = createRuntime(["--bash-policy", "ask"], {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-        KEEL_HOME: home,
-      },
-      input,
-      inputIsTTY: true,
-      onStderr: (text) => {
-        if (text.includes("Approve bash command?") && !approvalAnswered) {
-          approvalAnswered = true;
-          input.write("r\n");
-          input.end();
-        }
-      },
-    });
-
-    try {
-      // When
-      const run = runCliMain(fixture.runtime);
-      input.write("check status\n");
-      const exitCode = await run;
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(fixture.stdout()).toBe("Saved.\n");
-      expect(fixture.stderr()).toContain(
-        "[r] allow command family for this project: git status",
-      );
-
-      const approvals = createRuntime(["approvals"], {
-        cwd: workspace,
-        env: { KEEL_HOME: home },
-      });
-      const approvalsExitCode = await runCliMain(approvals.runtime);
-      expect(approvalsExitCode).toBe(0);
-      expect(approvals.stdout()).toContain("Bash project approvals:\n");
-      expect(approvals.stdout()).toContain("argv prefix: git status\n");
-      expect(approvals.stderr()).toBe("");
-    } finally {
-      await close(server);
-      await rm(workspace, { recursive: true, force: true });
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
   test(`Given the user runs a one-shot prompt,
     When the prompt completes,
     Then no persistent session is required`, async () => {
@@ -4206,7 +4029,7 @@ describe("CLI Main - Interactive Entrypoint", () => {
     await listen(server);
     const input = new PassThrough();
     let approvalAnswered = false;
-    const fixture = createRuntime(["--bash-policy", "ask"], {
+    const fixture = createRuntime(["--approval-policy", "ask"], {
       cwd: workspace,
       env: {
         DEEPSEEK_API_KEY: "test-key",

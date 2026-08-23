@@ -2,6 +2,5 @@
   "kind": "standard",
   "prompt": "Analyze the log files in logs/. Create summary.md with exactly three lines: the total ERROR count for 2026-06-10 through 2026-06-12 inclusive, the service with the most ERROR entries in that range, and the number of WARN entries outside that range. Use exactly these output keys: `errors_in_range: N`, `top_error_service: NAME`, `warnings_outside_range: N`.",
   "timeoutMs": 240000,
-  "allowBash": true,
   "maxCostUsd": 0.05
 }

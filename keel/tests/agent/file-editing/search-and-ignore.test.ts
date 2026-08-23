@@ -99,7 +99,7 @@ describe("File Editing Search And Ignore", () => {
           userMessage: "find handleSubmit",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -162,7 +162,7 @@ describe("File Editing Search And Ignore", () => {
           userMessage: "inspect target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -260,7 +260,7 @@ describe("File Editing Search And Ignore", () => {
           userMessage: "find target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -309,7 +309,7 @@ describe("File Editing Search And Ignore", () => {
             userMessage: "find target",
             systemPrompt: "You are a helpful assistant.",
             signal: abortController.signal,
-            bash: { kind: "disabled" },
+            bash: { kind: "trusted" },
             stopPolicy: defaultStopPolicy(),
           }),
         ),
@@ -413,7 +413,7 @@ describe("File Editing Search And Ignore", () => {
           userMessage: "find target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );
@@ -555,7 +555,7 @@ describe("File Editing Search And Ignore", () => {
           userMessage: "find target",
           systemPrompt: "You are a helpful assistant.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       );

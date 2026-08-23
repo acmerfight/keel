@@ -72,7 +72,7 @@ describe("Text Reply", () => {
         userMessage: "hi",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -103,7 +103,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -153,7 +153,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -197,7 +197,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -249,7 +249,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -263,7 +263,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -309,7 +309,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -363,7 +363,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: {
           shouldStopAfterTurn: ({ toolCalls }) =>
             toolCalls.length > 0
@@ -447,7 +447,7 @@ describe("Text Reply", () => {
           ledger: sessionLedgerMirroringMessages(messages),
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: {
             shouldStopAfterTurn: ({ toolCalls }) =>
               toolCalls.length > 0
@@ -502,7 +502,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -516,7 +516,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -567,7 +567,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -581,7 +581,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -634,7 +634,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         costTracking: {
           model: budgetModel,
@@ -652,7 +652,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -710,7 +710,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -724,7 +724,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -792,7 +792,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => {
           if (drained) {
@@ -873,7 +873,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
         drainInjectedUserMessages: () => {
           if (drained) {
@@ -932,7 +932,7 @@ describe("Text Reply", () => {
         userMessage: "hello",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -972,7 +972,7 @@ describe("Text Reply", () => {
         userMessage: "answer after retry",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1013,7 +1013,7 @@ describe("Text Reply", () => {
         userMessage: "summarize",
         systemPrompt: "You are a helpful assistant.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1059,7 +1059,7 @@ describe("Text Reply", () => {
         userMessage: "hi",
         systemPrompt: "You are helpful.",
         signal: controller.signal,
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1088,7 +1088,7 @@ describe("Text Reply", () => {
           userMessage: "hi",
           systemPrompt: "You are helpful.",
           signal: freshSignal(),
-          bash: { kind: "disabled" },
+          bash: { kind: "trusted" },
           stopPolicy: defaultStopPolicy(),
         }),
       ),
@@ -1122,7 +1122,7 @@ describe("Text Reply", () => {
         ledger: sessionLedgerMirroringMessages(messages),
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       })) {
         events.push(event);
@@ -1191,7 +1191,7 @@ describe("Text Reply", () => {
         userMessage: "inspect several files and verify the result",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );
@@ -1259,7 +1259,7 @@ describe("Text Reply", () => {
         userMessage: "inspect forever",
         systemPrompt: "You are helpful.",
         signal: freshSignal(),
-        bash: { kind: "disabled" },
+        bash: { kind: "trusted" },
         stopPolicy: defaultStopPolicy(),
       }),
     );

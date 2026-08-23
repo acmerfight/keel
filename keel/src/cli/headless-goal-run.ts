@@ -5,19 +5,9 @@ import {
   type ResumableSessionGoal,
   type SessionGoal,
   type SessionGoalBudget,
-  type SessionGoalCompletion,
   type SessionGoalResumeAssessment,
 } from "../core/session-goal.ts";
-import {
-  createSessionBashPermissionPolicy,
-  type SessionBashPermissionPolicy,
-} from "../permissions/bash.ts";
 import type { CliArgs } from "./args.ts";
-import {
-  BashProjectApprovalsError,
-  bashApprovalProjectRoot,
-  listBashProjectApprovalGrants,
-} from "./bash-project-approvals.ts";
 import { writeHeadlessGoalOutcome } from "./headless-goal-outcome.ts";
 import {
   type HeadlessSessionCliArgs,
@@ -56,61 +46,6 @@ function headlessGoalActivationCommand(cliArgs: GoalLaunchCliArgs): string {
   ].join(" ");
 }
 
-async function headlessGoalBashPermission(
-  contract: {
-    readonly bashMode: GoalCliArgs["bashMode"];
-    readonly completion: SessionGoalCompletion;
-  },
-  runtime: CliRuntime,
-): Promise<SessionBashPermissionPolicy | null | undefined> {
-  if (contract.bashMode === "trusted") {
-    return undefined;
-  }
-  if (contract.completion.kind === "assertion") {
-    if (contract.bashMode === "disabled") {
-      return undefined;
-    }
-    const workspace = runtime.cwd();
-    const projectRoot = bashApprovalProjectRoot(workspace);
-    return createSessionBashPermissionPolicy({
-      projectRoot,
-      initialProjectGrants: listBashProjectApprovalGrants(runtime, projectRoot),
-      prompt: () => ({
-        type: "deny",
-        message:
-          "Headless command approval is unavailable and no saved project approval matched.",
-      }),
-    });
-  }
-  if (contract.bashMode === "disabled") {
-    runtime.writeStderr(
-      "Error: headless command Goals require --bash-policy trusted or a matching saved project approval with --bash-policy ask.\n",
-    );
-    return null;
-  }
-  const workspace = runtime.cwd();
-  const projectRoot = bashApprovalProjectRoot(workspace);
-  const policy = createSessionBashPermissionPolicy({
-    projectRoot,
-    initialProjectGrants: listBashProjectApprovalGrants(runtime, projectRoot),
-    prompt: () => ({
-      type: "deny",
-      message:
-        "Headless command approval is unavailable and no saved project approval matched.",
-    }),
-  });
-  const decision = await policy.review({
-    command: contract.completion.command,
-    cwd: workspace,
-    signal: new AbortController().signal,
-  });
-  if (decision.type === "allow") {
-    return policy;
-  }
-  runtime.writeStderr(`Error: ${decision.message}\n`);
-  return null;
-}
-
 async function prepareHeadlessGoalResume(
   cliArgs: GoalResumeCliArgs,
   runtime: CliRuntime,
@@ -119,7 +54,6 @@ async function prepareHeadlessGoalResume(
   | {
       readonly kind: "ready";
       readonly goal: ResumableSessionGoal;
-      readonly bashPermission?: SessionBashPermissionPolicy;
     }
   | { readonly kind: "rejected" }
 > {
@@ -130,20 +64,7 @@ async function prepareHeadlessGoalResume(
     return { kind: "rejected" };
   }
   const resumableGoal = assessment.goal;
-  const bashPermission = await headlessGoalBashPermission(
-    {
-      bashMode: cliArgs.bashMode,
-      completion: resumableGoal.completion,
-    },
-    runtime,
-  );
-  return bashPermission === null
-    ? { kind: "rejected" }
-    : {
-        kind: "ready",
-        goal: resumableGoal,
-        ...(bashPermission !== undefined ? { bashPermission } : {}),
-      };
+  return { kind: "ready", goal: resumableGoal };
 }
 
 function headlessGoalForResume(
@@ -174,7 +95,7 @@ function headlessGoalRunArgs(cliArgs: GoalCliArgs): HeadlessSessionCliArgs {
     command: "run",
     mode: "interactive",
     agentPolicy: "off",
-    bashMode: cliArgs.bashMode,
+    executionPosture: cliArgs.executionPosture,
     skillsEnabled: cliArgs.skillsEnabled,
     memoryEnabled: cliArgs.memoryEnabled,
     recoveryPolicy: "block",
@@ -210,60 +131,31 @@ export async function runHeadlessGoalCli(
   cliArgs: GoalCliArgs,
   runtime: CliRuntime,
 ): Promise<number> {
-  let result: HeadlessSessionCliResult;
-  try {
-    let bashPermission: SessionBashPermissionPolicy | undefined;
-    if (cliArgs.mode === "launch") {
-      const preparedBashPermission = await headlessGoalBashPermission(
-        {
-          bashMode: cliArgs.bashMode,
-          completion:
-            cliArgs.criterion.kind === "command"
-              ? {
-                  kind: "command",
-                  command: cliArgs.criterion.command,
-                  ...(cliArgs.criterion.verificationTimeoutMs === undefined
-                    ? {}
-                    : {
-                        verificationTimeoutMs:
-                          cliArgs.criterion.verificationTimeoutMs,
-                      }),
-                }
-              : {
-                  kind: "assertion",
-                  assertion: cliArgs.criterion.assertion,
-                },
-        },
-        runtime,
-      );
-      if (preparedBashPermission === null) return 1;
-      bashPermission = preparedBashPermission;
-    }
-    result = await runHeadlessSessionCli(
-      headlessGoalRunArgs(cliArgs),
-      runtime,
-      cliArgs.mode === "launch"
-        ? headlessGoalActivationCommand(cliArgs)
-        : "/goal resume",
-      bashPermission,
-      (activatedSessionId) => {
-        runtime.writeStdout(
-          `Headless goal session: ${sanitizeStatusLineText(activatedSessionId)}\n`,
-        );
-      },
-      cliArgs.mode === "resume"
-        ? async (goal) =>
-            await prepareHeadlessGoalResume(cliArgs, runtime, goal)
-        : undefined,
-      cliArgs.mode === "resume"
-        ? (goal) => headlessGoalResumeAssessment(cliArgs, goal)
-        : undefined,
+  if (cliArgs.executionPosture === "reviewed") {
+    runtime.writeStderr(
+      "Error: --approval-policy ask requires a real TTY and is unavailable to Goal runs.\n",
     );
-  } catch (error) {
-    if (!(error instanceof BashProjectApprovalsError)) throw error;
-    runtime.writeStderr(`${error.message}\n`);
     return 1;
   }
+  const result: HeadlessSessionCliResult = await runHeadlessSessionCli(
+    headlessGoalRunArgs(cliArgs),
+    runtime,
+    cliArgs.mode === "launch"
+      ? headlessGoalActivationCommand(cliArgs)
+      : "/goal resume",
+    undefined,
+    (activatedSessionId) => {
+      runtime.writeStdout(
+        `Headless goal session: ${sanitizeStatusLineText(activatedSessionId)}\n`,
+      );
+    },
+    cliArgs.mode === "resume"
+      ? async (goal) => await prepareHeadlessGoalResume(cliArgs, runtime, goal)
+      : undefined,
+    cliArgs.mode === "resume"
+      ? (goal) => headlessGoalResumeAssessment(cliArgs, goal)
+      : undefined,
+  );
   if (result.kind === "failed") {
     return result.exitCode;
   }

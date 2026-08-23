@@ -1,5 +1,10 @@
 # Explicit Subagent Intent Calibration v1
 
+> Historical reproducibility: authoritative scored runs must be reproduced
+> from their recorded freeze commit. Current-tree task fixtures follow Keel's
+> trusted-execution default and are not directly comparable with frozen runs
+> that used the removed `allowBash` task setting.
+
 This is a pre-registered supplement to the #590 Slice 1.5 calibration. It
 answers one narrower product question: when the experimental feature is enabled
 and the user explicitly says `使用 subagent 调研这个任务。`, does main start one bounded child?

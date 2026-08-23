@@ -114,9 +114,9 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given user allows shell commands,
+  test(`Given a one-shot run uses the default execution posture,
     When the CLI sends the provider request,
-    Then bash is advertised for that session only`, async () => {
+    Then Bash is advertised without a permission option`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-cli-bash-"));
     let capturedBody = "";
@@ -148,7 +148,7 @@ describe("CLI File Editing", () => {
 
     try {
       // When
-      const result = await runCli(["--allow-bash", "inspect workspace"], {
+      const result = await runCli(["inspect workspace"], {
         cwd: workspace,
         env: {
           DEEPSEEK_API_KEY: "test-key",
@@ -182,7 +182,7 @@ describe("CLI File Editing", () => {
     }
   });
 
-  test(`Given user allows trusted shell commands,
+  test(`Given Bash uses the trusted default posture,
     When the shell reads a gitignored file,
     Then the CLI returns the shell output as trusted access`, async () => {
     // Given
@@ -244,16 +244,13 @@ describe("CLI File Editing", () => {
 
     try {
       // When
-      const result = await runCli(
-        ["--allow-bash", "read the ignored file with shell"],
-        {
-          cwd: workspace,
-          env: {
-            DEEPSEEK_API_KEY: "test-key",
-            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-          },
+      const result = await runCli(["read the ignored file with shell"], {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
         },
-      );
+      });
 
       // Then
       expect(result.exitCode).toBe(0);

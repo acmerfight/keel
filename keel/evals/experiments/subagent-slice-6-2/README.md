@@ -1,5 +1,10 @@
 # Subagent product graduation — Slice 6.2
 
+> Historical reproducibility: authoritative scored runs must be reproduced
+> from their recorded freeze commit. Current-tree task fixtures follow Keel's
+> trusted-execution default and are not directly comparable with frozen runs
+> that used the removed `allowBash` task setting.
+
 This is the pre-registered real-provider window for issue #590 Slice 6.2. It
 tests the finished product boundary rather than a new orchestration mode:
 

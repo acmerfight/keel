@@ -5,10 +5,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { runCliMain } from "../../../src/cli/index.ts";
-import {
-  requestWithToolsSchema,
-  runReportSchema,
-} from "../../../src/testing/cli-main-schemas.ts";
+import { runReportSchema } from "../../../src/testing/cli-main-schemas.ts";
 import { createRuntime } from "../../../src/testing/cli-runtime-fixtures.ts";
 import {
   close,
@@ -45,7 +42,12 @@ describe("CLI Main - Provider Config", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 22,
+        schemaVersion: 23,
+        execution: {
+          posture: "trusted",
+          bashAuthority: "current_os_user",
+          enabledMcpIntegrationsMayPerformExternalEffects: true,
+        },
         modelsUsed: [{ provider: "fake", model: "fake" }],
         usageByModel: [
           {
@@ -125,89 +127,21 @@ describe("CLI Main - Provider Config", () => {
     expect(fixture.stderr()).toBe("");
   });
 
-  test(`Given trusted shell mode is enabled,
-    When the CLI main runs a one-shot request,
-    Then it passes the allow-bash option into the agent run`, async () => {
-    // Given
-    const fixture = createRuntime(["--allow-bash", "hello"], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
-
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
-    expect(fixture.stderr()).toBe("");
-  });
-
-  test(`Given an unknown bash policy is configured,
-    When the CLI main parses the request,
-    Then it returns a bash policy validation error`, async () => {
-    // Given
-    const fixture = createRuntime(["--bash-policy", "sometimes", "hello"], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
-
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
-    );
-  });
-
-  test(`Given an unknown bash policy uses equals syntax,
-    When the CLI main parses the request,
-    Then it returns a bash policy validation error`, async () => {
-    // Given
-    const fixture = createRuntime(["--bash-policy=sometimes", "hello"], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
-
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
-    );
-  });
-
-  test(`Given bash policy is missing its value,
-    When the CLI main parses the request,
-    Then it returns a bash policy validation error`, async () => {
-    // Given
-    const fixture = createRuntime(["--bash-policy"], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
-
-    // Then
-    expect(exitCode).toBe(1);
-    expect(fixture.stdout()).toBe("");
-    expect(fixture.stderr()).toBe(
-      "Error: --bash-policy must be one of: ask, deny, trusted.\n",
-    );
-  });
-
   test.each([
-    ["--allow-bash", "--bash-policy", "ask", "hello"],
-    ["--allow-bash", "--bash-policy=ask", "hello"],
-    ["--bash-policy=ask", "--allow-bash", "hello"],
+    [
+      ["--approval-policy", "sometimes", "hello"],
+      "Error: --approval-policy must be: ask.\n",
+    ],
+    [
+      ["--approval-policy=sometimes", "hello"],
+      "Error: --approval-policy must be: ask.\n",
+    ],
+    [["--approval-policy"], "Error: --approval-policy must be: ask.\n"],
   ])(
-    `Given conflicting bash policy options %s %s,
+    `Given invalid approval policy arguments %j,
     When the CLI main parses the request,
-    Then it returns a conflict validation error`,
-    async (...args) => {
+    Then it rejects them before provider resolution`,
+    async (args, message) => {
       // Given
       const fixture = createRuntime(args, {
         env: { KEEL_PROVIDER: "fake" },
@@ -219,86 +153,16 @@ describe("CLI Main - Provider Config", () => {
       // Then
       expect(exitCode).toBe(1);
       expect(fixture.stdout()).toBe("");
-      expect(fixture.stderr()).toBe(
-        "Error: --allow-bash cannot be combined with --bash-policy; use --bash-policy trusted instead.\n",
-      );
+      expect(fixture.stderr()).toBe(message);
     },
   );
 
-  test(`Given bash policy is configured with equals syntax,
-    When the CLI main runs a text request,
-    Then it accepts the policy option`, async () => {
-    // Given
-    const fixture = createRuntime(["--bash-policy=trusted", "hello"], {
-      env: { KEEL_PROVIDER: "fake" },
-    });
-
-    // When
-    const exitCode = await runCliMain(fixture.runtime);
-
-    // Then
-    expect(exitCode).toBe(0);
-    expect(fixture.stdout()).toBe("Hello from fake provider.\n");
-    expect(fixture.stderr()).toBe("");
-  });
-
-  test(`Given bash policy is explicitly denied,
-    When the CLI main sends a one-shot provider request,
-    Then the bash tool is not exposed to the model`, async () => {
-    // Given
-    const capturedBodies: unknown[] = [];
-    const server = createServer((req, res) => {
-      if (req.url !== "/chat/completions") {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-
-      let body = "";
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        capturedBodies.push(JSON.parse(body));
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        });
-        res.end(sseTextReplyWithUsage("No shell."));
-      });
-    });
-    await listen(server);
-    const fixture = createRuntime(["--bash-policy", "deny", "hello"], {
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
-      },
-    });
-
-    try {
-      // When
-      const exitCode = await runCliMain(fixture.runtime);
-
-      // Then
-      expect(exitCode).toBe(0);
-      expect(fixture.stdout()).toBe("No shell.\n");
-      expect(fixture.stderr()).toBe("");
-      const request = requestWithToolsSchema.parse(capturedBodies[0]);
-      expect(
-        request.tools?.map((tool) => tool.function?.name).filter(Boolean),
-      ).not.toContain("bash");
-    } finally {
-      await close(server);
-    }
-  });
-
-  test(`Given ask bash policy is forced through non-TTY input,
+  test(`Given reviewed execution is requested through non-TTY input,
     When the CLI main starts an interactive session,
-    Then it rejects the unsafe approval channel`, async () => {
+    Then it rejects the unsupported approval channel`, async () => {
     // Given
-    const fixture = createRuntime(["--bash-policy", "ask"], {
-      env: { KEEL_FORCE_INTERACTIVE: "1" },
+    const fixture = createRuntime(["--approval-policy", "ask"], {
+      env: { KEEL_PROVIDER: "fake" },
     });
 
     // When
@@ -308,7 +172,7 @@ describe("CLI Main - Provider Config", () => {
     expect(exitCode).toBe(1);
     expect(fixture.stdout()).toBe("");
     expect(fixture.stderr()).toBe(
-      "Error: --bash-policy ask requires a real TTY so approvals cannot be read from piped input. Use --bash-policy deny or --bash-policy trusted for non-TTY runs.\n",
+      "Error: --approval-policy ask requires a real TTY and is unavailable to piped or non-TTY runs.\n",
     );
   });
 

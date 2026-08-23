@@ -76,7 +76,6 @@ describe("Eval Runner", () => {
       solution: "exit 0\n",
       timeoutMs: 10_000,
       scriptTimeoutMs: 10_000,
-      allowBash: false,
       maxCostUsd: 0.01,
       memory: "A project fact.",
     });
@@ -127,7 +126,6 @@ describe("Eval Runner", () => {
       solution: "exit 0\n",
       timeoutMs: 10_000,
       scriptTimeoutMs: 10_000,
-      allowBash: false,
       maxCostUsd: 0.01,
       memory: "A project fact.",
     });

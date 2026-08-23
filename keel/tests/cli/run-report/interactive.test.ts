@@ -61,15 +61,7 @@ describe("CLI Run Report", () => {
     });
     await listen(server);
     const { child, result } = runCliProcess(
-      [
-        "--ephemeral",
-        "--provider",
-        "deepseek",
-        "--bash-policy",
-        "trusted",
-        "--report",
-        reportPath,
-      ],
+      ["--ephemeral", "--provider", "deepseek", "--report", reportPath],
       {
         cwd: workspace,
         env: {

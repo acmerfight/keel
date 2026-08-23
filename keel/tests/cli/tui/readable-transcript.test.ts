@@ -296,7 +296,7 @@ describe("Interactive TUI readable transcript", () => {
       );
     });
     await listen(server);
-    const pty = runCliPty(["--ephemeral", "--bash-policy", "trusted"], {
+    const pty = runCliPty(["--ephemeral"], {
       cwd: workspace,
       env: {
         KEEL_HOME: home,

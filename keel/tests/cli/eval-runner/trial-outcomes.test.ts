@@ -37,7 +37,6 @@ describe("Eval Runner", () => {
       solution: "printf 'alpha beta\n' > result.txt\n",
       timeoutMs: 10_000,
       scriptTimeoutMs: 10_000,
-      allowBash: false,
       maxCostUsd: 0.01,
       agentPolicy: "auto",
       delegationPolicy: "require_one",
@@ -219,7 +218,6 @@ writeFileSync(args[transcriptIndex + 1], '{"schemaVersion":1,"type":"transcript"
         solution: "touch result.txt\n",
         timeoutMs: 10_000,
         scriptTimeoutMs: 10_000,
-        allowBash: false,
         maxCostUsd: 0.01,
         agentPolicy: "auto",
         delegationPolicy: "require_one",
@@ -311,7 +309,6 @@ if (prompt === "selection-missing" || (prompt === "control-only" && !treatment))
       solution: "touch result.txt\n",
       timeoutMs: 10_000,
       scriptTimeoutMs: 10_000,
-      allowBash: false,
       maxCostUsd: 0.01,
       agentPolicy: "auto",
       delegationPolicy: "forbid",
@@ -384,7 +381,6 @@ writeFileSync(${JSON.stringify(configPath)}, ${JSON.stringify(
       solution: "printf '{\"created\":true}\\n' > result.json\n",
       timeoutMs: 10_000,
       scriptTimeoutMs: 10_000,
-      allowBash: false,
       maxCostUsd: 0.01,
       memory: "A project fact.",
     });
@@ -444,7 +440,6 @@ writeFileSync(${JSON.stringify(configPath)}, ${JSON.stringify(
       solution: "printf 'pnpm test:coverage\\n' > release-command.txt\n",
       timeoutMs: 10_000,
       scriptTimeoutMs: 10_000,
-      allowBash: false,
       maxCostUsd: 0.01,
       memory: "The release command is pnpm test:coverage.",
     });
@@ -587,7 +582,6 @@ if (!args.includes("--no-memory")) writeFileSync("release-command.txt", "pnpm te
         solution: "printf 'pnpm test:coverage\\n' > release-command.txt\n",
         timeoutMs: 10_000,
         scriptTimeoutMs,
-        allowBash: false,
         maxCostUsd: 0.01,
         memory: "The release command is pnpm test:coverage.",
       });
@@ -905,9 +899,9 @@ process.exitCode = 1;
     }
   });
 
-  test(`Given a task enables bash and a max cost budget,
+  test(`Given a task configures a max cost budget,
     When the eval runner executes the task,
-    Then it passes those task options into the CLI run`, async () => {
+    Then it passes that task option into the CLI run`, async () => {
     // Given
     const { root, suiteDir, outFile } = await createEvalDir();
     await createTask(suiteDir, "task-options", {
@@ -915,7 +909,6 @@ process.exitCode = 1;
       solution: "printf 'hello new world\\n' > note.txt\n",
       verify: 'grep -q "hello new world" note.txt\n',
       maxCostUsd: 1,
-      allowBash: true,
     });
 
     try {

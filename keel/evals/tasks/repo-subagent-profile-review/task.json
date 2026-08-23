@@ -2,7 +2,6 @@
   "kind": "standard",
   "prompt": "Use exactly one repo:focused-review subagent to inspect src/access-policy.ts. Then, as Main, create review.txt with exactly two lines: `guest_delete: denied` and `staff_delete: allowed`, based only on the implemented policy.",
   "timeoutMs": 240000,
-  "allowBash": false,
   "maxCostUsd": 0.05,
   "agentPolicy": "explicit",
   "delegationPolicy": "require_one",

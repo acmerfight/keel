@@ -46,7 +46,7 @@ describe("Interactive Session - Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", reportFile: "report.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -172,7 +172,7 @@ describe("Interactive Session - Queued Input", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -305,7 +305,7 @@ describe("Interactive Session - Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -414,7 +414,7 @@ describe("Interactive Session - Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -537,7 +537,7 @@ describe("Interactive Session - Queued Input", () => {
     const input = new PassThrough();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -686,7 +686,7 @@ describe("Interactive Session - Queued Input", () => {
     let stderr = "";
     input.write("inspect package\nqueued before compact\n");
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -813,7 +813,7 @@ describe("Interactive Session - Queued Input", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -911,7 +911,7 @@ describe("Interactive Session - Queued Input", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "trusted" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1024,7 +1024,7 @@ describe("Interactive Session - Queued Input", () => {
     const input = new PassThrough();
     const sigintHandlers = new Set<() => void>();
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

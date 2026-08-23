@@ -53,7 +53,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -146,7 +146,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -250,7 +250,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -383,7 +383,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", maxCostUsd: 0.01 },
+      cliArgs: { executionPosture: "trusted", maxCostUsd: 0.01 },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -522,7 +522,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", reportFile: "session.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "session.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -683,7 +683,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
       },
     };
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: savedInteractiveSession({
@@ -871,7 +871,7 @@ describe("Interactive Session - Model Switch Compaction Session", () => {
     let stdout = "";
     let stderr = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

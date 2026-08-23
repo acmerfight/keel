@@ -114,7 +114,7 @@ describe("Interactive Session - Restored Compaction Evidence", () => {
       let stdout = "";
       let stderr = "";
       const session = runInteractiveSession({
-        cliArgs: { bashMode: "disabled" },
+        cliArgs: { executionPosture: "trusted" },
         workspace,
         platform: process.platform,
         session: EPHEMERAL_INTERACTIVE_SESSION,

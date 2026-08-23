@@ -542,7 +542,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:02.000Z",
           reason: "size_threshold",
@@ -964,7 +964,7 @@ describe("Session Store Task Recovery", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 10,
+            schemaVersion: 11,
             type: "effect_reconciled",
             timestamp: "1970-01-01T00:00:02.000Z",
             task: reconciledTask,
@@ -1174,7 +1174,7 @@ describe("Session Store Task Recovery", () => {
       const ledgerBeforeDisposition = await readFile(session.filePath, "utf8");
       const noncanonicalDispositionLedger = `${ledgerBeforeDisposition}${JSON.stringify(
         {
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "task_recovery_disposition",
           timestamp: "1970-01-01T00:00:03.000Z",
           task: {
@@ -1225,7 +1225,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:03.000Z",
           reason: "size_threshold",
@@ -1291,7 +1291,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         opened.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:06.000Z",
           reason: "size_threshold",
@@ -2028,7 +2028,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "provider_attempt_settled",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -2094,7 +2094,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "task_recovery_started",
           timestamp: "1970-01-01T00:00:02.000Z",
           task: {
@@ -2207,7 +2207,7 @@ describe("Session Store Task Recovery", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 10,
+            schemaVersion: 11,
             type: "task_recovery_started",
             timestamp: "1970-01-01T00:00:03.000Z",
             task: nextTask,
@@ -3429,7 +3429,7 @@ describe("Session Store Task Recovery", () => {
         providerSettled,
       ];
       const invalidToolRecovery = {
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "task_recovery_started",
         timestamp: "1970-01-01T00:00:00.009Z",
         task: {
@@ -3693,7 +3693,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "task_terminal",
           timestamp: "1970-01-01T00:00:03.000Z",
           taskId: recovered.taskId,
@@ -3986,7 +3986,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.003Z",
           task: {
@@ -4028,7 +4028,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "task_admitted",
           timestamp: "1970-01-01T00:00:00.001Z",
           task: {
@@ -4126,7 +4126,7 @@ describe("Session Store Task Recovery", () => {
         activeTask: unknown,
         stored = sourceMessages,
       ) => ({
-        schemaVersion: 10,
+        schemaVersion: 11,
         type: "snapshot",
         timestamp: "1970-01-01T00:00:00.010Z",
         reason: "size_threshold",
@@ -4498,7 +4498,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -4564,7 +4564,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -4982,7 +4982,7 @@ describe("Session Store Task Recovery", () => {
         await appendFile(
           session.filePath,
           `${JSON.stringify({
-            schemaVersion: 10,
+            schemaVersion: 11,
             type: "snapshot",
             timestamp: "1970-01-01T00:00:00.001Z",
             reason: "size_threshold",
@@ -5030,7 +5030,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:00.001Z",
           reason: "size_threshold",
@@ -5284,7 +5284,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "provider_intent",
           timestamp: "1970-01-01T00:00:00.009Z",
           task: {
@@ -5756,7 +5756,7 @@ describe("Session Store Task Recovery", () => {
       await appendFile(
         session.filePath,
         `${JSON.stringify({
-          schemaVersion: 10,
+          schemaVersion: 11,
           type: "snapshot",
           timestamp: "1970-01-01T00:00:03.000Z",
           reason: "size_threshold",

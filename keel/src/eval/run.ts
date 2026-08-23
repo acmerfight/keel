@@ -300,7 +300,6 @@ async function runTrialInWorkspace(
       ? ["--provider", selection.providerId]
       : []),
     ...(selection.model !== undefined ? ["--model", selection.model] : []),
-    ...(task.allowBash ? ["--allow-bash"] : []),
     ...(task.maxCostUsd !== undefined
       ? ["--max-cost", String(task.maxCostUsd)]
       : []),

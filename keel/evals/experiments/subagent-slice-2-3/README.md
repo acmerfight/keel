@@ -1,5 +1,10 @@
 # Stable Agent Policy — Slice 2.3
 
+> Historical reproducibility: authoritative scored runs must be reproduced
+> from their recorded freeze commit. Current-tree task fixtures follow Keel's
+> trusted-execution default and are not directly comparable with frozen runs
+> that used the removed `allowBash` task setting.
+
 This is the pre-registered real-provider window for issue #590 Slice 2.3. It
 asks whether the stable `explicit` policy recognizes an ordinary, short user
 request to use a subagent while leaving the same capability unused for a small

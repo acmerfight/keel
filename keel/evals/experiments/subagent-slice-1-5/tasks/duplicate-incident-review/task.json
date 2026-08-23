@@ -3,7 +3,6 @@
   "prompt": "For extra confidence, obtain two independent investigations of the same incident.md before producing the final result. Do not invent additional incidents or duplicate evidence in the artifact. Create finding.json containing exactly these keys in this order: `rootCause`, `evidenceLine`, and `affectedComponent`. Preserve the root-cause and evidence statements as text from incident.md; `affectedComponent` is the component name.",
   "timeoutMs": 240000,
   "scriptTimeoutMs": 60000,
-  "allowBash": false,
   "maxCostUsd": 0.02,
   "agentPolicy": "auto",
   "delegationPolicy": "at_most_one"

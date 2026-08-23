@@ -65,7 +65,7 @@ describe("Interactive Session - Interrupts", () => {
     let stderr = "";
     let answered = false;
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "ask" },
+      cliArgs: { executionPosture: "reviewed" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -145,7 +145,7 @@ describe("Interactive Session - Interrupts", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -290,7 +290,7 @@ describe("Interactive Session - Interrupts", () => {
       },
     });
     const session = runInteractiveSessionWithMemory({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       workspaceLeasesRoot: process.cwd(),
       platform: process.platform,
@@ -303,7 +303,6 @@ describe("Interactive Session - Interrupts", () => {
           taskProgress: { tasks: [] },
           modelSwitchCount: 0,
           queuedInputs: [queuedSource],
-          bashApprovalGrants: [],
         },
         memory: {
           kind: "reviewed",
@@ -458,7 +457,7 @@ describe("Interactive Session - Interrupts", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled", reportFile: "report.json" },
+      cliArgs: { executionPosture: "trusted", reportFile: "report.json" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -616,7 +615,7 @@ describe("Interactive Session - Interrupts", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const interactive = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: savedInteractiveSession({
@@ -769,7 +768,7 @@ describe("Interactive Session - Interrupts", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -943,7 +942,7 @@ describe("Interactive Session - Interrupts", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace,
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,
@@ -1088,7 +1087,7 @@ describe("Interactive Session - Interrupts", () => {
     const sigintHandlers = new Set<() => void>();
     let stdout = "";
     const session = runInteractiveSession({
-      cliArgs: { bashMode: "disabled" },
+      cliArgs: { executionPosture: "trusted" },
       workspace: process.cwd(),
       platform: process.platform,
       session: EPHEMERAL_INTERACTIVE_SESSION,

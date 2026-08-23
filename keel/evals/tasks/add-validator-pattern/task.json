@@ -2,6 +2,5 @@
   "kind": "standard",
   "prompt": "Add a new exported validator `isSlug(value)` following the style of the existing validators. A slug is lowercase letters and numbers separated by single hyphens: `docs-v2` is valid, `Docs`, `docs--v2`, and `docs_2` are invalid. Add the implementation and update the existing tests so `node test.js` passes.",
   "timeoutMs": 240000,
-  "allowBash": true,
   "maxCostUsd": 0.05
 }

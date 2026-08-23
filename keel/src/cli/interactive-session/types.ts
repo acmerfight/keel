@@ -22,10 +22,8 @@ import type {
   McpLifecyclePolicy,
 } from "../../mcp/runtime-types.ts";
 import type {
-  BashApprovalGrant,
-  BashMode,
-  BashProjectApprovalGrant,
-  SessionBashPermissionPolicy,
+  BashPermissionPolicy,
+  ExecutionPosture,
 } from "../../permissions/bash.ts";
 import type {
   DiscoveredSkillCatalog,
@@ -66,7 +64,7 @@ export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
 export type EndEventWithCost = EndEvent & { readonly cost: CostReport };
 
 export interface InteractiveSessionArgs {
-  readonly bashMode: BashMode;
+  readonly executionPosture: ExecutionPosture;
   readonly maxCostUsd?: number;
   readonly reportFile?: string;
 }
@@ -161,14 +159,6 @@ export interface SavedInteractiveSession {
   readonly persistSkillState: (state: SkillLifecycleState) => void;
   readonly fork: (request: InteractiveForkSessionRequest) => string;
   readonly listForkPoints: () => SessionForkPoints;
-  readonly persistBashApprovalGrant: (grant: BashApprovalGrant) => void;
-  readonly persistBashApprovalRevoked: (revocation: {
-    readonly grant: BashApprovalGrant;
-    readonly consumedInputIds: readonly string[];
-  }) => void;
-  readonly persistBashApprovalsCleared: (clear: {
-    readonly consumedInputIds: readonly string[];
-  }) => void;
 }
 
 type EnabledInteractiveMemoryRuntime =
@@ -196,7 +186,6 @@ export interface InteractiveActiveSessionState {
   readonly modelSelection?: SessionModelSelection;
   readonly modelSwitchCount: number;
   readonly queuedInputs: readonly SessionQueuedInput[];
-  readonly bashApprovalGrants: readonly BashApprovalGrant[];
   readonly activeTask?: ActiveSessionTask;
 }
 
@@ -264,9 +253,7 @@ interface InteractiveSessionOptionsBase {
   readonly configuredModelSelection?: ProviderSelection;
   readonly initialInputLines?: readonly string[];
   readonly onInitialInputLinesAdmitted?: () => void;
-  readonly projectRoot?: string;
-  readonly initialProjectBashApprovalGrants?: readonly BashProjectApprovalGrant[];
-  readonly bashPermission?: SessionBashPermissionPolicy;
+  readonly bashPermission?: BashPermissionPolicy;
   readonly goalAutomaticContinuationTurnLimit?: number;
   readonly reportRecorder?: AgentEventReportRecorder;
   readonly priorExplicitSkillActivations?: readonly SkillActivationRecord[];
@@ -275,9 +262,6 @@ interface InteractiveSessionOptionsBase {
   readonly sessionPicker?: () => SessionPickerView;
   readonly exitOnTurnAbort?: boolean;
   readonly now?: () => number;
-  readonly persistProjectBashApprovalGrant?: (
-    grant: BashProjectApprovalGrant,
-  ) => void;
   readonly toolOutputArtifacts?: ToolOutputArtifactsOptions;
   readonly agentHistory?: AgentTreeHistory;
   readonly delegation?: {

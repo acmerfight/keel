@@ -32,7 +32,6 @@ interface TaskFixtureBase {
   readonly solution?: string;
   readonly timeoutMs?: number;
   readonly scriptTimeoutMs?: number;
-  readonly allowBash?: boolean;
 }
 
 export type TaskFixture = TaskFixtureBase &
@@ -65,7 +64,6 @@ export interface MemoryPairTaskFixture {
   readonly solution: string;
   readonly timeoutMs: number;
   readonly scriptTimeoutMs: number;
-  readonly allowBash: boolean;
   readonly maxCostUsd: number;
   readonly memory: string;
 }
@@ -77,7 +75,6 @@ export interface DelegationPairTaskFixture {
   readonly solution: string;
   readonly timeoutMs: number;
   readonly scriptTimeoutMs: number;
-  readonly allowBash: boolean;
   readonly maxCostUsd: number;
   readonly agentPolicy: DelegatingAgentPolicy;
   readonly delegationPolicy: EvalDelegationPolicy;
@@ -111,9 +108,6 @@ export async function createTask(
         : {}),
       ...(fixture.scriptTimeoutMs !== undefined
         ? { scriptTimeoutMs: fixture.scriptTimeoutMs }
-        : {}),
-      ...(fixture.allowBash !== undefined
-        ? { allowBash: fixture.allowBash }
         : {}),
       ...(fixture.maxCostUsd !== undefined
         ? { maxCostUsd: fixture.maxCostUsd }
@@ -154,7 +148,6 @@ export async function createMemoryPairTask(
       prompt: fixture.prompt,
       timeoutMs: fixture.timeoutMs,
       scriptTimeoutMs: fixture.scriptTimeoutMs,
-      allowBash: fixture.allowBash,
       maxCostUsd: fixture.maxCostUsd,
       memory: fixture.memory,
     }),
@@ -175,7 +168,6 @@ export async function createDelegationPairTask(
       prompt: fixture.prompt,
       timeoutMs: fixture.timeoutMs,
       scriptTimeoutMs: fixture.scriptTimeoutMs,
-      allowBash: fixture.allowBash,
       maxCostUsd: fixture.maxCostUsd,
       agentPolicy: fixture.agentPolicy,
       delegationPolicy: fixture.delegationPolicy,
@@ -204,7 +196,12 @@ export const FIX_NOTE_TASK: TaskFixture = {
   solution: "printf 'hello new world\\n' > note.txt\n",
 };
 export const VALID_REPORT = {
-  schemaVersion: 22,
+  schemaVersion: 23,
+  execution: {
+    posture: "trusted",
+    bashAuthority: "current_os_user",
+    enabledMcpIntegrationsMayPerformExternalEffects: true,
+  },
   tasks: [
     {
       ordinal: 1,

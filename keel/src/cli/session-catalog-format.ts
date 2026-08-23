@@ -139,7 +139,7 @@ function formatSessionForkPoint(forkPoint: SessionForkPointRecord): string {
 }
 
 function formatSessionForkPolicy(policy: SessionForkPolicyRecord): string {
-  return `transcript=${policy.transcript}, pendingInputs=${policy.pendingInputs}, queuedInputs=${policy.queuedInputs}, bashApprovalGrants=${policy.bashApprovalGrants}`;
+  return `transcript=${policy.transcript}, pendingInputs=${policy.pendingInputs}, queuedInputs=${policy.queuedInputs}`;
 }
 
 interface SessionCatalogGraphGroup {
@@ -489,6 +489,7 @@ export function formatSessionDetail(options: {
         : {}),
       workspace: options.entry.workspace,
       activeModel: formatSessionDetailActiveModel(options.session),
+      executionPosture: null,
       ...(options.session.goal !== undefined
         ? { goal: options.session.goal }
         : {}),
@@ -496,7 +497,6 @@ export function formatSessionDetail(options: {
       messages: options.session.messages,
       messageCount: options.session.storedMessages.length,
       pendingInputCount: options.session.pendingInputs.length,
-      bashApprovalCount: options.session.bashApprovalGrants.length,
       taskProgress: options.session.taskProgress,
       modelSwitchCount: options.session.modelSwitches.length,
       undoCheckpoints: options.undoCheckpoints,
@@ -531,7 +531,6 @@ export function formatSessionDetail(options: {
     `  pending inputs: ${options.session.pendingInputs.length}`,
     `  active model: ${formatSessionDetailActiveModel(options.session)}`,
     `  model switches: ${options.session.modelSwitches.length}`,
-    `  bash approvals: ${options.session.bashApprovalGrants.length}`,
     ...(options.session.lastTaskOutcome === undefined ||
     options.session.lastTaskOutcome.unknownToolEffectOperationIds.length === 0
       ? []
