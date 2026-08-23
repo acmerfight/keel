@@ -1,9 +1,9 @@
 import { writeFileSync } from "node:fs";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
 import { errorMessage, KeelError, type KeelErrorCode } from "../core/error.ts";
+import type { ExecutionPosture } from "../core/execution-posture.ts";
 import type { SubagentTerminalStatus } from "../core/subagent-status.ts";
 import type { UndoProtectionSummary } from "../core/undo-protection.ts";
-import type { ExecutionPosture } from "../permissions/bash.ts";
 import type {
   ActiveSkillStatus,
   SkillActivationRecord,
@@ -197,10 +197,12 @@ interface RunReportFailure {
 }
 
 interface RunReportBase {
-  readonly schemaVersion: 23;
+  readonly schemaVersion: 24;
   readonly execution: {
     readonly posture: ExecutionPosture;
     readonly bashAuthority: "current_os_user";
+    readonly mainMcpCalls: "trusted" | "allow_once";
+    readonly childMcpTaskLeases: "exact_current" | "disabled";
     readonly enabledMcpIntegrationsMayPerformExternalEffects: true;
   };
   readonly tasks: readonly RunReportTask[];
@@ -282,10 +284,14 @@ export function writeRunReport(filePath: string, input: RunReportInput): void {
         : 0
       : Math.max(0, accounting.costUsd - (outcome.maxCostUsd ?? Infinity));
   const reportBase: RunReportBase = {
-    schemaVersion: 23,
+    schemaVersion: 24,
     execution: {
       posture: input.executionPosture,
       bashAuthority: "current_os_user",
+      mainMcpCalls:
+        input.executionPosture === "trusted" ? "trusted" : "allow_once",
+      childMcpTaskLeases:
+        input.executionPosture === "trusted" ? "exact_current" : "disabled",
       enabledMcpIntegrationsMayPerformExternalEffects: true,
     },
     tasks: input.tasks,

@@ -196,52 +196,6 @@ function parseMcpLoginArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   });
 }
 
-function parseMcpApprovalIndex(raw: string | undefined): ParseResult<number> {
-  if (raw === undefined || !/^[1-9][0-9]*$/u.test(raw)) {
-    return parseError("Error: mcp approvals revoke requires a positive index.");
-  }
-  const index = Number(raw);
-  return Number.isSafeInteger(index)
-    ? parseOk(index)
-    : parseError("Error: mcp approvals revoke requires a positive index.");
-}
-
-function parseMcpApprovalsArgs(
-  args: readonly string[],
-): ParseResult<McpCliArgs> {
-  const action = args[0];
-  if (action === "list" || action === "clear") {
-    if (args.length > 1) {
-      return parseError(
-        `Error: unknown mcp approvals ${action} option "${args[1]}"`,
-      );
-    }
-    return parseOk({
-      command: "mcp",
-      mode: action === "list" ? "approvals-list" : "approvals-clear",
-    });
-  }
-  if (action === "revoke") {
-    const parsed = parseMcpApprovalIndex(args[1]);
-    if (!parsed.ok) return parsed;
-    if (args.length > 2) {
-      return parseError(
-        `Error: unknown mcp approvals revoke option "${args[2]}"`,
-      );
-    }
-    return parseOk({
-      command: "mcp",
-      mode: "approvals-revoke",
-      index: parsed.value,
-    });
-  }
-  return parseError(
-    action === undefined || action === ""
-      ? "Error: mcp approvals requires a subcommand: list, revoke, or clear."
-      : `Error: unknown mcp approvals subcommand "${action}"`,
-  );
-}
-
 export function parseMcpArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   const mode = args[0];
   if (mode === "add") {
@@ -259,9 +213,6 @@ export function parseMcpArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   if (mode === "login") {
     return parseMcpLoginArgs(args.slice(1));
   }
-  if (mode === "approvals") {
-    return parseMcpApprovalsArgs(args.slice(1));
-  }
   if (
     mode === "logout" ||
     mode === "enable" ||
@@ -272,7 +223,7 @@ export function parseMcpArgs(args: readonly string[]): ParseResult<McpCliArgs> {
   }
   return parseError(
     mode === undefined || mode === ""
-      ? "Error: mcp requires a subcommand: add, list, status, doctor, login, logout, enable, disable, remove, or approvals."
+      ? "Error: mcp requires a subcommand: add, list, status, doctor, login, logout, enable, disable, or remove."
       : `Error: unknown mcp subcommand "${mode}"`,
   );
 }

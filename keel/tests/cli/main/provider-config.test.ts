@@ -42,10 +42,12 @@ describe("CLI Main - Provider Config", () => {
         JSON.parse(await readFile(reportPath, "utf8")),
       );
       expect(report).toMatchObject({
-        schemaVersion: 23,
+        schemaVersion: 24,
         execution: {
           posture: "trusted",
           bashAuthority: "current_os_user",
+          mainMcpCalls: "trusted",
+          childMcpTaskLeases: "exact_current",
           enabledMcpIntegrationsMayPerformExternalEffects: true,
         },
         modelsUsed: [{ provider: "fake", model: "fake" }],

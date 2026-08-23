@@ -1,7 +1,7 @@
 import type { AgentPolicyConfiguration } from "../../core/agent-policy.ts";
+import type { ExecutionPosture } from "../../core/execution-posture.ts";
 import type { ApiKeyProviderId, ProviderId } from "../../core/provider-id.ts";
 import type { SessionGoalBudget } from "../../core/session-goal.ts";
-import type { ExecutionPosture } from "../../permissions/bash.ts";
 import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 
 export interface EvalRunCliArgs {
@@ -112,19 +112,6 @@ export type McpCliArgs =
       readonly command: "mcp";
       readonly mode: "remove";
       readonly serverId: string;
-    }
-  | {
-      readonly command: "mcp";
-      readonly mode: "approvals-list";
-    }
-  | {
-      readonly command: "mcp";
-      readonly mode: "approvals-revoke";
-      readonly index: number;
-    }
-  | {
-      readonly command: "mcp";
-      readonly mode: "approvals-clear";
     };
 
 export interface SetupCliArgs {

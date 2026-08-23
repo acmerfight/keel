@@ -142,10 +142,12 @@ export function evalRunReport(
     };
   });
   return {
-    schemaVersion: 23,
+    schemaVersion: 24,
     execution: {
       posture: "trusted",
       bashAuthority: "current_os_user",
+      mainMcpCalls: "trusted",
+      childMcpTaskLeases: "exact_current",
       enabledMcpIntegrationsMayPerformExternalEffects: true,
     },
     tasks: [

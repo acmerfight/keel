@@ -36,6 +36,7 @@ import {
 import type { AbortableToolOutputArtifactStore } from "../agent/tool-output-artifacts.ts";
 import type { DelegatingAgentPolicy } from "../core/agent-policy.ts";
 import type { CostModel } from "../core/cost.ts";
+import type { ExecutionPosture } from "../core/execution-posture.ts";
 import type { ModelMetadata } from "../core/model-metadata.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import type { LLMProvider } from "../llm/types.ts";
@@ -51,7 +52,6 @@ import {
 import type {
   McpConnectionFactory,
   McpLifecyclePolicy,
-  McpPermissionPolicy,
   McpRuntimeServer,
 } from "../mcp/runtime-types.ts";
 import { createSkillActivation } from "../skills/lifecycle.ts";
@@ -76,6 +76,7 @@ interface CreateCliSubagentRuntimeOptionsBase {
   readonly modelMetadata: ModelMetadata;
   readonly maxCostUsd: number;
   readonly policy: DelegatingAgentPolicy;
+  readonly executionPosture: ExecutionPosture;
   readonly projectInstructions: ProjectInstructions | undefined;
   readonly hiddenWorkspacePaths: readonly string[];
   readonly skillCatalog?: DiscoveredSkillCatalog;
@@ -85,7 +86,6 @@ interface CreateCliSubagentRuntimeOptionsBase {
       authorizationIdentity: McpAuthorizationIdentity,
     ) => McpConnectionFactory;
     readonly lifecycle: McpLifecyclePolicy;
-    readonly permission: McpPermissionPolicy;
     readonly authorizationIdentity: (
       server: McpRuntimeServer,
     ) => Promise<McpAuthorizationIdentity>;
@@ -441,9 +441,13 @@ export async function createCliSubagentRuntime(
   };
   const skillCatalog = options.skillCatalog;
   const repoProfiles = loadRepoSubagentProfiles(options.workspace);
-  const configuredMcpSelectors = repoProfiles.flatMap(
-    (profile) => profile.mcp ?? [],
-  );
+  const childMcpTaskLeasesEnabled = options.executionPosture === "trusted";
+  const effectiveRepoProfiles = childMcpTaskLeasesEnabled
+    ? repoProfiles
+    : repoProfiles.map(({ mcp: _mcp, ...profile }) => profile);
+  const configuredMcpSelectors = childMcpTaskLeasesEnabled
+    ? repoProfiles.flatMap((profile) => profile.mcp ?? [])
+    : [];
   const uniqueMcpSelectors = [
     ...new Map(
       configuredMcpSelectors.map((selector) => [
@@ -473,6 +477,10 @@ export async function createCliSubagentRuntime(
       ? undefined
       : {
           kind: "enabled" as const,
+          taskLeases:
+            options.executionPosture === "trusted"
+              ? ("enabled" as const)
+              : ("disabled" as const),
           resolveTool: (selector: SubagentMcpToolSelector) =>
             resolvedMcpTools.get(mcpSelectorKey(selector)),
           resolveCurrent: async (tools: readonly SubagentMcpToolSnapshot[]) => {
@@ -576,7 +584,7 @@ export async function createCliSubagentRuntime(
                       ),
                   );
                   return authorized
-                    ? await mcpOptions.permission.review(request)
+                    ? { type: "allow" as const }
                     : {
                         type: "deny" as const,
                         message:
@@ -597,7 +605,7 @@ export async function createCliSubagentRuntime(
       providerId: options.providerId,
       model: options.model,
     },
-    repoProfiles,
+    repoProfiles: effectiveRepoProfiles,
     writer: options.policy === "explicit" ? "enabled" : "disabled",
     ...(mcpRuntime !== undefined ? { mcpRuntime } : {}),
     ...(skillCatalog !== undefined

@@ -1,5 +1,3 @@
-export type ExecutionPosture = "trusted" | "reviewed";
-
 interface BashPermissionReviewRequest {
   readonly command: string;
   readonly cwd: string;

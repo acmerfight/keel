@@ -7,11 +7,6 @@ import { z } from "zod";
 import { runCliMain } from "../../../src/cli/index.ts";
 import { listMcpServers } from "../../../src/cli/mcp-config.ts";
 import {
-  hasMcpProjectApprovalGrant,
-  mcpProjectApprovalGrant,
-  saveMcpProjectApprovalGrant,
-} from "../../../src/cli/mcp-project-approvals.ts";
-import {
   MCP_CIMD_CLIENT_ID,
   MCP_CIMD_REDIRECT_URIS,
 } from "../../../src/mcp/cimd.ts";
@@ -386,12 +381,7 @@ describe("CLI Main - MCP OAuth", () => {
     When the user logs in again after the server reports insufficient scope,
     Then Keel completes step-up authorization and reports the server ready`, async () => {
     // Given
-    const {
-      home,
-      mcp,
-      secrets,
-      login: initialLogin,
-    } = await loggedInRefreshableMcp({
+    const { home, mcp, secrets } = await loggedInRefreshableMcp({
       refreshResponse: "rotate",
       stepUp: {
         initialScope: "mcp:read",
@@ -406,25 +396,6 @@ describe("CLI Main - MCP OAuth", () => {
         throw new Error("Initial MCP login did not publish a grant identity");
       }
       expect(initialRecord.credentials[0]?.tokens?.scope).toBe("mcp:read");
-      const permissionRequest = {
-        origin: new URL(mcp.url).origin,
-        serverId: "refreshable",
-        configurationDigest: "a".repeat(64),
-        rawToolName: "search",
-        descriptorDigest: "b".repeat(64),
-        arguments: { query: "otters" },
-        signal: AbortSignal.abort(),
-      };
-      const priorApproval = mcpProjectApprovalGrant(home, {
-        ...permissionRequest,
-        authorizationIdentity: {
-          kind: "oauth",
-          ...initialAuthorization,
-        },
-      });
-      expect(
-        await saveMcpProjectApprovalGrant(initialLogin.runtime, priorApproval),
-      ).toBe(true);
       mcp.requireStepUp();
       const insufficient = createRuntime(["mcp", "status", "refreshable"], {
         env: { KEEL_HOME: home },
@@ -486,22 +457,6 @@ describe("CLI Main - MCP OAuth", () => {
       expect(steppedUpAuthorization.grantId).not.toBe(
         initialAuthorization.grantId,
       );
-      const steppedUpApproval = mcpProjectApprovalGrant(home, {
-        ...permissionRequest,
-        authorizationIdentity: {
-          kind: "oauth",
-          ...steppedUpAuthorization,
-        },
-      });
-      expect(
-        await hasMcpProjectApprovalGrant(initialLogin.runtime, priorApproval),
-      ).toBe(true);
-      expect(
-        await hasMcpProjectApprovalGrant(
-          initialLogin.runtime,
-          steppedUpApproval,
-        ),
-      ).toBe(false);
       expect(steppedUpRecord.credentials[0]?.tokens).toMatchObject({
         access_token: mcp.stepUpAccessToken,
         scope: "mcp:read mcp:tools",
