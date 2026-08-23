@@ -226,7 +226,10 @@ async function startInputRequiredMcpToolServer(): Promise<TestMcpServer> {
   };
 }
 
-function mcpAgentProvider(capturedBodies: unknown[]): Server {
+function mcpAgentProvider(
+  capturedBodies: unknown[],
+  options: { readonly beforeFirstResponse?: () => void } = {},
+): Server {
   return createServer((request, response) => {
     if (request.url !== "/chat/completions") {
       response.writeHead(404);
@@ -246,6 +249,7 @@ function mcpAgentProvider(capturedBodies: unknown[]): Server {
         Connection: "keep-alive",
       });
       if (capturedBodies.length === 1) {
+        options.beforeFirstResponse?.();
         response.write(
           sseToolCall("call_mcp_search", "mcp_search", {
             query: "search",
@@ -274,10 +278,63 @@ function mcpAgentProvider(capturedBodies: unknown[]): Server {
   });
 }
 
+function goalMcpAgentProvider(capturedBodies: unknown[]): Server {
+  return createServer((request, response) => {
+    if (request.url !== "/chat/completions") {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      capturedBodies.push(JSON.parse(body));
+      response.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      switch (capturedBodies.length) {
+        case 1:
+          response.write(
+            sseToolCall("goal_mcp_search", "mcp_search", {
+              query: "search",
+              server: "catalog",
+              toolName: "search",
+            }),
+          );
+          break;
+        case 2:
+          response.write(
+            sseToolCall("goal_remote_search", "mcp__catalog__search", {
+              query: "otters",
+            }),
+          );
+          break;
+        case 3:
+          response.write(
+            sseToolCall("complete_mcp_goal", "update_goal", {
+              status: "completed",
+            }),
+          );
+          break;
+        default:
+          response.end(sseTextReplyWithUsage("MCP Goal completed."));
+          return;
+      }
+      response.write(sseToolFinish());
+      response.end("data: [DONE]\n\n");
+    });
+  });
+}
+
 describe("CLI Main - MCP agent tools", () => {
-  test(`Given a repo child profile allows one MCP tool and an exact project approval already exists,
+  test(`Given a trusted run and a repo child profile allows one MCP tool,
     When the user delegates with only that MCP task lease,
-    Then the child progressively calls the leased tool without seeing or dispatching another server tool`, async () => {
+    Then the child calls the exact current lease without approval or access to another server tool`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-child-mcp-home-"));
     const workspace = await mkdtemp(
@@ -312,31 +369,6 @@ describe("CLI Main - MCP agent tools", () => {
       }),
       "utf8",
     );
-
-    const approvalBodies: unknown[] = [];
-    const approvalProvider = mcpAgentProvider(approvalBodies);
-    await listen(approvalProvider);
-    const approvalInput = new PassThrough();
-    let approvalAnswered = false;
-    const approvalRun = createRuntime(["search the catalog for otters"], {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(approvalProvider)}`,
-        KEEL_HOME: home,
-      },
-      input: approvalInput,
-      inputIsTTY: true,
-      onStderr: (text) => {
-        if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
-          approvalAnswered = true;
-          approvalInput.end("s\n");
-        }
-      },
-    });
-    expect(await runCliMain(approvalRun.runtime), approvalRun.stderr()).toBe(0);
-    await close(approvalProvider);
-    expect(mcp.calls()).toEqual(["otters"]);
 
     const capturedBodies: unknown[] = [];
     const provider = createServer((request, response) => {
@@ -432,13 +464,13 @@ describe("CLI Main - MCP agent tools", () => {
       expect(
         activatedChild.tools?.map((tool) => tool.function?.name),
       ).not.toContain("mcp__catalog__erase");
-      expect(mcp.calls()).toEqual(["otters", "otters"]);
+      expect(run.stderr()).not.toContain("Approve MCP tool call?");
+      expect(mcp.calls()).toEqual(["otters"]);
       expect(mainOnly.requests()).toBe(mainOnlyRequestsAfterConfiguration);
       expect(JSON.stringify(capturedBodies[3])).toContain(
         "remote result for otters",
       );
     } finally {
-      approvalInput.end();
       await close(provider);
       await mainOnly.close();
       await mcp.close();
@@ -447,9 +479,9 @@ describe("CLI Main - MCP agent tools", () => {
     }
   });
 
-  test(`Given a child MCP task lease has no exact saved project approval,
-    When a headless child attempts the leased remote call,
-    Then it fails closed before server dispatch instead of borrowing interactive authority`, async () => {
+  test(`Given the parent uses the reviewed execution posture,
+    When it delegates a child task with an MCP lease,
+    Then admission rejects the sensitive lease before child or external execution without prompting`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-child-mcp-denied-home-"));
     const workspace = await mkdtemp(
@@ -494,37 +526,21 @@ describe("CLI Main - MCP agent tools", () => {
               })}${sseToolFinish()}data: [DONE]\n\n`,
             );
             return;
-          case 2:
-            response.end(
-              `${sseToolCall("find_remote", "mcp_search", {
-                query: "search",
-                server: "catalog",
-                toolName: "search",
-              })}${sseToolFinish()}data: [DONE]\n\n`,
-            );
-            return;
-          case 3:
-            response.end(
-              `${sseToolCall("call_remote", "mcp__catalog__search", {
-                query: "otters",
-              })}${sseToolFinish()}data: [DONE]\n\n`,
-            );
-            return;
-          case 4:
+          default:
             response.end(
               sseTextReplyWithUsage(
-                "The leased call was denied because no saved approval exists.",
+                "Reviewed posture rejected the child MCP lease.",
               ),
             );
-            return;
-          default:
-            response.end(sseTextReplyWithUsage("The child failed closed."));
         }
       });
     });
     await listen(provider);
+    const input = new PassThrough();
     const run = createRuntime(
       [
+        "--approval-policy",
+        "ask",
         "--agent-policy",
         "explicit",
         "--max-cost",
@@ -538,6 +554,8 @@ describe("CLI Main - MCP agent tools", () => {
           DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
           KEEL_HOME: home,
         },
+        input,
+        inputIsTTY: true,
       },
     );
 
@@ -547,14 +565,109 @@ describe("CLI Main - MCP agent tools", () => {
 
       // Then
       expect(exitCode, run.stderr()).toBe(0);
-      expect(run.stdout()).toBe("The child failed closed.\n");
+      expect(run.stdout()).toBe(
+        "Reviewed posture rejected the child MCP lease.\n",
+      );
+      expect(run.stderr()).not.toContain("Approve MCP tool call?");
       expect(mcp.calls()).toEqual([]);
-      expect(JSON.stringify(capturedBodies[3])).toContain(
-        "exact saved project approval",
+      expect(capturedBodies).toHaveLength(2);
+      const firstRequest = requestWithToolsSchema.parse(capturedBodies[0]);
+      const delegateTool = firstRequest.tools?.find(
+        (tool) => tool.function?.name === "delegate",
+      );
+      expect(delegateTool).toBeDefined();
+      expect(JSON.stringify(capturedBodies[0])).toContain("no MCP");
+      expect(JSON.stringify(capturedBodies[0])).not.toContain("catalog/search");
+      expect(JSON.stringify(capturedBodies[1])).toContain(
+        'mcp tools must be allowed by selected profile \\"repo:remote\\"',
       );
     } finally {
+      input.end();
       await close(provider);
       await mcp.close();
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given reviewed execution has a repo profile with an MCP ceiling but no configured MCP server,
+    When Main advertises child profiles,
+    Then the profile remains available with no MCP authority and startup does not resolve the dropped selector`, async () => {
+    // Given
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-child-mcp-reviewed-empty-home-"),
+    );
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-child-mcp-reviewed-empty-workspace-"),
+    );
+    await mkdir(join(workspace, ".git"));
+    await mkdir(join(workspace, ".agents"));
+    await writeFile(
+      join(workspace, ".agents", "subagents.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: {
+          remote: {
+            base: "explorer",
+            mcp: [{ server: "missing-catalog", tool: "search" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const capturedBodies: unknown[] = [];
+    const provider = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        capturedBodies.push(JSON.parse(body));
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(sseTextReplyWithUsage("Reviewed profile is available."));
+      });
+    });
+    await listen(provider);
+    const input = new PassThrough();
+    const run = createRuntime(
+      [
+        "--approval-policy",
+        "ask",
+        "--agent-policy",
+        "explicit",
+        "--max-cost",
+        "0.05",
+        "Inspect the reviewed child catalog.",
+      ],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+          KEEL_HOME: home,
+        },
+        input,
+        inputIsTTY: true,
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(run.runtime);
+
+      // Then
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(run.stdout()).toBe("Reviewed profile is available.\n");
+      expect(capturedBodies).toHaveLength(1);
+      expect(JSON.stringify(capturedBodies[0])).toContain(
+        "repo:remote (explorer base; no Skills; no MCP)",
+      );
+      expect(JSON.stringify(capturedBodies[0])).not.toContain(
+        "missing-catalog/search",
+      );
+    } finally {
+      input.end();
+      await close(provider);
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
     }
@@ -824,22 +937,25 @@ describe("CLI Main - MCP agent tools", () => {
     await listen(provider);
     const input = new PassThrough();
     let approvalAnswered = false;
-    const run = createRuntime(["compare both repositories through MCP"], {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
-        KEEL_HOME: home,
+    const run = createRuntime(
+      ["--approval-policy", "ask", "compare both repositories through MCP"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+          KEEL_HOME: home,
+        },
+        input,
+        inputIsTTY: true,
+        onStderr: (text) => {
+          if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
+            approvalAnswered = true;
+            input.end("y\n");
+          }
+        },
       },
-      input,
-      inputIsTTY: true,
-      onStderr: (text) => {
-        if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
-          approvalAnswered = true;
-          input.end("y\n");
-        }
-      },
-    });
+    );
 
     try {
       // When
@@ -915,23 +1031,30 @@ describe("CLI Main - MCP agent tools", () => {
       await listen(provider);
       const input = new PassThrough();
       let approvalAnswered = false;
-      const run = createRuntime(["use the catalog MCP to search for otters"], {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
-          KEEL_HOME: home,
+      const run = createRuntime(
+        [
+          "--approval-policy",
+          "ask",
+          "use the catalog MCP to search for otters",
+        ],
+        {
+          cwd: workspace,
+          env: {
+            DEEPSEEK_API_KEY: "test-key",
+            DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+            KEEL_HOME: home,
+          },
+          input,
+          inputIsTTY: true,
+          onStderr: (text) => {
+            if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
+              approvalAnswered = true;
+              input.write("y\n");
+              input.end();
+            }
+          },
         },
-        input,
-        inputIsTTY: true,
-        onStderr: (text) => {
-          if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
-            approvalAnswered = true;
-            input.write("y\n");
-            input.end();
-          }
-        },
-      });
+      );
 
       try {
         // When
@@ -996,22 +1119,25 @@ describe("CLI Main - MCP agent tools", () => {
     await listen(provider);
     const input = new PassThrough();
     let approvalAnswered = false;
-    const run = createRuntime(["use the catalog MCP to search for otters"], {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
-        KEEL_HOME: home,
+    const run = createRuntime(
+      ["--approval-policy", "ask", "use the catalog MCP to search for otters"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+          KEEL_HOME: home,
+        },
+        input,
+        inputIsTTY: true,
+        onStderr: (text) => {
+          if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
+            approvalAnswered = true;
+            input.end("y\n");
+          }
+        },
       },
-      input,
-      inputIsTTY: true,
-      onStderr: (text) => {
-        if (text.includes("Approve MCP tool call?") && !approvalAnswered) {
-          approvalAnswered = true;
-          input.end("y\n");
-        }
-      },
-    });
+    );
 
     try {
       // When
@@ -1087,7 +1213,13 @@ describe("CLI Main - MCP agent tools", () => {
     const reportPath = join(workspace, "authenticated-report.json");
     let approvalAnswered = false;
     const run = createRuntime(
-      ["--report", reportPath, "search the protected catalog for otters"],
+      [
+        "--approval-policy",
+        "ask",
+        "--report",
+        reportPath,
+        "search the protected catalog for otters",
+      ],
       {
         cwd: workspace,
         env: {
@@ -1139,9 +1271,9 @@ describe("CLI Main - MCP agent tools", () => {
     }
   });
 
-  test(`Given a non-interactive run has no exact saved MCP approval,
+  test(`Given a default non-interactive run has an enabled MCP server,
     When the provider searches and attempts a valid remote call,
-    Then Keel fails the call closed without dispatching it`, async () => {
+    Then Keel dispatches it under the trusted posture without prompting`, async () => {
     // Given
     const home = await mkdtemp(join(tmpdir(), "keel-mcp-headless-home-"));
     const workspace = await mkdtemp(
@@ -1171,16 +1303,10 @@ describe("CLI Main - MCP agent tools", () => {
 
       // Then
       expect(exitCode, run.stderr()).toBe(0);
-      expect(mcp.calls()).toEqual([]);
+      expect(run.stdout()).toBe("Found one remote match.\n");
+      expect(mcp.calls()).toEqual(["otters"]);
       expect(run.stderr()).not.toContain("Approve MCP tool call?");
-      const recoveryRequest = requestWithMessagesSchema.parse(
-        capturedBodies[2],
-      );
-      expect(recoveryRequest.messages).toContainEqual({
-        role: "tool",
-        tool_call_id: "call_remote_search",
-        content: expect.stringContaining("non-TTY one-shot runs fail closed"),
-      });
+      expect(capturedBodies).toHaveLength(3);
     } finally {
       await close(provider);
       await mcp.close();
@@ -1189,13 +1315,120 @@ describe("CLI Main - MCP agent tools", () => {
     }
   });
 
-  test(`Given the user saves an exact MCP tool approval for the current project,
-    When a later non-interactive run requests the same remote call,
-    Then Keel dispatches it without another approval prompt`, async () => {
+  test.each(["start", "resume"] as const)(
+    `Given a headless Goal %s uses an enabled MCP integration under the default posture,
+    When the agent invokes the remote tool without a terminal,
+    Then Keel trusts the call without a grant or prompt and reaches verified completion`,
+    async (mode) => {
+      // Given
+      const home = await mkdtemp(join(tmpdir(), `keel-mcp-goal-${mode}-home-`));
+      const workspace = await mkdtemp(
+        join(tmpdir(), `keel-mcp-goal-${mode}-workspace-`),
+      );
+      const mcp = await startMcpToolServer("modern");
+      const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
+        env: { KEEL_HOME: home },
+      });
+      expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
+
+      const capturedBodies: unknown[] = [];
+      const provider = goalMcpAgentProvider(capturedBodies);
+      await listen(provider);
+      const sessionId = `mcp-goal-${mode}`;
+      const runtimeOptions = {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+          KEEL_HOME: home,
+        },
+        inputIsTTY: false,
+      } as const;
+
+      try {
+        let run: ReturnType<typeof createRuntime>;
+        if (mode === "resume") {
+          const launch = createRuntime(
+            [
+              "goal",
+              "--objective",
+              "Use the catalog MCP to find otters",
+              "--verify",
+              "true",
+              "--turns",
+              "8",
+              "--session",
+              sessionId,
+              "--provider",
+              "deepseek",
+              "--max-cost",
+              "0.000001",
+            ],
+            runtimeOptions,
+          );
+          expect(await runCliMain(launch.runtime), launch.stderr()).toBe(4);
+          expect(capturedBodies).toHaveLength(0);
+          run = createRuntime(
+            [
+              "goal",
+              "resume",
+              sessionId,
+              "--provider",
+              "deepseek",
+              "--max-cost",
+              "1",
+            ],
+            runtimeOptions,
+          );
+        } else {
+          run = createRuntime(
+            [
+              "goal",
+              "--objective",
+              "Use the catalog MCP to find otters",
+              "--verify",
+              "true",
+              "--turns",
+              "8",
+              "--session",
+              sessionId,
+              "--provider",
+              "deepseek",
+              "--max-cost",
+              "1",
+            ],
+            runtimeOptions,
+          );
+        }
+
+        // When
+        const exitCode = await runCliMain(run.runtime);
+
+        // Then
+        expect(exitCode, run.stderr()).toBe(0);
+        expect(run.stdout()).toContain(
+          `Headless goal outcome: completed; session: ${sessionId}\n`,
+        );
+        expect(run.stderr()).not.toContain("Approve MCP tool call?");
+        expect(mcp.calls()).toEqual(["otters"]);
+        expect(capturedBodies).toHaveLength(4);
+        expect(JSON.stringify(capturedBodies)).not.toContain("approval grant");
+      } finally {
+        await close(provider);
+        await mcp.close();
+        await rm(workspace, { recursive: true, force: true });
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(`Given reviewed one-shot input already contains a queued affirmative line,
+    When the exact MCP prompt later receives a denial,
+    Then only the post-prompt line decides and Keel never dispatches the external call`, async () => {
     // Given
-    const home = await mkdtemp(join(tmpdir(), "keel-mcp-saved-approval-home-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-mcp-queued-input-home-"));
     const workspace = await mkdtemp(
-      join(tmpdir(), "keel-mcp-saved-approval-workspace-"),
+      join(tmpdir(), "keel-mcp-queued-input-workspace-"),
     );
     const mcp = await startMcpToolServer("modern");
     const add = createRuntime(["mcp", "add", mcp.url, "--name", "catalog"], {
@@ -1203,94 +1436,53 @@ describe("CLI Main - MCP agent tools", () => {
     });
     expect(await runCliMain(add.runtime), add.stderr()).toBe(0);
 
-    const firstBodies: unknown[] = [];
-    const firstProvider = mcpAgentProvider(firstBodies);
-    await listen(firstProvider);
+    const capturedBodies: unknown[] = [];
     const input = new PassThrough();
-    let approvalSaved = false;
-    const firstRun = createRuntime(["search remotely"], {
+    const provider = mcpAgentProvider(capturedBodies, {
+      beforeFirstResponse: () => input.write("y\n"),
+    });
+    await listen(provider);
+    let denialAnswered = false;
+    const run = createRuntime(["--approval-policy", "ask", "search remotely"], {
       cwd: workspace,
       env: {
         DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(firstProvider)}`,
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
         KEEL_HOME: home,
       },
       input,
       inputIsTTY: true,
       onStderr: (text) => {
-        if (text.includes("Approve MCP tool call?") && !approvalSaved) {
-          approvalSaved = true;
-          input.end("s\n");
+        if (text.includes("Approve MCP tool call?") && !denialAnswered) {
+          denialAnswered = true;
+          input.end("n\n");
         }
       },
-    });
-    expect(await runCliMain(firstRun.runtime), firstRun.stderr()).toBe(0);
-    expect(approvalSaved).toBe(true);
-    await close(firstProvider);
-
-    const secondBodies: unknown[] = [];
-    const secondProvider = mcpAgentProvider(secondBodies);
-    await listen(secondProvider);
-    const secondRun = createRuntime(["search remotely"], {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(secondProvider)}`,
-        KEEL_HOME: home,
-      },
-      inputIsTTY: false,
     });
 
     try {
       // When
-      const exitCode = await runCliMain(secondRun.runtime);
+      const exitCode = await runCliMain(run.runtime);
 
       // Then
-      expect(exitCode, secondRun.stderr()).toBe(0);
-      expect(secondRun.stdout()).toBe("Found one remote match.\n");
-      expect(secondRun.stderr()).not.toContain("Approve MCP tool call?");
-      expect(mcp.calls()).toEqual(["otters", "otters"]);
-      await close(secondProvider);
-
-      const list = createRuntime(["mcp", "approvals", "list"], {
-        cwd: workspace,
-        env: { KEEL_HOME: home },
-      });
-      expect(await runCliMain(list.runtime), list.stderr()).toBe(0);
-      expect(list.stdout()).toContain("MCP project approvals:\n");
-      expect(list.stdout()).toContain("tool: catalog/search\n");
-      expect(list.stdout()).toContain("authorization: anonymous\n");
-
-      const revoke = createRuntime(["mcp", "approvals", "revoke", "1"], {
-        cwd: workspace,
-        env: { KEEL_HOME: home },
-      });
-      expect(await runCliMain(revoke.runtime), revoke.stderr()).toBe(0);
-      expect(revoke.stdout()).toBe("Revoked MCP project approval 1.\n");
-
-      const thirdBodies: unknown[] = [];
-      const thirdProvider = mcpAgentProvider(thirdBodies);
-      await listen(thirdProvider);
-      const thirdRun = createRuntime(["search remotely"], {
-        cwd: workspace,
-        env: {
-          DEEPSEEK_API_KEY: "test-key",
-          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(thirdProvider)}`,
-          KEEL_HOME: home,
-        },
-        inputIsTTY: false,
-      });
-      expect(await runCliMain(thirdRun.runtime), thirdRun.stderr()).toBe(0);
-      expect(mcp.calls()).toEqual(["otters", "otters"]);
-      const recoveryRequest = requestWithMessagesSchema.parse(thirdBodies[2]);
+      expect(exitCode, run.stderr()).toBe(0);
+      expect(denialAnswered).toBe(true);
+      expect(run.stderr()).toContain("Approve MCP tool call?");
+      expect(mcp.calls()).toEqual([]);
+      expect(capturedBodies).toHaveLength(3);
+      const recoveryRequest = requestWithMessagesSchema.parse(
+        capturedBodies[2],
+      );
       expect(recoveryRequest.messages).toContainEqual({
         role: "tool",
         tool_call_id: "call_remote_search",
-        content: expect.stringContaining("exact saved project approval"),
+        content: expect.stringContaining(
+          "User did not approve this MCP tool call",
+        ),
       });
-      await close(thirdProvider);
     } finally {
       input.end();
+      await close(provider);
       await mcp.close();
       await rm(workspace, { recursive: true, force: true });
       await rm(home, { recursive: true, force: true });
@@ -1365,25 +1557,28 @@ describe("CLI Main - MCP agent tools", () => {
     await listen(provider);
     const input = new PassThrough();
     let approvals = 0;
-    const run = createRuntime(["search three remote queries"], {
-      cwd: workspace,
-      env: {
-        DEEPSEEK_API_KEY: "test-key",
-        DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
-        KEEL_HOME: home,
-      },
-      input,
-      inputIsTTY: true,
-      onStderr: (text) => {
-        if (text.includes("Approve MCP tool call?")) {
-          approvals += 1;
-          input.write("y\n");
-          if (approvals === 3) {
-            input.end();
+    const run = createRuntime(
+      ["--approval-policy", "ask", "search three remote queries"],
+      {
+        cwd: workspace,
+        env: {
+          DEEPSEEK_API_KEY: "test-key",
+          DEEPSEEK_BASE_URL: `http://127.0.0.1:${getPort(provider)}`,
+          KEEL_HOME: home,
+        },
+        input,
+        inputIsTTY: true,
+        onStderr: (text) => {
+          if (text.includes("Approve MCP tool call?")) {
+            approvals += 1;
+            input.write("y\n");
+            if (approvals === 3) {
+              input.end();
+            }
           }
-        }
+        },
       },
-    });
+    );
 
     try {
       // When
@@ -1516,7 +1711,7 @@ describe("CLI Main - MCP agent tools", () => {
     input.write("search remotely\n");
     let approvalAnswered = false;
     let exitQueued = false;
-    const run = createRuntime([], {
+    const run = createRuntime(["--approval-policy", "ask"], {
       cwd: workspace,
       env: {
         DEEPSEEK_API_KEY: "test-key",

@@ -1,5 +1,6 @@
 import { conversationCheckpointSummaryFromMessage } from "../agent/context-compaction.ts";
 import type { SessionMessage } from "../agent/session-message.ts";
+import type { ExecutionPosture } from "../core/execution-posture.ts";
 import {
   formatSessionGoalCompletionEvidenceSummary,
   formatSessionGoalRuntimeOutcomeSummary,
@@ -11,7 +12,6 @@ import {
   type SessionTaskProgress,
 } from "../core/task-progress.ts";
 import type { UndoProtectionSummary } from "../core/undo-protection.ts";
-import type { ExecutionPosture } from "../permissions/bash.ts";
 import { sanitizeStatusLineText } from "./output.ts";
 import { redactTextForPersistence } from "./persistence-redaction.ts";
 import type { RunReportMemory } from "./report.ts";
@@ -183,9 +183,9 @@ function formatExecutionStatus(posture: ExecutionPosture | null): string {
     return "not active; posture is recomputed from the next CLI invocation; enabled MCP integrations may perform external effects";
   }
   if (posture === "trusted") {
-    return "trusted; Bash runs with current OS user authority; enabled MCP integrations may perform external effects";
+    return "trusted; Bash runs with current OS user authority and enabled MCP integrations may perform external effects; children may use exact current MCP task leases";
   }
-  return "reviewed; each Bash command requires allow-once approval before running with current OS user authority; enabled MCP integrations may perform external effects";
+  return "reviewed; each Bash command and main-agent MCP call requires allow-once approval; children cannot receive MCP task leases";
 }
 
 export function formatSessionStatusSnapshot(

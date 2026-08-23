@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { type AgentPolicy, agentPolicies } from "../../core/agent-policy.ts";
+import type { ExecutionPosture } from "../../core/execution-posture.ts";
 import { type ProviderId, providerIds } from "../../core/provider-id.ts";
-import type { ExecutionPosture } from "../../permissions/bash.ts";
 import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 
 export type ParseErrorKind = "unknownOption";

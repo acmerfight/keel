@@ -2,7 +2,7 @@ import type {
   AgentPolicy,
   AgentPolicyConfiguration,
 } from "../../core/agent-policy.ts";
-import type { ExecutionPosture } from "../../permissions/bash.ts";
+import type { ExecutionPosture } from "../../core/execution-posture.ts";
 import type { SessionToolEffectRecoveryPolicy } from "../session-store.ts";
 import {
   isRecognizedOptionToken,

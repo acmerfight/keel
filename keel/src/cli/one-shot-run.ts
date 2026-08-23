@@ -12,11 +12,12 @@ import {
 import type { SessionMessage } from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
+import type { ExecutionPosture } from "../core/execution-posture.ts";
 import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
-import type { McpRuntime } from "../mcp/runtime-types.ts";
-import type { ExecutionPosture, MainBashRuntime } from "../permissions/bash.ts";
+import type { McpPermissionPolicy, McpRuntime } from "../mcp/runtime-types.ts";
+import type { MainBashRuntime } from "../permissions/bash.ts";
 import {
   exposeSkillCatalog,
   formatSkillCatalogDegradation,
@@ -35,7 +36,10 @@ import {
   createLineReader,
   type LineReader,
 } from "./interactive-session/line-reader.ts";
-import { createMcpPermissionPolicy } from "./mcp-approval.ts";
+import {
+  createPromptedMcpPermissionPolicy,
+  trustedMcpPermissionPolicy,
+} from "./mcp-approval.ts";
 import { listMcpServers } from "./mcp-config.ts";
 import {
   createCliMcpAuthProvider,
@@ -56,7 +60,6 @@ import {
   loadRenderedProjectMemory,
   ProjectMemoryError,
 } from "./project-memory.ts";
-import { projectRoot } from "./project-root.ts";
 import {
   ProviderConfigError,
   requireKnownCostModel,
@@ -119,6 +122,20 @@ function oneShotBashRuntime(
   }
   const policy = createPromptedBashPermissionPolicy(lineReader, writeStderr);
   return { kind: "reviewed", permission: policy };
+}
+
+function oneShotMcpPermissionPolicy(
+  executionPosture: ExecutionPosture,
+  writeStderr: (text: string) => void,
+  lineReader: LineReader | undefined,
+): McpPermissionPolicy {
+  if (executionPosture === "trusted") return trustedMcpPermissionPolicy;
+
+  /* v8 ignore next 3 -- TTY ask mode creates the shared approval reader before this private adapter is called. */
+  if (lineReader === undefined) {
+    throw new Error("TTY MCP approval requires an approval line reader");
+  }
+  return createPromptedMcpPermissionPolicy(lineReader, writeStderr);
 }
 
 export async function runOneShotCli(
@@ -221,8 +238,7 @@ export async function runOneShotCli(
     const mcpConnectionFactory = createCliMcpConnectionFactory(runtime);
     const mcpLifecycle = createCliMcpLifecyclePolicy(runtime);
     const needsApprovalInput =
-      runtime.input.isTTY === true &&
-      (cliArgs.executionPosture === "reviewed" || mcpServers.length > 0);
+      runtime.input.isTTY === true && cliArgs.executionPosture === "reviewed";
     const approvalInput = needsApprovalInput
       ? createInterface({
           input: runtime.input,
@@ -244,24 +260,11 @@ export async function runOneShotCli(
         servers: mcpServers,
         connectionFactory: mcpConnectionFactory,
         lifecycle: mcpLifecycle,
-        permission: createMcpPermissionPolicy({
-          runtime,
-          projectRoot: projectRoot(workspace),
-          prompt:
-            approvalLineReader === undefined
-              ? {
-                  kind: "headless",
-                  deniedMessage:
-                    "MCP calls require an exact saved project approval; non-TTY one-shot runs fail closed.",
-                }
-              : {
-                  kind: "interactive",
-                  lineReader: approvalLineReader,
-                  writeStderr: runtime.writeStderr,
-                  onPromptStart: () => {},
-                  onPromptEnd: () => {},
-                },
-        }),
+        permission: oneShotMcpPermissionPolicy(
+          cliArgs.executionPosture,
+          runtime.writeStderr,
+          approvalLineReader,
+        ),
         now: runtime.now,
         schemaTarget: mcpProviderSchemaTarget(
           resolved.providerId,
@@ -391,6 +394,7 @@ export async function runOneShotCli(
             providerId: resolved.providerId,
             model: resolved.model,
             policy: delegationRun.policy,
+            executionPosture: cliArgs.executionPosture,
             maxCostUsd: delegationRun.maxCostUsd,
             costModel: delegationRun.costModel,
             modelMetadata: resolved.modelMetadata ?? {
@@ -409,15 +413,6 @@ export async function runOneShotCli(
                         authorizationIdentity,
                       ),
                     lifecycle: mcpLifecycle,
-                    permission: createMcpPermissionPolicy({
-                      runtime,
-                      projectRoot: projectRoot(workspace),
-                      prompt: {
-                        kind: "headless",
-                        deniedMessage:
-                          "Child MCP calls require an exact saved project approval and cannot prompt.",
-                      },
-                    }),
                     authorizationIdentity: async (server) =>
                       await createCliMcpAuthProvider(
                         runtime,

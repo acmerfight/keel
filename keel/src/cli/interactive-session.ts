@@ -170,7 +170,10 @@ import type {
   SavedInteractiveSession,
 } from "./interactive-session/types.ts";
 import { createInteractiveSubagentSession } from "./interactive-subagent-session.ts";
-import { createMcpPermissionPolicy } from "./mcp-approval.ts";
+import {
+  createPromptedMcpPermissionPolicy,
+  trustedMcpPermissionPolicy,
+} from "./mcp-approval.ts";
 import {
   createCliMcpAuthProvider,
   createCliMcpConnectionFactory,
@@ -182,7 +185,6 @@ import {
   formatUndoCheckpointWarning,
   sanitizeStatusLineText,
 } from "./output.ts";
-import { projectRoot } from "./project-root.ts";
 import {
   accountModelOperations,
   createAgentEventReportRecorder,
@@ -617,27 +619,17 @@ export async function runInteractiveSession(
       servers: options.mcp.servers,
       connectionFactory: options.mcp.connectionFactory,
       lifecycle: options.mcp.lifecycle,
-      permission: createMcpPermissionPolicy({
-        runtime: options.mcp.approvalRuntime,
-        projectRoot: projectRoot(options.workspace),
-        prompt: options.mcp.canPrompt
-          ? {
-              kind: "interactive",
-              lineReader,
-              writeStderr: options.writeStderr,
+      permission:
+        options.cliArgs.executionPosture === "trusted"
+          ? trustedMcpPermissionPolicy
+          : createPromptedMcpPermissionPolicy(lineReader, options.writeStderr, {
               onPromptStart: () => {
                 setComposerMode("approval");
               },
               onPromptEnd: () => {
                 setComposerMode("steer");
               },
-            }
-          : {
-              kind: "headless",
-              deniedMessage:
-                "MCP calls require an exact saved project approval and this session cannot prompt.",
-            },
-      }),
+            }),
       now,
       schemaTarget,
     });
@@ -657,15 +649,6 @@ export async function runInteractiveSession(
               authorizationIdentity,
             ),
           lifecycle: subagentMcpOptions.lifecycle,
-          permission: createMcpPermissionPolicy({
-            runtime: subagentMcpOptions.approvalRuntime,
-            projectRoot: projectRoot(options.workspace),
-            prompt: {
-              kind: "headless" as const,
-              deniedMessage:
-                "Child MCP calls require an exact saved project approval and cannot prompt.",
-            },
-          }),
           authorizationIdentity: async (server: McpRuntimeServer) =>
             await createCliMcpAuthProvider(
               subagentMcpOptions.approvalRuntime,
@@ -1322,6 +1305,7 @@ export async function runInteractiveSession(
               providerId: resolved.providerId,
               model: resolved.model,
               policy: options.delegation.policy,
+              executionPosture: options.cliArgs.executionPosture,
               costModel: turnCostModel,
               modelMetadata: resolved.modelMetadata ?? {
                 status: "unknown" as const,
@@ -2199,6 +2183,7 @@ export async function runInteractiveSession(
                   providerId: commandResolved.providerId,
                   model: commandResolved.model,
                   policy: delegation.policy,
+                  executionPosture: options.cliArgs.executionPosture,
                   costModel: commandCostModel,
                   modelMetadata: commandResolved.modelMetadata ?? {
                     status: "unknown" as const,

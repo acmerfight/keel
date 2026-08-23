@@ -345,10 +345,12 @@ const runReportGoalOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 
 const runReportBaseSchema = z.object({
-  schemaVersion: z.literal(23),
+  schemaVersion: z.literal(24),
   execution: z.object({
     posture: z.enum(["trusted", "reviewed"]),
     bashAuthority: z.literal("current_os_user"),
+    mainMcpCalls: z.enum(["trusted", "allow_once"]),
+    childMcpTaskLeases: z.enum(["exact_current", "disabled"]),
     enabledMcpIntegrationsMayPerformExternalEffects: z.literal(true),
   }),
   tasks: z.array(taskSchema),

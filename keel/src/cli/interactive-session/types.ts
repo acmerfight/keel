@@ -8,6 +8,7 @@ import type {
 } from "../../agent/tool-output-artifacts.ts";
 import type { DelegatingAgentPolicy } from "../../core/agent-policy.ts";
 import type { CostModel } from "../../core/cost.ts";
+import type { ExecutionPosture } from "../../core/execution-posture.ts";
 import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
@@ -21,10 +22,7 @@ import type {
   McpConnectionFactory,
   McpLifecyclePolicy,
 } from "../../mcp/runtime-types.ts";
-import type {
-  BashPermissionPolicy,
-  ExecutionPosture,
-} from "../../permissions/bash.ts";
+import type { BashPermissionPolicy } from "../../permissions/bash.ts";
 import type {
   DiscoveredSkillCatalog,
   SkillActivationCapability,
@@ -244,7 +242,6 @@ interface InteractiveSessionOptionsBase {
     ];
     readonly connectionFactory: McpConnectionFactory;
     readonly lifecycle: McpLifecyclePolicy;
-    readonly canPrompt: boolean;
     readonly approvalRuntime: {
       readonly env: (key: string) => string | undefined;
       readonly mcpSecretBackend: McpSecretBackend;

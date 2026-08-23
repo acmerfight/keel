@@ -192,10 +192,11 @@ What a user can do today:
   `repo:*` profiles in `.agents/subagents.json` that select a registered child
   model/effort and narrow a built-in profile's tools, turns, deadline, and
   result bound and declare audited Skill and MCP ceilings. Each Run leases exact
-  subsets. Child Skills use normal bounded activation; child MCP uses a fresh
-  progressively disclosed runtime, exact saved project approvals, and current
+  subsets. Child Skills use normal bounded activation. In trusted execution,
+  child MCP uses a fresh progressively disclosed runtime plus exact current
   server/configuration/authorization-identity checks without copying Main's
-  active tools or interactive approval channel. Resume can only preserve or
+  active tools; reviewed execution keeps all MCP calls in Main's one-time
+  approval channel. Resume can only preserve or
   remove persisted authority and revalidates current MCP identity. Accepted
   Threads retain their persisted capability and execution snapshots across
   config changes. The first writer slice adds one explicit-policy, foreground
@@ -241,10 +242,9 @@ What a user can do today:
   verifies real provider auth with a low-cost online models endpoint, while
   `--offline` keeps the check local-only.
 - `keel mcp add <url>` / `keel mcp login|logout <server>` / `keel mcp list|status|doctor`
-  / `keel mcp enable|disable|remove` / `keel mcp approvals` — register remote
-  Streamable HTTP MCP servers, complete standards-compliant OAuth, inspect
-  bounded catalog and health diagnostics, and manage exact project-scoped call
-  approvals. Discovered tools stay outside the static builtin registry, are
+  / `keel mcp enable|disable|remove` — register remote Streamable HTTP MCP
+  servers, complete standards-compliant OAuth, and inspect bounded catalog and
+  health diagnostics. Discovered tools stay outside the static builtin registry, are
   exposed to the model as `mcp__<server>__<tool>` through progressive
   `mcp_search` selection, and their results are recorded as untrusted evidence
   that cannot satisfy a Goal assertion.
@@ -469,13 +469,14 @@ Codex/Claude Code — or directly moves the eval numbers.
   Inactive sessions can be archived and unarchived as whole directory
   aggregates. Session locks are keyed by identity outside active/archive
   storage, so lifecycle moves cannot bypass a live owner.
-- **Execution posture simplification** — ✅ Local execution complete
-  (2026-08): Bash is trusted by default, while one explicit
-  `--approval-policy ask` posture provides exact allow-once/deny review in a
-  real TTY. Command-family parsing, selector registries, reusable grants,
-  project approval files, session replay, revocation, and approval catalogs
-  have been removed. Enabled MCP integrations still need to adopt this shared
-  posture and remove their saved approval subsystem. OS sandboxing remains P2.
+- **Execution posture simplification** — ✅ Complete (2026-08): Bash and
+  enabled MCP integrations are trusted by default, while one explicit
+  `--approval-policy ask` posture provides exact allow-once/deny review for
+  Bash and main-agent MCP calls in a real TTY. Reviewed children cannot receive
+  MCP task leases; trusted children remain bounded to exact current leases.
+  Command-family parsing, selector registries, reusable grants, project
+  approval files, session replay, revocation, and approval catalogs have been
+  removed. OS sandboxing remains P2.
 - **Whole-task undo** — ✅ Partial (2026-07): `/undo` restores the last edit,
   created file, apply_patch batch, or multi-file task checkpoint, while
   `/undo --list` and `/undo --to <index>` let users choose an older listed
@@ -517,8 +518,11 @@ Not needed to switch; revisit once P0/P1 are done.
   tools and dispatcher authority from one persisted capability snapshot;
   project `repo:*` profiles can select a registered model/effort, narrow that
   built-in authority, and declare Skill/MCP ceilings from which each Run leases
-  bounded catalogs. Child MCP uses fresh discovery plus exact saved approvals;
-  Main-active tools and temporary interactive approvals are not inherited. An
+  bounded catalogs. Under the default trusted posture, child MCP uses fresh
+  discovery plus exact current task leases; under the exceptional reviewed
+  posture, MCP task leases stay in Main because children cannot prompt or
+  inherit approval authority. Main-active tools and one-time interactive
+  approvals are never inherited. An
   explicit-policy `writer` profile now provides one foreground isolated
   branch/worktree, a bounded inspectable patch, and explicit same-Thread
   foreground follow-up as a new immutable Run without auto-merge or auto-cleanup.

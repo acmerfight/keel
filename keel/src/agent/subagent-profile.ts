@@ -100,6 +100,7 @@ export type SubagentProfileMcpRuntime =
   | { readonly kind: "disabled" }
   | {
       readonly kind: "enabled";
+      readonly taskLeases: "enabled" | "disabled";
       readonly resolveTool: (
         selector: SubagentMcpToolSelector,
       ) => SubagentMcpToolSnapshot | undefined;

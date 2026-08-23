@@ -426,6 +426,7 @@ describe("Subagent Supervisor", () => {
         ],
         mcpRuntime: {
           kind: "enabled",
+          taskLeases: "enabled",
           resolveTool: () => mcpSnapshot,
           resolveCurrent: async () => [mcpSnapshot],
           createRuntime: () => undefined,
@@ -1360,6 +1361,7 @@ describe("Subagent Supervisor", () => {
       ],
       mcpRuntime: {
         kind: "enabled",
+        taskLeases: "enabled",
         resolveTool: () => mcpSnapshot,
         resolveCurrent: async () => [],
         createRuntime: () => undefined,
@@ -1409,6 +1411,262 @@ describe("Subagent Supervisor", () => {
         content: expect.stringContaining("task MCP lease is outside"),
       });
       expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given reviewed execution receives a direct child delegation with an MCP lease,
+    When Supervisor defends the authority boundary below the tool schema,
+    Then it rejects before child or provider execution`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-delegate-reviewed-mcp-"),
+    );
+    let providerCalls = 0;
+    const mcpSnapshot = {
+      serverId: "catalog",
+      rawToolName: "search",
+      serverIncarnation: "server-v1",
+      configurationDigest: "a".repeat(64),
+      authorizationIdentity: { kind: "anonymous" as const },
+    };
+    const profileRegistry = createSubagentProfileRegistry({
+      execution: { providerId: "fake", model: "test-model" },
+      repoProfiles: [
+        {
+          name: "repo:remote",
+          base: "explorer",
+          mcp: [{ server: "catalog", tool: "search" }],
+        },
+      ],
+      mcpRuntime: {
+        kind: "enabled",
+        taskLeases: "disabled",
+        resolveTool: () => mcpSnapshot,
+        resolveCurrent: async () => {
+          throw new Error("reviewed delegation must not resolve current MCP");
+        },
+        createRuntime: () => {
+          throw new Error("reviewed delegation must not create child MCP");
+        },
+      },
+    });
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      profileRegistry,
+      lifecyclePersistence: durableLifecycleSink(),
+    });
+
+    try {
+      const result = await fixture.supervisor.capability.delegate({
+        toolCallId: "delegate-reviewed-mcp",
+        profile: "repo:remote",
+        mode: "foreground",
+        task: "Search the remote catalog.",
+        mcp: [{ server: "catalog", tool: "search" }],
+        focusPaths: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({
+        delivery: "rejected",
+        reason: expect.stringContaining(
+          "reviewed posture does not delegate MCP approval authority",
+        ),
+      });
+      expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a terminal child previously held an exact MCP task lease,
+    When Main resumes it under reviewed execution,
+    Then continuation rejects before current-resolution, provider, or child execution`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-resume-reviewed-mcp-"),
+    );
+    let providerCalls = 0;
+    let currentResolutionCalls = 0;
+    const mcpSnapshot = {
+      serverId: "catalog",
+      rawToolName: "search",
+      serverIncarnation: "server-v1",
+      configurationDigest: "a".repeat(64),
+      authorizationIdentity: { kind: "anonymous" as const },
+    };
+    const profileRegistry = createSubagentProfileRegistry({
+      execution: { providerId: "fake", model: "test-model" },
+      repoProfiles: [
+        {
+          name: "repo:remote",
+          base: "explorer",
+          mcp: [{ server: "catalog", tool: "search" }],
+        },
+      ],
+      mcpRuntime: {
+        kind: "enabled",
+        taskLeases: "disabled",
+        resolveTool: () => mcpSnapshot,
+        resolveCurrent: async () => {
+          currentResolutionCalls++;
+          return [mcpSnapshot];
+        },
+        createRuntime: () => {
+          throw new Error("reviewed execution must not create child MCP");
+        },
+      },
+    });
+    const profile = profileRegistry.resolve("repo:remote");
+    if (
+      profile === undefined ||
+      subagentCapabilityIsWriter(profile.capability)
+    ) {
+      throw new Error("missing read-only MCP test profile");
+    }
+    const fixture = supervisorFixture({
+      workspace,
+      provider: {
+        ...singleFinalProvider("must not run"),
+        async *stream() {
+          providerCalls++;
+          yield { type: "text", text: "must not run" };
+        },
+      },
+      profileRegistry,
+      background: {
+        signal: new AbortController().signal,
+        register: () => {
+          throw new Error("reviewed MCP resume must not register a Run");
+        },
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+    });
+
+    try {
+      const result = await fixture.supervisor.continuation.resume({
+        childAgentId: "agent-bbbbbbbb",
+        previousRunId: "subagent-bbbbbbbb",
+        workspaceAccess: "read_only",
+        capability: profile.capability,
+        threadCapabilityCeiling: profile.capability,
+        workspace: null,
+        execution: profile.execution,
+        toolCallId: "resume-reviewed-mcp",
+        message: "Search again.",
+        skills: [],
+        mcp: [{ server: "catalog", tool: "search" }],
+        focusPaths: [],
+        systemPrompt: "Read-only child instructions.",
+        priorMessages: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        content: expect.stringContaining(
+          "reviewed posture does not delegate MCP approval authority",
+        ),
+      });
+      expect(currentResolutionCalls).toBe(0);
+      expect(providerCalls).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a child thread has a historical MCP ceiling under reviewed execution,
+    When Main resumes it without requesting MCP authority,
+    Then continuation drops the historical ceiling without current MCP resolution and runs without MCP`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-resume-reviewed-mcp-dropped-"),
+    );
+    let currentResolutionCalls = 0;
+    let mcpRuntimeFactoryCalls = 0;
+    const registeredRuns: SubagentBackgroundRun[] = [];
+    const mcpSnapshot = {
+      serverId: "catalog",
+      rawToolName: "search",
+      serverIncarnation: "server-v1",
+      configurationDigest: "a".repeat(64),
+      authorizationIdentity: { kind: "anonymous" as const },
+    };
+    const profileRegistry = createSubagentProfileRegistry({
+      execution: { providerId: "fake", model: "test-model" },
+      repoProfiles: [
+        {
+          name: "repo:remote",
+          base: "explorer",
+          mcp: [{ server: "catalog", tool: "search" }],
+        },
+      ],
+      mcpRuntime: {
+        kind: "enabled",
+        taskLeases: "disabled",
+        resolveTool: () => mcpSnapshot,
+        resolveCurrent: async () => {
+          currentResolutionCalls++;
+          throw new Error("reviewed execution must not resolve historical MCP");
+        },
+        createRuntime: (capability) => {
+          mcpRuntimeFactoryCalls++;
+          expect(capability.mcpTools).toEqual([]);
+          return undefined;
+        },
+      },
+    });
+    const profile = profileRegistry.resolve("repo:remote");
+    if (
+      profile === undefined ||
+      subagentCapabilityIsWriter(profile.capability)
+    ) {
+      throw new Error("missing read-only MCP test profile");
+    }
+    const fixture = supervisorFixture({
+      workspace,
+      provider: singleFinalProvider("Continued without MCP."),
+      profileRegistry,
+      background: {
+        signal: new AbortController().signal,
+        register: (run) => registeredRuns.push(run),
+      },
+      lifecyclePersistence: durableLifecycleSink(),
+    });
+
+    try {
+      const result = await fixture.supervisor.continuation.resume({
+        childAgentId: "agent-bbbbbbbb",
+        previousRunId: "subagent-bbbbbbbb",
+        workspaceAccess: "read_only",
+        capability: profile.capability,
+        threadCapabilityCeiling: profile.capability,
+        workspace: null,
+        execution: profile.execution,
+        toolCallId: "resume-reviewed-without-mcp",
+        message: "Continue without remote tools.",
+        skills: [],
+        mcp: [],
+        focusPaths: [],
+        systemPrompt: "Read-only child instructions.",
+        priorMessages: [],
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(currentResolutionCalls).toBe(0);
+      expect(mcpRuntimeFactoryCalls).toBe(1);
+      expect(registeredRuns).toHaveLength(1);
+      await expect(registeredRuns[0]?.result).resolves.toMatchObject({
+        status: "completed",
+        finalText: "Continued without MCP.",
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -4307,6 +4565,7 @@ describe("Subagent Supervisor", () => {
       ],
       mcpRuntime: {
         kind: "enabled",
+        taskLeases: "enabled",
         resolveTool: () => mcpSnapshot,
         resolveCurrent: async () => [mcpSnapshot],
         createRuntime: () => childMcpRuntime,
@@ -4424,6 +4683,7 @@ describe("Subagent Supervisor", () => {
       ],
       mcpRuntime: {
         kind: "enabled",
+        taskLeases: "enabled",
         resolveTool: () => mcpSnapshot,
         resolveCurrent: async () => [mcpSnapshot],
         createRuntime: () => childMcpRuntime,

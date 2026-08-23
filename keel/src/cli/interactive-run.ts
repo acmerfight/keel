@@ -1554,8 +1554,6 @@ async function runActiveSessionCli(
                 servers: [firstMcpServer, ...remainingMcpServers],
                 connectionFactory: createCliMcpConnectionFactory(runtime),
                 lifecycle: createCliMcpLifecyclePolicy(runtime),
-                canPrompt:
-                  mode.kind === "interactive" && runtime.input.isTTY === true,
                 approvalRuntime: runtime,
               },
             }

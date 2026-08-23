@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
+import type { ExecutionPosture } from "../../src/core/execution-posture.ts";
 import type {
   BashRuntime,
-  ExecutionPosture,
   MainBashRuntime,
 } from "../../src/permissions/bash.ts";
 import { bashRuntimeExposesTool } from "../../src/permissions/bash.ts";
 
-describe("bash state invariants", () => {
+describe("execution authority state invariants", () => {
   test(`Given the invocation execution posture,
     When modeling the supported product states,
     Then trusted and reviewed are the only user-selectable meanings`, () => {
@@ -65,6 +65,26 @@ describe("bash state invariants", () => {
     for (const source of sources) {
       expect(source).not.toMatch(/bashApprovalGrant/u);
       expect(source).not.toMatch(/bash_approval_/u);
+    }
+  });
+
+  test(`Given reviewed MCP approval is one-call authority owned by Main,
+    When persistent and command state shapes are inspected,
+    Then no reusable MCP approval can be represented`, () => {
+    const sources = [
+      "src/cli/mcp-approval.ts",
+      "src/cli/mcp-config.ts",
+      "src/cli/args/mcp.ts",
+      "src/cli/args/types.ts",
+      "src/cli/session-store/model.ts",
+      "src/cli/session-store/records.ts",
+      "src/cli/report.ts",
+    ].map((path) => readFileSync(path, "utf8"));
+
+    for (const source of sources) {
+      expect(source).not.toMatch(/mcpProjectApproval/iu);
+      expect(source).not.toMatch(/mcp-project-approvals/iu);
+      expect(source).not.toMatch(/approvals-(?:list|revoke|clear)/u);
     }
   });
 });

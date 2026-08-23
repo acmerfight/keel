@@ -1950,6 +1950,19 @@ export function createSubagentSupervisor(
         });
         continue;
       }
+      if (
+        input.mcp.length > 0 &&
+        options.profileRegistry.mcpRuntime.kind === "enabled" &&
+        options.profileRegistry.mcpRuntime.taskLeases === "disabled"
+      ) {
+        recordRejection(input, delegationId, {
+          reason:
+            "Delegation rejected: the reviewed posture does not delegate MCP approval authority to children.",
+          recovery:
+            "Perform the MCP call in Main so the user can review it, or start a trusted run before delegating an exact MCP task lease.",
+        });
+        continue;
+      }
       const profileSelection = subagentCapabilityIsWriter(profile.capability)
         ? {
             workspaceAccess: "isolated_write" as const,
@@ -2615,6 +2628,15 @@ export function createSubagentSupervisor(
           "Agent resume rejected because provider access is blocked.",
         );
       }
+      if (
+        request.mcp.length > 0 &&
+        options.profileRegistry.mcpRuntime.kind === "enabled" &&
+        options.profileRegistry.mcpRuntime.taskLeases === "disabled"
+      ) {
+        return reject(
+          "Agent resume rejected because the reviewed posture does not delegate MCP approval authority to children.",
+        );
+      }
       const invalidFocusPath = validateWorkspacePaths(
         options.workspace,
         request.focusPaths,
@@ -2631,7 +2653,8 @@ export function createSubagentSupervisor(
             )
           : [];
       const currentMcpTools =
-        options.profileRegistry.mcpRuntime.kind === "enabled"
+        options.profileRegistry.mcpRuntime.kind === "enabled" &&
+        options.profileRegistry.mcpRuntime.taskLeases === "enabled"
           ? await options.profileRegistry.mcpRuntime.resolveCurrent(
               request.threadCapabilityCeiling.mcpTools,
             )

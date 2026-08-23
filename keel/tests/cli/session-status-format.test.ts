@@ -24,7 +24,29 @@ describe("CLI Session Status Format", () => {
     });
 
     expect(formatted).toContain(
-      "  execution: trusted; Bash runs with current OS user authority; enabled MCP integrations may perform external effects\n",
+      "  execution: trusted; Bash runs with current OS user authority and enabled MCP integrations may perform external effects; children may use exact current MCP task leases\n",
+    );
+  });
+
+  test(`Given a reviewed invocation owns all approval prompts in Main,
+    When the current session status is formatted,
+    Then it names one-time Bash and MCP review plus the child MCP boundary`, () => {
+    const formatted = formatSessionStatusSnapshot({
+      session: "scratch",
+      workspace: "/tmp/workspace",
+      activeModel: "fake/model",
+      executionPosture: "reviewed",
+      messages: [],
+      messageCount: 0,
+      pendingInputCount: 0,
+      taskProgress: emptySessionTaskProgress(),
+      modelSwitchCount: 0,
+      undoCheckpoints: [],
+      recoveryActions: [],
+    });
+
+    expect(formatted).toContain(
+      "  execution: reviewed; each Bash command and main-agent MCP call requires allow-once approval; children cannot receive MCP task leases\n",
     );
   });
 
