@@ -235,8 +235,12 @@ function discoveryRoots(options: SkillDiscoveryOptions): readonly SkillRoot[] {
 function filesystemIdentity(stat: {
   readonly dev: number | bigint;
   readonly ino: number | bigint;
+  readonly birthtimeMs: number;
 }): string {
-  return `${stat.dev}:${stat.ino}`;
+  // Linux may immediately reuse a deleted directory's inode. Birth time keeps
+  // that replacement from inheriting the catalog's previously captured path
+  // authority even when the device and inode pair are unchanged.
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
 }
 
 function ensureSkillRootDirectory(
