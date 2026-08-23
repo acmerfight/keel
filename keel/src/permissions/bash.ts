@@ -1,18 +1,18 @@
-import { posix, win32 } from "node:path";
+import {
+  type BashCommandFamily,
+  type BashCommandRisk,
+  bashArgvStartsWith,
+  bashCommandFamilyRisk,
+  matchingBashCommandFamily,
+} from "./bash-command-families.ts";
+
+export { bashCommandFamilyDisplay } from "./bash-command-families.ts";
 
 export type BashPolicy = "ask" | "deny" | "trusted";
 
 // BashPolicy is the user-facing CLI vocabulary; BashMode is the internal state
 // used to derive tool exposure and approval behavior.
 export type BashMode = "disabled" | "ask" | "trusted";
-
-type BashCommandRisk =
-  | "workspace-read"
-  | "project-verification"
-  | "workspace-write"
-  | "unknown-or-dangerous";
-
-export type BashCommandFamily = "pnpm_vitest_run_workspace_test_selectors";
 
 export type BashApprovalGrant =
   | {
@@ -44,13 +44,6 @@ export type BashProjectApprovalGrant =
       readonly commandFamily: BashCommandFamily;
       readonly argvPrefix?: never;
     };
-
-export function bashCommandFamilyDisplay(family: BashCommandFamily): string {
-  switch (family) {
-    case "pnpm_vitest_run_workspace_test_selectors":
-      return "pnpm vitest run <workspace test selectors>";
-  }
-}
 
 export function bashModeFromPolicy(policy: BashPolicy): BashMode {
   return policy === "deny" ? "disabled" : policy;
@@ -272,8 +265,14 @@ interface ProjectCommandFamilyApprovalRule {
 interface PrefixApprovalCandidate {
   readonly argvPrefix: readonly string[];
   readonly risk: BashCommandRisk;
-  readonly trailing: "any" | "exact" | "workspace-test-selectors";
-  readonly commandFamily?: BashCommandFamily;
+  readonly trailing: "any" | "exact";
+}
+
+interface BashApprovalCandidate {
+  readonly argvPrefix: readonly string[];
+  readonly commandFamily: BashCommandFamily | undefined;
+  readonly display: string;
+  readonly promptLabel: "command family" | "this command";
 }
 
 const SIMPLE_COMMAND_TOKEN_PATTERN = /^[A-Za-z0-9_./:@%+=,-]+$/u;
@@ -283,12 +282,6 @@ const PREFIX_APPROVAL_CANDIDATES: readonly PrefixApprovalCandidate[] = [
     argvPrefix: ["pnpm", "vitest", "run"],
     risk: "project-verification",
     trailing: "exact",
-  },
-  {
-    argvPrefix: ["pnpm", "vitest", "run"],
-    risk: "project-verification",
-    trailing: "workspace-test-selectors",
-    commandFamily: "pnpm_vitest_run_workspace_test_selectors",
   },
   {
     argvPrefix: ["pnpm", "test"],
@@ -371,21 +364,11 @@ function parseSimpleCommandArgv(command: string): readonly string[] | null {
   return tokens;
 }
 
-function argvStartsWith(
-  argv: readonly string[],
-  prefix: readonly string[],
-): boolean {
-  return (
-    argv.length >= prefix.length &&
-    prefix.every((token, index) => argv[index] === token)
-  );
-}
-
 function argvMatchesPrefixCandidate(
   argv: readonly string[],
   candidate: PrefixApprovalCandidate,
 ): boolean {
-  if (!argvStartsWith(argv, candidate.argvPrefix)) {
+  if (!bashArgvStartsWith(argv, candidate.argvPrefix)) {
     return false;
   }
   switch (candidate.trailing) {
@@ -393,61 +376,46 @@ function argvMatchesPrefixCandidate(
       return true;
     case "exact":
       return argv.length === candidate.argvPrefix.length;
-    case "workspace-test-selectors": {
-      const selectors = argv.slice(candidate.argvPrefix.length);
-      return (
-        selectors.length > 0 && selectors.every(isSafeWorkspaceTestSelector)
-      );
-    }
   }
 }
 
-function isSafeWorkspaceTestSelector(selector: string): boolean {
-  const filename = vitestSelectorFilename(selector);
-  if (
-    selector.startsWith("-") ||
-    filename === "" ||
-    posix.isAbsolute(filename) ||
-    win32.isAbsolute(filename) ||
-    /^[A-Za-z]:/u.test(selector)
-  ) {
-    return false;
-  }
-  const pathSegments = filename.split("/");
-  return (
-    pathSegments.every((segment) => segment !== "..") &&
-    pathSegments.some((segment) => segment !== "" && segment !== ".")
-  );
-}
-
-function vitestSelectorFilename(selector: string): string {
-  // Mirror Vitest's location-filter parse: a final numeric suffix is a line
-  // number, so path safety must be checked against the filename before it.
-  const colonIndex = selector.lastIndexOf(":");
-  if (colonIndex === -1) {
-    return selector;
-  }
-  const lineNumber = selector.slice(colonIndex + 1);
-  return /^\d+$/u.test(lineNumber) ? selector.slice(0, colonIndex) : selector;
-}
-
-function matchingPrefixApprovalCandidate(
+function matchingApprovalCandidate(
   assessment: BashCommandAssessment,
-): PrefixApprovalCandidate | undefined {
+): BashApprovalCandidate | undefined {
   const argv = assessment.argv;
   if (argv === null) {
     return undefined;
   }
 
-  return PREFIX_APPROVAL_CANDIDATES.find(
+  const commandFamily = matchingBashCommandFamily(argv);
+  if (commandFamily?.risk === assessment.risk) {
+    return {
+      argvPrefix: commandFamily.argvPrefix,
+      commandFamily: commandFamily.commandFamily,
+      display: commandFamily.display,
+      promptLabel: "command family",
+    };
+  }
+
+  const prefixCandidate = PREFIX_APPROVAL_CANDIDATES.find(
     (candidate) =>
       candidate.risk === assessment.risk &&
       argvMatchesPrefixCandidate(argv, candidate),
   );
+  if (prefixCandidate === undefined) {
+    return undefined;
+  }
+  return {
+    argvPrefix: prefixCandidate.argvPrefix,
+    commandFamily: undefined,
+    display: prefixCandidate.argvPrefix.join(" "),
+    promptLabel:
+      prefixCandidate.trailing === "exact" ? "this command" : "command family",
+  };
 }
 
 function commandPrefixApproval<RequestToken>(
-  candidate: PrefixApprovalCandidate | undefined,
+  candidate: BashApprovalCandidate | undefined,
 ): BashPermissionPrefixApproval<RequestToken> | undefined {
   if (candidate === undefined) {
     return undefined;
@@ -455,10 +423,8 @@ function commandPrefixApproval<RequestToken>(
   return new BashPermissionPrefixApproval<RequestToken>(
     candidate.argvPrefix,
     candidate.commandFamily,
-    candidate.commandFamily === undefined
-      ? candidate.argvPrefix.join(" ")
-      : bashCommandFamilyDisplay(candidate.commandFamily),
-    candidate.trailing === "exact" ? "this command" : "command family",
+    candidate.display,
+    candidate.promptLabel,
   );
 }
 
@@ -497,10 +463,11 @@ function hasMutatingVerificationArgument(argv: readonly string[]): boolean {
 
 function assessParsedCommand(argv: readonly string[]): BashCommandAssessment {
   const prefixCandidate = PREFIX_APPROVAL_CANDIDATES.find((candidate) =>
-    argvStartsWith(argv, candidate.argvPrefix),
+    bashArgvStartsWith(argv, candidate.argvPrefix),
   );
+  const knownRisk = prefixCandidate?.risk ?? bashCommandFamilyRisk(argv);
   if (
-    prefixCandidate?.risk === "project-verification" &&
+    knownRisk === "project-verification" &&
     hasMutatingVerificationArgument(argv)
   ) {
     return {
@@ -512,7 +479,7 @@ function assessParsedCommand(argv: readonly string[]): BashCommandAssessment {
   }
 
   const workspaceWritePrefix = WORKSPACE_WRITE_PREFIXES.find((prefix) =>
-    argvStartsWith(argv, prefix),
+    bashArgvStartsWith(argv, prefix),
   );
   if (workspaceWritePrefix !== undefined) {
     return {
@@ -523,8 +490,8 @@ function assessParsedCommand(argv: readonly string[]): BashCommandAssessment {
     };
   }
 
-  if (prefixCandidate !== undefined) {
-    if (prefixCandidate.risk === "workspace-read") {
+  if (knownRisk !== undefined) {
+    if (knownRisk === "workspace-read") {
       return {
         argv,
         risk: "workspace-read",
@@ -700,7 +667,7 @@ export function createSessionBashPermissionPolicy(options: {
       }
 
       const assessment = assessBashCommand(request.command);
-      const matchingPrefix = matchingPrefixApprovalCandidate(assessment);
+      const matchingPrefix = matchingApprovalCandidate(assessment);
       if (
         matchingPrefix !== undefined &&
         matchingPrefix.commandFamily === undefined &&

@@ -233,7 +233,7 @@ describe("CLI Main - Bash Project Approvals", () => {
     }
   });
 
-  test(`Given ask mode receives workspace Vitest selectors,
+  test(`Given ask mode receives workspace Vitest selectors through pnpm exec,
     When the user saves that safe command family for the project,
     Then later safe selectors run without a prompt while traversal fails closed`, async () => {
     // Given
@@ -266,7 +266,7 @@ describe("CLI Main - Bash Project Approvals", () => {
     process.env[logEnvironmentKey] = commandLog;
 
     try {
-      const firstCommand = "pnpm vitest run tests/first.test.ts";
+      const firstCommand = "pnpm exec vitest run tests/first.test.ts";
       const firstServer = bashCommandServer({
         command: firstCommand,
         toolCallId: "call_vitest_first",
@@ -300,7 +300,7 @@ describe("CLI Main - Bash Project Approvals", () => {
       }
 
       // When
-      const secondCommand = "pnpm vitest run ./tests/second.test.ts";
+      const secondCommand = "pnpm exec vitest run ./tests/second.test.ts";
       const secondCapturedBodies: unknown[] = [];
       const secondServer = bashCommandServer({
         command: secondCommand,
@@ -323,7 +323,7 @@ describe("CLI Main - Bash Project Approvals", () => {
         await close(secondServer);
       }
 
-      const unsafeCommand = "pnpm vitest run tests/..:12";
+      const unsafeCommand = "pnpm exec vitest run tests/..:12";
       const unsafeCapturedBodies: unknown[] = [];
       const unsafeServer = bashCommandServer({
         command: unsafeCommand,
@@ -350,7 +350,7 @@ describe("CLI Main - Bash Project Approvals", () => {
       expect(approvalPrompts).toBe(1);
       expect(firstRun.stdout()).toBe("Saved Vitest approval.\n");
       expect(firstRun.stderr()).toContain(
-        "[r] allow command family for this project: pnpm vitest run <workspace test selectors>",
+        "[r] allow command family for this project: pnpm exec vitest run <workspace test selectors>",
       );
       expect(secondRun.stdout()).toBe("Used Vitest approval.\n");
       expect(secondRun.stderr()).toBe(`Tool: bash ${secondCommand}\n`);
@@ -380,8 +380,8 @@ describe("CLI Main - Bash Project Approvals", () => {
       );
       expect(await readFile(commandLog, "utf8")).toBe(
         [
-          "vitest run tests/first.test.ts",
-          "vitest run ./tests/second.test.ts",
+          "exec vitest run tests/first.test.ts",
+          "exec vitest run ./tests/second.test.ts",
           "",
         ].join("\n"),
       );

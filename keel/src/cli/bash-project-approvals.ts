@@ -6,6 +6,7 @@ import {
   type BashProjectApprovalGrant,
   bashCommandFamilyDisplay,
 } from "../permissions/bash.ts";
+import { bashCommandFamilyIds } from "../permissions/bash-command-families.ts";
 import { escapeApprovalText } from "./bash-approval-text.ts";
 import { projectRoot } from "./project-root.ts";
 import { sessionHome } from "./session-store.ts";
@@ -25,7 +26,7 @@ const commandFamilyBashProjectApprovalGrantSchema = z
   .object({
     projectRoot: z.string().min(1),
     cwd: z.string().min(1),
-    commandFamily: z.literal("pnpm_vitest_run_workspace_test_selectors"),
+    commandFamily: z.enum(bashCommandFamilyIds),
   })
   .strict();
 const bashProjectApprovalGrantSchema = z.union([

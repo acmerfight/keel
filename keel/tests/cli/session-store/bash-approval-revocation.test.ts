@@ -36,6 +36,11 @@ describe("Session Store - Bash Approval Revocation", () => {
       cwd: ledgerWorkspace,
       commandFamily: "pnpm_vitest_run_workspace_test_selectors",
     } satisfies BashApprovalGrant;
+    const execCommandFamilyGrant = {
+      type: "command_family",
+      cwd: ledgerWorkspace,
+      commandFamily: "pnpm_exec_vitest_run_workspace_test_selectors",
+    } satisfies BashApprovalGrant;
 
     try {
       const session = createSessionStore({
@@ -63,41 +68,47 @@ describe("Session Store - Bash Approval Revocation", () => {
         grant: commandFamilyGrant,
         runtime: runtime(home, 4),
       });
+      persistSessionBashApprovalGrant({
+        session,
+        grant: execCommandFamilyGrant,
+        runtime: runtime(home, 5),
+      });
       persistSessionBashApprovalRevoked({
         session,
         grant: exactGrant,
-        runtime: runtime(home, 5),
+        runtime: runtime(home, 6),
       });
 
       // When
       const resumedAfterRevoke = resumeSessionStore({
         sessionId: "bash-approval-revoke",
         workspace,
-        runtime: runtime(home, 6),
+        runtime: runtime(home, 7),
       });
 
       // Then
       expect(resumedAfterRevoke.bashApprovalGrants).toEqual([
         prefixGrant,
         commandFamilyGrant,
+        execCommandFamilyGrant,
       ]);
 
       // When
       const clearInput = persistSessionQueuedInput({
         session,
-        sequence: 7,
+        sequence: 8,
         line: "/approvals clear",
-        runtime: runtime(home, 7),
+        runtime: runtime(home, 8),
       });
       persistSessionBashApprovalsCleared({
         session,
-        runtime: runtime(home, 8),
+        runtime: runtime(home, 9),
         consumedInputIds: [clearInput.id],
       });
       const resumedAfterClear = resumeSessionStore({
         sessionId: "bash-approval-revoke",
         workspace,
-        runtime: runtime(home, 9),
+        runtime: runtime(home, 10),
       });
 
       // Then
@@ -110,16 +121,16 @@ describe("Session Store - Bash Approval Revocation", () => {
       persistSessionBashApprovalGrant({
         session,
         grant: prefixGrant,
-        runtime: runtime(home, 10),
+        runtime: runtime(home, 11),
       });
       persistSessionBashApprovalsCleared({
         session,
-        runtime: runtime(home, 11),
+        runtime: runtime(home, 12),
       });
       const resumedAfterDirectClear = resumeSessionStore({
         sessionId: "bash-approval-revoke",
         workspace,
-        runtime: runtime(home, 12),
+        runtime: runtime(home, 13),
       });
 
       // Then
