@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  access,
   mkdir,
   mkdtemp,
   rm,
@@ -40,6 +41,60 @@ const noToolFilter = {
 };
 
 describe("MCP config", () => {
+  test(`Given MCP state path resolution raises an unexpected runtime failure,
+    When configuration is mutated,
+    Then the MCP boundary preserves that failure instead of misclassifying it`, async () => {
+    // Given
+    const unexpected = new Error("runtime env failed");
+
+    // When / Then
+    await expect(
+      addMcpServer(
+        {
+          env: () => {
+            throw unexpected;
+          },
+        },
+        {
+          id: "runtime-error",
+          url: "https://example.com/mcp",
+          enabled: true,
+          allowPrivateNetwork: false,
+          authenticationRequired: false,
+          toolFilter: noToolFilter,
+        },
+      ),
+    ).rejects.toThrow("runtime env failed");
+  });
+
+  test(`Given KEEL_HOME is a symbolic link to another directory,
+    When MCP configuration is mutated,
+    Then the state owner rejects the root without publishing through it`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-mcp-config-home-link-"));
+    const target = join(parent, "target");
+    const linkedHome = join(parent, "home");
+    await mkdir(target);
+    await symlink(target, linkedHome, "dir");
+
+    try {
+      // When / Then
+      await expect(
+        addMcpServer(configRuntime(linkedHome), {
+          id: "catalog",
+          url: "https://example.com/mcp",
+          enabled: true,
+          allowPrivateNetwork: false,
+          authenticationRequired: false,
+          toolFilter: noToolFilter,
+        }),
+      ).rejects.toThrow(/KEEL_HOME.*symbolic link/u);
+      await expect(access(join(target, "mcp.json"))).rejects.toThrow();
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   test(`Given no MCP config exists,
     When configuration is read,
     Then the latest empty schema is returned without creating a file`, async () => {

@@ -1,4 +1,5 @@
 import { readdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import type { SessionMessage } from "../../agent/session-message.ts";
 import { errorMessage } from "../../core/error.ts";
 import { copySessionGoal } from "../../core/session-goal.ts";
@@ -47,6 +48,7 @@ import {
 import {
   type SessionStorageLocation,
   sessionFilePathAtLocation,
+  sessionHome,
   sessionRootPath,
 } from "./paths.ts";
 import {
@@ -481,9 +483,14 @@ function listSessionDirectories(
   runtime: SessionStoreRuntime,
   location: SessionStorageLocation,
 ): readonly string[] {
-  const sessionsPath = sessionRootPath(runtime, location);
+  const sessionsPath = join(
+    sessionHome(runtime),
+    location === "active" ? "sessions" : "archived-sessions",
+  );
   try {
-    return readdirSync(sessionsPath, { withFileTypes: true })
+    return readdirSync(sessionRootPath(runtime, location), {
+      withFileTypes: true,
+    })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
   } catch (error) {

@@ -35,6 +35,7 @@ import {
 import {
   createCliMcpAuthProvider,
   mcpOAuthRefreshLockRoot,
+  validateMcpOAuthRefreshLockRoot,
 } from "./mcp-connection.ts";
 import {
   McpOAuthCallbackError,
@@ -281,6 +282,7 @@ async function runMcpLogin(
     async () => {
       await setMcpServerAuthenticationRequired(runtime, configuredServer, true);
     },
+    () => validateMcpOAuthRefreshLockRoot(runtime),
   );
   const server: McpServerConfig = {
     ...configuredServer,
@@ -353,6 +355,7 @@ async function runMcpLogin(
       server,
       backend: runtime.mcpSecretBackend,
       refreshLockRoot: mcpOAuthRefreshLockRoot(runtime),
+      validateRefreshLockRoot: () => validateMcpOAuthRefreshLockRoot(runtime),
       redirectUrl: callback.redirectUrl,
       state,
       startedAt: runtime.now(),
@@ -392,6 +395,7 @@ async function runMcpLogout(
       await setMcpServerAuthenticationRequired(runtime, server, false);
       return result;
     },
+    () => validateMcpOAuthRefreshLockRoot(runtime),
   );
   if (logoutResult === "remote-revocation-failed") {
     throw new McpOAuthCredentialError(
@@ -412,6 +416,7 @@ async function runMcpEnabledMutation(
     server,
     mcpOAuthRefreshLockRoot(runtime),
     async () => await setMcpServerEnabled(runtime, server, enabled),
+    () => validateMcpOAuthRefreshLockRoot(runtime),
   );
   runtime.writeStdout(
     changed
@@ -442,6 +447,7 @@ async function runMcpRemove(
                 mcpOAuthRefreshLockRoot(runtime),
               );
             }),
+          () => validateMcpOAuthRefreshLockRoot(runtime),
         );
   runtime.writeStdout(
     removed

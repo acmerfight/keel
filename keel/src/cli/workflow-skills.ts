@@ -1,5 +1,9 @@
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import {
+  PrivateStateError,
+  privateStateDirectoryPath,
+} from "../core/private-state.ts";
 import { redactSecretLikeText } from "../core/secret-text.ts";
 import type { SkillPackageAudit } from "../skills/audit.ts";
 import {
@@ -54,17 +58,31 @@ function configuredRoots(value: string | undefined): readonly string[] {
   );
 }
 
+function managedSystemSkillRoot(runtime: Pick<CliRuntime, "env">): string {
+  try {
+    return privateStateDirectoryPath(
+      runtime,
+      ["skills", ".system"],
+      "KEEL_HOME skills root",
+    );
+  } catch (error) {
+    if (error instanceof PrivateStateError) {
+      throw new WorkflowSkillError(error.message);
+    }
+    throw error;
+  }
+}
+
 function skillDiscoveryOptions(
   runtime: Pick<CliRuntime, "env">,
   workspace: string,
 ): SkillDiscoveryOptions {
   const home = runtime.env("HOME") ?? runtime.env("USERPROFILE") ?? homedir();
-  const keelHome = runtime.env("KEEL_HOME") ?? join(home, ".keel");
   return {
     workspace,
     userRoot: join(home, ".agents", "skills"),
     systemRoots: [
-      join(keelHome, "skills", ".system"),
+      managedSystemSkillRoot(runtime),
       ...configuredRoots(runtime.env("KEEL_SYSTEM_SKILL_ROOTS")),
     ],
     extraRoots: configuredRoots(runtime.env("KEEL_EXTRA_SKILL_ROOTS")),

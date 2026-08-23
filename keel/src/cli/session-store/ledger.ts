@@ -2,7 +2,6 @@ import {
   appendFileSync,
   closeSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readSync,
   statSync,
@@ -11,6 +10,11 @@ import {
 import { dirname } from "node:path";
 import { TextDecoder } from "node:util";
 import { errorMessage } from "../../core/error.ts";
+import {
+  ensurePrivateDirectory,
+  PrivateStateError,
+  requirePrivateDirectory,
+} from "../../core/private-state.ts";
 import {
   formatNestedSessionStoreError,
   hasNodeErrorCode,
@@ -56,7 +60,7 @@ function serializeSessionMutationRecord(
 function appendJsonLine(filePath: string, record: SessionMutationRecord): void {
   let fd: number | undefined;
   try {
-    mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+    validateSessionLedgerParents(filePath, false);
     fd = openSync(filePath, "a", 0o600);
     appendFileSync(
       fd,
@@ -72,6 +76,30 @@ function appendJsonLine(filePath: string, record: SessionMutationRecord): void {
     if (fd !== undefined) {
       closeSync(fd);
     }
+  }
+}
+
+function validateSessionLedgerParents(
+  filePath: string,
+  createKeelHome: boolean,
+): void {
+  const sessionDirectory = dirname(filePath);
+  const sessionsRoot = dirname(sessionDirectory);
+  const keelHome = dirname(sessionsRoot);
+  try {
+    if (createKeelHome) {
+      ensurePrivateDirectory(keelHome, "KEEL_HOME");
+    } else {
+      requirePrivateDirectory(keelHome, "KEEL_HOME");
+    }
+    ensurePrivateDirectory(sessionDirectory, "active session directory");
+  } catch (error) {
+    /* v8 ignore else -- private-directory helpers normalize filesystem failures to PrivateStateError. */
+    if (error instanceof PrivateStateError) {
+      sessionStoreError(error.message);
+    }
+    /* v8 ignore next -- private-directory helpers normalize filesystem failures to PrivateStateError. */
+    throw error;
   }
 }
 
@@ -102,7 +130,7 @@ function writeInitialHeader(
     .join("")}`;
   let fd: number | undefined;
   try {
-    mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+    validateSessionLedgerParents(filePath, true);
     fd = openSync(filePath, "wx", 0o600);
     writeFileSync(fd, content, "utf8");
     fsyncSync(fd);

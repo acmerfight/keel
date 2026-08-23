@@ -4128,6 +4128,49 @@ describe("CLI Main - Skills", () => {
     }
   });
 
+  test(`Given the KEEL_HOME skills root is a symbolic link,
+    When the user lists system skills,
+    Then the CLI rejects the managed root instead of loading linked packages`, async () => {
+    // Given
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-cli-system-skills-link-workspace-"),
+    );
+    const home = await mkdtemp(
+      join(tmpdir(), "keel-cli-system-skills-link-home-"),
+    );
+    const outside = await mkdtemp(
+      join(tmpdir(), "keel-cli-system-skills-link-outside-"),
+    );
+    await writeSkillAtRoot(
+      join(outside, ".system"),
+      "outside",
+      "Outside system skill.",
+      "This package must not load through KEEL_HOME.",
+    );
+    await symlink(outside, join(home, "skills"), "dir");
+    const fixture = createRuntime(["skills"], {
+      cwd: workspace,
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(fixture.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(fixture.stdout()).toBe("");
+      expect(fixture.stderr()).toContain("KEEL_HOME skills root");
+      expect(fixture.stderr()).toContain("symbolic link");
+      expect(fixture.stderr()).not.toContain("unexpected runtime failure");
+      expect(fixture.stderr()).not.toContain("outside system skill");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the local workflow skills root is a symlink,
     When the CLI starts a one-shot run with a skill from that root,
     Then it rejects the root before contacting a provider`, async () => {

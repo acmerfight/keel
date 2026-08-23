@@ -11,7 +11,12 @@ import {
 import { join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import { sessionHome } from "./session-store.ts";
+import {
+  ensurePrivateStateDirectory,
+  PrivateStateError,
+  privateStateDirectoryPath,
+  privateStateRootPath,
+} from "../core/private-state.ts";
 
 interface SkillUserConfigRuntime {
   readonly env: (key: string) => string | undefined;
@@ -74,12 +79,28 @@ function hasNodeErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
 }
 
+function skillStateHome(
+  runtime: SkillUserConfigRuntime,
+  ensure = false,
+): string {
+  try {
+    return ensure
+      ? ensurePrivateStateDirectory(runtime, [], "KEEL_HOME")
+      : privateStateDirectoryPath(runtime, [], "KEEL_HOME");
+  } catch (error) {
+    if (error instanceof PrivateStateError) {
+      configError(error.message);
+    }
+    throw error;
+  }
+}
+
 function userSkillConfigPath(runtime: SkillUserConfigRuntime): string {
-  return join(sessionHome(runtime), "skills.json");
+  return join(privateStateRootPath(runtime), "skills.json");
 }
 
 function skillConfigLockPath(runtime: SkillUserConfigRuntime): string {
-  return join(sessionHome(runtime), "skills.lock");
+  return join(privateStateRootPath(runtime), "skills.lock");
 }
 
 function skillConfigLockOwnerPath(lockPath: string): string {
@@ -181,7 +202,7 @@ function withUserSkillConfigLock<Result>(
   runtime: SkillUserConfigRuntime,
   action: () => Result,
 ): Result {
-  const home = sessionHome(runtime);
+  const home = skillStateHome(runtime, true);
   const lockPath = skillConfigLockPath(runtime);
   const token = randomUUID();
   const deadline = Date.now() + SKILL_CONFIG_LOCK_TIMEOUT_MS;
@@ -252,6 +273,7 @@ export function readUserSkillConfig(
   const filePath = userSkillConfigPath(runtime);
   let content: string;
   try {
+    skillStateHome(runtime);
     content = readFileSync(filePath, "utf8");
   } catch (error) {
     if (hasNodeErrorCode(error, "ENOENT")) {
@@ -291,7 +313,7 @@ function writeUserSkillConfig(
   runtime: SkillUserConfigRuntime,
   config: UserSkillConfig,
 ): void {
-  const home = sessionHome(runtime);
+  const home = skillStateHome(runtime, true);
   const filePath = userSkillConfigPath(runtime);
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {

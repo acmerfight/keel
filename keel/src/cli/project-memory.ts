@@ -18,6 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { estimateTextTokens } from "../agent/context-compaction.ts";
 import { errorMessage } from "../core/error.ts";
+import { privateStateRootPath } from "../core/private-state.ts";
 import { secretLikeTextLabel } from "../core/secret-text.ts";
 import { escapeTerminalText } from "./output.ts";
 import {
@@ -39,7 +40,6 @@ import {
   type ProjectMemorySource,
   projectMemoryTimestampSchema,
 } from "./project-memory-events.ts";
-import { sessionHome } from "./session-store.ts";
 
 const MAX_ACTIVE_ENTRIES = 100;
 const MAX_RENDERED_BYTES = 4096;
@@ -285,7 +285,7 @@ export function resolveProjectMemoryScope(
 }
 
 function memoryRoot(runtime: ProjectMemoryRuntime): string {
-  const home = resolve(sessionHome(runtime));
+  const home = resolve(privateStateRootPath(runtime));
   ensureKeelHomeDirectory(home);
   const root = join(home, "memory");
   ensurePrivateDirectory(root);
@@ -308,7 +308,7 @@ export function projectMemoryDirectoryForRead(
   runtime: ProjectMemoryRuntime,
   scope: ProjectMemoryScope,
 ): string | undefined {
-  const home = resolve(sessionHome(runtime));
+  const home = resolve(privateStateRootPath(runtime));
   const projectPath = join(home, "memory", "projects", scope.id);
   const candidateDirectories = [
     home,

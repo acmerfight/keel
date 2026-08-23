@@ -1,5 +1,8 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  PrivateStateError,
+  privateStateDirectoryPath,
+} from "../../core/private-state.ts";
 import { sessionStoreError } from "./errors.ts";
 import {
   SESSION_ID_PATTERN,
@@ -9,7 +12,29 @@ import {
 } from "./model.ts";
 
 export function sessionHome(runtime: Pick<SessionStoreRuntime, "env">): string {
-  return runtime.env("KEEL_HOME") ?? join(homedir(), ".keel");
+  try {
+    return privateStateDirectoryPath(runtime, [], "KEEL_HOME");
+  } catch (error) {
+    if (error instanceof PrivateStateError) {
+      sessionStoreError(error.message);
+    }
+    throw error;
+  }
+}
+
+function sessionStateDirectoryPath(
+  runtime: Pick<SessionStoreRuntime, "env">,
+  segments: readonly string[],
+  label: string,
+): string {
+  try {
+    return privateStateDirectoryPath(runtime, segments, label);
+  } catch (error) {
+    if (error instanceof PrivateStateError) {
+      sessionStoreError(error.message);
+    }
+    throw error;
+  }
 }
 
 function validateSessionId(sessionId: string): void {
@@ -31,9 +56,12 @@ export function sessionRootPath(
   runtime: Pick<SessionStoreRuntime, "env">,
   location: SessionStorageLocation,
 ): string {
-  return join(
-    sessionHome(runtime),
-    location === "active" ? "sessions" : "archived-sessions",
+  const directoryName =
+    location === "active" ? "sessions" : "archived-sessions";
+  return sessionStateDirectoryPath(
+    runtime,
+    [directoryName],
+    `${location} sessions root`,
   );
 }
 
@@ -69,7 +97,14 @@ export function sessionLockPath(
   sessionId: string,
 ): string {
   validateSessionId(sessionId);
-  return join(sessionHome(runtime), SESSION_LOCKS_DIRECTORY_NAME, sessionId);
+  return join(
+    sessionStateDirectoryPath(
+      runtime,
+      [SESSION_LOCKS_DIRECTORY_NAME],
+      "session locks root",
+    ),
+    sessionId,
+  );
 }
 
 export function sessionLockOwnerPath(lockPath: string): string {

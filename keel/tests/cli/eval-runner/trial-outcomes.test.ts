@@ -1,3 +1,4 @@
+import { symlink } from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
 import { runReportSchema } from "../../../src/eval/report-schema.ts";
 import {
@@ -424,6 +425,76 @@ writeFileSync(${JSON.stringify(configPath)}, ${JSON.stringify(
       if (previousDeepseekKey === undefined)
         delete process.env[DEEPSEEK_API_KEY_ENV];
       else process.env[DEEPSEEK_API_KEY_ENV] = previousDeepseekKey;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given eval provider authentication is a symbolic link,
+    When a memory pair isolates its Keel home,
+    Then setup rejects the linked secret instead of copying its target`, async () => {
+    // Given
+    const { root, suiteDir, outFile } = await createEvalDir();
+    const configuredHome = join(root, "configured-home");
+    const outsideAuth = join(root, "outside-auth.json");
+    await mkdir(configuredHome, { recursive: true });
+    await writeFile(
+      outsideAuth,
+      JSON.stringify({
+        schemaVersion: 1,
+        providers: { deepseek: { apiKey: "linked-eval-secret" } },
+      }),
+      "utf8",
+    );
+    await symlink(outsideAuth, join(configuredHome, "auth.json"));
+    await createMemoryPairTask(suiteDir, "linked-provider-auth", {
+      prompt: "create result.txt",
+      verify: "test -f result.txt\n",
+      solution: "printf 'done\\n' > result.txt\n",
+      timeoutMs: 10_000,
+      scriptTimeoutMs: 10_000,
+      maxCostUsd: 0.01,
+      memory: "A project fact.",
+    });
+    const cliEntry = join(root, "memory-pair-cli.mjs");
+    await writeFile(
+      cliEntry,
+      `import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "memory" && args[1] === "add") process.exit(0);
+writeFileSync("result.txt", "done\\n");
+const reportIndex = args.indexOf("--report");
+writeFileSync(args[reportIndex + 1], JSON.stringify(${JSON.stringify(VALID_REPORT)}));
+`,
+      "utf8",
+    );
+    const previousHome = process.env[KEEL_HOME_ENV];
+    process.env[KEEL_HOME_ENV] = configuredHome;
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+
+    try {
+      // When
+      const exitCode = await runEvalCommand({
+        suiteDir,
+        outFile,
+        trials: 1,
+        check: false,
+        cliEntry,
+      });
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(
+        stderr.mock.calls.map(([chunk]) => String(chunk)).join(""),
+      ).toContain("symbolic link");
+      expect(await readFile(outsideAuth, "utf8")).toContain(
+        "linked-eval-secret",
+      );
+    } finally {
+      stderr.mockRestore();
+      if (previousHome === undefined) delete process.env[KEEL_HOME_ENV];
+      else process.env[KEEL_HOME_ENV] = previousHome;
       await rm(root, { recursive: true, force: true });
     }
   });

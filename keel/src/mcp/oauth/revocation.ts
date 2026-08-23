@@ -20,11 +20,13 @@ export async function deleteMcpOAuthCredentials(
   server: McpOAuthServerEndpoint,
   backend: McpSecretBackend,
   refreshLockRoot: string,
+  validateRefreshLockRoot?: (() => void) | undefined,
 ): Promise<boolean> {
   const store = new OAuthCredentialStore({
     server,
     backend,
     refreshLockRoot,
+    validateRefreshLockRoot,
     mutationGuard: null,
   });
   return await store.delete();
@@ -34,9 +36,11 @@ export async function withMcpOAuthCredentialLock<Result>(
   server: McpOAuthServerEndpoint,
   refreshLockRoot: string,
   action: () => Promise<Result>,
+  validateRefreshLockRoot?: (() => void) | undefined,
 ): Promise<Result> {
   return await withMcpOAuthRefreshLock({
     root: refreshLockRoot,
+    validateRoot: validateRefreshLockRoot,
     credentialId: credentialAccount(server),
     action,
   });

@@ -250,12 +250,14 @@ export class OAuthCredentialStore {
   private readonly incarnation: string;
   private readonly mutationGuard: (() => Promise<void>) | null;
   private readonly refreshLockRoot: string;
+  private readonly validateRefreshLockRoot: (() => void) | undefined;
   private readonly resource: string;
 
   constructor(options: {
     readonly server: McpOAuthServerEndpoint;
     readonly backend: McpSecretBackend;
     readonly refreshLockRoot: string;
+    readonly validateRefreshLockRoot?: (() => void) | undefined;
     readonly mutationGuard: (() => Promise<void>) | null;
   }) {
     const { server } = options;
@@ -264,6 +266,7 @@ export class OAuthCredentialStore {
     this.account = credentialAccount(server);
     this.backend = options.backend;
     this.refreshLockRoot = options.refreshLockRoot;
+    this.validateRefreshLockRoot = options.validateRefreshLockRoot;
     this.mutationGuard = options.mutationGuard;
   }
 
@@ -321,6 +324,7 @@ export class OAuthCredentialStore {
   ): Promise<Result> {
     return await withMcpOAuthRefreshLock({
       root: this.refreshLockRoot,
+      validateRoot: this.validateRefreshLockRoot,
       credentialId: this.credentialId(),
       action: async () => {
         await this.mutationGuard?.();
@@ -359,6 +363,7 @@ export class OAuthCredentialStore {
   async delete(): Promise<boolean> {
     return await withMcpOAuthRefreshLock({
       root: this.refreshLockRoot,
+      validateRoot: this.validateRefreshLockRoot,
       credentialId: this.credentialId(),
       action: async () => await this.deleteUnderLock(),
     });
