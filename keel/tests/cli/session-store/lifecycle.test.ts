@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,6 +20,42 @@ import {
 import { runtime } from "../../../src/testing/session-store-fixtures.ts";
 
 describe("Session Store Lifecycle", () => {
+  test(`Given the archived sessions root is a symbolic link,
+    When the user archives a saved session,
+    Then the lifecycle owner rejects the root without moving state outside KEEL_HOME`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-session-outside-"));
+    const sessionId = "linked-archive-root";
+    const session = createSessionStore({
+      sessionId,
+      workspace,
+      runtime: runtime(home),
+    });
+    const ledger = await readFile(session.filePath);
+    await symlink(outside, join(home, "archived-sessions"), "dir");
+
+    try {
+      // When / Then
+      expect(() =>
+        archiveSessionStore({
+          sessionId,
+          workspace,
+          runtime: runtime(home, 1),
+        }),
+      ).toThrow(SessionStoreError);
+      expect(await readFile(session.filePath)).toEqual(ledger);
+      await expect(
+        readFile(join(outside, sessionId, "ledger.jsonl")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given the requested active session does not exist,
     When the user archives that identity,
     Then the lifecycle owner reports the missing source and releases its lock`, async () => {

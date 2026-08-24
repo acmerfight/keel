@@ -4,6 +4,7 @@ import {
   readdir,
   rm,
   stat,
+  symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -24,6 +25,77 @@ function artifactRuntime(home: string, now = 0) {
 }
 
 describe("CLI tool-output artifact store", () => {
+  test(`Given the managed tool-output root is a symbolic link,
+    When the artifact store saves raw output,
+    Then it fails closed without writing outside KEEL_HOME`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-link-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-artifact-link-out-"));
+    await mkdir(join(home, "artifacts"));
+    await symlink(outside, join(home, "artifacts", "tool-output"), "dir");
+    const store = createToolOutputArtifactStore({
+      runtime: artifactRuntime(home),
+      scope: "linked-root",
+    });
+
+    try {
+      // When
+      const saved = await store.save({
+        toolCallId: "linked_artifact_root",
+        toolName: "read",
+        content: "raw output must stay inside KEEL_HOME",
+        sourceStatus: "complete",
+        purpose: "settlement",
+      });
+
+      // Then
+      expect(saved.status).toBe("failed");
+      if (saved.status === "failed") {
+        expect(saved.reason).toContain("symbolic link");
+      }
+      expect(await readdir(outside)).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an artifact scope directory is a symbolic link,
+    When the artifact store saves raw output,
+    Then it rejects the scope without writing through the link`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-artifact-scope-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-artifact-scope-out-"));
+    const root = join(home, "artifacts", "tool-output");
+    await mkdir(root, { recursive: true });
+    await symlink(outside, join(root, "linked-scope"), "dir");
+    const store = createToolOutputArtifactStore({
+      runtime: artifactRuntime(home),
+      scope: "linked-scope",
+    });
+
+    try {
+      // When
+      const saved = await store.save({
+        toolCallId: "linked_artifact_scope",
+        toolName: "read",
+        content: "raw output must not follow a scope link",
+        sourceStatus: "complete",
+        purpose: "settlement",
+      });
+
+      // Then
+      expect(saved.status).toBe("failed");
+      if (saved.status === "failed") {
+        expect(saved.reason).toContain("symbolic link");
+      }
+      expect(await readdir(outside)).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given transcript persistence is cancelled before publication,
     When the abortable artifact store settles,
     Then it leaves neither a final artifact nor a temporary partial file`, async () => {

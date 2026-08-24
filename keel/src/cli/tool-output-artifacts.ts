@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  mkdir,
   readdir,
   readFile,
   rename,
@@ -18,7 +17,11 @@ import type {
   ToolOutputArtifactSaveResult,
 } from "../agent/tool-output-artifacts.ts";
 import { errorMessage } from "../core/error.ts";
-import { type SessionStoreRuntime, sessionHome } from "./session-store.ts";
+import {
+  ensurePrivateStateDirectory,
+  privateStateDirectoryPath,
+} from "../core/private-state.ts";
+import type { SessionStoreRuntime } from "./session-store.ts";
 
 const ARTIFACT_SCOPE_PATTERN = /^[A-Za-z0-9._-]+$/u;
 const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9._-]+$/u;
@@ -66,7 +69,11 @@ function validateArtifactSegment(kind: string, value: string): void {
 }
 
 function artifactRoot(runtime: SessionStoreRuntime): string {
-  return join(sessionHome(runtime), "artifacts", "tool-output");
+  return privateStateDirectoryPath(
+    runtime,
+    ["artifacts", "tool-output"],
+    "tool-output artifact root",
+  );
 }
 
 function hasNodeErrorCode(error: unknown, code: string): boolean {
@@ -89,7 +96,11 @@ function artifactDirectory(
   scope: string,
 ): string {
   validateArtifactSegment("scope", scope);
-  return join(artifactRoot(runtime), scope);
+  return privateStateDirectoryPath(
+    runtime,
+    ["artifacts", "tool-output", scope],
+    "tool-output artifact scope",
+  );
 }
 
 function artifactPath(
@@ -98,7 +109,7 @@ function artifactPath(
 ): string {
   validateArtifactSegment("scope", ref.scope);
   validateArtifactSegment("id", ref.id);
-  return join(artifactRoot(runtime), ref.scope, `${ref.id}.txt`);
+  return join(artifactDirectory(runtime, ref.scope), `${ref.id}.txt`);
 }
 
 function toolOutputArtifactRef(scope: string, id: string): string {
@@ -212,9 +223,9 @@ function artifactMatchesReuseInput(
 export async function cleanupExpiredToolOutputArtifacts(options: {
   readonly runtime: SessionStoreRuntime;
 }): Promise<void> {
-  const root = artifactRoot(options.runtime);
   const cutoffMs = options.runtime.now() - TOOL_OUTPUT_ARTIFACT_RETENTION_MS;
   try {
+    const root = artifactRoot(options.runtime);
     const scopes = await listDirectoryEntries(root);
     for (const scopeEntry of scopes) {
       if (
@@ -223,7 +234,10 @@ export async function cleanupExpiredToolOutputArtifacts(options: {
       ) {
         continue;
       }
-      const scopeDirectory = join(root, scopeEntry.name);
+      const scopeDirectory = artifactDirectory(
+        options.runtime,
+        scopeEntry.name,
+      );
       const artifacts = await listDirectoryEntries(scopeDirectory);
       for (const artifactEntry of artifacts) {
         if (!artifactEntry.isFile()) {
@@ -242,16 +256,25 @@ export async function cleanupExpiredToolOutputArtifacts(options: {
         ) {
           continue;
         }
-        const artifactFile = join(scopeDirectory, artifactEntry.name);
         try {
+          const artifactFile = join(
+            artifactDirectory(options.runtime, scopeEntry.name),
+            artifactEntry.name,
+          );
           const artifactStats = await stat(artifactFile);
           if (artifactStats.mtimeMs < cutoffMs) {
-            await rm(artifactFile, { force: true });
+            await rm(
+              join(
+                artifactDirectory(options.runtime, scopeEntry.name),
+                artifactEntry.name,
+              ),
+              { force: true },
+            );
           }
         } catch {}
       }
       try {
-        await rmdir(scopeDirectory);
+        await rmdir(artifactDirectory(options.runtime, scopeEntry.name));
       } catch {}
     }
   } catch {
@@ -297,14 +320,18 @@ export function createToolOutputArtifactStore(
     save: async (
       input: ToolOutputArtifactSaveInput,
     ): Promise<ToolOutputArtifactSaveResult> => {
-      const directory = artifactDirectory(options.runtime, options.scope);
       const id = randomUUID();
       const ref = toolOutputArtifactRef(options.scope, id);
-      const finalPath = join(directory, `${id}.txt`);
-      const temporaryPath = join(directory, `${id}.${randomUUID()}.tmp`);
+      let temporaryPath: string | undefined;
       try {
         input.signal?.throwIfAborted();
-        await mkdir(directory, { recursive: true, mode: 0o700 });
+        const directory = ensurePrivateStateDirectory(
+          options.runtime,
+          ["artifacts", "tool-output", options.scope],
+          "tool-output artifact scope",
+        );
+        const finalPath = join(directory, `${id}.txt`);
+        temporaryPath = join(directory, `${id}.${randomUUID()}.tmp`);
         input.signal?.throwIfAborted();
         await writeFile(
           temporaryPath,
@@ -331,7 +358,9 @@ export function createToolOutputArtifactStore(
       } catch (error) {
         return { status: "failed", reason: errorMessage(error) };
       } finally {
-        await rm(temporaryPath, { force: true }).catch(() => undefined);
+        if (temporaryPath !== undefined) {
+          await rm(temporaryPath, { force: true }).catch(() => undefined);
+        }
       }
     },
     discard: async (ref: string): Promise<void> => {

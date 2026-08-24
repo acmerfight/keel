@@ -1,5 +1,10 @@
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { setAllWorkflowSkillsEnabled } from "../../src/cli/skill-user-config.ts";
 import {
+  discoverWorkflowSkillCatalog,
   filterWorkflowSkillCatalog,
   formatWorkflowSkillList,
 } from "../../src/cli/workflow-skills.ts";
@@ -43,6 +48,60 @@ function workflowSkill(skill: SkillDescriptor): WorkflowSkill {
 }
 
 describe("Workflow Skill Resource Contract", () => {
+  test(`Given KEEL_HOME is a symbolic link,
+    When user controls and managed Skill discovery resolve private state,
+    Then both owners reject the linked boundary`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-skill-linked-home-"));
+    const workspace = join(parent, "workspace");
+    const target = join(parent, "target");
+    const home = join(parent, "home");
+    await mkdir(workspace);
+    await mkdir(target);
+    await symlink(target, home, "dir");
+    const runtime = {
+      env: (key: string) => {
+        if (key === "KEEL_HOME") return home;
+        if (key === "HOME") return parent;
+        return undefined;
+      },
+    };
+
+    try {
+      // When / Then
+      expect(() => setAllWorkflowSkillsEnabled(runtime, false)).toThrow(
+        /symbolic link/u,
+      );
+      expect(() => discoverWorkflowSkillCatalog(runtime, workspace)).toThrow(
+        WorkflowSkillError,
+      );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given private Skill path resolution raises an unexpected runtime failure,
+    When user controls and managed Skill discovery resolve their roots,
+    Then both owners preserve the unexpected failure`, () => {
+    // Given
+    const unexpected = new Error("runtime env failed");
+    const runtime = {
+      env: (key: string) => {
+        if (key === "HOME") return tmpdir();
+        if (key === "KEEL_HOME") throw unexpected;
+        return undefined;
+      },
+    };
+
+    // When / Then
+    expect(() => setAllWorkflowSkillsEnabled(runtime, false)).toThrow(
+      unexpected,
+    );
+    expect(() => discoverWorkflowSkillCatalog(runtime, tmpdir())).toThrow(
+      unexpected,
+    );
+  });
+
   test(`Given one package is disabled in a mixed catalog,
     When every lazy catalog operation resolves a package,
     Then disabled identities fail closed and enabled identities remain usable`, () => {

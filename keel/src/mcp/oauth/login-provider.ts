@@ -100,6 +100,7 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
     readonly server: McpOAuthServerEndpoint;
     readonly backend: McpSecretBackend;
     readonly refreshLockRoot: string;
+    readonly validateRefreshLockRoot?: (() => void) | undefined;
     readonly isCurrentAndEnabled: (
       server: McpOAuthServerEndpoint,
     ) => boolean | Promise<boolean>;
@@ -113,6 +114,7 @@ class KeelMcpOAuthProvider implements McpOAuthLoginProvider {
       server: options.server,
       backend: options.backend,
       refreshLockRoot: options.refreshLockRoot,
+      validateRefreshLockRoot: options.validateRefreshLockRoot,
       mutationGuard: async () => {
         if (!(await options.isCurrentAndEnabled(options.server))) {
           throw new McpOAuthServerUnavailableError(
@@ -461,6 +463,7 @@ export function createMcpOAuthLoginProvider(options: {
   readonly server: McpOAuthServerEndpoint;
   readonly backend: McpSecretBackend;
   readonly refreshLockRoot: string;
+  readonly validateRefreshLockRoot?: (() => void) | undefined;
   readonly isCurrentAndEnabled: (
     server: McpOAuthServerEndpoint,
   ) => boolean | Promise<boolean>;

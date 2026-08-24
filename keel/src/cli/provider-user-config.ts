@@ -1,13 +1,17 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import {
+  PrivateStateError,
+  privateStateRootPath,
+  readPrivateStateFile,
+  writePrivateStateFile,
+} from "../core/private-state.ts";
 import {
   type ApiKeyProviderId,
   type ProviderId,
   providerIds,
 } from "../core/provider-id.ts";
-import { sessionHome } from "./session-store.ts";
 
 interface ProviderUserConfigRuntime {
   readonly env: (key: string) => string | undefined;
@@ -60,30 +64,35 @@ function userConfigError(message: string): never {
   throw new ProviderUserConfigError(message);
 }
 
-function hasNodeErrorCode(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && error.code === code;
-}
-
 function userProviderConfigPath(runtime: ProviderUserConfigRuntime): string {
-  return join(sessionHome(runtime), "config.json");
+  return join(privateStateRootPath(runtime), "config.json");
 }
 
 function userProviderAuthPath(runtime: ProviderUserConfigRuntime): string {
-  return join(sessionHome(runtime), "auth.json");
+  return join(privateStateRootPath(runtime), "auth.json");
 }
 
 function readOptionalJsonFile(
-  filePath: string,
+  runtime: ProviderUserConfigRuntime,
+  fileName: "auth.json" | "config.json",
   label: string,
   options: { readonly missingParentAsAbsent: boolean },
 ): unknown | null {
+  const filePath = join(privateStateRootPath(runtime), fileName);
   let content: string;
   try {
-    content = readFileSync(filePath, "utf8");
+    const stored = readPrivateStateFile({
+      runtime,
+      segments: [fileName],
+      label,
+    });
+    if (stored === null) return null;
+    content = stored;
   } catch (error) {
     if (
-      hasNodeErrorCode(error, "ENOENT") ||
-      (options.missingParentAsAbsent && hasNodeErrorCode(error, "ENOTDIR"))
+      options.missingParentAsAbsent &&
+      error instanceof PrivateStateError &&
+      error.reason === "not_directory"
     ) {
       return null;
     }
@@ -116,7 +125,12 @@ function readProviderConfigFile(
   options: { readonly missingParentAsAbsent: boolean },
 ): ProviderConfigFile | null {
   const filePath = userProviderConfigPath(runtime);
-  const json = readOptionalJsonFile(filePath, "provider config", options);
+  const json = readOptionalJsonFile(
+    runtime,
+    "config.json",
+    "provider config",
+    options,
+  );
   if (json === null) {
     return null;
   }
@@ -134,7 +148,12 @@ function readProviderAuthFile(
   options: { readonly missingParentAsAbsent: boolean },
 ): ProviderAuthFile {
   const filePath = userProviderAuthPath(runtime);
-  const json = readOptionalJsonFile(filePath, "provider auth", options);
+  const json = readOptionalJsonFile(
+    runtime,
+    "auth.json",
+    "provider auth",
+    options,
+  );
   if (json === null) {
     return { schemaVersion: 1, providers: {} };
   }
@@ -149,17 +168,18 @@ function readProviderAuthFile(
 
 function writePrivateJsonFile(
   runtime: ProviderUserConfigRuntime,
-  filePath: string,
+  fileName: "auth.json" | "config.json",
   label: string,
   data: unknown,
 ): void {
+  const filePath = join(privateStateRootPath(runtime), fileName);
   try {
-    mkdirSync(sessionHome(runtime), { recursive: true, mode: 0o700 });
-    writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
+    writePrivateStateFile({
+      runtime,
+      segments: [fileName],
+      label,
+      content: `${JSON.stringify(data, null, 2)}\n`,
     });
-    chmodSync(filePath, 0o600);
   } catch (error) {
     userConfigError(
       `Error: cannot write ${label} ${filePath}: ${errorMessage(error)}`,
@@ -202,7 +222,9 @@ export function readUserProviderConfig(
 export function readOptionalUserProviderConfig(
   runtime: ProviderUserConfigRuntime,
 ): UserProviderConfig | null {
-  const file = readProviderConfigFile(runtime, { missingParentAsAbsent: true });
+  const file = readProviderConfigFile(runtime, {
+    missingParentAsAbsent: true,
+  });
   return file === null ? null : configFromFile(file);
 }
 
@@ -212,7 +234,7 @@ export function writeUserProviderConfig(
 ): void {
   writePrivateJsonFile(
     runtime,
-    userProviderConfigPath(runtime),
+    "config.json",
     "provider config",
     configFileFromInput(input),
   );
@@ -285,36 +307,30 @@ export function writeProviderAuthApiKey(
   providerId: ApiKeyProviderId,
   apiKey: string,
 ): void {
-  const file = readProviderAuthFile(runtime, { missingParentAsAbsent: false });
-  writePrivateJsonFile(
-    runtime,
-    userProviderAuthPath(runtime),
-    "provider auth",
-    {
-      schemaVersion: 1,
-      providers: providersWithCredential(file.providers, providerId, {
-        apiKey,
-      }),
-    },
-  );
+  const file = readProviderAuthFile(runtime, {
+    missingParentAsAbsent: false,
+  });
+  writePrivateJsonFile(runtime, "auth.json", "provider auth", {
+    schemaVersion: 1,
+    providers: providersWithCredential(file.providers, providerId, {
+      apiKey,
+    }),
+  });
 }
 
 export function removeProviderAuthApiKey(
   runtime: ProviderUserConfigRuntime,
   providerId: ApiKeyProviderId,
 ): boolean {
-  const file = readProviderAuthFile(runtime, { missingParentAsAbsent: false });
+  const file = readProviderAuthFile(runtime, {
+    missingParentAsAbsent: false,
+  });
   const hadCredential =
     credentialForProvider(file.providers, providerId) !== null;
-  writePrivateJsonFile(
-    runtime,
-    userProviderAuthPath(runtime),
-    "provider auth",
-    {
-      schemaVersion: 1,
-      providers: providersWithoutCredential(file.providers, providerId),
-    },
-  );
+  writePrivateJsonFile(runtime, "auth.json", "provider auth", {
+    schemaVersion: 1,
+    providers: providersWithoutCredential(file.providers, providerId),
+  });
   return hadCredential;
 }
 
@@ -324,7 +340,9 @@ export function providerAuthStatus(
   readonly providerId: ProviderId;
   readonly status: "not-required" | "present" | "missing";
 }[] {
-  const file = readProviderAuthFile(runtime, { missingParentAsAbsent: false });
+  const file = readProviderAuthFile(runtime, {
+    missingParentAsAbsent: false,
+  });
   return providerIds.map((providerId) => {
     if (providerId === "fake") {
       return { providerId, status: "not-required" };

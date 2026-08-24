@@ -1,20 +1,17 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
-import {
-  chmod,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { chmod, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
-import { sessionHome } from "./session-store.ts";
+import {
+  ensurePrivateStateDirectory,
+  PrivateStateError,
+  privateStateDirectoryPath,
+  privateStateRootPath,
+} from "../core/private-state.ts";
 
 const MCP_CONFIG_SCHEMA_VERSION = 4;
 const MCP_CONFIG_MAX_BYTES = 1024 * 1024;
@@ -115,12 +112,25 @@ function hasNodeErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
 }
 
+function mcpStateHome(runtime: McpConfigRuntime, ensure = false): string {
+  try {
+    return ensure
+      ? ensurePrivateStateDirectory(runtime, [], "KEEL_HOME")
+      : privateStateDirectoryPath(runtime, [], "KEEL_HOME");
+  } catch (error) {
+    if (error instanceof PrivateStateError) {
+      configError(error.message);
+    }
+    throw error;
+  }
+}
+
 function configPath(runtime: McpConfigRuntime): string {
-  return join(sessionHome(runtime), "mcp.json");
+  return join(privateStateRootPath(runtime), "mcp.json");
 }
 
 function configLockPath(runtime: McpConfigRuntime): string {
-  return join(sessionHome(runtime), ".mcp-config.lock");
+  return join(privateStateRootPath(runtime), ".mcp-config.lock");
 }
 
 async function readMcpConfigFile(
@@ -129,6 +139,7 @@ async function readMcpConfigFile(
   const filePath = configPath(runtime);
   let fileStat: Awaited<ReturnType<typeof stat>>;
   try {
+    mcpStateHome(runtime);
     fileStat = await stat(filePath);
   } catch (error) {
     if (hasNodeErrorCode(error, "ENOENT")) {
@@ -175,6 +186,7 @@ function readMcpConfigFileSync(runtime: McpConfigRuntime): McpConfigFile {
   const filePath = configPath(runtime);
   let fileStat: ReturnType<typeof statSync>;
   try {
+    mcpStateHome(runtime);
     fileStat = statSync(filePath);
   } catch (error) {
     if (hasNodeErrorCode(error, "ENOENT")) {
@@ -216,14 +228,13 @@ async function writeMcpConfigFile(
   runtime: McpConfigRuntime,
   file: McpConfigFile,
 ): Promise<void> {
-  const home = sessionHome(runtime);
+  const home = mcpStateHome(runtime, true);
   const filePath = configPath(runtime);
   const tempPath = join(
     home,
     `.mcp.json.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
   );
   try {
-    await mkdir(home, { recursive: true, mode: 0o700 });
     await chmod(home, 0o700);
     const handle = await open(tempPath, "wx", 0o600);
     try {
@@ -278,6 +289,7 @@ async function acquireConfigLock(
   const deadline = Date.now() + MCP_CONFIG_LOCK_TIMEOUT_MS;
   for (;;) {
     try {
+      mcpStateHome(runtime);
       return await open(lockPath, "wx", 0o600);
     } catch (error) {
       /* v8 ignore next 4 -- open faults other than contention require OS permission/device failure injection and are normalized for the CLI. */
@@ -299,9 +311,8 @@ async function withConfigLock<T>(
   runtime: McpConfigRuntime,
   action: () => Promise<T>,
 ): Promise<T> {
-  const home = sessionHome(runtime);
+  mcpStateHome(runtime, true);
   const lockPath = configLockPath(runtime);
-  await mkdir(home, { recursive: true, mode: 0o700 });
   const lockHandle = await acquireConfigLock(runtime);
   try {
     return await action();

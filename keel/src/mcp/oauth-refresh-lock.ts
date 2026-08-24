@@ -4,6 +4,10 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
+import {
+  ensurePrivateDirectory,
+  PrivateStateError,
+} from "../core/private-state.ts";
 
 const MCP_OAUTH_REFRESH_LOCK_WAIT_MS = 25;
 // Keep lock acquisition bounded, but longer than the 30-second token request
@@ -29,6 +33,11 @@ type RefreshLockRead =
   | { readonly status: "malformed" }
   | { readonly status: "failed"; readonly error: string };
 
+type RefreshLockRoot = {
+  readonly root: string;
+  readonly validateRoot?: (() => void) | undefined;
+};
+
 export class McpOAuthRefreshLockError extends Error {}
 
 function hasNodeErrorCode(error: unknown, code: string): boolean {
@@ -42,6 +51,18 @@ function hasNodeErrorCode(error: unknown, code: string): boolean {
 
 function refreshLockError(message: string): never {
   throw new McpOAuthRefreshLockError(`Error: MCP authorization ${message}.`);
+}
+
+function validateRefreshLockRoot(options: RefreshLockRoot): void {
+  try {
+    options.validateRoot?.();
+    ensurePrivateDirectory(options.root, "MCP OAuth refresh lock root");
+  } catch (error) {
+    if (error instanceof PrivateStateError) {
+      throw new McpOAuthRefreshLockError(error.message);
+    }
+    throw error;
+  }
 }
 
 function lockPath(root: string, credentialId: string): string {
@@ -105,13 +126,15 @@ async function lockIsStale(
 }
 
 async function moveLockForRemoval(
-  root: string,
+  rootOptions: RefreshLockRoot,
   path: string,
 ): Promise<boolean> {
-  const reclaimedRoot = join(root, ".reclaimed");
+  validateRefreshLockRoot(rootOptions);
+  const reclaimedRoot = join(rootOptions.root, ".reclaimed");
   const reclaimedPath = join(reclaimedRoot, randomUUID());
   try {
     await mkdir(reclaimedRoot, { recursive: true, mode: 0o700 });
+    validateRefreshLockRoot(rootOptions);
     await rename(path, reclaimedPath);
   } catch (error) {
     /* v8 ignore next -- requires another process to remove the same stale generation between inspection and atomic rename; the acquisition loop safely retries. */
@@ -130,13 +153,14 @@ async function moveLockForRemoval(
 }
 
 async function releaseLock(
-  root: string,
+  rootOptions: RefreshLockRoot,
   path: string,
   token: string,
 ): Promise<void> {
+  validateRefreshLockRoot(rootOptions);
   const ownerRead = await readOwner(path);
   if (ownerRead.status !== "valid" || ownerRead.owner.token !== token) return;
-  await moveLockForRemoval(root, path);
+  await moveLockForRemoval(rootOptions, path);
 }
 
 async function waitForLock(): Promise<void> {
@@ -147,22 +171,24 @@ async function waitForLock(): Promise<void> {
 
 export async function withMcpOAuthRefreshLock<Result>(options: {
   readonly root: string;
+  readonly validateRoot?: (() => void) | undefined;
   readonly credentialId: string;
   readonly action: () => Promise<Result>;
 }): Promise<Result> {
+  const rootOptions: RefreshLockRoot = options;
   const path = lockPath(options.root, options.credentialId);
   const token = randomUUID();
   const deadline = Date.now() + MCP_OAUTH_REFRESH_LOCK_TIMEOUT_MS;
 
   for (;;) {
+    validateRefreshLockRoot(rootOptions);
     try {
-      await mkdir(options.root, { recursive: true, mode: 0o700 });
       await mkdir(path, { mode: 0o700 });
     } catch (error) {
       if (hasNodeErrorCode(error, "EEXIST")) {
         const ownerRead = await readOwner(path);
         if (await lockIsStale(path, ownerRead, Date.now())) {
-          await moveLockForRemoval(options.root, path);
+          await moveLockForRemoval(rootOptions, path);
           continue;
         }
         if (Date.now() >= deadline) {
@@ -178,6 +204,7 @@ export async function withMcpOAuthRefreshLock<Result>(options: {
       );
     }
 
+    validateRefreshLockRoot(rootOptions);
     try {
       await writeFile(
         ownerPath(path),
@@ -191,17 +218,18 @@ export async function withMcpOAuthRefreshLock<Result>(options: {
       );
     } catch (error) {
       /* v8 ignore start -- requires an external filesystem mutation between exclusive directory creation and its immediate owner-file write. */
-      await moveLockForRemoval(options.root, path);
+      await moveLockForRemoval(rootOptions, path);
       refreshLockError(
         `cannot initialize the refresh lock: ${errorMessage(error)}`,
       );
       /* v8 ignore stop */
     }
 
+    validateRefreshLockRoot(rootOptions);
     try {
       return await options.action();
     } finally {
-      await releaseLock(options.root, path, token);
+      await releaseLock(rootOptions, path, token);
     }
   }
 }

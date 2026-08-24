@@ -1,9 +1,11 @@
 import {
+  link,
   mkdir,
   mkdtemp,
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -35,6 +37,138 @@ function stringInputText(text: string): PassThrough {
 }
 
 describe("CLI Main - Provider Auth Setup", () => {
+  test(`Given KEEL_HOME is a symbolic link to another directory,
+    When the user stores provider authentication,
+    Then Keel rejects the private state root without writing through the link`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-auth-linked-home-"));
+    const target = join(parent, "target");
+    const linkedHome = join(parent, "linked-home");
+    await mkdir(target);
+    await symlink(target, linkedHome, "dir");
+    const login = createRuntime(
+      ["auth", "login", "deepseek", "--with-api-key"],
+      {
+        env: { KEEL_HOME: linkedHome },
+        input: inputText("linked-home-secret\n"),
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stdout()).toBe("");
+      expect(login.stderr()).toContain("KEEL_HOME");
+      expect(login.stderr()).toContain("symbolic link");
+      await expect(readFile(join(target, "auth.json"))).rejects.toThrow(
+        /ENOENT/u,
+      );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given auth.json is a symbolic link to another file,
+    When the user replaces a provider API key,
+    Then Keel rejects the secret file and preserves its target`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-auth-file-link-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-auth-file-link-out-"));
+    const target = join(outside, "target.json");
+    const original = '{"schemaVersion":1,"providers":{}}\n';
+    await writeFile(target, original, "utf8");
+    await symlink(target, join(home, "auth.json"));
+    const login = createRuntime(
+      ["auth", "login", "deepseek", "--with-api-key"],
+      {
+        env: { KEEL_HOME: home },
+        input: inputText("linked-file-secret\n"),
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stdout()).toBe("");
+      expect(login.stderr()).toContain("provider auth");
+      expect(login.stderr()).toContain("symbolic link");
+      expect(await readFile(target, "utf8")).toBe(original);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given auth.json is a hard link to another file,
+    When the user replaces a provider API key,
+    Then Keel rejects the shared inode and preserves the other link`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-auth-hard-link-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-auth-hard-link-out-"));
+    const target = join(outside, "target.json");
+    const original = '{"schemaVersion":1,"providers":{}}\n';
+    await writeFile(target, original, "utf8");
+    await link(target, join(home, "auth.json"));
+    const login = createRuntime(
+      ["auth", "login", "deepseek", "--with-api-key"],
+      {
+        env: { KEEL_HOME: home },
+        input: inputText("hard-linked-secret\n"),
+      },
+    );
+
+    try {
+      // When
+      const exitCode = await runCliMain(login.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(login.stdout()).toBe("");
+      expect(login.stderr()).toContain("provider auth");
+      expect(login.stderr()).toContain("exactly one hard link");
+      expect(await readFile(target, "utf8")).toBe(original);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given config.json is a symbolic link to another file,
+    When the user stores provider defaults,
+    Then the shared private-file owner rejects the link and preserves its target`, async () => {
+    // Given
+    const home = await mkdtemp(join(tmpdir(), "keel-config-file-link-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-config-file-link-out-"));
+    const target = join(outside, "target.json");
+    const original = '{"schemaVersion":1,"provider":{"id":"fake"}}\n';
+    await writeFile(target, original, "utf8");
+    await symlink(target, join(home, "config.json"));
+    const config = createRuntime(["config", "set-provider", "deepseek"], {
+      env: { KEEL_HOME: home },
+    });
+
+    try {
+      // When
+      const exitCode = await runCliMain(config.runtime);
+
+      // Then
+      expect(exitCode).toBe(1);
+      expect(config.stdout()).toBe("");
+      expect(config.stderr()).toContain("provider config");
+      expect(config.stderr()).toContain("symbolic link");
+      expect(await readFile(target, "utf8")).toBe(original);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a fresh provider home,
     When the user runs setup with an API key and provider defaults,
     Then Keel stores the provider configuration and verifies auth without printing the secret`, async () => {

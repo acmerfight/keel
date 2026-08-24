@@ -108,6 +108,7 @@ export async function authorizeMcpServer(options: {
   readonly server: McpOAuthServerEndpoint;
   readonly backend: McpSecretBackend;
   readonly refreshLockRoot: string;
+  readonly validateRefreshLockRoot?: (() => void) | undefined;
   readonly redirectUrl: McpCimdRedirectUri;
   readonly state: string;
   readonly startedAt: number;
@@ -135,6 +136,7 @@ export async function authorizeMcpServer(options: {
     server: options.server,
     backend: options.backend,
     refreshLockRoot: options.refreshLockRoot,
+    validateRefreshLockRoot: options.validateRefreshLockRoot,
     isCurrentAndEnabled: async () => await options.isCurrentAndEnabled(),
     redirectUrl: options.redirectUrl,
     openAuthorizationUrl: async (authorizationUrl) => {
@@ -197,6 +199,7 @@ export async function authorizeMcpServer(options: {
             options.server,
             options.backend,
             options.refreshLockRoot,
+            options.validateRefreshLockRoot,
           ),
         ]);
       }
@@ -213,6 +216,7 @@ export async function authorizeMcpServer(options: {
         server: options.server,
         backend: options.backend,
         refreshLockRoot: options.refreshLockRoot,
+        validateRefreshLockRoot: options.validateRefreshLockRoot,
         isCurrentAndEnabled: async () => await options.isCurrentAndEnabled(),
       }),
     );
@@ -225,6 +229,7 @@ export async function authorizeMcpServer(options: {
           options.server,
           options.backend,
           options.refreshLockRoot,
+          options.validateRefreshLockRoot,
         ),
       ]);
     }

@@ -1,9 +1,24 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
+import {
+  mcpOAuthRefreshLockRoot,
+  validateMcpOAuthRefreshLockRoot,
+} from "../../src/cli/mcp-connection.ts";
 import {
   McpOAuthRefreshLockError,
   withMcpOAuthRefreshLock,
@@ -96,6 +111,190 @@ async function createOwner(options: {
 }
 
 describe("MCP OAuth refresh lock", () => {
+  test(`Given refresh-lock policy validation raises an unexpected runtime failure,
+    When Keel starts lock acquisition,
+    Then it preserves the failure and does not run the protected action`, async () => {
+    // Given
+    const root = join(tmpdir(), `keel-mcp-validator-error-${randomUUID()}`);
+    const unexpected = new Error("validator failed");
+    let actionRan = false;
+
+    try {
+      // When / Then
+      await expect(
+        withMcpOAuthRefreshLock({
+          root,
+          validateRoot: () => {
+            throw unexpected;
+          },
+          credentialId: "validator-error",
+          action: async () => {
+            actionRan = true;
+          },
+        }),
+      ).rejects.toBe(unexpected);
+      expect(actionRan).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the production OAuth lock path starts at a symlinked KEEL_HOME,
+    When Keel resolves the lock policy root,
+    Then it rejects the linked state boundary before lock acquisition`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-mcp-home-link-parent-"));
+    const outside = await mkdtemp(
+      join(tmpdir(), "keel-mcp-home-link-outside-"),
+    );
+    const linkedHome = join(parent, "home");
+    await symlink(outside, linkedHome, "dir");
+
+    try {
+      // When / Then
+      expect(() =>
+        mcpOAuthRefreshLockRoot({
+          env: (key) => (key === "KEEL_HOME" ? linkedHome : undefined),
+        }),
+      ).toThrow(/KEEL_HOME.*symbolic link/u);
+      expect(await readdir(outside)).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a long-lived OAuth provider resolved its root before KEEL_HOME was replaced,
+    When a later refresh acquires the cached lock path,
+    Then acquisition revalidates the production policy root and does not run outside`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-mcp-home-swap-parent-"));
+    const outside = await mkdtemp(
+      join(tmpdir(), "keel-mcp-home-swap-outside-"),
+    );
+    const home = join(parent, "home");
+    const parkedHome = join(parent, "parked-home");
+    await mkdir(home);
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+    };
+    const root = mcpOAuthRefreshLockRoot(runtime);
+    await rename(home, parkedHome);
+    await symlink(outside, home, "dir");
+    let actionRan = false;
+
+    try {
+      // When / Then
+      await expect(
+        withMcpOAuthRefreshLock({
+          root,
+          validateRoot: () => validateMcpOAuthRefreshLockRoot(runtime),
+          credentialId: "cached-root",
+          action: async () => {
+            actionRan = true;
+          },
+        }),
+      ).rejects.toBeInstanceOf(McpOAuthRefreshLockError);
+      expect(actionRan).toBe(false);
+      expect(await readdir(outside)).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a cached OAuth lock root is waiting behind a live owner,
+    When KEEL_HOME is replaced by a symlink during contention,
+    Then every acquisition attempt revalidates the policy root before touching the new target`, async () => {
+    // Given
+    vi.useFakeTimers();
+    const parent = await mkdtemp(
+      join(tmpdir(), "keel-mcp-contended-swap-parent-"),
+    );
+    const outside = await mkdtemp(
+      join(tmpdir(), "keel-mcp-contended-swap-outside-"),
+    );
+    const home = join(parent, "home");
+    const parkedHome = join(parent, "parked-home");
+    await mkdir(home);
+    const runtime = {
+      env: (key: string) => (key === "KEEL_HOME" ? home : undefined),
+    };
+    const root = mcpOAuthRefreshLockRoot(runtime);
+    const credentialId = "contended-cached-root";
+    await createOwner({
+      root,
+      credentialId,
+      pid: process.pid,
+      ownerHostname: hostname(),
+      createdAt: Date.now(),
+    });
+    await mkdir(join(outside, "mcp", "oauth-refresh-locks"), {
+      recursive: true,
+    });
+    let actionRan = false;
+
+    try {
+      const result = withMcpOAuthRefreshLock({
+        root,
+        validateRoot: () => validateMcpOAuthRefreshLockRoot(runtime),
+        credentialId,
+        action: async () => {
+          actionRan = true;
+        },
+      });
+      const rejection = expect(result).rejects.toBeInstanceOf(
+        McpOAuthRefreshLockError,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // When
+      await rename(home, parkedHome);
+      await symlink(outside, home, "dir");
+      await vi.advanceTimersByTimeAsync(25);
+
+      // Then
+      await rejection;
+      expect(actionRan).toBe(false);
+      expect(
+        await readdir(join(outside, "mcp", "oauth-refresh-locks")),
+      ).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      await rm(parent, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the OAuth refresh-lock root is a symbolic link,
+    When Keel coordinates a credential refresh,
+    Then it rejects the root without running the action outside managed state`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-mcp-link-parent-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-mcp-link-outside-"));
+    const root = join(parent, "oauth-refresh-locks");
+    await symlink(outside, root, "dir");
+    let actionRan = false;
+
+    try {
+      // When / Then
+      await expect(
+        withMcpOAuthRefreshLock({
+          root,
+          credentialId: "linked-root",
+          action: async () => {
+            actionRan = true;
+          },
+        }),
+      ).rejects.toBeInstanceOf(McpOAuthRefreshLockError);
+      expect(actionRan).toBe(false);
+      expect(await readdir(outside)).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given two Keel processes refresh the same credential,
     When their critical sections overlap in wall-clock time,
     Then the filesystem lock serializes them across process boundaries`, async () => {

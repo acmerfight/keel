@@ -2,9 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
-  chmodSync,
   closeSync,
-  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -14,11 +12,15 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { AgentPolicy } from "../core/agent-policy.ts";
 import { errorMessage } from "../core/error.ts";
+import {
+  readPrivateStateFile,
+  writePrivateStateFile,
+} from "../core/private-state.ts";
 import type { ProviderId } from "../core/provider-id.ts";
 import { type RunReport, runReportSchema } from "./report-schema.ts";
 import {
@@ -50,7 +52,6 @@ const transcriptHeaderSchema = z.object({
 });
 
 const packageJsonSchema = z.object({ version: z.string() });
-const KEEL_HOME_ENV = "KEEL_HOME";
 
 function keelVersion(): string {
   const raw = readFileSync(
@@ -405,14 +406,24 @@ interface MemoryPairTrial {
 }
 
 function copyProviderConfiguration(targetKeelHome: string): void {
-  const sourceKeelHome = process.env[KEEL_HOME_ENV] ?? join(homedir(), ".keel");
+  const sourceRuntime = { env: (key: string) => process.env[key] };
+  const targetRuntime = {
+    env: () => targetKeelHome,
+  };
   for (const name of ["config.json", "auth.json"]) {
-    const source = join(sourceKeelHome, name);
-    if (existsSync(source)) {
-      const target = join(targetKeelHome, name);
-      copyFileSync(source, target);
-      chmodSync(target, 0o600);
-    }
+    const label = name === "auth.json" ? "provider auth" : "provider config";
+    const content = readPrivateStateFile({
+      runtime: sourceRuntime,
+      segments: [name],
+      label,
+    });
+    if (content === null) continue;
+    writePrivateStateFile({
+      runtime: targetRuntime,
+      segments: [name],
+      label,
+      content,
+    });
   }
 }
 

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { privateStateDirectoryPath } from "../core/private-state.ts";
 import { connectMcpServer } from "../mcp/discovery.ts";
 import {
   createMcpBearerAuthProvider,
@@ -12,12 +13,21 @@ import type {
 } from "../mcp/runtime-types.ts";
 import { isMcpServerCurrentAndEnabled, listMcpServers } from "./mcp-config.ts";
 import type { CliRuntime } from "./runtime.ts";
-import { sessionHome } from "./session-store.ts";
 
 export function mcpOAuthRefreshLockRoot(
   runtime: Pick<CliRuntime, "env">,
 ): string {
-  return join(sessionHome(runtime), "mcp", "oauth-refresh-locks");
+  return join(
+    privateStateDirectoryPath(runtime, [], "KEEL_HOME"),
+    "mcp",
+    "oauth-refresh-locks",
+  );
+}
+
+export function validateMcpOAuthRefreshLockRoot(
+  runtime: Pick<CliRuntime, "env">,
+): void {
+  mcpOAuthRefreshLockRoot(runtime);
 }
 
 export function createCliMcpAuthProvider(
@@ -29,6 +39,7 @@ export function createCliMcpAuthProvider(
     server,
     backend: runtime.mcpSecretBackend,
     refreshLockRoot: mcpOAuthRefreshLockRoot(runtime),
+    validateRefreshLockRoot: () => validateMcpOAuthRefreshLockRoot(runtime),
     isCurrentAndEnabled: async () =>
       await isMcpServerCurrentAndEnabled(runtime, server),
     ...(fixedAuthorizationIdentity === undefined

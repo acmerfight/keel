@@ -160,6 +160,7 @@ function requireAuthorizationIdentity(
 async function refreshRejectedCredential(options: {
   readonly store: OAuthCredentialStore;
   readonly refreshLockRoot: string;
+  readonly validateRefreshLockRoot?: (() => void) | undefined;
   readonly rejectedAccessToken: string;
   readonly expectedAuthorizationIdentity: McpAuthorizationIdentity | null;
   readonly fetchFn: FetchLike;
@@ -167,6 +168,7 @@ async function refreshRejectedCredential(options: {
 }): Promise<void> {
   await withMcpOAuthRefreshLock({
     root: options.refreshLockRoot,
+    validateRoot: options.validateRefreshLockRoot,
     credentialId: options.store.credentialId(),
     action: async () => {
       await options.ensureAvailable();
@@ -269,6 +271,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
   private readonly server: McpOAuthServerEndpoint;
   private readonly store: OAuthCredentialStore;
   private readonly refreshLockRoot: string;
+  private readonly validateRefreshLockRoot: (() => void) | undefined;
   private readonly isCurrentAndEnabled: (
     server: McpOAuthServerEndpoint,
   ) => boolean | Promise<boolean>;
@@ -283,6 +286,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
     readonly server: McpOAuthServerEndpoint;
     readonly backend: McpSecretBackend;
     readonly refreshLockRoot: string;
+    readonly validateRefreshLockRoot?: (() => void) | undefined;
     readonly isCurrentAndEnabled: (
       server: McpOAuthServerEndpoint,
     ) => boolean | Promise<boolean>;
@@ -293,9 +297,11 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
       server: options.server,
       backend: options.backend,
       refreshLockRoot: options.refreshLockRoot,
+      validateRefreshLockRoot: options.validateRefreshLockRoot,
       mutationGuard: null,
     });
     this.refreshLockRoot = options.refreshLockRoot;
+    this.validateRefreshLockRoot = options.validateRefreshLockRoot;
     this.isCurrentAndEnabled = options.isCurrentAndEnabled;
     this.fixedAuthorizationIdentity = options.fixedAuthorizationIdentity;
   }
@@ -398,6 +404,7 @@ class KeelMcpBearerAuthProvider implements McpRuntimeAuthProvider {
       await refreshRejectedCredential({
         store: this.store,
         refreshLockRoot: this.refreshLockRoot,
+        validateRefreshLockRoot: this.validateRefreshLockRoot,
         rejectedAccessToken,
         expectedAuthorizationIdentity:
           this.expectedAuthorization.getStore() ??
@@ -414,6 +421,7 @@ export function createMcpBearerAuthProvider(options: {
   readonly server: McpOAuthServerEndpoint;
   readonly backend: McpSecretBackend;
   readonly refreshLockRoot: string;
+  readonly validateRefreshLockRoot?: (() => void) | undefined;
   readonly isCurrentAndEnabled: (
     server: McpOAuthServerEndpoint,
   ) => boolean | Promise<boolean>;

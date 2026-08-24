@@ -5,7 +5,9 @@ import {
   mkdir,
   mkdtemp,
   realpath,
+  rename,
   rm,
+  symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -19,6 +21,8 @@ import {
   persistSessionMessages,
   resumeSessionStore,
   SessionStoreError,
+  sessionFilePath,
+  sessionHome,
 } from "../../../src/cli/session-store.ts";
 import {
   headerLine,
@@ -26,6 +30,137 @@ import {
 } from "../../../src/testing/session-store-fixtures.ts";
 
 describe("Session Store Locks And Validation", () => {
+  test(`Given KEEL_HOME itself is a symbolic link,
+    When the session store resolves its home,
+    Then the session boundary translates the private-state rejection`, async () => {
+    // Given
+    const parent = await mkdtemp(join(tmpdir(), "keel-session-linked-home-"));
+    const target = join(parent, "target");
+    const home = join(parent, "home");
+    await mkdir(target);
+    await symlink(target, home, "dir");
+
+    try {
+      // When / Then
+      expect(() => sessionHome(runtime(home))).toThrow(SessionStoreError);
+      expect(() => sessionHome(runtime(home))).toThrow(/symbolic link/u);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given session path resolution raises an unexpected runtime failure,
+    When home and active-root paths are resolved,
+    Then both boundaries preserve the unexpected failure`, () => {
+    // Given
+    const unexpected = new Error("runtime env failed");
+    const failingRuntime = {
+      env: () => {
+        throw unexpected;
+      },
+      now: () => 0,
+    };
+
+    // When / Then
+    expect(() => sessionHome(failingRuntime)).toThrow(unexpected);
+    expect(() => sessionFilePath(failingRuntime, "session-id")).toThrow(
+      unexpected,
+    );
+  });
+
+  test(`Given the configured KEEL_HOME does not exist yet,
+    When a user starts the first saved session,
+    Then Keel creates the validated private root and ledger normally`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const parent = await mkdtemp(join(tmpdir(), "keel-session-parent-"));
+    const home = join(parent, "fresh-home");
+
+    try {
+      // When
+      const session = createSessionStore({
+        sessionId: "first-session",
+        workspace,
+        runtime: runtime(home),
+      });
+
+      // Then
+      await expect(access(session.filePath)).resolves.toBeUndefined();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the active sessions root is a symbolic link,
+    When a user starts a saved session,
+    Then the store rejects the root without writing the ledger outside KEEL_HOME`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-session-outside-"));
+    await symlink(outside, join(home, "sessions"), "dir");
+
+    try {
+      // When / Then
+      expect(() =>
+        createSessionStore({
+          sessionId: "linked-root",
+          workspace,
+          runtime: runtime(home),
+        }),
+      ).toThrow(SessionStoreError);
+      await expect(access(join(outside, "linked-root"))).rejects.toThrow();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given the active sessions root is replaced after a session is opened,
+    When a later mutation appends to the cached session state,
+    Then Keel revalidates the policy root and writes nothing through the link`, async () => {
+    // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-session-workspace-"));
+    const home = await mkdtemp(join(tmpdir(), "keel-session-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "keel-session-outside-"));
+    const session = createSessionStore({
+      sessionId: "swapped-root",
+      workspace,
+      runtime: runtime(home),
+    });
+    const sessionsRoot = join(home, "sessions");
+    await rename(sessionsRoot, join(home, "parked-sessions"));
+    await symlink(outside, sessionsRoot, "dir");
+
+    try {
+      // When / Then
+      expect(() =>
+        persistSessionMessages({
+          session,
+          previousMessages: [],
+          currentMessages: [
+            {
+              role: "user",
+              content: "must remain inside managed state",
+              origin: { type: "user_prompt" },
+            },
+          ],
+          runtime: runtime(home, 1),
+          reason: "turn",
+        }),
+      ).toThrow(SessionStoreError);
+      await expect(
+        access(join(outside, "swapped-root", "ledger.jsonl")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`Given a session id already exists,
     When a user starts the same named session again,
     Then creation fails instead of overwriting the transcript`, async () => {
