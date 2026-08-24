@@ -11,6 +11,10 @@ interface FsOverrides {
   readonly linkSync?: FsModule["linkSync"];
   readonly renameSync?: FsModule["renameSync"];
   readonly rmSync?: FsModule["rmSync"];
+  readonly unlinkSync?: FsModule["unlinkSync"];
+  readonly writeFileSync?: (
+    ...args: Parameters<FsModule["writeFileSync"]>
+  ) => ReturnType<FsModule["writeFileSync"]>;
   readonly writeSync?: (
     fd: number,
     buffer: Uint8Array,
@@ -249,9 +253,10 @@ describe("CLI Project Memory Race Handling", () => {
     const actualFs = await vi.importActual<FsModule>("node:fs");
     let failAtomicWrite = false;
     const projectMemory = await importProjectMemoryWithFs({
-      writeSync: (fd, buffer, offset, length) => {
-        if (failAtomicWrite) throw errno("EIO");
-        return actualFs.writeSync(fd, buffer, offset, length);
+      writeFileSync: (...args) => {
+        const [file] = args;
+        if (failAtomicWrite && typeof file === "number") throw errno("EIO");
+        actualFs.writeFileSync(...args);
       },
     });
     const saved = projectMemory.addProjectMemory(
@@ -318,11 +323,11 @@ describe("CLI Project Memory Race Handling", () => {
     const actualFs = await vi.importActual<FsModule>("node:fs");
     let failStoreRemoval = false;
     const projectMemory = await importProjectMemoryWithFs({
-      rmSync: (path, options) => {
+      unlinkSync: (path) => {
         if (failStoreRemoval && String(path).endsWith("events.jsonl")) {
           throw errno("EIO");
         }
-        actualFs.rmSync(path, options);
+        actualFs.unlinkSync(path);
       },
     });
     const saved = projectMemory.addProjectMemory(

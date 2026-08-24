@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  chmodSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -15,7 +14,9 @@ import {
   ensurePrivateStateDirectory,
   PrivateStateError,
   privateStateDirectoryPath,
-  privateStateRootPath,
+  privateStatePath,
+  readPrivateStateFile,
+  replacePrivateStateFile,
 } from "../core/private-state.ts";
 
 interface SkillUserConfigRuntime {
@@ -96,11 +97,11 @@ function skillStateHome(
 }
 
 function userSkillConfigPath(runtime: SkillUserConfigRuntime): string {
-  return join(privateStateRootPath(runtime), "skills.json");
+  return privateStatePath(runtime, ["skills.json"]);
 }
 
 function skillConfigLockPath(runtime: SkillUserConfigRuntime): string {
-  return join(privateStateRootPath(runtime), "skills.lock");
+  return privateStatePath(runtime, ["skills.lock"]);
 }
 
 function skillConfigLockOwnerPath(lockPath: string): string {
@@ -271,17 +272,21 @@ export function readUserSkillConfig(
   runtime: SkillUserConfigRuntime,
 ): UserSkillConfig {
   const filePath = userSkillConfigPath(runtime);
-  let content: string;
+  let content: string | null;
   try {
     skillStateHome(runtime);
-    content = readFileSync(filePath, "utf8");
+    content = readPrivateStateFile({
+      runtime,
+      segments: ["skills.json"],
+      label: "workflow skill config",
+    });
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return DEFAULT_USER_SKILL_CONFIG;
-    }
     configError(
       `Error: cannot read workflow skill config ${filePath}: ${errorMessage(error)}`,
     );
+  }
+  if (content === null) {
+    return DEFAULT_USER_SKILL_CONFIG;
   }
   let json: unknown;
   try {
@@ -313,24 +318,18 @@ function writeUserSkillConfig(
   runtime: SkillUserConfigRuntime,
   config: UserSkillConfig,
 ): void {
-  const home = skillStateHome(runtime, true);
   const filePath = userSkillConfigPath(runtime);
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    mkdirSync(home, { recursive: true, mode: 0o700 });
-    writeFileSync(
-      temporaryPath,
-      `${JSON.stringify(configFile(config), null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600, flag: "wx" },
-    );
-    renameSync(temporaryPath, filePath);
-    chmodSync(filePath, 0o600);
+    replacePrivateStateFile({
+      runtime,
+      segments: ["skills.json"],
+      label: "workflow skill config",
+      content: `${JSON.stringify(configFile(config), null, 2)}\n`,
+    });
   } catch (error) {
     configError(
       `Error: cannot write workflow skill config ${filePath}: ${errorMessage(error)}`,
     );
-  } finally {
-    rmSync(temporaryPath, { force: true });
   }
 }
 

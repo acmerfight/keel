@@ -1,13 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  readdir,
-  readFile,
-  rename,
-  rm,
-  rmdir,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { readdir, rm, rmdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   AbortableToolOutputArtifactStore,
@@ -18,8 +10,11 @@ import type {
 } from "../agent/tool-output-artifacts.ts";
 import { errorMessage } from "../core/error.ts";
 import {
+  createPrivateFile,
   ensurePrivateStateDirectory,
   privateStateDirectoryPath,
+  readPrivateStateFile,
+  removePrivateFile,
 } from "../core/private-state.ts";
 import type { SessionStoreRuntime } from "./session-store.ts";
 
@@ -110,6 +105,12 @@ function artifactPath(
   validateArtifactSegment("scope", ref.scope);
   validateArtifactSegment("id", ref.id);
   return join(artifactDirectory(runtime, ref.scope), `${ref.id}.txt`);
+}
+
+function artifactSegments(ref: ParsedToolOutputArtifactRef): readonly string[] {
+  validateArtifactSegment("scope", ref.scope);
+  validateArtifactSegment("id", ref.id);
+  return ["artifacts", "tool-output", ref.scope, `${ref.id}.txt`];
 }
 
 function toolOutputArtifactRef(scope: string, id: string): string {
@@ -304,10 +305,12 @@ export function createToolOutputArtifactStore(
         return { status: "not_reusable" };
       }
       try {
-        const content = await readFile(
-          artifactPath(options.runtime, parsed),
-          "utf8",
-        );
+        const content = readPrivateStateFile({
+          runtime: options.runtime,
+          segments: artifactSegments(parsed),
+          label: "tool-output artifact",
+        });
+        if (content === null) return { status: "not_reusable" };
         const artifact = parseArtifactContent(content);
         if (artifact === null) {
           return { status: "not_reusable" };
@@ -322,7 +325,6 @@ export function createToolOutputArtifactStore(
     ): Promise<ToolOutputArtifactSaveResult> => {
       const id = randomUUID();
       const ref = toolOutputArtifactRef(options.scope, id);
-      let temporaryPath: string | undefined;
       try {
         input.signal?.throwIfAborted();
         const directory = ensurePrivateStateDirectory(
@@ -331,25 +333,23 @@ export function createToolOutputArtifactStore(
           "tool-output artifact scope",
         );
         const finalPath = join(directory, `${id}.txt`);
-        temporaryPath = join(directory, `${id}.${randomUUID()}.tmp`);
         input.signal?.throwIfAborted();
-        await writeFile(
-          temporaryPath,
-          artifactContent({
+        await Promise.resolve();
+        input.signal?.throwIfAborted();
+        const result = createPrivateFile({
+          path: finalPath,
+          label: "tool-output artifact",
+          content: artifactContent({
             ref,
             id,
             savedAt: new Date(options.runtime.now()).toISOString(),
             saveInput: input,
           }),
-          {
-            encoding: "utf8",
-            flag: "wx",
-            mode: 0o600,
-            ...(input.signal !== undefined ? { signal: input.signal } : {}),
-          },
-        );
-        input.signal?.throwIfAborted();
-        await rename(temporaryPath, finalPath);
+        });
+        /* v8 ignore next -- random UUID collisions are defensive; createPrivateFile still reports them fail-closed. */
+        if (result.status === "exists") {
+          throw new Error(`artifact ${finalPath} already exists`);
+        }
         return {
           status: "stored",
           ref,
@@ -357,10 +357,6 @@ export function createToolOutputArtifactStore(
         };
       } catch (error) {
         return { status: "failed", reason: errorMessage(error) };
-      } finally {
-        if (temporaryPath !== undefined) {
-          await rm(temporaryPath, { force: true }).catch(() => undefined);
-        }
       }
     },
     discard: async (ref: string): Promise<void> => {
@@ -368,7 +364,10 @@ export function createToolOutputArtifactStore(
       if (parsed === null) {
         return;
       }
-      await rm(artifactPath(options.runtime, parsed), { force: true });
+      removePrivateFile({
+        path: artifactPath(options.runtime, parsed),
+        label: "tool-output artifact",
+      });
     },
   };
 }
@@ -392,9 +391,20 @@ export async function showToolOutputArtifact(options: {
     };
   }
   try {
+    const content = readPrivateStateFile({
+      runtime: options.runtime,
+      segments: artifactSegments(parsed),
+      label: "tool-output artifact",
+    });
+    if (content === null) {
+      return {
+        ok: false,
+        message: `Error: cannot read artifact ${options.ref}: file not found.`,
+      };
+    }
     return {
       ok: true,
-      content: await readFile(artifactPath(options.runtime, parsed), "utf8"),
+      content,
     };
   } catch (error) {
     return {

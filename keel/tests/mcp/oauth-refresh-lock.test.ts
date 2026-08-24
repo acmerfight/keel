@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { renameSync, symlinkSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -207,7 +208,6 @@ describe("MCP OAuth refresh lock", () => {
     When KEEL_HOME is replaced by a symlink during contention,
     Then every acquisition attempt revalidates the policy root before touching the new target`, async () => {
     // Given
-    vi.useFakeTimers();
     const parent = await mkdtemp(
       join(tmpdir(), "keel-mcp-contended-swap-parent-"),
     );
@@ -232,35 +232,37 @@ describe("MCP OAuth refresh lock", () => {
     await mkdir(join(outside, "mcp", "oauth-refresh-locks"), {
       recursive: true,
     });
+    let validationCount = 0;
+    let swappedHome = false;
     let actionRan = false;
 
     try {
       const result = withMcpOAuthRefreshLock({
         root,
-        validateRoot: () => validateMcpOAuthRefreshLockRoot(runtime),
+        validateRoot: () => {
+          validationCount += 1;
+          if (validationCount === 2) {
+            renameSync(home, parkedHome);
+            symlinkSync(outside, home, "dir");
+            swappedHome = true;
+          }
+          validateMcpOAuthRefreshLockRoot(runtime);
+        },
         credentialId,
         action: async () => {
           actionRan = true;
         },
       });
-      const rejection = expect(result).rejects.toBeInstanceOf(
-        McpOAuthRefreshLockError,
-      );
-      await vi.advanceTimersByTimeAsync(0);
 
-      // When
-      await rename(home, parkedHome);
-      await symlink(outside, home, "dir");
-      await vi.advanceTimersByTimeAsync(25);
-
-      // Then
-      await rejection;
+      // When / Then
+      await expect(result).rejects.toThrow(/symbolic link/u);
+      expect(swappedHome).toBe(true);
+      expect(validationCount).toBe(2);
       expect(actionRan).toBe(false);
       expect(
         await readdir(join(outside, "mcp", "oauth-refresh-locks")),
       ).toEqual([]);
     } finally {
-      vi.useRealTimers();
       await rm(parent, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
     }

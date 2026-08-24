@@ -1,26 +1,24 @@
-import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  truncateSync,
-  writeSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { errorMessage } from "../core/error.ts";
+import {
+  appendPrivateFile,
+  createPrivateFile,
+  PrivateStateError,
+  readPrivateFile,
+  readPrivateFileBuffer,
+  removePrivateFile,
+  replacePrivateFile,
+  truncatePrivateFile,
+} from "../core/private-state.ts";
 import {
   type ProjectMemoryEvent,
   projectMemoryEventSchema,
 } from "./project-memory-events.ts";
 
 export class ProjectMemoryEventFileError extends Error {}
+
+const PROJECT_MEMORY_EVENT_FILE_LABEL = "project memory event file";
 
 function fail(message: string): never {
   throw new ProjectMemoryEventFileError(message);
@@ -30,28 +28,10 @@ function hasNodeErrorCode(error: unknown, code: string): boolean {
   return Reflect.get(Object(error), "code") === code;
 }
 
-function fileKind(path: string): "missing" | "file" | "unsafe" {
-  const stat = lstatSync(path, { throwIfNoEntry: false });
-  if (stat === undefined) return "missing";
-  if (stat.isFile()) return "file";
-  return "unsafe";
-}
-
-function writeAll(fd: number, content: string): void {
-  const buffer = Buffer.from(content, "utf8");
-  let offset = 0;
-  while (offset < buffer.byteLength) {
-    offset += writeSync(fd, buffer, offset, buffer.byteLength - offset);
-  }
-}
-
-function fsyncDirectory(path: string): void {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
+function unsafeProjectMemoryFile(path: string, error: unknown): never {
+  fail(
+    `Error: unsafe project memory path ${path}: expected a regular file: ${errorMessage(error)}`,
+  );
 }
 
 function parseEvent(
@@ -79,15 +59,16 @@ function parseEvent(
 export function readProjectMemoryEventFile(
   filePath: string,
 ): readonly ProjectMemoryEvent[] {
-  const kind = fileKind(filePath);
-  if (kind === "missing") return [];
-  if (kind === "unsafe") {
-    fail(
-      `Error: unsafe project memory path ${filePath}: expected a regular file.`,
-    );
+  let content: string | null;
+  try {
+    content = readPrivateFile({
+      path: filePath,
+      label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+    });
+  } catch (error) {
+    return projectMemoryFileAccessError(filePath, "read", error);
   }
-  chmodSync(filePath, 0o600);
-  const content = readFileSync(filePath, "utf8");
+  if (content === null) return [];
   let completeContent = content;
   if (!content.endsWith("\n")) {
     const finalNewline = content.lastIndexOf("\n");
@@ -113,18 +94,47 @@ export function readProjectMemoryEventFile(
     );
 }
 
-function removeIncompleteFinalEvent(filePath: string): void {
-  if (fileKind(filePath) === "missing") return;
-  const content = readFileSync(filePath);
-  if (content.byteLength === 0 || content.at(-1) === 0x0a) return;
-  const finalNewline = content.lastIndexOf(0x0a);
-  truncateSync(filePath, finalNewline + 1);
-  const fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+function projectMemoryFileAccessError(
+  filePath: string,
+  action: "read" | "write" | "repair" | "remove",
+  error: unknown,
+): never {
+  if (
+    error instanceof PrivateStateError &&
+    error.reason !== "invalid_path" &&
+    error.reason !== "io"
+  ) {
+    unsafeProjectMemoryFile(filePath, error);
   }
+  fail(
+    `Error: cannot ${action} project memory ${filePath}: ${errorMessage(error)}`,
+  );
+}
+
+function removeIncompleteFinalEvent(filePath: string): boolean {
+  let content: Buffer | null;
+  try {
+    content = readPrivateFileBuffer({
+      path: filePath,
+      label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+    });
+  } catch (error) {
+    projectMemoryFileAccessError(filePath, "read", error);
+  }
+  if (content === null) return false;
+  if (content.byteLength === 0 || content.at(-1) === 0x0a) return true;
+  const finalNewline = content.lastIndexOf(0x0a);
+  try {
+    truncatePrivateFile({
+      path: filePath,
+      label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+      size: finalNewline + 1,
+    });
+  } catch (error) {
+    /* v8 ignore next -- repair faults require the file to change after the owner read and before truncate. */
+    projectMemoryFileAccessError(filePath, "repair", error);
+  }
+  return true;
 }
 
 export function appendProjectMemoryEvent(
@@ -132,40 +142,33 @@ export function appendProjectMemoryEvent(
   event: ProjectMemoryEvent,
 ): void {
   projectMemoryEventSchema.parse(event);
-  const existingKind = fileKind(filePath);
-  if (existingKind === "unsafe") {
-    fail(
-      `Error: unsafe project memory path ${filePath}: expected a regular file.`,
-    );
-  }
-  removeIncompleteFinalEvent(filePath);
-  const fd = openSync(
-    filePath,
-    constants.O_APPEND |
-      constants.O_CREAT |
-      constants.O_WRONLY |
-      constants.O_NOFOLLOW,
-    0o600,
-  );
   try {
-    writeAll(fd, `${JSON.stringify(event)}\n`);
-    fsyncSync(fd);
-    chmodSync(filePath, 0o600);
-    if (existingKind === "missing") fsyncDirectory(dirname(filePath));
-  } finally {
-    closeSync(fd);
+    const content = `${JSON.stringify(event)}\n`;
+    const existing = removeIncompleteFinalEvent(filePath);
+    if (existing) {
+      appendPrivateFile({
+        path: filePath,
+        label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+        content,
+      });
+      return;
+    }
+    const result = createPrivateFile({
+      path: filePath,
+      label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+      content,
+    });
+    /* v8 ignore next 7 -- the project-memory write lock prevents normal concurrent first creation; this preserves race safety. */
+    if (result.status === "exists") {
+      appendPrivateFile({
+        path: filePath,
+        label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+        content,
+      });
+    }
+  } catch (error) {
+    projectMemoryFileAccessError(filePath, "write", error);
   }
-}
-
-function openPrivateNewFile(path: string): number {
-  return openSync(
-    path,
-    constants.O_CREAT |
-      constants.O_EXCL |
-      constants.O_WRONLY |
-      constants.O_NOFOLLOW,
-    0o600,
-  );
 }
 
 export function replaceProjectMemoryEvents(
@@ -173,42 +176,29 @@ export function replaceProjectMemoryEvents(
   events: readonly ProjectMemoryEvent[],
 ): void {
   for (const event of events) projectMemoryEventSchema.parse(event);
-  const directory = dirname(filePath);
-  const replacementPath = join(directory, `.events-${randomUUID()}.tmp`);
-  let fd: number | undefined;
   try {
-    fd = openPrivateNewFile(replacementPath);
-    writeAll(
-      fd,
-      events.length === 0
-        ? ""
-        : `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
-    );
-    fsyncSync(fd);
-    chmodSync(replacementPath, 0o600);
-    closeSync(fd);
-    fd = undefined;
-    renameSync(replacementPath, filePath);
-    fsyncDirectory(directory);
-  } finally {
-    try {
-      if (fd !== undefined) closeSync(fd);
-    } finally {
-      rmSync(replacementPath, { force: true });
-    }
+    replacePrivateFile({
+      path: filePath,
+      label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+      content:
+        events.length === 0
+          ? ""
+          : `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    });
+  } catch (error) {
+    projectMemoryFileAccessError(filePath, "write", error);
   }
 }
 
 export function removeProjectMemoryEventFile(filePath: string): void {
-  const kind = fileKind(filePath);
-  if (kind === "missing") return;
-  if (kind === "unsafe") {
-    fail(
-      `Error: unsafe project memory path ${filePath}: expected a regular file.`,
-    );
+  try {
+    removePrivateFile({
+      path: filePath,
+      label: PROJECT_MEMORY_EVENT_FILE_LABEL,
+    });
+  } catch (error) {
+    projectMemoryFileAccessError(filePath, "remove", error);
   }
-  rmSync(filePath);
-  fsyncDirectory(dirname(filePath));
 }
 
 function acquireDirectoryLease(
