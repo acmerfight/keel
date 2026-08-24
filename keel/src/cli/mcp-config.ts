@@ -1,8 +1,6 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
-import { chmod, open, readFile, rename, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { open, rm, stat } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
@@ -10,7 +8,9 @@ import {
   ensurePrivateStateDirectory,
   PrivateStateError,
   privateStateDirectoryPath,
-  privateStateRootPath,
+  privateStatePath,
+  readPrivateStateFile,
+  replacePrivateStateFile,
 } from "../core/private-state.ts";
 
 const MCP_CONFIG_SCHEMA_VERSION = 4;
@@ -126,41 +126,36 @@ function mcpStateHome(runtime: McpConfigRuntime, ensure = false): string {
 }
 
 function configPath(runtime: McpConfigRuntime): string {
-  return join(privateStateRootPath(runtime), "mcp.json");
+  return privateStatePath(runtime, ["mcp.json"]);
 }
 
 function configLockPath(runtime: McpConfigRuntime): string {
-  return join(privateStateRootPath(runtime), ".mcp-config.lock");
+  return privateStatePath(runtime, [".mcp-config.lock"]);
 }
 
 async function readMcpConfigFile(
   runtime: McpConfigRuntime,
 ): Promise<McpConfigFile> {
   const filePath = configPath(runtime);
-  let fileStat: Awaited<ReturnType<typeof stat>>;
+  let raw: string | null;
   try {
     mcpStateHome(runtime);
-    fileStat = await stat(filePath);
+    raw = readPrivateStateFile({
+      runtime,
+      segments: ["mcp.json"],
+      label: "MCP config",
+    });
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return { schemaVersion: MCP_CONFIG_SCHEMA_VERSION, servers: [] };
-    }
     configError(
       `Error: cannot read MCP config ${filePath}: ${errorMessage(error)}`,
     );
   }
-  if (fileStat.size > MCP_CONFIG_MAX_BYTES) {
+  if (raw === null) {
+    return { schemaVersion: MCP_CONFIG_SCHEMA_VERSION, servers: [] };
+  }
+  if (Buffer.byteLength(raw, "utf8") > MCP_CONFIG_MAX_BYTES) {
     configError(
       `Error: cannot read MCP config ${filePath}: file exceeds ${MCP_CONFIG_MAX_BYTES} bytes.`,
-    );
-  }
-
-  let raw: string;
-  try {
-    raw = await readFile(filePath, "utf8");
-  } catch (error) {
-    configError(
-      `Error: cannot read MCP config ${filePath}: ${errorMessage(error)}`,
     );
   }
   return parseMcpConfigFile(raw, filePath);
@@ -184,79 +179,46 @@ function parseMcpConfigFile(raw: string, filePath: string): McpConfigFile {
 
 function readMcpConfigFileSync(runtime: McpConfigRuntime): McpConfigFile {
   const filePath = configPath(runtime);
-  let fileStat: ReturnType<typeof statSync>;
+  let raw: string | null;
   try {
     mcpStateHome(runtime);
-    fileStat = statSync(filePath);
+    raw = readPrivateStateFile({
+      runtime,
+      segments: ["mcp.json"],
+      label: "MCP config",
+    });
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return { schemaVersion: MCP_CONFIG_SCHEMA_VERSION, servers: [] };
-    }
     configError(
       `Error: cannot read MCP config ${filePath}: ${errorMessage(error)}`,
     );
   }
-  if (fileStat.size > MCP_CONFIG_MAX_BYTES) {
+  if (raw === null) {
+    return { schemaVersion: MCP_CONFIG_SCHEMA_VERSION, servers: [] };
+  }
+  if (Buffer.byteLength(raw, "utf8") > MCP_CONFIG_MAX_BYTES) {
     configError(
       `Error: cannot read MCP config ${filePath}: file exceeds ${MCP_CONFIG_MAX_BYTES} bytes.`,
     );
   }
-
-  let raw: string;
-  try {
-    raw = readFileSync(filePath, "utf8");
-  } catch (error) {
-    configError(
-      `Error: cannot read MCP config ${filePath}: ${errorMessage(error)}`,
-    );
-  }
   return parseMcpConfigFile(raw, filePath);
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  /* v8 ignore next -- Windows cannot fsync a directory handle. */
-  if (process.platform === "win32") return;
-  const handle = await open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 async function writeMcpConfigFile(
   runtime: McpConfigRuntime,
   file: McpConfigFile,
 ): Promise<void> {
-  const home = mcpStateHome(runtime, true);
   const filePath = configPath(runtime);
-  const tempPath = join(
-    home,
-    `.mcp.json.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
-  );
   try {
-    await chmod(home, 0o700);
-    const handle = await open(tempPath, "wx", 0o600);
-    try {
-      await handle.writeFile(`${JSON.stringify(file, null, 2)}\n`, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await rename(tempPath, filePath);
-    await chmod(filePath, 0o600);
-    await syncDirectory(home);
+    replacePrivateStateFile({
+      runtime,
+      segments: ["mcp.json"],
+      label: "MCP config",
+      content: `${JSON.stringify(file, null, 2)}\n`,
+    });
   } catch (error) {
-    /* v8 ignore start -- publication faults require OS/filesystem failure injection; cleanup is best effort and the original error remains authoritative. */
-    try {
-      await rm(tempPath, { force: true });
-    } catch {
-      // Preserve the publication failure; the unique temp file is inert.
-    }
     configError(
       `Error: cannot write MCP config ${filePath}: ${errorMessage(error)}`,
     );
-    /* v8 ignore stop */
   }
 }
 

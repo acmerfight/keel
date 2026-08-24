@@ -14,11 +14,15 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import { estimateTextTokens } from "../agent/context-compaction.ts";
 import { errorMessage } from "../core/error.ts";
-import { privateStateRootPath } from "../core/private-state.ts";
+import {
+  ensurePrivateStateDirectory,
+  PrivateStateError,
+  privateStateDirectoryPath,
+} from "../core/private-state.ts";
 import { secretLikeTextLabel } from "../core/secret-text.ts";
 import { escapeTerminalText } from "./output.ts";
 import {
@@ -142,17 +146,6 @@ function ensurePrivateDirectory(path: string): void {
     fail(`Error: unsafe project memory path ${path}: expected a directory.`);
   }
   chmodSync(path, 0o700);
-}
-
-function ensureKeelHomeDirectory(path: string): void {
-  const kind = pathKind(path);
-  if (kind === "missing") {
-    mkdirSync(path, { recursive: true, mode: 0o700 });
-    return;
-  }
-  if (kind !== "directory") {
-    fail(`Error: unsafe project memory path ${path}: expected a directory.`);
-  }
 }
 
 function writeAll(fd: number, content: string): void {
@@ -285,36 +278,53 @@ export function resolveProjectMemoryScope(
 }
 
 function memoryRoot(runtime: ProjectMemoryRuntime): string {
-  const home = resolve(privateStateRootPath(runtime));
-  ensureKeelHomeDirectory(home);
-  const root = join(home, "memory");
-  ensurePrivateDirectory(root);
-  const projects = join(root, "projects");
-  ensurePrivateDirectory(projects);
-  return realpathSync(root);
+  const root = privateMemoryDirectory(
+    runtime,
+    ["memory"],
+    "project memory root",
+    true,
+  );
+  privateMemoryDirectory(
+    runtime,
+    ["memory", "projects"],
+    "project memory projects root",
+    true,
+  );
+  return root;
 }
 
 export function projectMemoryDirectory(
   runtime: ProjectMemoryRuntime,
   scope: ProjectMemoryScope,
 ): string {
-  const root = memoryRoot(runtime);
-  const directory = join(root, "projects", scope.id);
-  ensurePrivateDirectory(directory);
-  return realpathSync(directory);
+  memoryRoot(runtime);
+  return privateMemoryDirectory(
+    runtime,
+    ["memory", "projects", scope.id],
+    "project memory project",
+    true,
+  );
 }
 
 export function projectMemoryDirectoryForRead(
   runtime: ProjectMemoryRuntime,
   scope: ProjectMemoryScope,
 ): string | undefined {
-  const home = resolve(privateStateRootPath(runtime));
-  const projectPath = join(home, "memory", "projects", scope.id);
   const candidateDirectories = [
-    home,
-    join(home, "memory"),
-    join(home, "memory", "projects"),
-    projectPath,
+    privateMemoryDirectory(runtime, [], "KEEL_HOME", false),
+    privateMemoryDirectory(runtime, ["memory"], "project memory root", false),
+    privateMemoryDirectory(
+      runtime,
+      ["memory", "projects"],
+      "project memory projects root",
+      false,
+    ),
+    privateMemoryDirectory(
+      runtime,
+      ["memory", "projects", scope.id],
+      "project memory project",
+      false,
+    ),
   ];
   for (const directory of candidateDirectories) {
     const kind = pathKind(directory);
@@ -325,7 +335,27 @@ export function projectMemoryDirectoryForRead(
       );
     }
   }
-  return realpathSync(projectPath);
+  return candidateDirectories.at(-1);
+}
+
+function privateMemoryDirectory(
+  runtime: ProjectMemoryRuntime,
+  segments: readonly string[],
+  label: string,
+  ensure: boolean,
+): string {
+  try {
+    return ensure
+      ? ensurePrivateStateDirectory(runtime, segments, label)
+      : privateStateDirectoryPath(runtime, segments, label);
+  } catch (error) {
+    /* v8 ignore next 3 -- private-state helpers normalize filesystem failures to PrivateStateError. */
+    if (error instanceof PrivateStateError) {
+      fail(`Error: unsafe project memory path: ${error.message}`);
+    }
+    /* v8 ignore next -- private-state helpers normalize filesystem failures to PrivateStateError. */
+    throw error;
+  }
 }
 
 function readProjectMemoryState(

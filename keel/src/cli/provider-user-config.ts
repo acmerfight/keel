@@ -1,9 +1,8 @@
-import { join } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "../core/error.ts";
 import {
   PrivateStateError,
-  privateStateRootPath,
+  privateStatePath,
   readPrivateStateFile,
   writePrivateStateFile,
 } from "../core/private-state.ts";
@@ -65,11 +64,11 @@ function userConfigError(message: string): never {
 }
 
 function userProviderConfigPath(runtime: ProviderUserConfigRuntime): string {
-  return join(privateStateRootPath(runtime), "config.json");
+  return privateStatePath(runtime, ["config.json"]);
 }
 
 function userProviderAuthPath(runtime: ProviderUserConfigRuntime): string {
-  return join(privateStateRootPath(runtime), "auth.json");
+  return privateStatePath(runtime, ["auth.json"]);
 }
 
 function readOptionalJsonFile(
@@ -78,7 +77,7 @@ function readOptionalJsonFile(
   label: string,
   options: { readonly missingParentAsAbsent: boolean },
 ): unknown | null {
-  const filePath = join(privateStateRootPath(runtime), fileName);
+  const filePath = privateStatePath(runtime, [fileName]);
   let content: string;
   try {
     const stored = readPrivateStateFile({
@@ -172,7 +171,7 @@ function writePrivateJsonFile(
   label: string,
   data: unknown,
 ): void {
-  const filePath = join(privateStateRootPath(runtime), fileName);
+  const filePath = privateStatePath(runtime, [fileName]);
   try {
     writePrivateStateFile({
       runtime,

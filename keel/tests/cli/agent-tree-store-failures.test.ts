@@ -1,6 +1,7 @@
 import {
   appendFileSync,
   chmodSync,
+  linkSync,
   mkdirSync,
   rmSync,
   writeFileSync,
@@ -513,6 +514,68 @@ describe("Agent Tree Store Crash Boundaries", () => {
         writer.create(filePath, { type: "replacement" }, "agent tree"),
       ).toThrow("cannot create agent tree");
       await expect(readFile(filePath, "utf8")).resolves.toBe(original);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given an agent-tree JSONL file has another hard link before append,
+    When the durable writer prepares the next record,
+    Then it rejects the shared inode before writing either directory entry`, async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keel-jsonl-hardlink-"));
+    const filePath = join(workspace, "events.jsonl");
+    const aliasPath = join(workspace, "events-alias.jsonl");
+    const original = '{"type":"header"}\n';
+    writeFileSync(filePath, original, { mode: 0o600 });
+    linkSync(filePath, aliasPath);
+
+    try {
+      const writer = createDurableJsonlWriter();
+      expect(() =>
+        writer.append(filePath, { type: "record" }, "agent tree"),
+      ).toThrow(/exactly one hard link/u);
+      await expect(readFile(filePath, "utf8")).resolves.toBe(original);
+      await expect(readFile(aliasPath, "utf8")).resolves.toBe(original);
+      expect(() =>
+        writer.append(filePath, { type: "retry" }, "agent tree"),
+      ).toThrow(/exactly one hard link/u);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test(`Given a partial agent-tree append becomes hard-linked before rollback,
+    When the durable writer tries to restore the original byte count,
+    Then it treats the write as indeterminate instead of truncating a shared inode`, async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "keel-jsonl-rollback-link-"),
+    );
+    const filePath = join(workspace, "events.jsonl");
+    const aliasPath = join(workspace, "events-alias.jsonl");
+    const original = '{"type":"header"}\n';
+    writeFileSync(filePath, original, { mode: 0o600 });
+    const writer = createDurableJsonlWriter({
+      create: () => ({ kind: "written" }),
+      append: (targetPath, content) => {
+        appendFileSync(targetPath, content.slice(0, 6));
+        linkSync(targetPath, aliasPath);
+        throw new TestWriteError("append");
+      },
+    });
+
+    try {
+      expect(() =>
+        writer.append(filePath, { type: "record" }, "agent tree"),
+      ).toThrow(IndeterminateJsonlWriteError);
+      await expect(readFile(filePath, "utf8")).resolves.toBe(
+        `${original}{"type`,
+      );
+      await expect(readFile(aliasPath, "utf8")).resolves.toBe(
+        `${original}{"type`,
+      );
+      expect(() =>
+        writer.append(filePath, { type: "retry" }, "agent tree"),
+      ).toThrow(IndeterminateJsonlWriteError);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

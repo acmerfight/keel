@@ -1,18 +1,13 @@
-import {
-  appendFileSync,
-  closeSync,
-  fsyncSync,
-  openSync,
-  readSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
 import { dirname } from "node:path";
 import { TextDecoder } from "node:util";
 import { errorMessage } from "../../core/error.ts";
 import {
+  appendPrivateFile,
+  createPrivateFile,
   ensurePrivateDirectory,
   PrivateStateError,
+  privateFileSize,
+  readPrivateFileBufferRange,
   requirePrivateDirectory,
 } from "../../core/private-state.ts";
 import {
@@ -58,24 +53,17 @@ function serializeSessionMutationRecord(
 }
 
 function appendJsonLine(filePath: string, record: SessionMutationRecord): void {
-  let fd: number | undefined;
   try {
     validateSessionLedgerParents(filePath, false);
-    fd = openSync(filePath, "a", 0o600);
-    appendFileSync(
-      fd,
-      `${JSON.stringify(serializeSessionMutationRecord(record))}\n`,
-      "utf8",
-    );
-    fsyncSync(fd);
+    appendPrivateFile({
+      path: filePath,
+      label: "session ledger",
+      content: `${JSON.stringify(serializeSessionMutationRecord(record))}\n`,
+    });
   } catch (error) {
     sessionStoreError(
       `Error: cannot write session ledger ${filePath}: ${errorMessage(error)}`,
     );
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
   }
 }
 
@@ -128,12 +116,18 @@ function writeInitialHeader(
       (record) => `${JSON.stringify(serializeSessionMutationRecord(record))}\n`,
     )
     .join("")}`;
-  let fd: number | undefined;
   try {
     validateSessionLedgerParents(filePath, true);
-    fd = openSync(filePath, "wx", 0o600);
-    writeFileSync(fd, content, "utf8");
-    fsyncSync(fd);
+    const result = createPrivateFile({
+      path: filePath,
+      label: "session ledger",
+      content,
+    });
+    if (result.status === "exists") {
+      sessionStoreError(
+        `Error: session "${header.id}" already exists. Use --resume ${header.id} to continue it.`,
+      );
+    }
   } catch (error) {
     if (hasNodeErrorCode(error, "EEXIST")) {
       sessionStoreError(
@@ -143,10 +137,6 @@ function writeInitialHeader(
     sessionStoreError(
       `Error: cannot create session ledger ${filePath}: ${errorMessage(error)}`,
     );
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
   }
 }
 
@@ -155,16 +145,24 @@ function formatByteCount(bytes: number): string {
 }
 
 function sessionLedgerSize(filePath: string): number {
+  let size: number | null;
   try {
-    return statSync(filePath).size;
+    size = privateFileSize({
+      path: filePath,
+      label: "session ledger",
+    });
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      sessionStoreError(`Error: session ledger not found at ${filePath}.`);
+    if (error instanceof PrivateStateError && error.reason === "not_file") {
+      sessionLedgerReadError(filePath, error);
     }
     sessionStoreError(
       `Error: cannot inspect session ledger ${filePath}: ${errorMessage(error)}`,
     );
   }
+  if (size === null) {
+    sessionStoreError(`Error: session ledger not found at ${filePath}.`);
+  }
+  return size;
 }
 
 function sessionLedgerReadError(filePath: string, error: unknown): never {
@@ -190,32 +188,21 @@ function readSessionLedgerBufferRange(
   start: number,
   length: number,
 ): Buffer {
-  let fd: number | undefined;
+  let buffer: Buffer | null;
   try {
-    fd = openSync(filePath, "r");
-    const buffer = Buffer.alloc(length);
-    let offset = 0;
-    while (offset < length) {
-      const bytesRead = readSync(
-        fd,
-        buffer,
-        offset,
-        length - offset,
-        start + offset,
-      );
-      if (bytesRead === 0) {
-        throw new Error("unexpected end of file");
-      }
-      offset += bytesRead;
-    }
-    return buffer;
+    buffer = readPrivateFileBufferRange({
+      path: filePath,
+      label: "session ledger",
+      start,
+      length,
+    });
   } catch (error) {
     return sessionLedgerReadError(filePath, error);
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
   }
+  if (buffer === null) {
+    sessionStoreError(`Error: session ledger not found at ${filePath}.`);
+  }
+  return buffer;
 }
 
 function readSessionLedgerRange(

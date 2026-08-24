@@ -1,18 +1,15 @@
-import {
-  appendFileSync,
-  closeSync,
-  fsyncSync,
-  ftruncateSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { closeSync, constants, fsyncSync, openSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { errorMessage } from "../../core/error.ts";
+import {
+  appendPrivateFile,
+  createPrivateFile,
+  ensurePrivateDirectory,
+  privateFileSize,
+  readPrivateFileBuffer,
+  truncatePrivateFile,
+} from "../../core/private-state.ts";
 
 type JsonlKind = "agent tree" | "agent transcript";
 export type DirectorySync = (directory: string) => void;
@@ -48,22 +45,13 @@ export function agentTreeError(message: string): never {
   throw new Error(`Error: ${message}`);
 }
 
-function withSyncedFile(
-  filePath: string,
-  flags: "a" | "r" | "r+" | "wx",
-  operation: (fileDescriptor: number) => void,
-): void {
-  const fileDescriptor = openSync(filePath, flags, 0o600);
+function syncDirectoryHandle(directory: string): void {
+  const fileDescriptor = openSync(directory, constants.O_RDONLY);
   try {
-    operation(fileDescriptor);
     fsyncSync(fileDescriptor);
   } finally {
     closeSync(fileDescriptor);
   }
-}
-
-function syncDirectoryHandle(directory: string): void {
-  withSyncedFile(directory, "r", () => {});
 }
 
 export function createPlatformDirectorySync(
@@ -82,10 +70,7 @@ function ensureDurableDirectory(
   syncDirectory: DirectorySync = syncDurableDirectory,
 ): void {
   const targetDirectory = resolve(directory);
-  mkdirSync(targetDirectory, {
-    recursive: true,
-    mode: 0o700,
-  });
+  ensurePrivateDirectory(targetDirectory, "durable JSONL directory");
   const ancestorDirectories: string[] = [];
   let current = targetDirectory;
   for (;;) {
@@ -102,10 +87,15 @@ function ensureDurableDirectory(
 function nodeCreate(filePath: string, content: string): JsonlCreateResult {
   let ownership: "owned" | "unowned" = "unowned";
   try {
-    withSyncedFile(filePath, "wx", (fileDescriptor) => {
-      ownership = "owned";
-      writeFileSync(fileDescriptor, content, "utf8");
+    const result = createPrivateFile({
+      path: filePath,
+      label: "agent tree JSONL",
+      content,
     });
+    if (result.status === "exists") {
+      throw new Error("file already exists");
+    }
+    ownership = "owned";
     return { kind: "written" };
   } catch (error) {
     return { kind: "failed", ownership, error };
@@ -113,8 +103,10 @@ function nodeCreate(filePath: string, content: string): JsonlCreateResult {
 }
 
 function nodeAppend(filePath: string, content: string): void {
-  withSyncedFile(filePath, "a", (fileDescriptor) => {
-    appendFileSync(fileDescriptor, content, "utf8");
+  appendPrivateFile({
+    path: filePath,
+    label: "agent tree JSONL",
+    content,
   });
 }
 
@@ -124,8 +116,10 @@ const nodeJsonlWriteRuntime: JsonlWriteRuntime = {
 };
 
 function rollbackAppend(filePath: string, originalBytes: number): void {
-  withSyncedFile(filePath, "r+", (fileDescriptor) => {
-    ftruncateSync(fileDescriptor, originalBytes);
+  truncatePrivateFile({
+    path: filePath,
+    label: "agent tree JSONL",
+    size: originalBytes,
   });
 }
 
@@ -203,7 +197,12 @@ export function createDurableJsonlWriter(
       writable();
       const originalBytes = ((): number => {
         try {
-          return statSync(filePath).size;
+          const size = privateFileSize({
+            path: filePath,
+            label: kind,
+          });
+          if (size === null) throw new Error("file not found");
+          return size;
         } catch (caught) {
           return fail(
             `cannot inspect ${kind} ${filePath} before writing`,
@@ -232,7 +231,14 @@ export function createDurableJsonlWriter(
 function readBoundedBuffer(filePath: string, maxBytes: number): Buffer {
   let size: number;
   try {
-    size = statSync(filePath).size;
+    const measuredSize = privateFileSize({
+      path: filePath,
+      label: "agent tree JSONL",
+    });
+    if (measuredSize === null) {
+      agentTreeError(`cannot read ${filePath}: file not found`);
+    }
+    size = measuredSize;
   } catch (caught) {
     agentTreeError(`cannot read ${filePath}: ${errorMessage(caught)}`);
   }
@@ -242,7 +248,15 @@ function readBoundedBuffer(filePath: string, maxBytes: number): Buffer {
     );
   }
   try {
-    return readFileSync(filePath);
+    const content = readPrivateFileBuffer({
+      path: filePath,
+      label: "agent tree JSONL",
+    });
+    /* v8 ignore next -- the file can disappear between size inspection and read. */
+    if (content === null) {
+      agentTreeError(`cannot read ${filePath}: file not found`);
+    }
+    return content;
   } catch (caught) {
     agentTreeError(`cannot read ${filePath}: ${errorMessage(caught)}`);
   }
@@ -260,8 +274,10 @@ function decodeUtf8(filePath: string, bytes: Uint8Array): string {
 
 function appendFinalNewline(filePath: string): void {
   try {
-    withSyncedFile(filePath, "a", (fileDescriptor) => {
-      appendFileSync(fileDescriptor, "\n", "utf8");
+    appendPrivateFile({
+      path: filePath,
+      label: "agent tree JSONL",
+      content: "\n",
     });
   } catch (caught) {
     agentTreeError(
@@ -272,8 +288,10 @@ function appendFinalNewline(filePath: string): void {
 
 function truncateTail(filePath: string, byteLength: number): void {
   try {
-    withSyncedFile(filePath, "r+", (fileDescriptor) => {
-      ftruncateSync(fileDescriptor, byteLength);
+    truncatePrivateFile({
+      path: filePath,
+      label: "agent tree JSONL",
+      size: byteLength,
     });
   } catch (caught) {
     agentTreeError(

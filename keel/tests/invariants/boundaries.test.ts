@@ -242,6 +242,27 @@ function wildcardReExportSpecifiers(
 }
 
 describe("module boundaries", () => {
+  test(`Given core/private-state owns private storage boundaries,
+    When source imports are inspected,
+    Then consumers do not import the raw private state root path`, () => {
+    const violations: string[] = [];
+
+    for (const file of sourceFiles()) {
+      if (file === "src/core/private-state.ts") continue;
+      const source = readFileSync(file, "utf8");
+      const importedNames = importedNamesFromResolvedSpecifier(
+        file,
+        source,
+        "src/core/private-state.ts",
+      );
+      if (importedNames.includes("privateStateRootPath")) {
+        violations.push(`${file} imports privateStateRootPath`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   test(`Given provider message contracts define the LLM boundary,
     When their source dependencies and fields are inspected,
     Then Runtime-only ledger evidence stays outside the provider layer`, () => {
