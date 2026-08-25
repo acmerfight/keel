@@ -16,7 +16,7 @@ interface MainAgentDelegationEffects {
   readonly costBudgetProvider: LLMProvider;
 }
 
-interface CreateMainAgentEffectsOptions<
+export interface CreateMainAgentEffectsOptions<
   Memory extends AgentMemoryRuntime = AgentMemoryRuntime,
 > {
   readonly bash: MainBashRuntime;
@@ -37,18 +37,19 @@ interface MainAgentEffectsBase<
   readonly skillActivation?: SkillActivationCapability;
 }
 
-type MainAgentEffects<Memory extends AgentMemoryRuntime = AgentMemoryRuntime> =
-  MainAgentEffectsBase<Memory> &
-    (
-      | {
-          readonly delegation?: never;
-          readonly costBudgetProvider?: never;
-        }
-      | {
-          readonly delegation: DelegationCapability;
-          readonly costBudgetProvider: LLMProvider;
-        }
-    );
+export type MainAgentEffects<
+  Memory extends AgentMemoryRuntime = AgentMemoryRuntime,
+> = MainAgentEffectsBase<Memory> &
+  (
+    | {
+        readonly delegation?: never;
+        readonly costBudgetProvider?: never;
+      }
+    | {
+        readonly delegation: DelegationCapability;
+        readonly costBudgetProvider: LLMProvider;
+      }
+  );
 
 export function createMainAgentEffects<Memory extends AgentMemoryRuntime>(
   options: CreateMainAgentEffectsOptions<Memory>,

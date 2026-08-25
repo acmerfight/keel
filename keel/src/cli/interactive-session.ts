@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import type { AgentEvent, CostReport } from "../agent/events.ts";
-import { runAgentTurn } from "../agent/loop.ts";
 import type {
   MainModelOperationInstrumentation,
   ModelOperationOwner,
@@ -23,7 +22,6 @@ import type {
   SessionMessage,
   UserMessageOrigin,
 } from "../agent/session-message.ts";
-import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { MAX_SUBAGENT_RESULT_CHARS } from "../agent/subagent-tree-budget.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
 import { isAbortThrow } from "../core/error.ts";
@@ -67,7 +65,7 @@ import type {
   BashPermissionPolicy,
   MainBashRuntime,
 } from "../permissions/bash.ts";
-import { createMainAgentEffects } from "../runtime/agent-effects.ts";
+import { runMainAgentInvocation } from "../runtime/agent-invocation.ts";
 import { buildMainAgentSystemPrompt } from "../runtime/agent-prompt.ts";
 import {
   type AgentInvocationContext,
@@ -1331,7 +1329,7 @@ export async function runInteractiveSession(
                 resolveSubagentExecution(request.userMessage, selection),
             })
           : undefined;
-      const agentEffects = createMainAgentEffects({
+      const effects = {
         bash,
         hiddenWorkspacePaths,
         ...(agentMemory === undefined ? {} : { memory: agentMemory }),
@@ -1354,106 +1352,113 @@ export async function runInteractiveSession(
         ...(managedSkills === null
           ? {}
           : { skillActivation: managedSkills.activation }),
-      });
+      };
       const stream = observeAgentStateEvents(
-        runAgentTurn({
-          workspace: options.workspace,
-          provider: resolved.provider,
-          ledger,
-          systemPrompt: baseSystemPromptWithGoal(),
-          signal: turnAbortController.signal,
-          ...agentEffects,
-          ...(subagentSession !== null && subagentRuntime !== undefined
-            ? {
-                agentControl: subagentSession.control,
-                agentControlResultBudget:
-                  subagentRuntime.supervisor.resultContinuationBudget,
-              }
-            : {}),
-          stopPolicy: defaultStopPolicy(),
-          taskProgress,
-          ...(sessionGoal !== undefined ? { sessionGoal } : {}),
-          ...(turnCostModel !== undefined
-            ? {
-                costTracking: {
-                  model: turnCostModel,
-                  ...(modelMaxOutputTokens !== undefined
-                    ? { modelMaxOutputTokens }
-                    : {}),
-                  ...(remainingCostUsd !== undefined
-                    ? { maxCostUsd: remainingCostUsd }
-                    : {}),
-                },
-              }
-            : {}),
-          ...(resolved.contextCompaction !== undefined
-            ? { contextCompaction: resolved.contextCompaction }
-            : {}),
-          ...(turnModelOperations !== null
-            ? { modelOperations: turnModelOperations }
-            : {}),
-          ...(durableTaskTurn
-            ? {
-                providerRecovery: savedSession.taskRecovery.providerLifecycle(
-                  modelSelectionFromResolved(turnProvider),
-                  {
-                    /* v8 ignore next 3 -- the named-session steering subprocess test exercises this child-runtime callback before the second provider request. */
-                    pendingInputIds: () =>
-                      queuedInputIds(drainedInjectedLines).filter(
-                        (inputId) => !persistedInputIds.has(inputId),
-                      ),
-                    /* v8 ignore next 5 -- the same subprocess test proves the selected ids are committed exactly once. */
-                    committed: (inputIds) => {
-                      for (const inputId of inputIds) {
-                        persistedInputIds.add(inputId);
-                      }
-                    },
+        runMainAgentInvocation({
+          kind: "interactive_turn",
+          assembly: {
+            workspace: options.workspace,
+            provider: resolved.provider,
+            systemPrompt: baseSystemPromptWithGoal(),
+            signal: turnAbortController.signal,
+            effects,
+          },
+          lifecycle: {
+            ledger,
+            ...(subagentSession !== null && subagentRuntime !== undefined
+              ? {
+                  agentControl: subagentSession.control,
+                  agentControlResultBudget:
+                    subagentRuntime.supervisor.resultContinuationBudget,
+                }
+              : {}),
+            taskProgress,
+            ...(sessionGoal !== undefined ? { sessionGoal } : {}),
+            ...(turnCostModel !== undefined
+              ? {
+                  costTracking: {
+                    model: turnCostModel,
+                    ...(modelMaxOutputTokens !== undefined
+                      ? { modelMaxOutputTokens }
+                      : {}),
+                    ...(remainingCostUsd !== undefined
+                      ? { maxCostUsd: remainingCostUsd }
+                      : {}),
                   },
-                ),
+                }
+              : {}),
+            ...(resolved.contextCompaction !== undefined
+              ? { contextCompaction: resolved.contextCompaction }
+              : {}),
+            ...(turnModelOperations !== null
+              ? { modelOperations: turnModelOperations }
+              : {}),
+            ...(durableTaskTurn
+              ? {
+                  providerRecovery: savedSession.taskRecovery.providerLifecycle(
+                    modelSelectionFromResolved(turnProvider),
+                    {
+                      /* v8 ignore next 3 -- the named-session steering subprocess test exercises this child-runtime callback before the second provider request. */
+                      pendingInputIds: () =>
+                        queuedInputIds(drainedInjectedLines).filter(
+                          (inputId) => !persistedInputIds.has(inputId),
+                        ),
+                      /* v8 ignore next 5 -- the same subprocess test proves the selected ids are committed exactly once. */
+                      committed: (inputIds) => {
+                        for (const inputId of inputIds) {
+                          persistedInputIds.add(inputId);
+                        }
+                      },
+                    },
+                  ),
+                }
+              : {}),
+            ...(options.toolOutputArtifacts !== undefined
+              ? { toolOutputArtifacts: options.toolOutputArtifacts }
+              : {}),
+            readVisibility,
+            projectInstructionVisibility,
+            recordCheckpointOperations: (operations) => {
+              checkpointOperations.push(...operations);
+            },
+            onAgentLoopAccountingUpdated: (accounting) => {
+              latestAgentLoopAccounting = accounting;
+            },
+            drainInjectedUserMessages: () => {
+              const queuedLines = lineReader
+                .drainLinesAfter(turnStartSequence)
+                .map(trimQueuedLine)
+                .filter((queuedLine) => queuedLine.line !== "");
+              if (deferRemainingInjectedInput) {
+                deferredInputLines.push(...queuedLines);
+                return [];
               }
-            : {}),
-          ...(options.toolOutputArtifacts !== undefined
-            ? { toolOutputArtifacts: options.toolOutputArtifacts }
-            : {}),
-          readVisibility,
-          projectInstructionVisibility,
-          recordCheckpointOperations: (operations) => {
-            checkpointOperations.push(...operations);
-          },
-          onAgentLoopAccountingUpdated: (accounting) => {
-            latestAgentLoopAccounting = accounting;
-          },
-          drainInjectedUserMessages: () => {
-            const queuedLines = lineReader
-              .drainLinesAfter(turnStartSequence)
-              .map(trimQueuedLine)
-              .filter((queuedLine) => queuedLine.line !== "");
-            if (deferRemainingInjectedInput) {
-              deferredInputLines.push(...queuedLines);
-              return [];
-            }
-            const firstCommandIndex = queuedLines.findIndex(
-              (queuedLine) => parseInteractiveCommand(queuedLine.line) !== null,
-            );
-            const injectableLines =
-              firstCommandIndex < 0
-                ? queuedLines
-                : queuedLines.slice(0, firstCommandIndex);
-            drainedInjectedLines.push(...injectableLines);
-            if (firstCommandIndex >= 0) {
-              deferRemainingInjectedInput = true;
-              deferredInputLines.push(...queuedLines.slice(firstCommandIndex));
-            }
-            return injectableLines.map((content) => {
-              reportRecorder.recordHumanIntervention();
-              const injectedMessage = {
-                role: "user",
-                content: content.line,
-                origin: STEER_ORIGIN,
-              } as const;
-              reserveMemoryProposalSource(injectedMessage, turnProvider);
-              return injectedMessage;
-            });
+              const firstCommandIndex = queuedLines.findIndex(
+                (queuedLine) =>
+                  parseInteractiveCommand(queuedLine.line) !== null,
+              );
+              const injectableLines =
+                firstCommandIndex < 0
+                  ? queuedLines
+                  : queuedLines.slice(0, firstCommandIndex);
+              drainedInjectedLines.push(...injectableLines);
+              if (firstCommandIndex >= 0) {
+                deferRemainingInjectedInput = true;
+                deferredInputLines.push(
+                  ...queuedLines.slice(firstCommandIndex),
+                );
+              }
+              return injectableLines.map((content) => {
+                reportRecorder.recordHumanIntervention();
+                const injectedMessage = {
+                  role: "user",
+                  content: content.line,
+                  origin: STEER_ORIGIN,
+                } as const;
+                reserveMemoryProposalSource(injectedMessage, turnProvider);
+                return injectedMessage;
+              });
+            },
           },
         }),
         (toolExecution) => {

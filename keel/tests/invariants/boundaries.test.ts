@@ -2,6 +2,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
+import {
+  parseSourceText as parseSharedSourceText,
+  runtimeImportSpecifiers,
+} from "./_ast.ts";
 
 interface LayerRule {
   readonly layer: string;
@@ -157,6 +161,24 @@ function importSpecifiers(file: string, source: string): readonly string[] {
   return specifiers;
 }
 
+function resolvedImportTargets(
+  file: string,
+  source: string,
+): readonly string[] {
+  return importSpecifiers(file, source)
+    .map((specifier) => resolvedRelativeSpecifier(file, specifier))
+    .filter((target): target is string => target !== null);
+}
+
+function resolvedRuntimeImportTargets(
+  file: string,
+  source: string,
+): readonly string[] {
+  return runtimeImportSpecifiers(parseSharedSourceText(file, source))
+    .map((specifier) => resolvedRelativeSpecifier(file, specifier))
+    .filter((target): target is string => target !== null);
+}
+
 function importedNamesFromResolvedSpecifier(
   file: string,
   source: string,
@@ -244,92 +266,6 @@ function wildcardReExportSpecifiers(
 
   visit(sourceFile);
   return specifiers;
-}
-
-const mainAgentEffectProperties = new Set([
-  "bash",
-  "costBudgetProvider",
-  "delegation",
-  "hiddenWorkspacePaths",
-  "mcp",
-  "memory",
-  "skillActivation",
-]);
-
-function calledIdentifier(node: ts.CallExpression): string | null {
-  return ts.isIdentifier(node.expression) ? node.expression.text : null;
-}
-
-function propertyName(node: ts.ObjectLiteralElementLike): string | null {
-  if (ts.isSpreadAssignment(node)) return null;
-  const name = node.name;
-  return ts.isIdentifier(name) ||
-    ts.isStringLiteral(name) ||
-    ts.isNumericLiteral(name)
-    ? name.text
-    : null;
-}
-
-function agentInvocationEffectBoundaryViolations(
-  file: string,
-  source: string,
-): readonly string[] {
-  const sourceFile = parseSource(file, source);
-  const ownedEffectBindings = new Set<string>();
-  const violations: string[] = [];
-
-  function collectOwnedEffectBindings(node: ts.Node): void {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined &&
-      ts.isCallExpression(node.initializer) &&
-      calledIdentifier(node.initializer) === "createMainAgentEffects"
-    ) {
-      ownedEffectBindings.add(node.name.text);
-    }
-    ts.forEachChild(node, collectOwnedEffectBindings);
-  }
-
-  function inspectAgentInvocations(node: ts.Node): void {
-    if (ts.isCallExpression(node)) {
-      const invocation = calledIdentifier(node);
-      if (invocation === "runAgent" || invocation === "runAgentTurn") {
-        const [options] = node.arguments;
-        if (options === undefined || !ts.isObjectLiteralExpression(options)) {
-          violations.push(`${file}: ${invocation} has no inspectable options`);
-        } else {
-          const spreadsOwnedEffects = options.properties.some(
-            (property) =>
-              ts.isSpreadAssignment(property) &&
-              ((ts.isIdentifier(property.expression) &&
-                ownedEffectBindings.has(property.expression.text)) ||
-                (ts.isCallExpression(property.expression) &&
-                  calledIdentifier(property.expression) ===
-                    "createMainAgentEffects")),
-          );
-          if (!spreadsOwnedEffects) {
-            violations.push(
-              `${file}: ${invocation} bypasses createMainAgentEffects`,
-            );
-          }
-          for (const property of options.properties) {
-            const name = propertyName(property);
-            if (name !== null && mainAgentEffectProperties.has(name)) {
-              violations.push(
-                `${file}: ${invocation} directly configures ${name}`,
-              );
-            }
-          }
-        }
-      }
-    }
-    ts.forEachChild(node, inspectAgentInvocations);
-  }
-
-  collectOwnedEffectBindings(sourceFile);
-  inspectAgentInvocations(sourceFile);
-  return violations;
 }
 
 describe("module boundaries", () => {
@@ -508,9 +444,11 @@ describe("module boundaries", () => {
   test(`Given Main-agent tools can perform externally visible effects,
     When one-shot and interactive capability dependencies are inspected,
     Then one runtime owner couples every shared effect capability`, () => {
-    const owner = "src/runtime/agent-effects.ts";
-    const ownerSource = readFileSync(owner, "utf8");
-    expect(importSpecifiers(owner, ownerSource)).toEqual(
+    const effectOwner = "src/runtime/agent-effects.ts";
+    const invocationOwner = "src/runtime/agent-invocation.ts";
+    const effectOwnerSource = readFileSync(effectOwner, "utf8");
+    const invocationOwnerSource = readFileSync(invocationOwner, "utf8");
+    expect(importSpecifiers(effectOwner, effectOwnerSource)).toEqual(
       expect.arrayContaining([
         "../llm/types.ts",
         "../mcp/provider-schema.ts",
@@ -521,31 +459,68 @@ describe("module boundaries", () => {
         "../tools/memory.ts",
       ]),
     );
+    expect(
+      importedNamesFromResolvedSpecifier(
+        invocationOwner,
+        invocationOwnerSource,
+        effectOwner,
+      ),
+    ).toContain("createMainAgentEffects");
+    expect(
+      sourceFiles().filter((file) =>
+        resolvedImportTargets(file, readFileSync(file, "utf8")).includes(
+          effectOwner,
+        ),
+      ),
+    ).toEqual([invocationOwner]);
+  });
+
+  test(`Given Main-agent invocation supports one-shot and interactive turns,
+    When CLI dependencies on the agent loop are inspected,
+    Then one mode-neutral runtime boundary owns both loop entry points`, () => {
+    const owner = "src/runtime/agent-invocation.ts";
+    const ownerSource = readFileSync(owner, "utf8");
+    expect(
+      importedNamesFromResolvedSpecifier(
+        owner,
+        ownerSource,
+        "src/agent/loop.ts",
+      ),
+    ).toEqual(expect.arrayContaining(["runAgent", "runAgentTurn"]));
+
+    const allowedConsumers = new Set([
+      "src/agent/subagent-supervisor.ts",
+      owner,
+    ]);
+    const violations = sourceFiles().flatMap((file) => {
+      const source = readFileSync(file, "utf8");
+      return resolvedRuntimeImportTargets(file, source).includes(
+        "src/agent/loop.ts",
+      ) && !allowedConsumers.has(file)
+        ? [`${file} imports src/agent/loop.ts`]
+        : [];
+    });
+    expect(violations).toEqual([]);
+
+    for (const source of [
+      `import * as loop from "../agent/loop.ts";
+       loop.runAgent(options);`,
+      `const { runAgentTurn } = await import("../agent/loop.ts");`,
+    ]) {
+      expect(
+        resolvedRuntimeImportTargets("src/cli/regression.ts", source),
+      ).toContain("src/agent/loop.ts");
+    }
 
     for (const file of [
       "src/cli/one-shot-run.ts",
       "src/cli/interactive-session.ts",
     ]) {
       const source = readFileSync(file, "utf8");
-      expect(
-        importedNamesFromResolvedSpecifier(
-          file,
-          source,
-          "src/runtime/agent-effects.ts",
-        ),
-      ).toContain("createMainAgentEffects");
-      expect(agentInvocationEffectBoundaryViolations(file, source)).toEqual([]);
+      expect(importedNamesFromResolvedSpecifier(file, source, owner)).toContain(
+        "runMainAgentInvocation",
+      );
     }
-
-    expect(
-      agentInvocationEffectBoundaryViolations(
-        "src/cli/regression-fixture.ts",
-        `const agentEffects = createMainAgentEffects({ bash, hiddenWorkspacePaths });
-         runAgent({ workspace, ...agentEffects, delegation });`,
-      ),
-    ).toEqual([
-      "src/cli/regression-fixture.ts: runAgent directly configures delegation",
-    ]);
   });
 
   test(`Given interactive compaction helpers restore visible context,

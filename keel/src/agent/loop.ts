@@ -239,8 +239,11 @@ type SubagentRunAgentOptions = SubagentRunAgentOptionsBase &
       }
   );
 
-export type RunAgentOptions = RunAgentOptionsBase &
-  (MainRunAgentOptions | SubagentRunAgentOptions);
+export type MainAgentRunOptions = RunAgentOptionsBase & MainRunAgentOptions;
+
+export type RunAgentOptions =
+  | MainAgentRunOptions
+  | (RunAgentOptionsBase & SubagentRunAgentOptions);
 
 type InjectedUserMessage = Extract<SessionMessage, { readonly role: "user" }>;
 
@@ -352,8 +355,12 @@ interface SubagentRunAgentTurnOptionsBase {
 type SubagentRunAgentTurnOptions = SubagentRunAgentTurnOptionsBase &
   SubagentWorkspaceRunOptions;
 
-export type RunAgentTurnOptions = RunAgentTurnOptionsBase &
-  (MainRunAgentTurnOptions | SubagentRunAgentTurnOptions);
+export type MainAgentRunTurnOptions = RunAgentTurnOptionsBase &
+  MainRunAgentTurnOptions;
+
+export type RunAgentTurnOptions =
+  | MainAgentRunTurnOptions
+  | (RunAgentTurnOptionsBase & SubagentRunAgentTurnOptions);
 
 function agentTurnExecutionOptions(
   options: RunAgentOptions,

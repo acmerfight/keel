@@ -1,20 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { runAgent } from "../agent/loop.ts";
 import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import {
   appendProjectMemoryToSystemPrompt,
   appendWorkflowSkillsToSystemPrompt,
 } from "../agent/prompt.ts";
 import type { SessionMessage } from "../agent/session-message.ts";
-import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import type { ExecutionPosture } from "../core/execution-posture.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpPermissionPolicy, McpRuntime } from "../mcp/runtime-types.ts";
 import type { MainBashRuntime } from "../permissions/bash.ts";
-import { createMainAgentEffects } from "../runtime/agent-effects.ts";
+import { runMainAgentInvocation } from "../runtime/agent-invocation.ts";
 import { buildMainAgentSystemPrompt } from "../runtime/agent-prompt.ts";
 import { createAgentInvocationContext } from "../runtime/invocation-context.ts";
 import {
@@ -455,69 +453,72 @@ export async function runOneShotCli(
         })) ?? [],
     });
     let transcriptMessages: readonly SessionMessage[] | undefined;
-    const agentEffects = createMainAgentEffects({
-      bash: bashRuntime,
-      hiddenWorkspacePaths,
-      ...(memoryPrompt === undefined
-        ? {}
-        : {
-            memory: {
-              kind: "direct" as const,
-              prompt: memoryPrompt,
-              mutation: agentMemory.capability,
-            },
-          }),
-      ...(mcpRuntime === undefined
-        ? {}
-        : {
-            mcp: {
-              runtime: mcpRuntime,
-              schemaTarget: resolved.schemaTarget,
-            },
-          }),
-      ...(subagentRuntime === undefined
-        ? {}
-        : {
-            delegation: {
-              capability: subagentRuntime.supervisor.capability,
-              costBudgetProvider: subagentRuntime.costBudgetProvider,
-            },
-          }),
-      ...(skillActivation === undefined ? {} : { skillActivation }),
-    });
-    const stream = runAgent({
-      workspace,
-      provider: resolved.provider,
-      userMessage,
-      systemPrompt,
-      signal: abortController.signal,
-      ...agentEffects,
-      stopPolicy: defaultStopPolicy(),
-      toolOutputArtifacts,
-      ...(trackedCostModel !== undefined
-        ? {
-            costTracking: {
-              model: trackedCostModel,
-              ...(modelMaxOutputTokens !== undefined
-                ? { modelMaxOutputTokens }
-                : {}),
-              ...(cliArgs.maxCostUsd !== undefined
-                ? { maxCostUsd: cliArgs.maxCostUsd }
-                : {}),
-            },
-          }
-        : {}),
-      ...(modelOperations !== undefined ? { modelOperations } : {}),
-      ...(resolved.contextCompaction !== undefined
-        ? { contextCompaction: resolved.contextCompaction }
-        : {}),
-      ...(cliArgs.transcriptFile !== null
-        ? {
-            onTranscriptReady: (messages) => {
-              transcriptMessages = messages;
-            },
-          }
-        : {}),
+    const stream = runMainAgentInvocation({
+      kind: "one_shot",
+      assembly: {
+        workspace,
+        provider: resolved.provider,
+        systemPrompt,
+        signal: abortController.signal,
+        effects: {
+          bash: bashRuntime,
+          hiddenWorkspacePaths,
+          ...(memoryPrompt === undefined
+            ? {}
+            : {
+                memory: {
+                  kind: "direct",
+                  prompt: memoryPrompt,
+                  mutation: agentMemory.capability,
+                },
+              }),
+          ...(mcpRuntime === undefined
+            ? {}
+            : {
+                mcp: {
+                  runtime: mcpRuntime,
+                  schemaTarget: resolved.schemaTarget,
+                },
+              }),
+          ...(subagentRuntime === undefined
+            ? {}
+            : {
+                delegation: {
+                  capability: subagentRuntime.supervisor.capability,
+                  costBudgetProvider: subagentRuntime.costBudgetProvider,
+                },
+              }),
+          ...(skillActivation === undefined ? {} : { skillActivation }),
+        },
+      },
+      lifecycle: {
+        userMessage,
+        toolOutputArtifacts,
+        ...(trackedCostModel !== undefined
+          ? {
+              costTracking: {
+                model: trackedCostModel,
+                ...(modelMaxOutputTokens !== undefined
+                  ? { modelMaxOutputTokens }
+                  : {}),
+                ...(cliArgs.maxCostUsd !== undefined
+                  ? { maxCostUsd: cliArgs.maxCostUsd }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(modelOperations !== undefined ? { modelOperations } : {}),
+        ...(resolved.contextCompaction !== undefined
+          ? { contextCompaction: resolved.contextCompaction }
+          : {}),
+        ...(cliArgs.transcriptFile !== null
+          ? {
+              onTranscriptReady: (messages) => {
+                transcriptMessages = messages;
+              },
+            }
+          : {}),
+      },
     });
 
     const writeUndoProtectionWarning = (): void => {
