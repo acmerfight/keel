@@ -8,11 +8,7 @@ import type {
   ModelOperationOwner,
 } from "../agent/model-operations.ts";
 import { postCompactionReadToolCallId } from "../agent/post-compaction-read-id.ts";
-import {
-  appendDelegationToSystemPrompt,
-  appendWorkflowSkillsToSystemPrompt,
-  buildAgentSystemPrompt,
-} from "../agent/prompt.ts";
+import { appendWorkflowSkillsToSystemPrompt } from "../agent/prompt.ts";
 import {
   clearReadVisibilityState,
   createReadVisibilityState,
@@ -71,6 +67,7 @@ import type {
   BashPermissionPolicy,
   MainBashRuntime,
 } from "../permissions/bash.ts";
+import { buildMainAgentSystemPrompt } from "../runtime/agent-prompt.ts";
 import {
   type AgentInvocationContext,
   createAgentInvocationContext,
@@ -479,7 +476,7 @@ export async function runInteractiveSession(
   });
   let visibleSkillCatalog = latestCatalogExposure.skills;
   const rebuildSystemPrompt = (): string =>
-    buildAgentSystemPrompt({
+    buildMainAgentSystemPrompt({
       workspace: options.workspace,
       platform: options.platform,
       ...(options.projectInstructions !== undefined
@@ -488,6 +485,14 @@ export async function runInteractiveSession(
       ...(visibleSkillCatalog.length > 0
         ? { skillCatalog: visibleSkillCatalog }
         : {}),
+      ...(options.delegation === undefined
+        ? {}
+        : {
+            delegation: {
+              policy: options.delegation.policy,
+              background: backgroundAgentsEnabled,
+            },
+          }),
     });
   let systemPrompt = rebuildSystemPrompt();
   let catalogDiagnosticSignature: string | null = null;
@@ -514,21 +519,7 @@ export async function runInteractiveSession(
     options.setComposerMode?.(mode);
   };
   const baseSystemPromptWithGoal = (): string =>
-    systemPromptWithSessionGoal(
-      options.delegation !== undefined
-        ? appendDelegationToSystemPrompt(
-            systemPrompt,
-            options.delegation.policy,
-            {
-              background: backgroundAgentsEnabled,
-              nestedReadOnly: options.delegation.policy === "explicit",
-              writer: options.delegation.policy === "explicit",
-            },
-          )
-        : systemPrompt,
-      sessionGoal,
-      true,
-    );
+    systemPromptWithSessionGoal(systemPrompt, sessionGoal, true);
   const currentSystemPrompt = (): string =>
     appendWorkflowSkillsToSystemPrompt(
       baseSystemPromptWithGoal(),

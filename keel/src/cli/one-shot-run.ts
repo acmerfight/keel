@@ -4,10 +4,8 @@ import { createInterface } from "node:readline/promises";
 import { runAgent } from "../agent/loop.ts";
 import type { MainModelOperationInstrumentation } from "../agent/model-operations.ts";
 import {
-  appendDelegationToSystemPrompt,
   appendProjectMemoryToSystemPrompt,
   appendWorkflowSkillsToSystemPrompt,
-  buildAgentSystemPrompt,
 } from "../agent/prompt.ts";
 import type { SessionMessage } from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
@@ -16,6 +14,7 @@ import type { ExecutionPosture } from "../core/execution-posture.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpPermissionPolicy, McpRuntime } from "../mcp/runtime-types.ts";
 import type { MainBashRuntime } from "../permissions/bash.ts";
+import { buildMainAgentSystemPrompt } from "../runtime/agent-prompt.ts";
 import { createAgentInvocationContext } from "../runtime/invocation-context.ts";
 import {
   exposeSkillCatalog,
@@ -276,26 +275,22 @@ export async function runOneShotCli(
         scope: newToolOutputArtifactScope("run"),
       }),
     };
-    const baseSystemPrompt = buildAgentSystemPrompt({
+    const systemPrompt = buildMainAgentSystemPrompt({
       workspace,
       platform: runtime.platform,
       ...(projectInstructions !== undefined ? { projectInstructions } : {}),
       ...(catalogExposure.skills.length > 0
         ? { skillCatalog: catalogExposure.skills }
         : {}),
-    });
-    const systemPrompt =
-      cliArgs.agentPolicy === "off"
-        ? baseSystemPrompt
-        : appendDelegationToSystemPrompt(
-            baseSystemPrompt,
-            cliArgs.agentPolicy,
-            {
+      ...(cliArgs.agentPolicy === "off"
+        ? {}
+        : {
+            delegation: {
+              policy: cliArgs.agentPolicy,
               background: false,
-              nestedReadOnly: cliArgs.agentPolicy === "explicit",
-              writer: cliArgs.agentPolicy === "explicit",
             },
-          );
+          }),
+    });
     const exposedMemoryEntries = new Map<string, RunReportMemoryEntry>();
     let exposedMemoryBytes = 0;
     let exposedMemoryTokens = 0;
