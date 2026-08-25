@@ -13,11 +13,10 @@ import type { SessionMessage } from "../agent/session-message.ts";
 import { defaultStopPolicy } from "../agent/stop-policy.ts";
 import { isAbortThrow } from "../core/error.ts";
 import type { ExecutionPosture } from "../core/execution-posture.ts";
-import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
-import { mcpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpPermissionPolicy, McpRuntime } from "../mcp/runtime-types.ts";
 import type { MainBashRuntime } from "../permissions/bash.ts";
+import { createAgentInvocationContext } from "../runtime/invocation-context.ts";
 import {
   exposeSkillCatalog,
   formatSkillCatalogDegradation,
@@ -207,12 +206,13 @@ export async function runOneShotCli(
     if (catalog !== undefined) {
       runtime.writeStderr(formatWorkflowSkillListWarnings(catalog.warnings));
     }
-    const resolved = resolveProvider(userMessage, runtime, {
+    const resolvedProvider = resolveProvider(userMessage, runtime, {
       ...(cliArgs.providerId !== undefined
         ? { providerId: cliArgs.providerId }
         : {}),
       ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
     });
+    const resolved = createAgentInvocationContext(resolvedProvider);
     const catalogExposure = exposeSkillCatalog({
       skills: (catalog?.implicitSkills ?? []).filter(
         (descriptor) =>
@@ -266,10 +266,7 @@ export async function runOneShotCli(
           approvalLineReader,
         ),
         now: runtime.now,
-        schemaTarget: mcpProviderSchemaTarget(
-          resolved.providerId,
-          resolved.model,
-        ),
+        schemaTarget: resolved.schemaTarget,
       });
     }
     await cleanupExpiredToolOutputArtifacts({ runtime });
@@ -345,9 +342,7 @@ export async function runOneShotCli(
         operations: [],
       });
     }
-    const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
-      resolved.modelMetadata,
-    );
+    const modelMaxOutputTokens = resolved.modelMaxOutputTokens;
     const delegationRun =
       cliArgs.agentPolicy === "off"
         ? ({ kind: "off" } as const)
@@ -430,14 +425,10 @@ export async function runOneShotCli(
               runtime.writeStderr(formatSubagentProgress(event));
             },
             resolveProvider: (selection) => {
-              const child = resolveProvider(
-                originalUserMessage,
-                runtime,
-                selection,
+              const child = createAgentInvocationContext(
+                resolveProvider(originalUserMessage, runtime, selection),
               );
-              const childModelMaxOutputTokens = modelMetadataMaxOutputTokens(
-                child.modelMetadata,
-              );
+              const childModelMaxOutputTokens = child.modelMaxOutputTokens;
               return {
                 provider: child.provider,
                 providerId: child.providerId,
@@ -494,10 +485,7 @@ export async function runOneShotCli(
         ? {
             mcp: {
               runtime: mcpRuntime,
-              schemaTarget: mcpProviderSchemaTarget(
-                resolved.providerId,
-                resolved.model,
-              ),
+              schemaTarget: resolved.schemaTarget,
             },
           }
         : {}),

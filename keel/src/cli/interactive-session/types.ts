@@ -1,4 +1,3 @@
-import type { ContextCompactionOptions } from "../../agent/context-compaction.ts";
 import type { AgentEvent, CostReport } from "../../agent/events.ts";
 import type { ProjectInstructions } from "../../agent/prompt.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
@@ -9,14 +8,13 @@ import type {
 import type { DelegatingAgentPolicy } from "../../core/agent-policy.ts";
 import type { CostModel } from "../../core/cost.ts";
 import type { ExecutionPosture } from "../../core/execution-posture.ts";
-import type { ModelMetadata } from "../../core/model-metadata.ts";
 import type { SessionGoal } from "../../core/session-goal.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type {
   UndoProtectionSummary,
   UndoProtectionTracker,
 } from "../../core/undo-protection.ts";
-import type { LLMProvider, Usage } from "../../llm/types.ts";
+import type { Usage } from "../../llm/types.ts";
 import type { McpSecretBackend } from "../../mcp/oauth.ts";
 import type {
   McpConnectionFactory,
@@ -38,7 +36,10 @@ import type {
 import type { AgentTreeHistory } from "../agent-tree-store.ts";
 import type { SessionForkPoints } from "../fork-points.ts";
 import type { McpServerConfig } from "../mcp-config.ts";
-import type { ModelSource, ProviderSelection } from "../provider-config.ts";
+import type {
+  ProviderSelection,
+  ResolvedProvider,
+} from "../provider-config.ts";
 import type { RunReportMemory } from "../report.ts";
 import type {
   AgentEventReportRecorder,
@@ -88,33 +89,7 @@ export interface InteractiveForkSessionRequest {
   readonly beforeMessageId?: string;
 }
 
-interface InteractiveResolvedProviderBase {
-  readonly provider: LLMProvider;
-  readonly model: string;
-  readonly contextCompaction?: ContextCompactionOptions;
-  readonly modelMetadata?: ModelMetadata;
-}
-
-export type InteractiveResolvedProvider =
-  | (InteractiveResolvedProviderBase & {
-      readonly providerId: "fake";
-      readonly costModel: CostModel;
-    })
-  | (InteractiveResolvedProviderBase & {
-      readonly providerId: "deepseek";
-      readonly costModel: CostModel | null;
-      readonly modelSource: ModelSource;
-    })
-  | (InteractiveResolvedProviderBase & {
-      readonly providerId: "kimi";
-      readonly costModel: CostModel | null;
-      readonly modelSource: ModelSource;
-    })
-  | (InteractiveResolvedProviderBase & {
-      readonly providerId: "qwen";
-      readonly costModel: CostModel | null;
-      readonly modelSource: ModelSource;
-    });
+export type InteractiveResolvedProvider = ResolvedProvider;
 
 export interface SavedInteractiveSession {
   readonly kind: "saved";
