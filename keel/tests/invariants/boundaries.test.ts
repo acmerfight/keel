@@ -379,6 +379,46 @@ describe("module boundaries", () => {
     expect(violations).toEqual([]);
   });
 
+  test(`Given one-shot and interactive modes invoke the same Main agent,
+    When prompt-assembly dependencies are inspected,
+    Then one runtime owner composes project context, Skill catalogs, and delegation`, () => {
+    const owner = "src/runtime/agent-prompt.ts";
+    const ownerSource = readFileSync(owner, "utf8");
+    const agentPrompt = "src/agent/prompt.ts";
+    expect(
+      importedNamesFromResolvedSpecifier(owner, ownerSource, agentPrompt),
+    ).toEqual(
+      expect.arrayContaining([
+        "appendDelegationToSystemPrompt",
+        "buildAgentSystemPrompt",
+      ]),
+    );
+
+    const consumers = [
+      "src/cli/one-shot-run.ts",
+      "src/cli/interactive-session.ts",
+    ];
+    const violations = consumers.flatMap((file) => {
+      const source = readFileSync(file, "utf8");
+      expect(
+        importedNamesFromResolvedSpecifier(
+          file,
+          source,
+          "src/runtime/agent-prompt.ts",
+        ),
+      ).toContain("buildMainAgentSystemPrompt");
+      return importedNamesFromResolvedSpecifier(file, source, agentPrompt)
+        .filter((name) =>
+          ["appendDelegationToSystemPrompt", "buildAgentSystemPrompt"].includes(
+            name,
+          ),
+        )
+        .map((name) => `${file} imports ${name}`);
+    });
+
+    expect(violations).toEqual([]);
+  });
+
   test(`Given interactive compaction helpers restore visible context,
     When their dependencies are inspected,
     Then restoration remains owned by the dedicated post-compaction module`, () => {

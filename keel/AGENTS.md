@@ -28,7 +28,7 @@ src/
   cli/         -> Entry point
   core/        -> error, logger, git, cost
   agent/       -> Agent loop, prompt
-  runtime/     -> Mode-neutral Agent invocation assembly
+  runtime/     -> Mode-neutral Agent invocation and prompt assembly
   llm/         -> Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
   permissions/ -> Tool permission policies
   testing/     -> Test support code (CLI harnesses, fixture factories)
