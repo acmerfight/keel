@@ -13,7 +13,6 @@ import {
   createCliFakeProvider,
   createInteractiveFakeProvider,
 } from "./fake-provider-demo.ts";
-import type { InteractiveResolvedProvider } from "./interactive-session.ts";
 import { type ModelSource, providerProfile } from "./provider-profiles.ts";
 import {
   type ProviderConfigRuntime,
@@ -55,17 +54,19 @@ function contextCompactionOptions(
   return { contextWindowTokens: metadata.contextWindowTokens };
 }
 
-type ResolvedProviderBase<Cost extends CostModel | null> = {
+interface ResolvedProviderBase<Cost extends CostModel | null> {
   readonly provider: LLMProvider;
+  readonly model: string;
   readonly costModel: Cost;
-} & Omit<InteractiveResolvedProvider, "costModel" | "provider">;
+  readonly contextCompaction?: ContextCompactionOptions;
+  readonly modelMetadata?: ModelMetadata;
+}
 
-type ResolvedApiProvider<
-  Id extends Exclude<InteractiveResolvedProvider["providerId"], "fake">,
-> = ResolvedProviderBase<CostModel | null> & {
-  readonly providerId: Id;
-  readonly modelSource: ModelSource;
-};
+type ResolvedApiProvider<Id extends "deepseek" | "kimi" | "qwen"> =
+  ResolvedProviderBase<CostModel | null> & {
+    readonly providerId: Id;
+    readonly modelSource: ModelSource;
+  };
 
 export type ResolvedProvider =
   | (ResolvedProviderBase<CostModel> & { readonly providerId: "fake" })

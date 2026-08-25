@@ -322,6 +322,7 @@ describe("CLI Main - One Shot Cost And Edit", () => {
     When the CLI sends the admitted provider request,
     Then it bounds reasoning plus answer output with max_completion_tokens`, async () => {
     // Given
+    const workspace = await mkdtemp(join(tmpdir(), "keel-qwen-budget-"));
     let requestBody: unknown;
     const server = createServer((req, res) => {
       if (req.url !== "/chat/completions") {
@@ -360,6 +361,7 @@ describe("CLI Main - One Shot Cost And Edit", () => {
         "hello",
       ],
       {
+        cwd: workspace,
         env: {
           DASHSCOPE_API_KEY: "test-key",
           QWEN_BASE_URL: `http://127.0.0.1:${getPort(server)}`,
@@ -385,6 +387,7 @@ describe("CLI Main - One Shot Cost And Edit", () => {
       ).toMatchObject({ max_completion_tokens: expect.any(Number) });
     } finally {
       await close(server);
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 

@@ -28,6 +28,7 @@ src/
   cli/         -> Entry point
   core/        -> error, logger, git, cost
   agent/       -> Agent loop, prompt
+  runtime/     -> Mode-neutral Agent invocation assembly
   llm/         -> Provider abstraction (DeepSeek, Kimi, Qwen, fake, OpenAI-compatible shared runtime)
   permissions/ -> Tool permission policies
   testing/     -> Test support code (CLI harnesses, fixture factories)
@@ -42,6 +43,7 @@ Layer rules are enforced by `tests/invariants/boundaries.test.ts`:
 
 - `agent/` does not import `fs`, `child_process`, or `cli/`
 - `llm/` does not import `cli/` or `agent/`
+- `runtime/` does not import `cli/`
 - `cli/` does not import `testing/`
 - `eval/` does not import `agent/`, `llm/`, `cli/`, or `testing/`, so evals measure
   keel only through the spawned CLI

@@ -38,7 +38,6 @@ import {
   restoreLastEditCheckpoint,
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
-import { modelMetadataMaxOutputTokens } from "../core/model-metadata.ts";
 import {
   accountSessionGoalTurn,
   activeSessionGoalSystemPrompt,
@@ -65,16 +64,17 @@ import {
 } from "../core/undo-protection.ts";
 import type { Usage } from "../llm/types.ts";
 import type { McpAuthorizationIdentity } from "../mcp/oauth.ts";
-import {
-  type McpProviderSchemaTarget,
-  mcpProviderSchemaTarget,
-} from "../mcp/provider-schema.ts";
+import type { McpProviderSchemaTarget } from "../mcp/provider-schema.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpRuntime, McpRuntimeServer } from "../mcp/runtime-types.ts";
 import type {
   BashPermissionPolicy,
   MainBashRuntime,
 } from "../permissions/bash.ts";
+import {
+  type AgentInvocationContext,
+  createAgentInvocationContext,
+} from "../runtime/invocation-context.ts";
 import {
   exposeSkillCatalog,
   formatSkillCatalogDegradation,
@@ -204,7 +204,6 @@ export type {
   InteractiveActiveSessionState,
   InteractiveForkSessionRequest,
   InteractiveInvocationState,
-  InteractiveResolvedProvider,
   InteractiveSessionOptions,
   InteractiveSessionResult,
   InteractiveSkillRuntime,
@@ -215,6 +214,9 @@ type ManagedInteractiveSkillRuntime = Extract<
   InteractiveSkillRuntime,
   { readonly kind: "managed" }
 >;
+
+type InteractiveInvocationContext =
+  AgentInvocationContext<InteractiveResolvedProvider>;
 
 interface InteractiveSkillCheckpoint {
   readonly runtime: ManagedInteractiveSkillRuntime;
@@ -417,12 +419,12 @@ function resolveSelectedProvider(
   options: InteractiveSessionOptions,
   userMessage: string,
   selection?: ProviderSelection,
-): InteractiveResolvedProvider {
+): InteractiveInvocationContext {
   const next = options.resolveProvider(userMessage, selection);
   if (shouldTrackInteractiveCost(options.cliArgs)) {
     options.requireKnownCostModel(next);
   }
-  return next;
+  return createAgentInvocationContext(next);
 }
 
 function isReviewedInteractiveActiveSession(
@@ -584,7 +586,7 @@ export async function runInteractiveSession(
       yield event;
     }
   };
-  let resolved: InteractiveResolvedProvider | null = null;
+  let resolved: InteractiveInvocationContext | null = null;
   const input =
     options.lineInput ??
     createInterface({
@@ -731,10 +733,9 @@ export async function runInteractiveSession(
   let modelSwitchCount = initialState.modelSwitchCount;
   const resolveActiveProvider = (
     userMessage: string,
-  ): InteractiveResolvedProvider => {
-    resolved ??= options.resolveProvider(
-      userMessage,
-      initialState.modelSelection,
+  ): InteractiveInvocationContext => {
+    resolved ??= createAgentInvocationContext(
+      options.resolveProvider(userMessage, initialState.modelSelection),
     );
     return resolved;
   };
@@ -755,9 +756,8 @@ export async function runInteractiveSession(
     userMessage: string,
     selection: ProviderSelection,
   ) => {
-    const child = options.resolveProvider(userMessage, selection);
-    const childModelMaxOutputTokens = modelMetadataMaxOutputTokens(
-      child.modelMetadata,
+    const child = createAgentInvocationContext(
+      options.resolveProvider(userMessage, selection),
     );
     return {
       provider: child.provider,
@@ -768,8 +768,8 @@ export async function runInteractiveSession(
       ...(child.contextCompaction !== undefined
         ? { contextCompaction: child.contextCompaction }
         : {}),
-      ...(childModelMaxOutputTokens !== undefined
-        ? { modelMaxOutputTokens: childModelMaxOutputTokens }
+      ...(child.modelMaxOutputTokens !== undefined
+        ? { modelMaxOutputTokens: child.modelMaxOutputTokens }
         : {}),
     };
   };
@@ -1074,10 +1074,7 @@ export async function runInteractiveSession(
     if (request.recoveringTask === undefined) {
       reserveMemoryProposalSource(currentUserMessage, turnProvider);
     }
-    const schemaTarget = mcpProviderSchemaTarget(
-      turnProvider.providerId,
-      turnProvider.model,
-    );
+    const schemaTarget = turnProvider.schemaTarget;
     const turnMcpRuntime = ensureMcpRuntime(schemaTarget);
     const turnModelOperations = reportModelOperations(resolved, {
       type: "current_agent_run",
@@ -1283,9 +1280,7 @@ export async function runInteractiveSession(
             ? remainingMaxCostUsd()
             : Math.max(0, options.delegation.maxCostUsd - sessionCostUsd)
           : subagentSession.sharedCostBudget.remainingUsd();
-      const modelMaxOutputTokens = modelMetadataMaxOutputTokens(
-        resolved.modelMetadata,
-      );
+      const modelMaxOutputTokens = resolved.modelMaxOutputTokens;
       const turnCostModel =
         shouldTrackInteractiveCost(options.cliArgs) ||
         options.delegation !== undefined
@@ -2196,9 +2191,7 @@ export async function runInteractiveSession(
                     : {}),
                   ...(subagentMcp !== undefined ? { mcp: subagentMcp } : {}),
                   contextCompaction: commandResolved.contextCompaction,
-                  modelMaxOutputTokens: modelMetadataMaxOutputTokens(
-                    commandResolved.modelMetadata,
-                  ),
+                  modelMaxOutputTokens: commandResolved.modelMaxOutputTokens,
                   modelOperations:
                     reportModelOperations(commandResolved, {
                       type: "session",
@@ -2484,7 +2477,7 @@ export async function runInteractiveSession(
             continue;
           }
 
-          let previousResolved: InteractiveResolvedProvider | null =
+          let previousResolved: InteractiveInvocationContext | null =
             resolved ??
             (initialState.modelSelection !== undefined
               ? resolveActiveProvider(userMessage)
@@ -2525,7 +2518,7 @@ export async function runInteractiveSession(
             bashToolVisible: true,
           };
           if (modelSwitchRequiresCompaction(modelSwitchCompaction)) {
-            const currentResolved: InteractiveResolvedProvider =
+            const currentResolved: InteractiveInvocationContext =
               previousResolved ?? resolveActiveProvider(userMessage);
             previousResolved = currentResolved;
             resolved = currentResolved;

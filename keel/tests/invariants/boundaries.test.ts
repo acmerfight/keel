@@ -25,6 +25,11 @@ const layerRules: readonly LayerRule[] = [
     forbidden: [/\/cli\//, /\/agent\//],
   },
   {
+    layer: "src/runtime",
+    contract: "does not import cli/",
+    forbidden: [/\/cli\//],
+  },
+  {
     layer: "src/cli",
     contract: "does not import testing/",
     forbidden: [/\/testing\//],
@@ -324,6 +329,54 @@ describe("module boundaries", () => {
     );
 
     expect(forbidden).toEqual([]);
+  });
+
+  test(`Given resolved provider state drives every Main invocation,
+    When execution-context dependencies are inspected,
+    Then one runtime owner derives model limits and MCP schema targets`, () => {
+    const owner = "src/runtime/invocation-context.ts";
+    const ownerSource = readFileSync(owner, "utf8");
+    expect(importSpecifiers(owner, ownerSource)).toContain(
+      "../core/model-metadata.ts",
+    );
+    expect(importSpecifiers(owner, ownerSource)).toContain(
+      "../mcp/provider-schema.ts",
+    );
+
+    const resolver = "src/cli/provider-resolver.ts";
+    const resolverSource = readFileSync(resolver, "utf8");
+    expect(importSpecifiers(resolver, resolverSource)).not.toContain(
+      "./interactive-session.ts",
+    );
+
+    const consumers = [
+      "src/cli/one-shot-run.ts",
+      "src/cli/interactive-session.ts",
+    ];
+    const violations = consumers.flatMap((file) => {
+      const source = readFileSync(file, "utf8");
+      expect(
+        importedNamesFromResolvedSpecifier(
+          file,
+          source,
+          "src/runtime/invocation-context.ts",
+        ),
+      ).toContain("createAgentInvocationContext");
+      return [
+        ...importedNamesFromResolvedSpecifier(
+          file,
+          source,
+          "src/core/model-metadata.ts",
+        ).filter((name) => name === "modelMetadataMaxOutputTokens"),
+        ...importedNamesFromResolvedSpecifier(
+          file,
+          source,
+          "src/mcp/provider-schema.ts",
+        ).filter((name) => name === "mcpProviderSchemaTarget"),
+      ].map((name) => `${file} imports ${name}`);
+    });
+
+    expect(violations).toEqual([]);
   });
 
   test(`Given interactive compaction helpers restore visible context,
