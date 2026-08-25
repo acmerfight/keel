@@ -671,9 +671,9 @@ describe("CLI Main - Subagent Delegation", () => {
     }
   });
 
-  test(`Given a project profile allows one workflow Skill while Main has another active,
+  test(`Given a project profile selects a child model and allows one workflow Skill while Main has another active,
     When one child uses the leased Skill and another child invents the unleased Skill name,
-    Then only the leased instruction and resource load without gaining Main's Skill or write authority`, async () => {
+    Then the child model loads only the leased instruction and resource without gaining Main's Skill or write authority`, async () => {
     // Given
     const workspace = await mkdtemp(join(tmpdir(), "keel-subagent-skill-"));
     const keelHome = join(workspace, ".keel-home");
@@ -728,6 +728,7 @@ describe("CLI Main - Subagent Delegation", () => {
         profiles: {
           "skilled-review": {
             base: "reviewer",
+            model: "deepseek-v4-pro",
             tools: ["read", "grep", "git_diff"],
             skills: ["repo:review-guide"],
             maxTurns: 6,
@@ -891,6 +892,7 @@ describe("CLI Main - Subagent Delegation", () => {
       // Then
       expect(exitCode, fixture.stderr()).toBe(0);
       expect(requests).toHaveLength(7);
+      expect(requests[1]).toMatchObject({ model: "deepseek-v4-pro" });
       const childInitial = requestText(requests[1]);
       expect(childInitial).toContain("repo:review-guide");
       expect(childInitial).not.toContain("CHILD_REVIEW_GUIDE");

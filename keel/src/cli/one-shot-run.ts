@@ -206,14 +206,13 @@ export async function runOneShotCli(
     if (catalog !== undefined) {
       runtime.writeStderr(formatWorkflowSkillListWarnings(catalog.warnings));
     }
-    const resolved = createAgentInvocationContext(
-      resolveProvider(userMessage, runtime, {
-        ...(cliArgs.providerId !== undefined
-          ? { providerId: cliArgs.providerId }
-          : {}),
-        ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
-      }),
-    );
+    const resolvedProvider = resolveProvider(userMessage, runtime, {
+      ...(cliArgs.providerId !== undefined
+        ? { providerId: cliArgs.providerId }
+        : {}),
+      ...(cliArgs.model !== undefined ? { model: cliArgs.model } : {}),
+    });
+    const resolved = createAgentInvocationContext(resolvedProvider);
     const catalogExposure = exposeSkillCatalog({
       skills: (catalog?.implicitSkills ?? []).filter(
         (descriptor) =>
@@ -429,6 +428,7 @@ export async function runOneShotCli(
               const child = createAgentInvocationContext(
                 resolveProvider(originalUserMessage, runtime, selection),
               );
+              const childModelMaxOutputTokens = child.modelMaxOutputTokens;
               return {
                 provider: child.provider,
                 providerId: child.providerId,
@@ -440,9 +440,9 @@ export async function runOneShotCli(
                 ...(child.contextCompaction !== undefined
                   ? { contextCompaction: child.contextCompaction }
                   : {}),
-                ...(child.modelMaxOutputTokens !== undefined
+                ...(childModelMaxOutputTokens !== undefined
                   ? {
-                      modelMaxOutputTokens: child.modelMaxOutputTokens,
+                      modelMaxOutputTokens: childModelMaxOutputTokens,
                     }
                   : {}),
               };

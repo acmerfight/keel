@@ -759,6 +759,7 @@ export async function runInteractiveSession(
     const child = createAgentInvocationContext(
       options.resolveProvider(userMessage, selection),
     );
+    const childModelMaxOutputTokens = child.modelMaxOutputTokens;
     return {
       provider: child.provider,
       providerId: child.providerId,
@@ -768,8 +769,8 @@ export async function runInteractiveSession(
       ...(child.contextCompaction !== undefined
         ? { contextCompaction: child.contextCompaction }
         : {}),
-      ...(child.modelMaxOutputTokens !== undefined
-        ? { modelMaxOutputTokens: child.modelMaxOutputTokens }
+      ...(childModelMaxOutputTokens !== undefined
+        ? { modelMaxOutputTokens: childModelMaxOutputTokens }
         : {}),
     };
   };
