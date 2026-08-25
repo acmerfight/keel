@@ -67,6 +67,7 @@ import type {
   BashPermissionPolicy,
   MainBashRuntime,
 } from "../permissions/bash.ts";
+import { createMainAgentEffects } from "../runtime/agent-effects.ts";
 import { buildMainAgentSystemPrompt } from "../runtime/agent-prompt.ts";
 import {
   type AgentInvocationContext,
@@ -1330,39 +1331,44 @@ export async function runInteractiveSession(
                 resolveSubagentExecution(request.userMessage, selection),
             })
           : undefined;
+      const agentEffects = createMainAgentEffects({
+        bash,
+        hiddenWorkspacePaths,
+        ...(agentMemory === undefined ? {} : { memory: agentMemory }),
+        ...(turnMcpRuntime === undefined
+          ? {}
+          : {
+              mcp: {
+                runtime: turnMcpRuntime,
+                schemaTarget,
+              },
+            }),
+        ...(subagentRuntime === undefined
+          ? {}
+          : {
+              delegation: {
+                capability: subagentRuntime.supervisor.capability,
+                costBudgetProvider: subagentRuntime.costBudgetProvider,
+              },
+            }),
+        ...(managedSkills === null
+          ? {}
+          : { skillActivation: managedSkills.activation }),
+      });
       const stream = observeAgentStateEvents(
         runAgentTurn({
           workspace: options.workspace,
           provider: resolved.provider,
           ledger,
           systemPrompt: baseSystemPromptWithGoal(),
-          ...(agentMemory !== undefined ? { memory: agentMemory } : {}),
           signal: turnAbortController.signal,
-          bash,
-          ...(subagentRuntime !== undefined
-            ? { delegation: subagentRuntime.supervisor.capability }
-            : {}),
+          ...agentEffects,
           ...(subagentSession !== null && subagentRuntime !== undefined
             ? {
                 agentControl: subagentSession.control,
                 agentControlResultBudget:
                   subagentRuntime.supervisor.resultContinuationBudget,
               }
-            : {}),
-          ...(subagentRuntime !== undefined
-            ? { costBudgetProvider: subagentRuntime.costBudgetProvider }
-            : {}),
-          ...(turnMcpRuntime !== undefined
-            ? {
-                mcp: {
-                  runtime: turnMcpRuntime,
-                  schemaTarget,
-                },
-              }
-            : {}),
-          hiddenWorkspacePaths,
-          ...(managedSkills !== null
-            ? { skillActivation: managedSkills.activation }
             : {}),
           stopPolicy: defaultStopPolicy(),
           taskProgress,

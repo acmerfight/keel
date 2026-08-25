@@ -14,6 +14,7 @@ import type { ExecutionPosture } from "../core/execution-posture.ts";
 import { createMcpRuntime } from "../mcp/runtime.ts";
 import type { McpPermissionPolicy, McpRuntime } from "../mcp/runtime-types.ts";
 import type { MainBashRuntime } from "../permissions/bash.ts";
+import { createMainAgentEffects } from "../runtime/agent-effects.ts";
 import { buildMainAgentSystemPrompt } from "../runtime/agent-prompt.ts";
 import { createAgentInvocationContext } from "../runtime/invocation-context.ts";
 import {
@@ -454,38 +455,43 @@ export async function runOneShotCli(
         })) ?? [],
     });
     let transcriptMessages: readonly SessionMessage[] | undefined;
+    const agentEffects = createMainAgentEffects({
+      bash: bashRuntime,
+      hiddenWorkspacePaths,
+      ...(memoryPrompt === undefined
+        ? {}
+        : {
+            memory: {
+              kind: "direct" as const,
+              prompt: memoryPrompt,
+              mutation: agentMemory.capability,
+            },
+          }),
+      ...(mcpRuntime === undefined
+        ? {}
+        : {
+            mcp: {
+              runtime: mcpRuntime,
+              schemaTarget: resolved.schemaTarget,
+            },
+          }),
+      ...(subagentRuntime === undefined
+        ? {}
+        : {
+            delegation: {
+              capability: subagentRuntime.supervisor.capability,
+              costBudgetProvider: subagentRuntime.costBudgetProvider,
+            },
+          }),
+      ...(skillActivation === undefined ? {} : { skillActivation }),
+    });
     const stream = runAgent({
       workspace,
       provider: resolved.provider,
       userMessage,
       systemPrompt,
-      ...(memoryPrompt !== undefined
-        ? {
-            memory: {
-              kind: "direct",
-              prompt: memoryPrompt,
-              mutation: agentMemory.capability,
-            },
-          }
-        : {}),
       signal: abortController.signal,
-      bash: bashRuntime,
-      ...(subagentRuntime !== undefined
-        ? { delegation: subagentRuntime.supervisor.capability }
-        : {}),
-      ...(subagentRuntime !== undefined
-        ? { costBudgetProvider: subagentRuntime.costBudgetProvider }
-        : {}),
-      ...(mcpRuntime !== undefined
-        ? {
-            mcp: {
-              runtime: mcpRuntime,
-              schemaTarget: resolved.schemaTarget,
-            },
-          }
-        : {}),
-      ...(hiddenWorkspacePaths.length > 0 ? { hiddenWorkspacePaths } : {}),
-      ...(skillActivation !== undefined ? { skillActivation } : {}),
+      ...agentEffects,
       stopPolicy: defaultStopPolicy(),
       toolOutputArtifacts,
       ...(trackedCostModel !== undefined
