@@ -87,6 +87,69 @@ export function parseSourceText(path: string, text: string): ParsedSource {
   };
 }
 
+function importDeclarationIsTypeOnly(node: ts.ImportDeclaration): boolean {
+  const clause = node.importClause;
+  if (clause?.isTypeOnly === true) return true;
+  if (clause?.name !== undefined) return false;
+  const bindings = clause?.namedBindings;
+  return (
+    bindings !== undefined &&
+    ts.isNamedImports(bindings) &&
+    bindings.elements.every((element) => element.isTypeOnly)
+  );
+}
+
+function exportDeclarationIsTypeOnly(node: ts.ExportDeclaration): boolean {
+  if (node.isTypeOnly) return true;
+  return (
+    node.exportClause !== undefined &&
+    ts.isNamedExports(node.exportClause) &&
+    node.exportClause.elements.every((element) => element.isTypeOnly)
+  );
+}
+
+export function runtimeImportSpecifiers(
+  source: ParsedSource,
+): readonly string[] {
+  const specifiers: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isImportDeclaration(node) && !importDeclarationIsTypeOnly(node)) {
+      const specifier = stringLiteralValue(node.moduleSpecifier);
+      if (specifier !== null) specifiers.push(specifier);
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier !== undefined &&
+      !exportDeclarationIsTypeOnly(node)
+    ) {
+      const specifier = stringLiteralValue(node.moduleSpecifier);
+      if (specifier !== null) specifiers.push(specifier);
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword
+    ) {
+      const argument = node.arguments[0];
+      const specifier =
+        argument === undefined ? null : stringLiteralValue(argument);
+      if (specifier !== null) specifiers.push(specifier);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      !node.isTypeOnly &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      const expression = node.moduleReference.expression;
+      const specifier =
+        expression === undefined ? null : stringLiteralValue(expression);
+      if (specifier !== null) specifiers.push(specifier);
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source.sourceFile);
+  return specifiers;
+}
+
 export function location(source: ParsedSource, node: ts.Node): string {
   const position = source.sourceFile.getLineAndCharacterOfPosition(
     node.getStart(source.sourceFile),
