@@ -24,11 +24,8 @@ import type {
 } from "../agent/session-message.ts";
 import { MAX_SUBAGENT_RESULT_CHARS } from "../agent/subagent-tree-budget.ts";
 import { type CostModel, calculateRequestCostBatchUsd } from "../core/cost.ts";
-import { isAbortThrow } from "../core/error.ts";
 import {
   listUndoCheckpoints,
-  type RecordLastBatchCheckpointOperation,
-  recordLastTaskCheckpoint,
   restoreLastEditCheckpoint,
   restoreUndoCheckpointsThrough,
 } from "../core/git.ts";
@@ -51,11 +48,7 @@ import {
   type SessionTaskProgress,
   sessionTaskProgressesEqual,
 } from "../core/task-progress.ts";
-import {
-  createUndoProtectionTracker,
-  type RecordUndoCheckpointResult,
-  undoCheckpointUnavailable,
-} from "../core/undo-protection.ts";
+import { createUndoProtectionTracker } from "../core/undo-protection.ts";
 import type { Usage } from "../llm/types.ts";
 import type { McpAuthorizationIdentity } from "../mcp/oauth.ts";
 import type { McpProviderSchemaTarget } from "../mcp/provider-schema.ts";
@@ -65,12 +58,15 @@ import type {
   BashPermissionPolicy,
   MainBashRuntime,
 } from "../permissions/bash.ts";
-import { runMainAgentInvocation } from "../runtime/agent-invocation.ts";
 import { buildMainAgentSystemPrompt } from "../runtime/agent-prompt.ts";
 import {
   type AgentInvocationContext,
   createAgentInvocationContext,
 } from "../runtime/invocation-context.ts";
+import {
+  type MainTurnPreparedInvocation,
+  runMainTurnTransaction,
+} from "../runtime/main-turn-transaction.ts";
 import {
   exposeSkillCatalog,
   formatSkillCatalogDegradation,
@@ -1015,25 +1011,6 @@ export async function runInteractiveSession(
   ): Promise<PromptTurnResult> => {
     sessionPromptTurnAttempted = true;
     reportRecorder.beginAgentRun(request.runTrigger);
-    let latestAgentLoopAccounting:
-      | Pick<EndEvent, "usage" | "turns" | "cost">
-      | undefined;
-    const abortReportedAgentRun = (
-      end?: EndEvent,
-      recordAccounting = true,
-    ): void => {
-      const accounting = end ?? latestAgentLoopAccounting;
-      reportRecorder.abortAgentRun(accounting?.turns ?? 0);
-      if (recordAccounting && accounting !== undefined) {
-        recordTurnEnd({
-          type: "end",
-          usage: accounting.usage,
-          turns: accounting.turns,
-          stopReason: "aborted",
-          ...(accounting.cost !== undefined ? { cost: accounting.cost } : {}),
-        });
-      }
-    };
     const skillStateBeforeTurn =
       managedSkills === null
         ? null
@@ -1061,7 +1038,6 @@ export async function runInteractiveSession(
       savedSession?.taskRecovery !== undefined &&
       (request.runTrigger === "user_prompt" ||
         request.recoveringTask !== undefined);
-    let durableTaskRunId = request.recoveringTask?.runId;
     if (request.recoveringTask === undefined) {
       reserveMemoryProposalSource(currentUserMessage, turnProvider);
     }
@@ -1130,41 +1106,17 @@ export async function runInteractiveSession(
         agentHistory.deliveredResult(delivery);
       }
     }
-    if (durableTaskTurn && request.recoveringTask === undefined) {
-      const userMessageId = reservedSessionMessageIds.find(
-        (reservation) => reservation.message === currentUserMessage,
-      )?.id;
-      durableTaskRunId = savedSession.taskRecovery.admit({
-        userMessage: currentUserMessage,
-        provider: modelSelectionFromResolved(turnProvider),
-        consumedInputIds: queuedInputIds(request.consumedInputLines),
-        ...(userMessageId === undefined ? {} : { userMessageId }),
-      }).runId;
-    }
-    const messagesBeforeTurn = [...sessionLedgerMessages(ledger)];
-    const taskProgressBeforeTurn = copySessionTaskProgress(taskProgress);
-    const sessionGoalBeforeTurn =
-      sessionGoal === undefined ? undefined : copySessionGoal(sessionGoal);
     const taskProgressUpdatesDuringTurn: {
       readonly taskProgress: SessionTaskProgress;
       readonly messageOrdinal: number;
     }[] = [];
     const sessionGoalUpdatesDuringTurn: SessionGoal[] = [];
-    const projectInstructionPathsBeforeTurnOldestFirst = [
-      ...projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
-    ]
-      .reverse()
-      .map((snapshot) => snapshot.instructionPath);
-    const checkpointOperations: RecordLastBatchCheckpointOperation[] = [];
     const toolExecutionsDuringTurn: GoalContinuationToolExecution[] = [];
     const turnStartSequence = lineReader.sequence();
     const drainedInjectedLines: QueuedLine[] = [];
     const deferredInputLines: QueuedLine[] = [];
     const turnAbortController = new AbortController();
     activeAbortController = turnAbortController;
-    if (request.recoveringTask === undefined) {
-      ledger.append(currentUserMessage);
-    }
     let persistedMemorySourceMessages: readonly SessionMessage[] | null = null;
     let persistedDrainedInputCount = 0;
     const persistedInputIds = new Set<string>();
@@ -1233,519 +1185,437 @@ export async function runInteractiveSession(
     let taskProgressChanged = false;
     let sessionGoalStateChanged = false;
     let sessionGoalUpdateReportedDuringTurn = false;
-    const restoreInterruptedTurnState = (): void => {
-      if (skillStateBeforeTurn !== null) {
-        skillStateBeforeTurn.runtime.activation.restore(
-          skillStateBeforeTurn.state,
-        );
-        systemPrompt = rebuildSystemPrompt();
-      }
-      replaceSessionLedgerMessages(
-        ledger,
-        persistedMemorySourceMessages ?? messagesBeforeTurn,
-      );
-      reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
-      updateTaskProgress(taskProgressBeforeTurn);
-      updateSessionGoal(sessionGoalBeforeTurn);
-      projectInstructionVisibility.clear();
-      projectInstructionVisibility.markInstructionPathsVisible(
-        projectInstructionPathsBeforeTurnOldestFirst,
-      );
-      restoreDrainedInput([
-        ...drainedInjectedLines.slice(persistedDrainedInputCount),
-        ...deferredInputLines,
-      ]);
-      consumeQueuedInputLines(
-        request.consumedInputLines.filter(
-          (line) =>
-            line.inputId === undefined || !persistedInputIds.has(line.inputId),
-        ),
-      );
+    let detachTurnContinuation: (() => void) | null = null;
+    const detachContinuation = (): void => {
+      const detach = detachTurnContinuation;
+      detachTurnContinuation = null;
+      detach?.();
     };
     setComposerMode("steer");
 
     try {
-      const remainingCostUsd =
-        subagentSession === null
-          ? options.delegation === undefined
-            ? remainingMaxCostUsd()
-            : Math.max(0, options.delegation.maxCostUsd - sessionCostUsd)
-          : subagentSession.sharedCostBudget.remainingUsd();
-      const modelMaxOutputTokens = resolved.modelMaxOutputTokens;
-      const turnCostModel =
-        shouldTrackInteractiveCost(options.cliArgs) ||
-        options.delegation !== undefined
-          ? options.requireKnownCostModel(resolved)
-          : undefined;
-      const subagentRuntime =
-        options.delegation !== undefined &&
-        remainingCostUsd !== undefined &&
-        turnCostModel !== undefined
-          ? await createCliSubagentRuntime({
+      const durability =
+        savedSession === null
+          ? ({ kind: "ephemeral" } as const)
+          : durableTaskTurn && savedSession.taskRecovery !== undefined
+            ? ({
+                kind: "durable",
+                persistence: savedSession,
+                recovery: savedSession.taskRecovery,
+                provider: modelSelectionFromResolved(turnProvider),
+                ...(request.recoveringTask === undefined
+                  ? {}
+                  : { recoveringRunId: request.recoveringTask.runId }),
+              } as const)
+            : ({ kind: "saved", persistence: savedSession } as const);
+      return await runMainTurnTransaction<QueuedLine, PromptTurnResult>({
+        workspace: options.workspace,
+        currentUserMessage,
+        signal: turnAbortController.signal,
+        durability,
+        state: {
+          ledger,
+          taskProgress: {
+            current: () => taskProgress,
+            restore: updateTaskProgress,
+          },
+          goal: {
+            current: () => sessionGoal,
+            restore: updateSessionGoal,
+          },
+          projectInstructions: projectInstructionVisibility,
+          ...(skillStateBeforeTurn === null
+            ? {}
+            : {
+                skill: {
+                  activation: skillStateBeforeTurn.runtime.activation,
+                  before: skillStateBeforeTurn.state,
+                  stateChanged: () => {
+                    systemPrompt = rebuildSystemPrompt();
+                  },
+                },
+              }),
+        },
+        input: {
+          consumed: request.consumedInputLines,
+          drained: drainedInjectedLines,
+          deferred: deferredInputLines,
+          persistedInputIds,
+          persistedDrainedCount: () => persistedDrainedInputCount,
+          restore: restoreDrainedInput,
+          consume: consumeQueuedInputLines,
+        },
+        updates: {
+          taskProgress: taskProgressUpdatesDuringTurn,
+          goals: sessionGoalUpdatesDuringTurn,
+        },
+        reservedMessageIds: reservedSessionMessageIds,
+        persistedMemorySourceMessages: () => persistedMemorySourceMessages,
+        report: {
+          abort: (turns) => {
+            reportRecorder.abortAgentRun(turns);
+          },
+          complete: (turns, stopReason) => {
+            reportRecorder.completeAgentRun(turns, stopReason);
+          },
+          fail: () => {
+            reportRecorder.failAgentRun();
+          },
+          recordAbortedEnd: (end) => {
+            recordTurnEnd(end);
+          },
+        },
+        undoProtection,
+        prepareInvocation: async ({ durableRunId }) => {
+          const remainingCostUsd =
+            subagentSession === null
+              ? options.delegation === undefined
+                ? remainingMaxCostUsd()
+                : Math.max(0, options.delegation.maxCostUsd - sessionCostUsd)
+              : subagentSession.sharedCostBudget.remainingUsd();
+          const modelMaxOutputTokens = turnProvider.modelMaxOutputTokens;
+          const turnCostModel =
+            shouldTrackInteractiveCost(options.cliArgs) ||
+            options.delegation !== undefined
+              ? options.requireKnownCostModel(turnProvider)
+              : undefined;
+          const subagentRuntime =
+            options.delegation !== undefined &&
+            remainingCostUsd !== undefined &&
+            turnCostModel !== undefined
+              ? await createCliSubagentRuntime({
+                  workspace: options.workspace,
+                  workspaceLeasesRoot: options.workspaceLeasesRoot,
+                  platform: options.platform,
+                  /* v8 ignore next -- the fallback is the pre-existing ephemeral parent identity; C2 changes only durable Task correlation. */
+                  parentRunId: durableRunId ?? `interactive-${randomUUID()}`,
+                  provider: turnProvider.provider,
+                  providerId: turnProvider.providerId,
+                  model: turnProvider.model,
+                  policy: options.delegation.policy,
+                  executionPosture: options.cliArgs.executionPosture,
+                  costModel: turnCostModel,
+                  /* v8 ignore next -- known model metadata is exercised by real-provider delegation; the unknown sentinel is the mode-neutral fallback contract. */
+                  modelMetadata: turnProvider.modelMetadata ?? {
+                    status: "unknown" as const,
+                  },
+                  maxCostUsd: remainingCostUsd,
+                  projectInstructions: options.projectInstructions,
+                  hiddenWorkspacePaths,
+                  ...(managedSkills !== null
+                    ? { skillCatalog: managedSkills.catalog }
+                    : {}),
+                  /* v8 ignore next -- MCP and delegation adapters are covered independently; composing both only forwards the already-built MCP port. */
+                  ...(subagentMcp !== undefined ? { mcp: subagentMcp } : {}),
+                  contextCompaction: turnProvider.contextCompaction,
+                  modelMaxOutputTokens,
+                  modelOperations: turnModelOperations ?? undefined,
+                  transcriptStore: options.delegation.transcriptStore,
+                  ...(subagentSession !== null
+                    ? {
+                        attachedSession: {
+                          lifecyclePersistence:
+                            subagentSession.lifecyclePersistence,
+                          costBudget: subagentSession.sharedCostBudget,
+                          admission: subagentSession.sharedAdmission,
+                          providerCoordination:
+                            subagentSession.providerCoordination,
+                          background: subagentSession.background,
+                          modelOperations: backgroundModelOperations,
+                        },
+                      }
+                    : {}),
+                  now,
+                  onProgress: (event) => {
+                    options.writeStderr(formatSubagentProgress(event));
+                  },
+                  resolveProvider: (selection) =>
+                    resolveSubagentExecution(request.userMessage, selection),
+                })
+              : undefined;
+          const effects = {
+            bash,
+            hiddenWorkspacePaths,
+            ...(agentMemory === undefined ? {} : { memory: agentMemory }),
+            ...(turnMcpRuntime === undefined
+              ? {}
+              : {
+                  mcp: {
+                    runtime: turnMcpRuntime,
+                    schemaTarget,
+                  },
+                }),
+            ...(subagentRuntime === undefined
+              ? {}
+              : {
+                  delegation: {
+                    capability: subagentRuntime.supervisor.capability,
+                    costBudgetProvider: subagentRuntime.costBudgetProvider,
+                  },
+                }),
+            ...(managedSkills === null
+              ? {}
+              : { skillActivation: managedSkills.activation }),
+          };
+          detachTurnContinuation =
+            subagentSession !== null && subagentRuntime !== undefined
+              ? subagentSession.continuation.attach(
+                  subagentRuntime.supervisor.continuation,
+                )
+              : null;
+          return {
+            kind: "interactive_turn",
+            assembly: {
               workspace: options.workspace,
-              workspaceLeasesRoot: options.workspaceLeasesRoot,
-              platform: options.platform,
-              /* v8 ignore next -- the fallback is the pre-existing ephemeral parent identity; C2 changes only durable Task correlation. */
-              parentRunId: durableTaskRunId ?? `interactive-${randomUUID()}`,
-              provider: resolved.provider,
-              providerId: resolved.providerId,
-              model: resolved.model,
-              policy: options.delegation.policy,
-              executionPosture: options.cliArgs.executionPosture,
-              costModel: turnCostModel,
-              modelMetadata: resolved.modelMetadata ?? {
-                status: "unknown" as const,
-              },
-              maxCostUsd: remainingCostUsd,
-              projectInstructions: options.projectInstructions,
-              hiddenWorkspacePaths,
-              ...(managedSkills !== null
-                ? { skillCatalog: managedSkills.catalog }
-                : {}),
-              ...(subagentMcp !== undefined ? { mcp: subagentMcp } : {}),
-              contextCompaction: resolved.contextCompaction,
-              modelMaxOutputTokens,
-              modelOperations: turnModelOperations ?? undefined,
-              transcriptStore: options.delegation.transcriptStore,
-              ...(subagentSession !== null
+              provider: turnProvider.provider,
+              systemPrompt: baseSystemPromptWithGoal(),
+              signal: turnAbortController.signal,
+              effects,
+            },
+            lifecycle: {
+              ledger,
+              ...(subagentSession !== null && subagentRuntime !== undefined
                 ? {
-                    attachedSession: {
-                      lifecyclePersistence:
-                        subagentSession.lifecyclePersistence,
-                      costBudget: subagentSession.sharedCostBudget,
-                      admission: subagentSession.sharedAdmission,
-                      providerCoordination:
-                        subagentSession.providerCoordination,
-                      background: subagentSession.background,
-                      modelOperations: backgroundModelOperations,
+                    agentControl: subagentSession.control,
+                    agentControlResultBudget:
+                      subagentRuntime.supervisor.resultContinuationBudget,
+                  }
+                : {}),
+              taskProgress,
+              ...(sessionGoal !== undefined ? { sessionGoal } : {}),
+              ...(turnCostModel !== undefined
+                ? {
+                    costTracking: {
+                      model: turnCostModel,
+                      ...(modelMaxOutputTokens !== undefined
+                        ? { modelMaxOutputTokens }
+                        : {}),
+                      ...(remainingCostUsd !== undefined
+                        ? { maxCostUsd: remainingCostUsd }
+                        : {}),
                     },
                   }
                 : {}),
-              now,
-              onProgress: (event) => {
-                options.writeStderr(formatSubagentProgress(event));
-              },
-              resolveProvider: (selection) =>
-                resolveSubagentExecution(request.userMessage, selection),
-            })
-          : undefined;
-      const effects = {
-        bash,
-        hiddenWorkspacePaths,
-        ...(agentMemory === undefined ? {} : { memory: agentMemory }),
-        ...(turnMcpRuntime === undefined
-          ? {}
-          : {
-              mcp: {
-                runtime: turnMcpRuntime,
-                schemaTarget,
-              },
-            }),
-        ...(subagentRuntime === undefined
-          ? {}
-          : {
-              delegation: {
-                capability: subagentRuntime.supervisor.capability,
-                costBudgetProvider: subagentRuntime.costBudgetProvider,
-              },
-            }),
-        ...(managedSkills === null
-          ? {}
-          : { skillActivation: managedSkills.activation }),
-      };
-      const stream = observeAgentStateEvents(
-        runMainAgentInvocation({
-          kind: "interactive_turn",
-          assembly: {
-            workspace: options.workspace,
-            provider: resolved.provider,
-            systemPrompt: baseSystemPromptWithGoal(),
-            signal: turnAbortController.signal,
-            effects,
-          },
-          lifecycle: {
-            ledger,
-            ...(subagentSession !== null && subagentRuntime !== undefined
-              ? {
-                  agentControl: subagentSession.control,
-                  agentControlResultBudget:
-                    subagentRuntime.supervisor.resultContinuationBudget,
+              ...(turnProvider.contextCompaction !== undefined
+                ? { contextCompaction: turnProvider.contextCompaction }
+                : {}),
+              ...(turnModelOperations !== null
+                ? { modelOperations: turnModelOperations }
+                : {}),
+              ...(options.toolOutputArtifacts !== undefined
+                ? { toolOutputArtifacts: options.toolOutputArtifacts }
+                : {}),
+              readVisibility,
+              projectInstructionVisibility,
+              drainInjectedUserMessages: () => {
+                const queuedLines = lineReader
+                  .drainLinesAfter(turnStartSequence)
+                  .map(trimQueuedLine)
+                  .filter((queuedLine) => queuedLine.line !== "");
+                if (deferRemainingInjectedInput) {
+                  deferredInputLines.push(...queuedLines);
+                  return [];
                 }
-              : {}),
-            taskProgress,
-            ...(sessionGoal !== undefined ? { sessionGoal } : {}),
-            ...(turnCostModel !== undefined
-              ? {
-                  costTracking: {
-                    model: turnCostModel,
-                    ...(modelMaxOutputTokens !== undefined
-                      ? { modelMaxOutputTokens }
-                      : {}),
-                    ...(remainingCostUsd !== undefined
-                      ? { maxCostUsd: remainingCostUsd }
-                      : {}),
-                  },
-                }
-              : {}),
-            ...(resolved.contextCompaction !== undefined
-              ? { contextCompaction: resolved.contextCompaction }
-              : {}),
-            ...(turnModelOperations !== null
-              ? { modelOperations: turnModelOperations }
-              : {}),
-            ...(durableTaskTurn
-              ? {
-                  providerRecovery: savedSession.taskRecovery.providerLifecycle(
-                    modelSelectionFromResolved(turnProvider),
-                    {
-                      /* v8 ignore next 3 -- the named-session steering subprocess test exercises this child-runtime callback before the second provider request. */
-                      pendingInputIds: () =>
-                        queuedInputIds(drainedInjectedLines).filter(
-                          (inputId) => !persistedInputIds.has(inputId),
-                        ),
-                      /* v8 ignore next 5 -- the same subprocess test proves the selected ids are committed exactly once. */
-                      committed: (inputIds) => {
-                        for (const inputId of inputIds) {
-                          persistedInputIds.add(inputId);
-                        }
-                      },
-                    },
-                  ),
-                }
-              : {}),
-            ...(options.toolOutputArtifacts !== undefined
-              ? { toolOutputArtifacts: options.toolOutputArtifacts }
-              : {}),
-            readVisibility,
-            projectInstructionVisibility,
-            recordCheckpointOperations: (operations) => {
-              checkpointOperations.push(...operations);
-            },
-            onAgentLoopAccountingUpdated: (accounting) => {
-              latestAgentLoopAccounting = accounting;
-            },
-            drainInjectedUserMessages: () => {
-              const queuedLines = lineReader
-                .drainLinesAfter(turnStartSequence)
-                .map(trimQueuedLine)
-                .filter((queuedLine) => queuedLine.line !== "");
-              if (deferRemainingInjectedInput) {
-                deferredInputLines.push(...queuedLines);
-                return [];
-              }
-              const firstCommandIndex = queuedLines.findIndex(
-                (queuedLine) =>
-                  parseInteractiveCommand(queuedLine.line) !== null,
-              );
-              const injectableLines =
-                firstCommandIndex < 0
-                  ? queuedLines
-                  : queuedLines.slice(0, firstCommandIndex);
-              drainedInjectedLines.push(...injectableLines);
-              if (firstCommandIndex >= 0) {
-                deferRemainingInjectedInput = true;
-                deferredInputLines.push(
-                  ...queuedLines.slice(firstCommandIndex),
+                const firstCommandIndex = queuedLines.findIndex(
+                  (queuedLine) =>
+                    parseInteractiveCommand(queuedLine.line) !== null,
                 );
+                const injectableLines =
+                  firstCommandIndex < 0
+                    ? queuedLines
+                    : queuedLines.slice(0, firstCommandIndex);
+                drainedInjectedLines.push(...injectableLines);
+                if (firstCommandIndex >= 0) {
+                  deferRemainingInjectedInput = true;
+                  deferredInputLines.push(
+                    ...queuedLines.slice(firstCommandIndex),
+                  );
+                }
+                return injectableLines.map((content) => {
+                  reportRecorder.recordHumanIntervention();
+                  const injectedMessage = {
+                    role: "user",
+                    content: content.line,
+                    origin: STEER_ORIGIN,
+                  } as const;
+                  reserveMemoryProposalSource(injectedMessage, turnProvider);
+                  return injectedMessage;
+                });
+              },
+            },
+          } satisfies MainTurnPreparedInvocation;
+        },
+        observeEvents: (stream) =>
+          observeAgentStateEvents(
+            stream,
+            (toolExecution) => {
+              toolExecutionsDuringTurn.push(toolExecution);
+            },
+            (next, messageOrdinal) => {
+              if (!sessionTaskProgressesEqual(next, taskProgress)) {
+                taskProgressChanged = true;
               }
-              return injectableLines.map((content) => {
-                reportRecorder.recordHumanIntervention();
-                const injectedMessage = {
-                  role: "user",
-                  content: content.line,
-                  origin: STEER_ORIGIN,
-                } as const;
-                reserveMemoryProposalSource(injectedMessage, turnProvider);
-                return injectedMessage;
+              updateTaskProgress(next);
+              taskProgressUpdatesDuringTurn.push({
+                taskProgress: copySessionTaskProgress(next),
+                messageOrdinal,
               });
             },
-          },
-        }),
-        (toolExecution) => {
-          toolExecutionsDuringTurn.push(toolExecution);
-        },
-        (next, messageOrdinal) => {
-          if (!sessionTaskProgressesEqual(next, taskProgress)) {
-            taskProgressChanged = true;
-          }
-          updateTaskProgress(next);
-          taskProgressUpdatesDuringTurn.push({
-            taskProgress: copySessionTaskProgress(next),
-            messageOrdinal,
-          });
-        },
-        (next) => {
-          /* v8 ignore next -- session_goal_updated requires an existing active goal; keep the closure fail-safe if that event contract changes. */
-          const goalStateChanged =
-            sessionGoal === undefined ||
-            !sessionGoalStatesEqual(next, sessionGoal);
-          if (goalStateChanged) {
-            sessionGoalStateChanged = true;
-          }
-          sessionGoalUpdateReportedDuringTurn = true;
-          updateSessionGoal(next);
-          sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
-        },
-      );
-      let finalEnd: EndEvent | undefined;
-      const detachContinuation =
-        subagentSession !== null && subagentRuntime !== undefined
-          ? subagentSession.continuation.attach(
-              subagentRuntime.supervisor.continuation,
-            )
-          : null;
-      try {
-        try {
-          finalEnd = await options.printAgentEvents(
-            recordAgentEventStream(stream, reportRecorder),
-          );
-        } catch (error) {
-          if (!isAbortThrow(error, turnAbortController.signal)) {
-            reportRecorder.failAgentRun();
-            restoreInterruptedTurnState();
-          }
-          throw error;
-        }
-      } finally {
-        detachContinuation?.();
-      }
-      if (turnAbortController.signal.aborted) {
-        abortReportedAgentRun(finalEnd);
-        restoreInterruptedTurnState();
-        options.writeStdout("\n");
-        return { kind: "aborted" };
-      }
-      if (finalEnd === undefined) {
-        abortReportedAgentRun(undefined, false);
-      } else {
-        reportRecorder.completeAgentRun(finalEnd.turns, finalEnd.stopReason);
-      }
-      restoreDrainedInput(deferredInputLines);
-      const completedSkillState =
-        skillStateBeforeTurn === null
-          ? null
-          : skillStateBeforeTurn.runtime.activation.state();
-      const changedSkillState =
-        skillStateBeforeTurn !== null &&
-        completedSkillState !== null &&
-        !skillLifecycleStatesEqual(
-          skillStateBeforeTurn.state,
-          completedSkillState,
-        )
-          ? completedSkillState
-          : null;
-      /* v8 ignore else -- durable Task completion and budget paths run in the named-session subprocess suite and are verified at the recovery-owner boundary. */
-      if (!durableTaskTurn) {
-        savedSession?.persistMessages({
-          messages: sessionLedgerMessages(ledger),
-          reason: "turn",
-          consumedInputIds: [
-            ...queuedInputIds(request.consumedInputLines),
-            ...queuedInputIds(drainedInjectedLines),
-          ].filter((inputId) => !persistedInputIds.has(inputId)),
-          skillState: changedSkillState,
-          reservedMessageIds: reservedSessionMessageIds,
-        });
-      } else if (finalEnd?.stopReason === "cost_budget") {
-        savedSession.taskRecovery.blockProviderBudget(
-          sessionLedgerMessages(ledger),
-        );
-      } else {
-        savedSession.taskRecovery.terminal({
-          messages: sessionLedgerMessages(ledger),
-          outcome: "completed",
-          ...(changedSkillState === null
-            ? {}
-            : { skillState: changedSkillState }),
-          consumedInputIds: queuedInputIds(drainedInjectedLines).filter(
-            (inputId) => !persistedInputIds.has(inputId),
-          ),
-        });
-      }
-      reservedSessionMessageIds.splice(0, reservedSessionMessageIds.length);
-      if (changedSkillState !== null) {
-        systemPrompt = rebuildSystemPrompt();
-      }
-      if (savedSession !== null) {
-        let lastPersistedTurnProgress = taskProgressBeforeTurn;
-        for (const update of taskProgressUpdatesDuringTurn) {
-          if (
-            sessionTaskProgressesEqual(
-              update.taskProgress,
-              lastPersistedTurnProgress,
-            )
-          ) {
-            continue;
-          }
-          savedSession.persistTaskProgress(update);
-          lastPersistedTurnProgress = copySessionTaskProgress(
-            update.taskProgress,
-          );
-        }
-      }
-      if (savedSession !== null) {
-        for (const goal of sessionGoalUpdatesDuringTurn) {
-          sessionGoal = persistSessionGoalUpdate({
-            goal,
-            consumedInputIds: [],
-          });
-        }
-      }
-      options.writeStdout("\n");
-      const observedEvidenceFingerprint = goalContinuationStagnationFingerprint(
-        {
-          messages: sessionLedgerMessages(ledger),
-          toolExecutions: toolExecutionsDuringTurn,
-          stateChanged:
-            taskProgressChanged ||
-            sessionGoalStateChanged ||
-            checkpointOperations.length > 0,
-        },
-      );
-      const stagnationFingerprint =
-        drainedInjectedLines.length > 0 ? null : observedEvidenceFingerprint;
-      const runtimeOutcomeChangedDuringTurn =
-        JSON.stringify(sessionGoal?.latestRuntimeOutcome) !==
-        JSON.stringify(sessionGoalBeforeTurn?.latestRuntimeOutcome);
-      if (
-        sessionGoal !== undefined &&
-        !runtimeOutcomeChangedDuringTurn &&
-        !sessionGoalUpdateReportedDuringTurn
-      ) {
-        const observedChanges = [
-          ...(checkpointOperations.length > 0 ? ["the workspace"] : []),
-          ...(taskProgressChanged ? ["task progress"] : []),
-        ];
-        const successfulVerification = toolExecutionsDuringTurn.find(
-          (execution) =>
-            !isMcpToolInvocation(execution.toolCall) &&
-            execution.toolCall.tool === "bash" &&
-            execution.bashExitCode === 0 &&
-            sessionGoalCommandMatchesCriterion(
-              sessionGoalBeforeTurn,
-              execution.toolCall.command,
-            ),
-        );
-        const priorEvidenceFingerprints = new Set([
-          ...(sessionGoal.latestRuntimeOutcome?.observedEvidenceFingerprints ??
-            []),
-          ...(request.runtimeOutcome?.observedEvidenceFingerprints ?? []),
-        ]);
-        const freshToolEvidenceFingerprint =
-          observedEvidenceFingerprint?.startsWith("tools:") === true &&
-          !priorEvidenceFingerprints.has(observedEvidenceFingerprint)
-            ? observedEvidenceFingerprint
-            : undefined;
-        const observedOutcome: SessionGoalRuntimeOutcome | undefined =
-          observedChanges.length > 0
-            ? {
-                kind: "progress_observed",
-                reason: `The latest goal turn changed ${observedChanges.join(
-                  ", ",
-                )}.`,
+            (next) => {
+              /* v8 ignore next -- session_goal_updated requires an existing active goal; keep the closure fail-safe if that event contract changes. */
+              const goalStateChanged =
+                sessionGoal === undefined ||
+                !sessionGoalStatesEqual(next, sessionGoal);
+              if (goalStateChanged) {
+                sessionGoalStateChanged = true;
               }
-            : successfulVerification !== undefined &&
-                !isMcpToolInvocation(successfulVerification.toolCall) &&
-                successfulVerification.toolCall.tool === "bash"
-              ? {
-                  kind: "progress_observed",
-                  reason: `Completion command ${JSON.stringify(successfulVerification.toolCall.command)} exited 0 after the latest workspace mutation.`,
-                }
-              : freshToolEvidenceFingerprint !== undefined
+              sessionGoalUpdateReportedDuringTurn = true;
+              updateSessionGoal(next);
+              sessionGoalUpdatesDuringTurn.push(copySessionGoal(next));
+            },
+          ),
+        consumeEvents: async (stream) => {
+          try {
+            return await options.printAgentEvents(
+              recordAgentEventStream(stream, reportRecorder),
+            );
+          } finally {
+            detachContinuation();
+          }
+        },
+        afterAbort: () => {
+          options.writeStdout("\n");
+          return { kind: "aborted" };
+        },
+        afterCommit: (finalEnd, facts) => {
+          options.writeStdout("\n");
+          const observedEvidenceFingerprint =
+            goalContinuationStagnationFingerprint({
+              messages: sessionLedgerMessages(ledger),
+              toolExecutions: toolExecutionsDuringTurn,
+              stateChanged:
+                taskProgressChanged ||
+                sessionGoalStateChanged ||
+                facts.workspaceChanged,
+            });
+          const stagnationFingerprint =
+            drainedInjectedLines.length > 0
+              ? null
+              : observedEvidenceFingerprint;
+          const runtimeOutcomeChangedDuringTurn =
+            JSON.stringify(sessionGoal?.latestRuntimeOutcome) !==
+            JSON.stringify(facts.goalBeforeTurn?.latestRuntimeOutcome);
+          if (
+            sessionGoal !== undefined &&
+            !runtimeOutcomeChangedDuringTurn &&
+            !sessionGoalUpdateReportedDuringTurn
+          ) {
+            const observedChanges = [
+              ...(facts.workspaceChanged ? ["the workspace"] : []),
+              ...(taskProgressChanged ? ["task progress"] : []),
+            ];
+            const successfulVerification = toolExecutionsDuringTurn.find(
+              (execution) =>
+                !isMcpToolInvocation(execution.toolCall) &&
+                execution.toolCall.tool === "bash" &&
+                execution.bashExitCode === 0 &&
+                sessionGoalCommandMatchesCriterion(
+                  facts.goalBeforeTurn,
+                  execution.toolCall.command,
+                ),
+            );
+            const priorEvidenceFingerprints = new Set([
+              ...(sessionGoal.latestRuntimeOutcome
+                ?.observedEvidenceFingerprints ?? []),
+              ...(request.runtimeOutcome?.observedEvidenceFingerprints ?? []),
+            ]);
+            const freshToolEvidenceFingerprint =
+              observedEvidenceFingerprint?.startsWith("tools:") === true &&
+              !priorEvidenceFingerprints.has(observedEvidenceFingerprint)
+                ? observedEvidenceFingerprint
+                : undefined;
+            const observedOutcome: SessionGoalRuntimeOutcome | undefined =
+              observedChanges.length > 0
                 ? {
                     kind: "progress_observed",
-                    reason:
-                      "The latest goal turn produced new tool-result evidence.",
-                    observedEvidenceFingerprints: [
-                      freshToolEvidenceFingerprint,
-                    ],
+                    reason: `The latest goal turn changed ${observedChanges.join(
+                      ", ",
+                    )}.`,
                   }
-                : request.runtimeOutcome;
-        if (observedOutcome !== undefined) {
-          updateSessionGoal(
-            withSessionGoalRuntimeOutcome(sessionGoal, observedOutcome),
-          );
-        }
-      }
-      if (goalTurnStartedAt !== null && sessionGoal !== undefined) {
-        const accountedGoal = accountSessionGoalTurn(sessionGoal, {
-          tokens:
-            (finalEnd?.usage.inputTokens ?? 0) +
-            (finalEnd?.usage.outputTokens ?? 0),
-          activeTimeMs: Math.max(0, Math.floor(now() - goalTurnStartedAt)),
-        });
-        updateSessionGoal(accountedGoal);
-        const budgetLimitReason =
-          accountedGoal.status === "active"
-            ? formatSessionGoalBudgetLimitReason(accountedGoal)
-            : null;
-        if (budgetLimitReason !== null) {
-          limitActiveGoal("budget_limited", budgetLimitReason);
-        } else {
-          const persistedAccountedGoal = savedSession?.persistGoal({
-            goal: accountedGoal,
-            consumedInputIds: [],
-          });
-          if (persistedAccountedGoal !== undefined) {
-            updateSessionGoal(persistedAccountedGoal);
+                : successfulVerification !== undefined &&
+                    !isMcpToolInvocation(successfulVerification.toolCall) &&
+                    successfulVerification.toolCall.tool === "bash"
+                  ? {
+                      kind: "progress_observed",
+                      reason: `Completion command ${JSON.stringify(successfulVerification.toolCall.command)} exited 0 after the latest workspace mutation.`,
+                    }
+                  : freshToolEvidenceFingerprint !== undefined
+                    ? {
+                        kind: "progress_observed",
+                        reason:
+                          "The latest goal turn produced new tool-result evidence.",
+                        observedEvidenceFingerprints: [
+                          freshToolEvidenceFingerprint,
+                        ],
+                      }
+                    : request.runtimeOutcome;
+            if (observedOutcome !== undefined) {
+              updateSessionGoal(
+                withSessionGoalRuntimeOutcome(sessionGoal, observedOutcome),
+              );
+            }
           }
-        }
-      }
-      const cumulativeCost =
-        finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
-      if (
-        options.cliArgs.maxCostUsd !== undefined &&
-        cumulativeCost !== undefined
-      ) {
-        options.writeStderr(options.formatCostReport(cumulativeCost));
-      }
-      if (
-        finalEnd?.stopReason === "cost_budget" ||
-        cumulativeCost?.budget.kind === "budget_limited"
-      ) {
-        sessionStopReason = "cost_budget";
-        limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
-        return { kind: "cost_budget" };
-      }
-      return {
-        kind: "completed",
-        stagnationFingerprint,
-      };
-    } catch (error) {
-      if (!turnAbortController.signal.aborted) {
-        throw error;
-      }
-      abortReportedAgentRun();
-      restoreInterruptedTurnState();
-      options.writeStdout("\n");
-      return { kind: "aborted" };
-    } finally {
-      if (checkpointOperations.length > 0) {
-        let result: RecordUndoCheckpointResult;
-        if (durableTaskTurn) {
-          assert(
-            savedSession !== null,
-            "durable Task turn lost its saved session",
-          );
-          const durableResult = savedSession.taskRecovery.finalizeCheckpoint();
-          /* v8 ignore next 5 -- every durable mutation is checkpointed before settlement; retain the ordinary recorder only as a last-resort undo safeguard. */
-          result =
-            durableResult ??
-            recordLastTaskCheckpoint({
-              workspace: options.workspace,
-              operations: checkpointOperations,
+          if (goalTurnStartedAt !== null && sessionGoal !== undefined) {
+            const accountedGoal = accountSessionGoalTurn(sessionGoal, {
+              tokens:
+                (finalEnd?.usage.inputTokens ?? 0) +
+                (finalEnd?.usage.outputTokens ?? 0),
+              activeTimeMs: Math.max(0, Math.floor(now() - goalTurnStartedAt)),
             });
-        } else {
-          result = recordLastTaskCheckpoint({
-            workspace: options.workspace,
-            operations: checkpointOperations,
-          });
-        }
-        undoProtection.record(result);
-        if (undoCheckpointUnavailable(result)) {
+            updateSessionGoal(accountedGoal);
+            const budgetLimitReason =
+              accountedGoal.status === "active"
+                ? formatSessionGoalBudgetLimitReason(accountedGoal)
+                : null;
+            if (budgetLimitReason !== null) {
+              limitActiveGoal("budget_limited", budgetLimitReason);
+            } else {
+              const persistedAccountedGoal = savedSession?.persistGoal({
+                goal: accountedGoal,
+                consumedInputIds: [],
+              });
+              if (persistedAccountedGoal !== undefined) {
+                updateSessionGoal(persistedAccountedGoal);
+              }
+            }
+          }
+          const cumulativeCost =
+            finalEnd === undefined ? undefined : recordTurnEnd(finalEnd);
+          if (
+            options.cliArgs.maxCostUsd !== undefined &&
+            cumulativeCost !== undefined
+          ) {
+            options.writeStderr(options.formatCostReport(cumulativeCost));
+          }
+          if (
+            finalEnd?.stopReason === "cost_budget" ||
+            cumulativeCost?.budget.kind === "budget_limited"
+          ) {
+            sessionStopReason = "cost_budget";
+            limitActiveGoal("budget_limited", GOAL_BUDGET_LIMIT_REASON);
+            return { kind: "cost_budget" };
+          }
+          return {
+            kind: "completed",
+            stagnationFingerprint,
+          };
+        },
+        checkpointUnavailable: () => {
           options.writeStderr(`${formatUndoCheckpointWarning()}\n`);
-        }
-      }
+        },
+      });
+    } finally {
+      detachContinuation();
       activeAbortController = null;
       setComposerMode("ready");
     }

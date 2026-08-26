@@ -512,14 +512,63 @@ describe("module boundaries", () => {
       ).toContain("src/agent/loop.ts");
     }
 
-    for (const file of [
-      "src/cli/one-shot-run.ts",
-      "src/cli/interactive-session.ts",
+    const oneShot = "src/cli/one-shot-run.ts";
+    expect(
+      importedNamesFromResolvedSpecifier(
+        oneShot,
+        readFileSync(oneShot, "utf8"),
+        owner,
+      ),
+    ).toContain("runMainAgentInvocation");
+  });
+
+  test(`Given interactive Main turns must admit, invoke, settle, and checkpoint atomically,
+    When their runtime and CLI dependencies are inspected,
+    Then one CLI-independent transaction boundary owns the complete lifecycle`, () => {
+    const owner = "src/runtime/main-turn-transaction.ts";
+    const invocationOwner = "src/runtime/agent-invocation.ts";
+    const interactive = "src/cli/interactive-session.ts";
+    const ownerSource = readFileSync(owner, "utf8");
+    const interactiveSource = readFileSync(interactive, "utf8");
+
+    expect(
+      importedNamesFromResolvedSpecifier(owner, ownerSource, invocationOwner),
+    ).toContain("runMainAgentInvocation");
+    expect(
+      importedNamesFromResolvedSpecifier(interactive, interactiveSource, owner),
+    ).toContain("runMainTurnTransaction");
+    expect(
+      importedNamesFromResolvedSpecifier(
+        interactive,
+        interactiveSource,
+        invocationOwner,
+      ),
+    ).toEqual([]);
+    expect(
+      importedNamesFromResolvedSpecifier(
+        interactive,
+        interactiveSource,
+        "src/core/git.ts",
+      ),
+    ).not.toContain("recordLastTaskCheckpoint");
+    for (const ownedLifecycleCall of [
+      "options.durability.recovery.admit",
+      "options.durability.recovery.providerLifecycle",
+      "transaction.durability.recovery.terminal",
+      "transaction.durability.recovery.blockProviderBudget",
+      "options.transaction.durability.recovery.finalizeCheckpoint",
+      "transaction.state.ledger.replace",
     ]) {
-      const source = readFileSync(file, "utf8");
-      expect(importedNamesFromResolvedSpecifier(file, source, owner)).toContain(
-        "runMainAgentInvocation",
-      );
+      expect(ownerSource).toContain(ownedLifecycleCall);
+    }
+    for (const leakedLifecycleCall of [
+      "taskRecovery.admit",
+      "taskRecovery.providerLifecycle",
+      "taskRecovery.terminal",
+      "taskRecovery.blockProviderBudget",
+      "taskRecovery.finalizeCheckpoint",
+    ]) {
+      expect(interactiveSource).not.toContain(leakedLifecycleCall);
     }
   });
 
