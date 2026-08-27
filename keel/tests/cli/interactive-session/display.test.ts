@@ -47,6 +47,10 @@ describe("Interactive session display port", () => {
     // When
     display.writeStdout("visible stdout\n");
     display.writeStderr("visible stderr\n");
+    display.renderCommandOutput([
+      { type: "stdout", text: "command stdout\n" },
+      { type: "stderr", text: "command stderr\n" },
+    ]);
     display.setComposerMode("steer");
     display.renderSubmittedInput("guide this turn");
     display.renderSubmittedInput("/status");
@@ -72,8 +76,8 @@ describe("Interactive session display port", () => {
     );
 
     // Then
-    expect(stdout).toBe("visible stdout\nagent text");
-    expect(stderr).toBe("visible stderr\n");
+    expect(stdout).toBe("visible stdout\ncommand stdout\nagent text");
+    expect(stderr).toBe("visible stderr\ncommand stderr\n");
     expect(composerModes).toEqual(["steer", "approval", "ready"]);
     expect(submissions).toEqual([
       { line: "guide this turn", disposition: "steer/next" },

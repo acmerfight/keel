@@ -15,6 +15,10 @@ export type InteractiveSessionEndEvent = Extract<
   { readonly type: "end" }
 >;
 
+export type InteractiveCommandOutputEvent =
+  | { readonly type: "stdout"; readonly text: string }
+  | { readonly type: "stderr"; readonly text: string };
+
 export interface StableInteractiveDisplay {
   readonly writeIntro: () => void;
   readonly renderPrompt: () => void;
@@ -29,6 +33,9 @@ export interface StableInteractiveDisplay {
 export interface InteractiveSessionDisplay {
   readonly writeStdout: (text: string) => void;
   readonly writeStderr: (text: string) => void;
+  readonly renderCommandOutput: (
+    events: readonly InteractiveCommandOutputEvent[],
+  ) => void;
   readonly renderPrompt: () => void;
   readonly acceptInput: () => void;
   readonly closePrompt: () => void;
@@ -174,6 +181,18 @@ export function createInteractiveSessionDisplay(
     },
     writeStderr: (text) => {
       options.output.writeStderr(text);
+    },
+    renderCommandOutput: (events) => {
+      for (const event of events) {
+        switch (event.type) {
+          case "stdout":
+            options.output.writeStdout(event.text);
+            break;
+          case "stderr":
+            options.output.writeStderr(event.text);
+            break;
+        }
+      }
     },
     renderPrompt: () => {
       controls?.renderPrompt?.();

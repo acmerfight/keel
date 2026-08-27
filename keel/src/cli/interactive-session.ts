@@ -80,7 +80,6 @@ import {
   workflowSkillFromActivation,
 } from "../skills/lifecycle.ts";
 import {
-  type ActiveSkillStatus,
   type SkillActivationRecord,
   type SkillLifecycleState,
   type WorkflowSkill,
@@ -90,26 +89,52 @@ import type { AgentControlResult } from "../tools/agent-control.ts";
 import type { AgentMemoryProposalSource } from "../tools/memory.ts";
 import { createProjectInstructionVisibilityState } from "../tools/scoped-project-instructions.ts";
 import { isMcpToolInvocation } from "../tools/tool-call.ts";
-import {
-  formatAgentHistoryDetail,
-  formatAgentHistoryList,
-  formatAgentTranscript,
-  resolveAgentHistoryEntry,
-} from "./agent-history-format.ts";
-import {
-  formatInteractiveForkPicker,
-  formatInteractiveSessionForkPoints,
-} from "./fork-points.ts";
+import { resolveAgentHistoryEntry } from "./agent-history-format.ts";
 import { formatLiveSessionGoalStatus } from "./interactive-render-projection.ts";
 import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
 import {
-  formatForkRequiresNamedSession,
-  formatInteractiveCommandFailure,
-  formatInteractiveGoalCommandOutput,
-  formatInteractiveHelp,
-  formatInteractiveTitle,
-  formatInteractiveTitleSet,
-  formatTitleRequiresSavedSession,
+  projectInteractiveActiveModelStatus,
+  projectInteractiveActiveSkillsCommandOutput,
+  projectInteractiveAgentControlResultCommandOutput,
+  projectInteractiveAgentHistoryDetailCommandOutput,
+  projectInteractiveAgentHistoryListCommandOutput,
+  projectInteractiveAgentLiveControlRequiredCommandOutput,
+  projectInteractiveAgentNotFoundCommandOutput,
+  projectInteractiveAgentsRequiresSavedSessionCommandOutput,
+  projectInteractiveAgentTranscriptCommandOutput,
+  projectInteractiveCommandFailure,
+  projectInteractiveCompactSkippedCommandOutput,
+  projectInteractiveCurrentModelCommandOutput,
+  projectInteractiveDiffCommandOutput,
+  projectInteractiveForkCancelledCommandOutput,
+  projectInteractiveForkCreatedCommandOutput,
+  projectInteractiveForkPickerCommandOutput,
+  projectInteractiveForkPointsCommandOutput,
+  projectInteractiveForkRequiresNamedSessionCommandOutput,
+  projectInteractiveGoalCommandOutputs,
+  projectInteractiveHelpCommandOutput,
+  projectInteractiveInvalidCommandOutput,
+  projectInteractiveModelAlreadySetCommandOutput,
+  projectInteractiveModelSwitchedCommandOutput,
+  projectInteractiveModelUnknownContextCommandOutput,
+  projectInteractiveRecoveryBlockedCommandOutput,
+  projectInteractiveSessionAlreadyActiveCommandOutput,
+  projectInteractiveSessionPickerPromptCommandOutput,
+  projectInteractiveSessionSwitchCancelledCommandOutput,
+  projectInteractiveSessionsRequiresSavedSessionCommandOutput,
+  projectInteractiveSkillActivatedCommandOutput,
+  projectInteractiveSkillDeactivatedCommandOutput,
+  projectInteractiveSkillReloadedCommandOutput,
+  projectInteractiveStatusCommandOutput,
+  projectInteractiveTasksCommandOutput,
+  projectInteractiveTitleCommandOutput,
+  projectInteractiveTitleRequiresSavedSessionCommandOutput,
+  projectInteractiveTitleSetCommandOutput,
+  projectInteractiveUndoBlockedCommandOutput,
+  projectInteractiveUndoCheckpointListCommandOutput,
+  projectInteractiveUndoRestoredCommandOutput,
+} from "./interactive-session/command-output.ts";
+import {
   parseInteractiveCommand,
   undoRestoredContextMessage,
 } from "./interactive-session/commands.ts";
@@ -123,11 +148,13 @@ import {
 } from "./interactive-session/cost.ts";
 import {
   failedInteractiveDiff,
-  formatInteractiveDiffOutput,
   type InteractiveDiffInspection,
   inspectInteractiveDiff,
 } from "./interactive-session/diff-inspection.ts";
-import type { InteractiveComposerMode } from "./interactive-session/display.ts";
+import type {
+  InteractiveCommandOutputEvent,
+  InteractiveComposerMode,
+} from "./interactive-session/display.ts";
 import { readForkPointPickerSelection } from "./interactive-session/fork-picker.ts";
 import { executeInteractiveGoalCommand } from "./interactive-session/goal-command.ts";
 import {
@@ -172,7 +199,6 @@ import {
 } from "./mcp-connection.ts";
 import {
   formatSubagentProgress,
-  formatUndoCheckpointList,
   formatUndoCheckpointWarning,
   sanitizeStatusLineText,
 } from "./output.ts";
@@ -183,10 +209,6 @@ import {
   type RunReportTaskTrigger,
   recordAgentEventStream,
 } from "./report-events.ts";
-import {
-  formatSessionStatusSnapshot,
-  formatSessionTasks,
-} from "./session-status-format.ts";
 import type { SessionModelSelection } from "./session-store.ts";
 import { createCliSubagentRuntime } from "./subagent-runtime.ts";
 
@@ -212,36 +234,6 @@ type InteractiveInvocationContext =
 interface InteractiveSkillCheckpoint {
   readonly runtime: ManagedInteractiveSkillRuntime;
   readonly state: SkillLifecycleState;
-}
-
-function formatActiveModel(resolved: InteractiveResolvedProvider): string {
-  return `${resolved.providerId}/${resolved.model}`;
-}
-
-function formatModelSelection(selection: SessionModelSelection): string {
-  return `${selection.providerId}/${selection.model}`;
-}
-
-function formatConfiguredModelSelection(selection: ProviderSelection): string {
-  const provider = selection.providerId ?? "(default provider)";
-  const model = selection.model ?? "(default model)";
-  return `${provider}/${model}`;
-}
-
-function formatActiveWorkflowSkills(
-  statuses: readonly ActiveSkillStatus[],
-): string {
-  if (statuses.length === 0) {
-    return "No active workflow skills.\n";
-  }
-  return [
-    "Active workflow skills:",
-    ...statuses.map(
-      ({ activation, diskStatus }) =>
-        `- ${activation.qualifiedName} (${activation.relativePath}) [${activation.trigger}, ${diskStatus}]`,
-    ),
-    "",
-  ].join("\n");
 }
 
 function systemPromptWithSessionGoal(
@@ -384,17 +376,14 @@ type PromptTurnResult =
       readonly stagnationFingerprint: string | null;
     };
 
-function modelSwitchUnknownContextMessage(
+function modelSwitchHasUnknownContext(
   target: InteractiveResolvedProvider,
-): string | null {
-  if (
-    (target.modelMetadata !== undefined &&
-      target.modelMetadata.status !== "unknown") ||
-    target.contextCompaction !== undefined
-  ) {
-    return null;
-  }
-  return `Error: cannot switch to ${formatActiveModel(target)} because model metadata is unavailable; set KEEL_CONTEXT_WINDOW_TOKENS to configure the target context window.`;
+): boolean {
+  return (
+    (target.modelMetadata === undefined ||
+      target.modelMetadata.status === "unknown") &&
+    target.contextCompaction === undefined
+  );
 }
 
 function modelSelectionFromResolved(
@@ -855,13 +844,15 @@ export async function runInteractiveSession(
     return Math.max(0, options.cliArgs.maxCostUsd - sessionCostUsd);
   };
   const activeModelStatus = (): string =>
-    resolved === null
-      ? initialState.modelSelection === undefined
-        ? options.configuredModelSelection === undefined
-          ? "(default for next prompt)"
-          : formatConfiguredModelSelection(options.configuredModelSelection)
-        : formatModelSelection(initialState.modelSelection)
-      : formatActiveModel(resolved);
+    projectInteractiveActiveModelStatus({
+      resolved,
+      ...(initialState.modelSelection !== undefined
+        ? { initialModelSelection: initialState.modelSelection }
+        : {}),
+      ...(options.configuredModelSelection !== undefined
+        ? { configuredModelSelection: options.configuredModelSelection }
+        : {}),
+    });
   const statusRecoveryActions = () => [
     ...(savedSession === null || savedSession.resumeAvailable() === false
       ? []
@@ -1876,7 +1867,7 @@ export async function runInteractiveSession(
       try {
         explicitInvocation = parseExplicitSkillInvocation(userMessage);
       } catch (error) {
-        display.writeStderr(formatInteractiveCommandFailure(error));
+        display.renderCommandOutput(projectInteractiveCommandFailure(error));
         consumeQueuedInputLines([rawInput]);
         continue;
       }
@@ -1921,7 +1912,7 @@ export async function runInteractiveSession(
             );
             systemPrompt = rebuildSystemPrompt();
           }
-          display.writeStderr(formatInteractiveCommandFailure(error));
+          display.renderCommandOutput(projectInteractiveCommandFailure(error));
           consumeQueuedInputLines([rawInput]);
           continue;
         }
@@ -1929,13 +1920,13 @@ export async function runInteractiveSession(
       const interactiveCommand =
         explicitInvocation === null ? parseInteractiveCommand(rawLine) : null;
       if (interactiveCommand?.kind === "help") {
-        display.writeStdout(formatInteractiveHelp());
+        display.renderCommandOutput(projectInteractiveHelpCommandOutput());
         consumeQueuedInputLines([rawInput]);
         continue;
       }
       if (interactiveCommand?.kind === "status") {
-        display.writeStdout(
-          formatSessionStatusSnapshot({
+        display.renderCommandOutput(
+          projectInteractiveStatusCommandOutput({
             session:
               savedSession === null
                 ? "(ephemeral, not persisted)"
@@ -1968,14 +1959,18 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "agents") {
         if (options.agentHistory === undefined) {
-          display.writeStderr(
-            "Error: /agents requires a saved interactive session.\n",
+          display.renderCommandOutput(
+            projectInteractiveAgentsRequiresSavedSessionCommandOutput(),
           );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         if (interactiveCommand.action === "list") {
-          display.writeStdout(formatAgentHistoryList(options.agentHistory));
+          display.renderCommandOutput(
+            projectInteractiveAgentHistoryListCommandOutput(
+              options.agentHistory,
+            ),
+          );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
@@ -1984,22 +1979,29 @@ export async function runInteractiveSession(
           interactiveCommand.selector,
         );
         if (entry === null) {
-          display.writeStderr(
-            `Error: no subagent matches "${interactiveCommand.selector}".\n`,
+          display.renderCommandOutput(
+            projectInteractiveAgentNotFoundCommandOutput(
+              interactiveCommand.selector,
+            ),
           );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         try {
           if (interactiveCommand.action === "show") {
-            display.writeStdout(formatAgentHistoryDetail(entry));
+            display.renderCommandOutput(
+              projectInteractiveAgentHistoryDetailCommandOutput(entry),
+            );
           } else if (interactiveCommand.action === "transcript") {
-            display.writeStdout(
-              formatAgentTranscript(options.agentHistory, entry),
+            display.renderCommandOutput(
+              projectInteractiveAgentTranscriptCommandOutput(
+                options.agentHistory,
+                entry,
+              ),
             );
           } else if (subagentOwner === null) {
-            display.writeStderr(
-              "Error: live agent control requires an attached saved-session owner.\n",
+            display.renderCommandOutput(
+              projectInteractiveAgentLiveControlRequiredCommandOutput(),
             );
           } else {
             const { delegation, session: subagentSession } = subagentOwner;
@@ -2099,8 +2101,8 @@ export async function runInteractiveSession(
                   detach();
                 }
               }
-              (result.ok ? display.writeStdout : display.writeStderr)(
-                `${result.content.trimEnd()}\n`,
+              display.renderCommandOutput(
+                projectInteractiveAgentControlResultCommandOutput(result),
               );
             } finally {
               activeAbortController = null;
@@ -2108,21 +2110,23 @@ export async function runInteractiveSession(
             }
           }
         } catch (error) {
-          display.writeStderr(formatInteractiveCommandFailure(error));
+          display.renderCommandOutput(projectInteractiveCommandFailure(error));
         }
         consumeQueuedInputLines([rawInput]);
         continue;
       }
       if (interactiveCommand?.kind === "sessions") {
         if (savedSession === null || options.sessionPicker === undefined) {
-          display.writeStderr(
-            "Error: /sessions requires a saved interactive session.\n",
+          display.renderCommandOutput(
+            projectInteractiveSessionsRequiresSavedSessionCommandOutput(),
           );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         const pickerView = options.sessionPicker();
-        display.writeStdout(pickerView.prompt);
+        display.renderCommandOutput(
+          projectInteractiveSessionPickerPromptCommandOutput(pickerView.prompt),
+        );
         const pickerResult = await readNumberedPickerSelection({
           minChoice: 1,
           maxChoice: pickerView.sessions.length,
@@ -2135,7 +2139,9 @@ export async function runInteractiveSession(
         const consumedLines = [rawInput, ...pickerResult.consumedLines];
         if (pickerResult.kind === "cancelled") {
           if (pickerResult.explicit) {
-            display.writeStdout("Session switch cancelled.\n");
+            display.renderCommandOutput(
+              projectInteractiveSessionSwitchCancelledCommandOutput(),
+            );
           }
           consumeQueuedInputLines(consumedLines);
           continue;
@@ -2147,7 +2153,11 @@ export async function runInteractiveSession(
           throw new Error("Error: selected session is not available.");
         }
         if (selectedSession.id === savedSession.id) {
-          display.writeStdout(`Session already active: ${savedSession.id}\n`);
+          display.renderCommandOutput(
+            projectInteractiveSessionAlreadyActiveCommandOutput(
+              savedSession.id,
+            ),
+          );
           consumeQueuedInputLines(consumedLines);
           continue;
         }
@@ -2176,12 +2186,16 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "title") {
         if (interactiveCommand.title === undefined) {
-          display.writeStdout(formatInteractiveTitle(sessionTitle));
+          display.renderCommandOutput(
+            projectInteractiveTitleCommandOutput(sessionTitle),
+          );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         if (savedSession === null) {
-          display.writeStderr(formatTitleRequiresSavedSession());
+          display.renderCommandOutput(
+            projectInteractiveTitleRequiresSavedSessionCommandOutput(),
+          );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
@@ -2190,9 +2204,11 @@ export async function runInteractiveSession(
             title: interactiveCommand.title,
             consumedInputIds: queuedInputIds([rawInput]),
           });
-          display.writeStdout(formatInteractiveTitleSet(sessionTitle));
+          display.renderCommandOutput(
+            projectInteractiveTitleSetCommandOutput(sessionTitle),
+          );
         } catch (error) {
-          display.writeStderr(formatInteractiveCommandFailure(error));
+          display.renderCommandOutput(projectInteractiveCommandFailure(error));
           consumeQueuedInputLines([rawInput]);
         }
         continue;
@@ -2211,16 +2227,11 @@ export async function runInteractiveSession(
               }
             : {}),
         });
-        for (const output of result.output) {
-          const rendered = formatInteractiveGoalCommandOutput(output, {
+        display.renderCommandOutput(
+          projectInteractiveGoalCommandOutputs(result.output, {
             bashToolVisible: true,
-          });
-          if (rendered.stream === "stdout") {
-            display.writeStdout(rendered.text);
-          } else {
-            display.writeStderr(rendered.text);
-          }
-        }
+          }),
+        );
         if (result.consumeInput) {
           consumeQueuedInputLines([rawInput]);
         }
@@ -2250,7 +2261,9 @@ export async function runInteractiveSession(
         continue;
       }
       if (interactiveCommand?.kind === "tasks") {
-        display.writeStdout(formatSessionTasks(taskProgress));
+        display.renderCommandOutput(
+          projectInteractiveTasksCommandOutput(taskProgress),
+        );
         consumeQueuedInputLines([rawInput]);
         continue;
       }
@@ -2268,11 +2281,9 @@ export async function runInteractiveSession(
           consumeQueuedInputLines([rawInput]);
           continue;
         }
-        if (inspection.kind === "failed") {
-          display.writeStderr(formatInteractiveDiffOutput(inspection));
-        } else {
-          display.writeStdout(formatInteractiveDiffOutput(inspection));
-        }
+        display.renderCommandOutput(
+          projectInteractiveDiffCommandOutput(inspection),
+        );
         consumeQueuedInputLines([rawInput]);
         continue;
       }
@@ -2280,14 +2291,18 @@ export async function runInteractiveSession(
         if (interactiveCommand.scope === "goal") {
           pendingGoalDrive = null;
         }
-        display.writeStderr(`${interactiveCommand.message}\n`);
+        display.renderCommandOutput(
+          projectInteractiveInvalidCommandOutput(interactiveCommand.message),
+        );
         consumeQueuedInputLines([rawInput]);
         continue;
       }
       if (interactiveCommand?.kind === "undo") {
         if (interactiveCommand.mode === "list") {
-          display.writeStdout(
-            formatUndoCheckpointList(listUndoCheckpoints(options.workspace)),
+          display.renderCommandOutput(
+            projectInteractiveUndoCheckpointListCommandOutput(
+              listUndoCheckpoints(options.workspace),
+            ),
           );
           consumeQueuedInputLines([rawInput]);
           continue;
@@ -2301,7 +2316,9 @@ export async function runInteractiveSession(
             : restoreLastEditCheckpoint(options.workspace);
         switch (result.status) {
           case "restored":
-            display.writeStdout(`Restored ${result.restoredLabel}\n`);
+            display.renderCommandOutput(
+              projectInteractiveUndoRestoredCommandOutput(result.restoredLabel),
+            );
             clearReadVisibilityState(readVisibility);
             projectInstructionVisibility.clear();
             ledger.append({
@@ -2322,11 +2339,15 @@ export async function runInteractiveSession(
             }
             break;
           case "none":
-            display.writeStderr(`${result.message}\n`);
+            display.renderCommandOutput(
+              projectInteractiveUndoBlockedCommandOutput(result.message),
+            );
             consumeQueuedInputLines([rawInput]);
             break;
           case "blocked":
-            display.writeStderr(`${result.message}\n`);
+            display.renderCommandOutput(
+              projectInteractiveUndoBlockedCommandOutput(result.message),
+            );
             consumeQueuedInputLines([rawInput]);
             break;
         }
@@ -2336,8 +2357,8 @@ export async function runInteractiveSession(
         try {
           if (interactiveCommand.selection === undefined) {
             resolved = resolveActiveProvider(userMessage);
-            display.writeStdout(
-              `Current model: ${formatActiveModel(resolved)}\nUsage: /model <provider>/<model>\n`,
+            display.renderCommandOutput(
+              projectInteractiveCurrentModelCommandOutput(resolved),
             );
             consumeQueuedInputLines([rawInput]);
             continue;
@@ -2354,8 +2375,8 @@ export async function runInteractiveSession(
               interactiveCommand.selection.providerId &&
             previousResolved.model === interactiveCommand.selection.model
           ) {
-            display.writeStdout(
-              `Model already set to ${formatActiveModel(previousResolved)}\n`,
+            display.renderCommandOutput(
+              projectInteractiveModelAlreadySetCommandOutput(previousResolved),
             );
             consumeQueuedInputLines([rawInput]);
             continue;
@@ -2367,10 +2388,12 @@ export async function runInteractiveSession(
             interactiveCommand.selection,
           );
           if (sessionLedgerMessages(ledger).length > 0) {
-            const unknownContextMessage =
-              modelSwitchUnknownContextMessage(nextResolved);
-            if (unknownContextMessage !== null) {
-              display.writeStderr(`${unknownContextMessage}\n`);
+            if (modelSwitchHasUnknownContext(nextResolved)) {
+              display.renderCommandOutput(
+                projectInteractiveModelUnknownContextCommandOutput(
+                  nextResolved,
+                ),
+              );
               consumeQueuedInputLines([rawInput]);
               continue;
             }
@@ -2453,8 +2476,8 @@ export async function runInteractiveSession(
             consumedByPersistence = true;
           }
           modelSwitchCount++;
-          display.writeStdout(
-            `Model switched to ${formatActiveModel(resolved)}\n`,
+          display.renderCommandOutput(
+            projectInteractiveModelSwitchedCommandOutput(resolved),
           );
           if (modelSwitchCost?.budget.kind === "budget_limited") {
             if (!consumedByPersistence) {
@@ -2467,7 +2490,7 @@ export async function runInteractiveSession(
             continue;
           }
         } catch (error) {
-          display.writeStderr(formatInteractiveCommandFailure(error));
+          display.renderCommandOutput(projectInteractiveCommandFailure(error));
         }
         consumeQueuedInputLines([rawInput]);
         continue;
@@ -2475,7 +2498,9 @@ export async function runInteractiveSession(
       if (interactiveCommand?.kind === "skill") {
         if (interactiveCommand.action === "active") {
           const statuses = managedSkills?.activation.activeStatuses() ?? [];
-          display.writeStdout(formatActiveWorkflowSkills(statuses));
+          display.renderCommandOutput(
+            projectInteractiveActiveSkillsCommandOutput(statuses),
+          );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
@@ -2493,19 +2518,23 @@ export async function runInteractiveSession(
             runtime: skillRuntime,
             state: skillRuntime.activation.state(),
           };
-          let successMessage: string;
+          let successOutput: readonly InteractiveCommandOutputEvent[];
           let activationRecord: SkillActivationRecord | undefined;
           if (interactiveCommand.action === "deactivate") {
             const deactivated = skillRuntime.activation.deactivate(
               interactiveCommand.lookup,
             );
-            successMessage = `Deactivated workflow skill ${deactivated.qualifiedName}.\n`;
+            successOutput = projectInteractiveSkillDeactivatedCommandOutput(
+              deactivated.qualifiedName,
+            );
           } else if (interactiveCommand.action === "reload") {
             const reloaded = skillRuntime.activation.reload(
               interactiveCommand.lookup,
             );
             activationRecord = reloaded.record;
-            successMessage = `Reloaded workflow skill ${reloaded.activation.qualifiedName}.\n`;
+            successOutput = projectInteractiveSkillReloadedCommandOutput(
+              reloaded.activation.qualifiedName,
+            );
           } else {
             const skill = skillRuntime.loadExplicit(interactiveCommand.lookup);
             const activated = skillRuntime.activation.activateExplicit(
@@ -2513,7 +2542,9 @@ export async function runInteractiveSession(
               interactiveCommand.arguments ?? "",
             );
             activationRecord = activated.record;
-            successMessage = `Activated workflow skill ${skill.qualifiedName}.\n`;
+            successOutput = projectInteractiveSkillActivatedCommandOutput(
+              skill.qualifiedName,
+            );
             if (interactiveCommand.arguments !== undefined) {
               userMessage = interactiveCommand.arguments;
               skillTaskShouldRun = true;
@@ -2531,13 +2562,13 @@ export async function runInteractiveSession(
             explicitSkillActivations.push(activationRecord);
           }
           systemPrompt = rebuildSystemPrompt();
-          display.writeStdout(successMessage);
+          display.renderCommandOutput(successOutput);
         } catch (error) {
           if (commandRollback !== null) {
             commandRollback.runtime.activation.restore(commandRollback.state);
             systemPrompt = rebuildSystemPrompt();
           }
-          display.writeStderr(formatInteractiveCommandFailure(error));
+          display.renderCommandOutput(projectInteractiveCommandFailure(error));
         }
         if (!skillTaskShouldRun) {
           consumeQueuedInputLines([rawInput]);
@@ -2546,20 +2577,26 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "fork-points") {
         if (savedSession === null) {
-          display.writeStderr(formatForkRequiresNamedSession("/fork-points"));
+          display.renderCommandOutput(
+            projectInteractiveForkRequiresNamedSessionCommandOutput(
+              "/fork-points",
+            ),
+          );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
-        display.writeStdout(
-          formatInteractiveSessionForkPoints(savedSession.listForkPoints()),
+        display.renderCommandOutput(
+          projectInteractiveForkPointsCommandOutput(
+            savedSession.listForkPoints(),
+          ),
         );
         consumeQueuedInputLines([rawInput]);
         continue;
       }
       if (interactiveCommand?.kind === "compact") {
         if (sessionLedgerMessages(ledger).length === 0) {
-          display.writeStderr(
-            "Context compaction skipped: no conversation history to compact.\n",
+          display.renderCommandOutput(
+            projectInteractiveCompactSkippedCommandOutput(),
           );
           consumeQueuedInputLines([rawInput]);
           continue;
@@ -2621,13 +2658,17 @@ export async function runInteractiveSession(
       }
       if (interactiveCommand?.kind === "fork") {
         if (savedSession === null) {
-          display.writeStderr(formatForkRequiresNamedSession("/fork"));
+          display.renderCommandOutput(
+            projectInteractiveForkRequiresNamedSessionCommandOutput("/fork"),
+          );
           consumeQueuedInputLines([rawInput]);
           continue;
         }
         if (interactiveCommand.pick === true) {
           const forkPoints = savedSession.listForkPoints();
-          display.writeStdout(formatInteractiveForkPicker(forkPoints));
+          display.renderCommandOutput(
+            projectInteractiveForkPickerCommandOutput(forkPoints),
+          );
           const pickerResult = await readForkPointPickerSelection({
             maxChoice: forkPoints.points.length,
             lineReader,
@@ -2637,7 +2678,9 @@ export async function runInteractiveSession(
           const consumedLines = [rawInput, ...pickerResult.consumedLines];
           if (pickerResult.kind === "cancelled") {
             if (pickerResult.explicit) {
-              display.writeStdout("Fork cancelled.\n");
+              display.renderCommandOutput(
+                projectInteractiveForkCancelledCommandOutput(),
+              );
             }
             consumeQueuedInputLines(consumedLines);
             continue;
@@ -2647,24 +2690,32 @@ export async function runInteractiveSession(
               pickerResult.selection.choice === 0
                 ? undefined
                 : forkPoints.points[pickerResult.selection.choice - 1];
-            display.writeStdout(
-              savedSession.fork({
-                targetSessionId: interactiveCommand.targetSessionId,
-                ...(selectedPoint !== undefined
-                  ? { beforeMessageId: selectedPoint.messageId }
-                  : {}),
-              }),
+            display.renderCommandOutput(
+              projectInteractiveForkCreatedCommandOutput(
+                savedSession.fork({
+                  targetSessionId: interactiveCommand.targetSessionId,
+                  ...(selectedPoint !== undefined
+                    ? { beforeMessageId: selectedPoint.messageId }
+                    : {}),
+                }),
+              ),
             );
           } catch (error) {
-            display.writeStderr(formatInteractiveCommandFailure(error));
+            display.renderCommandOutput(
+              projectInteractiveCommandFailure(error),
+            );
           }
           consumeQueuedInputLines(consumedLines);
           continue;
         }
         try {
-          display.writeStdout(savedSession.fork(interactiveCommand));
+          display.renderCommandOutput(
+            projectInteractiveForkCreatedCommandOutput(
+              savedSession.fork(interactiveCommand),
+            ),
+          );
         } catch (error) {
-          display.writeStderr(formatInteractiveCommandFailure(error));
+          display.renderCommandOutput(projectInteractiveCommandFailure(error));
         }
         consumeQueuedInputLines([rawInput]);
         continue;
@@ -2677,8 +2728,8 @@ export async function runInteractiveSession(
             line: rawInput.line,
           });
         }
-        display.writeStderr(
-          `Error: recovery_blocked for durable Task ${recoveryBlockedTaskId}; input remains queued.\n`,
+        display.renderCommandOutput(
+          projectInteractiveRecoveryBlockedCommandOutput(recoveryBlockedTaskId),
         );
         continue;
       }
