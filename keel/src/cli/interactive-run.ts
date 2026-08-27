@@ -62,7 +62,7 @@ import {
   createCliMcpConnectionFactory,
   createCliMcpLifecyclePolicy,
 } from "./mcp-connection.ts";
-import { formatCostReport, printAgentEvents } from "./output.ts";
+import { printAgentEvents } from "./output.ts";
 import {
   loadProjectInstructions,
   ProjectInstructionsError,
@@ -1505,7 +1505,6 @@ async function runActiveSessionCli(
           }
           return printAgentEvents(stream, runtime);
         },
-        formatCostReport,
       });
       const activeSession: InteractiveActiveSession =
         cliArgs.memoryEnabled &&

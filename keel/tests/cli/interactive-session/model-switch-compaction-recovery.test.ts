@@ -551,7 +551,6 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
           printAgentEvents: async () => {
             throw new Error("agent event rendering is not used");
           },
-          formatCostReport: () => "",
         }),
       },
       bashToolVisible: true,
@@ -648,7 +647,6 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
           printAgentEvents: async () => {
             throw new Error("agent event rendering is not used");
           },
-          formatCostReport: () => "",
         }),
       },
       bashToolVisible: false,

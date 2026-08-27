@@ -16,14 +16,17 @@ import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { Usage } from "../../llm/types.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
 import {
-  formatContextCompactionReport,
-  formatToolOutputArtifactNotice,
-} from "../agent-event-format.ts";
-import { formatManualCompactionFailure } from "./commands.ts";
-import {
   createInteractiveCostBudgetedProvider,
   type InteractiveCompactionCost,
 } from "./cost.ts";
+import {
+  projectInteractiveCompactionAbortedNotice,
+  projectInteractiveCompactionFailureNotice,
+  projectInteractiveCompactionSkippedNotice,
+  projectInteractiveCompactionSuccessNotice,
+  projectInteractiveCostReport,
+  projectInteractiveModelSwitchOverflowNotice,
+} from "./progress-output.ts";
 import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
@@ -236,7 +239,7 @@ export async function executeModelSwitchCompaction(
         compactionCostModel === undefined
           ? undefined
           : recordCompactionCost(result.usage, compactionCostModel);
-      display.writeStdout("\n");
+      display.renderProgressOutput(projectInteractiveCompactionAbortedNotice());
       return {
         status: "rejected",
         ...(cost !== undefined ? { cost } : {}),
@@ -255,24 +258,22 @@ export async function executeModelSwitchCompaction(
           result.failure.error instanceof CostBudgetAdmissionError
         ) {
           const cost = compactionCost.budgetLimitedReport();
-          display.writeStderr(display.formatCostReport(cost));
+          display.renderProgressOutput(projectInteractiveCostReport(cost));
           return { status: "rejected", cost };
         }
-        display.writeStderr(
-          formatManualCompactionFailure(result.failure.message),
+        display.renderProgressOutput(
+          projectInteractiveCompactionFailureNotice(result.failure.message),
         );
         if (failedCost !== undefined) {
           const cost = failedCost;
           if (options.cliArgs.maxCostUsd !== undefined) {
-            display.writeStderr(display.formatCostReport(cost));
+            display.renderProgressOutput(projectInteractiveCostReport(cost));
           }
           return { status: "rejected", cost };
         }
         return { status: "rejected" };
       }
-      display.writeStderr(
-        "Context compaction skipped: no safe history to compact.\n",
-      );
+      display.renderProgressOutput(projectInteractiveCompactionSkippedNotice());
       return { status: "rejected" };
     }
 
@@ -286,7 +287,7 @@ export async function executeModelSwitchCompaction(
     });
     if (signal.aborted) {
       rollback();
-      display.writeStdout("\n");
+      display.renderProgressOutput(projectInteractiveCompactionAbortedNotice());
       return { status: "rejected" };
     }
     if (
@@ -298,8 +299,8 @@ export async function executeModelSwitchCompaction(
       })
     ) {
       rollback();
-      display.writeStderr(
-        `Error: switching to ${target.providerId}/${target.model} still exceeds the target context window after model-switch compaction.\n`,
+      display.renderProgressOutput(
+        projectInteractiveModelSwitchOverflowNotice(target),
       );
       return { status: "rejected" };
     }
@@ -313,27 +314,27 @@ export async function executeModelSwitchCompaction(
         ...(bashToolVisible ? { bash: true } : {}),
       },
     });
-    display.writeStderr(
-      formatContextCompactionReport({
-        ...reportStats,
+    display.renderProgressOutput(
+      projectInteractiveCompactionSuccessNotice({
+        stats: reportStats,
         reasonLabel: "model switch",
+        ...(result.artifactNotices !== undefined
+          ? { artifactNotices: result.artifactNotices }
+          : {}),
       }),
     );
-    for (const notice of result.artifactNotices ?? []) {
-      display.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
-    }
     if (compactionCostModel === undefined) {
       return { status: "accepted" };
     }
     const cost = recordCompactionCost(result.usage, compactionCostModel);
     if (options.cliArgs.maxCostUsd !== undefined) {
-      display.writeStderr(display.formatCostReport(cost));
+      display.renderProgressOutput(projectInteractiveCostReport(cost));
     }
     return { status: "accepted", cost };
   } catch (error) {
     rollback();
     if (signal.aborted) {
-      display.writeStdout("\n");
+      display.renderProgressOutput(projectInteractiveCompactionAbortedNotice());
       return { status: "rejected" };
     }
     if (
@@ -341,10 +342,12 @@ export async function executeModelSwitchCompaction(
       error instanceof CostBudgetAdmissionError
     ) {
       const cost = compactionCost.budgetLimitedReport();
-      display.writeStderr(display.formatCostReport(cost));
+      display.renderProgressOutput(projectInteractiveCostReport(cost));
       return { status: "rejected", cost };
     }
-    display.writeStderr(formatManualCompactionFailure(error));
+    display.renderProgressOutput(
+      projectInteractiveCompactionFailureNotice(error),
+    );
     return { status: "rejected" };
   }
 }

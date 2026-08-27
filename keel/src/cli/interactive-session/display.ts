@@ -19,6 +19,14 @@ export type InteractiveCommandOutputEvent =
   | { readonly type: "stdout"; readonly text: string }
   | { readonly type: "stderr"; readonly text: string };
 
+export type InteractiveProgressOutputEvent =
+  | InteractiveCommandOutputEvent
+  | {
+      readonly type: "cost_report";
+      readonly cost: CostReport;
+      readonly text: string;
+    };
+
 export interface StableInteractiveDisplay {
   readonly writeIntro: () => void;
   readonly renderPrompt: () => void;
@@ -36,6 +44,9 @@ export interface InteractiveSessionDisplay {
   readonly renderCommandOutput: (
     events: readonly InteractiveCommandOutputEvent[],
   ) => void;
+  readonly renderProgressOutput: (
+    events: readonly InteractiveProgressOutputEvent[],
+  ) => void;
   readonly renderPrompt: () => void;
   readonly acceptInput: () => void;
   readonly closePrompt: () => void;
@@ -46,7 +57,6 @@ export interface InteractiveSessionDisplay {
   readonly printAgentEvents: (
     stream: AsyncIterable<AgentEvent>,
   ) => Promise<InteractiveSessionEndEvent | undefined>;
-  readonly formatCostReport: (cost: CostReport) => string;
 }
 
 interface StableInteractiveDisplayRuntime {
@@ -91,7 +101,23 @@ export interface InteractiveSessionDisplayOptions {
   readonly printAgentEvents: (
     stream: AsyncIterable<AgentEvent>,
   ) => Promise<InteractiveSessionEndEvent | undefined>;
-  readonly formatCostReport: (cost: CostReport) => string;
+}
+
+function renderProgressOutputEvent(
+  event: InteractiveProgressOutputEvent,
+  options: InteractiveSessionDisplayOptions,
+): void {
+  switch (event.type) {
+    case "stdout":
+      options.output.writeStdout(event.text);
+      break;
+    case "stderr":
+      options.output.writeStderr(event.text);
+      break;
+    case "cost_report":
+      options.output.writeStderr(event.text);
+      break;
+  }
 }
 
 function formatInteractiveIntro(
@@ -184,14 +210,12 @@ export function createInteractiveSessionDisplay(
     },
     renderCommandOutput: (events) => {
       for (const event of events) {
-        switch (event.type) {
-          case "stdout":
-            options.output.writeStdout(event.text);
-            break;
-          case "stderr":
-            options.output.writeStderr(event.text);
-            break;
-        }
+        renderProgressOutputEvent(event, options);
+      }
+    },
+    renderProgressOutput: (events) => {
+      for (const event of events) {
+        renderProgressOutputEvent(event, options);
       }
     },
     renderPrompt: () => {
@@ -224,6 +248,5 @@ export function createInteractiveSessionDisplay(
       return true;
     },
     printAgentEvents: (stream) => options.printAgentEvents(stream),
-    formatCostReport: (cost) => options.formatCostReport(cost),
   };
 }

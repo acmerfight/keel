@@ -353,7 +353,6 @@ describe("Interactive Session - Interrupts", () => {
           }
           return finalEnd;
         },
-        formatCostReport: () => "",
       }),
       onSigint: (handler) => {
         sigintHandlers.add(handler);

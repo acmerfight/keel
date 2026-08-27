@@ -34,7 +34,6 @@ import {
   activeSessionGoalSystemPrompt,
   copySessionGoal,
   formatSessionGoalBudgetLimitReason,
-  formatSessionGoalSummary,
   type SessionGoal,
   type SessionGoalRuntimeOutcome,
   sessionGoalAccounting,
@@ -67,10 +66,7 @@ import {
   type MainTurnPreparedInvocation,
   runMainTurnTransaction,
 } from "../runtime/main-turn-transaction.ts";
-import {
-  exposeSkillCatalog,
-  formatSkillCatalogDegradation,
-} from "../skills/catalog.ts";
+import { exposeSkillCatalog } from "../skills/catalog.ts";
 import {
   type ExplicitSkillInvocation,
   parseExplicitSkillInvocation,
@@ -175,6 +171,13 @@ import {
   modelSwitchRequiresCompaction,
 } from "./interactive-session/model-switch-compact.ts";
 import { readNumberedPickerSelection } from "./interactive-session/numbered-picker.ts";
+import {
+  projectInteractiveCostReport,
+  projectInteractiveGoalLimitNotice,
+  projectInteractiveSkillCatalogDegradationNotice,
+  projectInteractiveSubagentProgressNotice,
+  projectInteractiveUndoCheckpointWarningNotice,
+} from "./interactive-session/progress-output.ts";
 import type {
   EndEvent,
   EndEventWithCost,
@@ -197,11 +200,6 @@ import {
   createCliMcpAuthProvider,
   createCliMcpConnectionFactory,
 } from "./mcp-connection.ts";
-import {
-  formatSubagentProgress,
-  formatUndoCheckpointWarning,
-  sanitizeStatusLineText,
-} from "./output.ts";
 import {
   accountModelOperations,
   createAgentEventReportRecorder,
@@ -984,8 +982,8 @@ export async function runInteractiveSession(
       updateSessionGoal(persistedGoal);
       displayedGoal = persistedGoal;
     }
-    display.writeStderr(
-      `Session goal: ${sanitizeStatusLineText(formatSessionGoalSummary(displayedGoal))}\n`,
+    display.renderProgressOutput(
+      projectInteractiveGoalLimitNotice(displayedGoal),
     );
   };
   const runPromptTurn = async (
@@ -1050,13 +1048,14 @@ export async function runInteractiveSession(
     managedSkills?.activation.expose(exposure.skills);
     visibleSkillCatalog = exposure.skills;
     systemPrompt = rebuildSystemPrompt();
-    const diagnostic = formatSkillCatalogDegradation(exposure);
+    const diagnostic =
+      projectInteractiveSkillCatalogDegradationNotice(exposure);
     const diagnosticSignature = `${exposure.total}:${exposure.omitted}:${exposure.budgetChars}`;
     if (
-      diagnostic !== "" &&
+      diagnostic.length > 0 &&
       diagnosticSignature !== catalogDiagnosticSignature
     ) {
-      display.writeStderr(diagnostic);
+      display.renderProgressOutput(diagnostic);
       catalogDiagnosticSignature = diagnosticSignature;
     }
     subagentSession?.assertHealthy();
@@ -1309,7 +1308,9 @@ export async function runInteractiveSession(
                     : {}),
                   now,
                   onProgress: (event) => {
-                    display.writeStderr(formatSubagentProgress(event));
+                    display.renderProgressOutput(
+                      projectInteractiveSubagentProgressNotice(event),
+                    );
                   },
                   resolveProvider: (selection) =>
                     resolveSubagentExecution(request.userMessage, selection),
@@ -1577,7 +1578,9 @@ export async function runInteractiveSession(
             options.cliArgs.maxCostUsd !== undefined &&
             cumulativeCost !== undefined
           ) {
-            display.writeStderr(display.formatCostReport(cumulativeCost));
+            display.renderProgressOutput(
+              projectInteractiveCostReport(cumulativeCost),
+            );
           }
           if (
             finalEnd?.stopReason === "cost_budget" ||
@@ -1593,7 +1596,9 @@ export async function runInteractiveSession(
           };
         },
         checkpointUnavailable: () => {
-          display.writeStderr(`${formatUndoCheckpointWarning()}\n`);
+          display.renderProgressOutput(
+            projectInteractiveUndoCheckpointWarningNotice(),
+          );
         },
       });
     } finally {
@@ -2076,7 +2081,9 @@ export async function runInteractiveSession(
                   },
                   now,
                   onProgress: (event) => {
-                    display.writeStderr(formatSubagentProgress(event));
+                    display.renderProgressOutput(
+                      projectInteractiveSubagentProgressNotice(event),
+                    );
                   },
                   resolveProvider: (selection) =>
                     resolveSubagentExecution(
