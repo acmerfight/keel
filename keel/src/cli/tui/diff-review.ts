@@ -16,7 +16,7 @@ import {
   gitDiffScopeLabel,
 } from "../../tools/git-diff-document.ts";
 import type { InteractiveDiffInspection } from "../interactive-session/diff-inspection.ts";
-import { escapeTerminalText } from "../output.ts";
+import { escapeTerminalText } from "../terminal-text.ts";
 import {
   type DiffReviewAction,
   type DiffReviewFileRange,

@@ -16,7 +16,7 @@ import type { ProjectInstructionVisibilityState } from "../../tools/scoped-proje
 import {
   formatContextCompactionReport,
   formatToolOutputArtifactNotice,
-} from "../output.ts";
+} from "../agent-event-format.ts";
 import {
   formatManualCompactionFailure,
   type ManualCompactCommand,

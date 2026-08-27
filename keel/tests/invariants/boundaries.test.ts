@@ -572,6 +572,83 @@ describe("module boundaries", () => {
     }
   });
 
+  test(`Given interactive terminal rendering consumes projected view events,
+    When the TUI and projection dependencies are inspected,
+    Then raw agent, runtime, and session state stay behind the render projection owner`, () => {
+    const viewEvents = "src/cli/interactive-render-events.ts";
+    const projectionOwner = "src/cli/interactive-render-projection.ts";
+    const viewEventsSource = readFileSync(viewEvents, "utf8");
+    const projectionSource = readFileSync(projectionOwner, "utf8");
+
+    expect(importSpecifiers(viewEvents, viewEventsSource)).toEqual([]);
+    expect(
+      importedNamesFromResolvedSpecifier(
+        projectionOwner,
+        projectionSource,
+        "src/agent/events.ts",
+      ),
+    ).toContain("AgentEvent");
+    expect(
+      importedNamesFromResolvedSpecifier(
+        projectionOwner,
+        projectionSource,
+        viewEvents,
+      ),
+    ).toContain("InteractiveTranscriptEvent");
+    for (const exportName of [
+      "formatLiveSessionGoalStatus",
+      "printStableInteractiveAgentEvents",
+      "printInteractiveTerminalAgentEvents",
+    ]) {
+      expect(projectionSource).toMatch(
+        new RegExp(`\\bexport\\s+(?:async\\s+)?function\\s+${exportName}\\b`),
+      );
+    }
+    const outputSource = readFileSync("src/cli/output.ts", "utf8");
+    for (const exportName of [
+      "InteractiveTranscriptEvent",
+      "formatLiveSessionGoalStatus",
+      "printStableInteractiveAgentEvents",
+      "printInteractiveTerminalAgentEvents",
+    ]) {
+      expect(outputSource).not.toMatch(
+        new RegExp(
+          `\\bexport\\s+(?:async\\s+)?(?:function|type)\\s+${exportName}\\b`,
+        ),
+      );
+    }
+
+    const forbiddenTuiTargets = [
+      /^src\/agent\//u,
+      /^src\/runtime\//u,
+      /^src\/core\/session-goal\.ts$/u,
+      /^src\/core\/task-progress\.ts$/u,
+      /^src\/cli\/output\.ts$/u,
+    ];
+    const violations = layerFiles("src/cli/tui").flatMap((file) => {
+      const source = readFileSync(file, "utf8");
+      return resolvedRuntimeImportTargets(file, source)
+        .filter((target) =>
+          forbiddenTuiTargets.some((forbidden) => forbidden.test(target)),
+        )
+        .map((target) => `${file} imports ${target}`);
+    });
+
+    expect(violations).toEqual([]);
+    for (const file of [
+      "src/cli/tui/interactive-terminal.ts",
+      "src/cli/tui/interactive-transcript.ts",
+    ]) {
+      expect(
+        importedNamesFromResolvedSpecifier(
+          file,
+          readFileSync(file, "utf8"),
+          viewEvents,
+        ),
+      ).toContain("InteractiveTranscriptEvent");
+    }
+  });
+
   test(`Given interactive compaction helpers restore visible context,
     When their dependencies are inspected,
     Then restoration remains owned by the dedicated post-compaction module`, () => {

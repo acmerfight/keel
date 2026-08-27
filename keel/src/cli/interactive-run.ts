@@ -34,6 +34,10 @@ import {
   requireHeadlessGoalOutcome,
 } from "./headless-goal-outcome.ts";
 import {
+  printInteractiveTerminalAgentEvents,
+  printStableInteractiveAgentEvents,
+} from "./interactive-render-projection.ts";
+import {
   createStableInteractiveDisplay,
   type StableInteractiveDisplay,
 } from "./interactive-session/display.ts";
@@ -57,12 +61,7 @@ import {
   createCliMcpConnectionFactory,
   createCliMcpLifecyclePolicy,
 } from "./mcp-connection.ts";
-import {
-  formatCostReport,
-  printAgentEvents,
-  printInteractiveTerminalAgentEvents,
-  printStableInteractiveAgentEvents,
-} from "./output.ts";
+import { formatCostReport, printAgentEvents } from "./output.ts";
 import {
   loadProjectInstructions,
   ProjectInstructionsError,

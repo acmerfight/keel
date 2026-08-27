@@ -3,14 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../src/agent/events.ts";
+import type { InteractiveTranscriptEvent } from "../../src/cli/interactive-render-events.ts";
 import {
-  formatCostReport,
   formatLiveSessionGoalStatus,
-  type InteractiveTranscriptEvent,
-  printAgentEvents,
   printInteractiveTerminalAgentEvents,
   printStableInteractiveAgentEvents,
-} from "../../src/cli/output.ts";
+} from "../../src/cli/interactive-render-projection.ts";
+import { formatCostReport, printAgentEvents } from "../../src/cli/output.ts";
 import { runCli } from "../../src/testing/cli-harness.ts";
 
 describe("CLI Tool Progress", () => {
@@ -624,9 +623,25 @@ describe("CLI Tool Progress", () => {
         toolOutputEstimatedTokensBefore: 0,
         toolOutputEstimatedTokensAfter: 0,
       };
+      yield {
+        type: "provider_retry",
+        provider: "deepseek",
+        reason: "provider_http_error",
+        attempt: 1,
+        maxRetries: 2,
+        delayMs: 25,
+      };
       yield { type: "tool_start", toolCall };
       yield { type: "tool_end", toolCall, ok: true };
       yield { type: "tool_end", toolCall, ok: false };
+      yield {
+        type: "tool_output_artifact",
+        status: "failed",
+        reason: "disk full",
+        toolCallId: "live_read",
+        toolName: "read",
+        omittedChars: 200,
+      };
       yield {
         type: "session_goal_updated",
         messageOrdinal: 2,
@@ -647,6 +662,13 @@ describe("CLI Tool Progress", () => {
       };
       yield { type: "text", text: "Done" };
       yield { type: "text", text: "." };
+      yield { type: "undo_checkpoint", written: true };
+      yield {
+        type: "skill_activated",
+        name: "repo:review",
+        relativePath: ".agents/skills/review/SKILL.md",
+        trigger: "model_selected",
+      };
       yield {
         type: "end",
         usage: {
@@ -675,9 +697,11 @@ describe("CLI Tool Progress", () => {
     expect(activities).toEqual([
       "Thinking",
       "Context compacted",
+      "Waiting to retry provider",
       "Tool: read README.md",
       "Thinking",
       "Tool failed: read README.md",
+      "Stored tool output artifact",
       "Responding",
       "Responding",
       null,
@@ -745,6 +769,14 @@ describe("CLI Tool Progress", () => {
         attempt: 2,
         maxRetries: 3,
         delayMs: 125.4,
+      },
+      {
+        type: "provider_retry",
+        provider: "deepseek",
+        reason: "provider_context_overflow",
+        attempt: 3,
+        maxRetries: 3,
+        delayMs: 250,
       },
       { type: "tool_start", toolCall: successfulRead },
       { type: "tool_end", toolCall: successfulRead, ok: true },
@@ -856,6 +888,11 @@ describe("CLI Tool Progress", () => {
         text: "Provider retry: deepseek network error (attempt 2/3 in 125ms)",
       },
       {
+        type: "notice",
+        tone: "warning",
+        text: "Provider retry: deepseek provider error (attempt 3/3 in 250ms)",
+      },
+      {
         type: "tool_started",
         toolCallId: "read-success",
         label: "read success.md",
@@ -940,6 +977,7 @@ describe("CLI Tool Progress", () => {
       "Thinking",
       "Responding",
       "Context compacted",
+      "Waiting to retry provider",
       "Waiting to retry provider",
       "Running read success.md",
       "Thinking",
