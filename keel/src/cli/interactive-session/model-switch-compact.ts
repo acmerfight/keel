@@ -52,7 +52,10 @@ export interface ModelSwitchCompactionContext {
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
   readonly nextPostCompactionReadToolCallId: () => string;
   readonly taskProgress: SessionTaskProgress;
-  readonly options: InteractiveSessionOptions;
+  readonly options: Pick<
+    InteractiveSessionOptions,
+    "cliArgs" | "display" | "toolOutputArtifacts"
+  >;
   readonly bashToolVisible: boolean;
   readonly recordCompactionCost: (
     usage: Usage,
@@ -174,6 +177,7 @@ export async function executeModelSwitchCompaction(
     compactionCost,
     modelOperations,
   } = ctx;
+  const display = options.display;
   const compactionCostModel =
     compactionCost.kind === "untracked" ? undefined : compactionCost.model;
   const messagesBeforeCompact = messages.slice();
@@ -232,7 +236,7 @@ export async function executeModelSwitchCompaction(
         compactionCostModel === undefined
           ? undefined
           : recordCompactionCost(result.usage, compactionCostModel);
-      options.writeStdout("\n");
+      display.writeStdout("\n");
       return {
         status: "rejected",
         ...(cost !== undefined ? { cost } : {}),
@@ -251,22 +255,22 @@ export async function executeModelSwitchCompaction(
           result.failure.error instanceof CostBudgetAdmissionError
         ) {
           const cost = compactionCost.budgetLimitedReport();
-          options.writeStderr(options.formatCostReport(cost));
+          display.writeStderr(display.formatCostReport(cost));
           return { status: "rejected", cost };
         }
-        options.writeStderr(
+        display.writeStderr(
           formatManualCompactionFailure(result.failure.message),
         );
         if (failedCost !== undefined) {
           const cost = failedCost;
           if (options.cliArgs.maxCostUsd !== undefined) {
-            options.writeStderr(options.formatCostReport(cost));
+            display.writeStderr(display.formatCostReport(cost));
           }
           return { status: "rejected", cost };
         }
         return { status: "rejected" };
       }
-      options.writeStderr(
+      display.writeStderr(
         "Context compaction skipped: no safe history to compact.\n",
       );
       return { status: "rejected" };
@@ -282,7 +286,7 @@ export async function executeModelSwitchCompaction(
     });
     if (signal.aborted) {
       rollback();
-      options.writeStdout("\n");
+      display.writeStdout("\n");
       return { status: "rejected" };
     }
     if (
@@ -294,7 +298,7 @@ export async function executeModelSwitchCompaction(
       })
     ) {
       rollback();
-      options.writeStderr(
+      display.writeStderr(
         `Error: switching to ${target.providerId}/${target.model} still exceeds the target context window after model-switch compaction.\n`,
       );
       return { status: "rejected" };
@@ -309,27 +313,27 @@ export async function executeModelSwitchCompaction(
         ...(bashToolVisible ? { bash: true } : {}),
       },
     });
-    options.writeStderr(
+    display.writeStderr(
       formatContextCompactionReport({
         ...reportStats,
         reasonLabel: "model switch",
       }),
     );
     for (const notice of result.artifactNotices ?? []) {
-      options.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
+      display.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
     }
     if (compactionCostModel === undefined) {
       return { status: "accepted" };
     }
     const cost = recordCompactionCost(result.usage, compactionCostModel);
     if (options.cliArgs.maxCostUsd !== undefined) {
-      options.writeStderr(options.formatCostReport(cost));
+      display.writeStderr(display.formatCostReport(cost));
     }
     return { status: "accepted", cost };
   } catch (error) {
     rollback();
     if (signal.aborted) {
-      options.writeStdout("\n");
+      display.writeStdout("\n");
       return { status: "rejected" };
     }
     if (
@@ -337,10 +341,10 @@ export async function executeModelSwitchCompaction(
       error instanceof CostBudgetAdmissionError
     ) {
       const cost = compactionCost.budgetLimitedReport();
-      options.writeStderr(options.formatCostReport(cost));
+      display.writeStderr(display.formatCostReport(cost));
       return { status: "rejected", cost };
     }
-    options.writeStderr(formatManualCompactionFailure(error));
+    display.writeStderr(formatManualCompactionFailure(error));
     return { status: "rejected" };
   }
 }

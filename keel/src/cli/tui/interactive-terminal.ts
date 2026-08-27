@@ -14,12 +14,12 @@ import {
 import type { SkillDescriptor } from "../../skills/model.ts";
 import type { InteractiveTranscriptEvent } from "../interactive-render-events.ts";
 import type { InteractiveDiffInspection } from "../interactive-session/diff-inspection.ts";
-import type { StableInteractiveDisplayOptions } from "../interactive-session/display.ts";
-import type { InteractiveLineInput } from "../interactive-session/line-reader.ts";
 import type {
   InteractiveComposerMode,
   InteractiveInputDisposition,
-} from "../interactive-session/types.ts";
+  StableInteractiveDisplayOptions,
+} from "../interactive-session/display.ts";
+import type { InteractiveLineInput } from "../interactive-session/line-reader.ts";
 import { InteractiveDiffReview } from "./diff-review.ts";
 import {
   createInteractiveTerminalTheme,

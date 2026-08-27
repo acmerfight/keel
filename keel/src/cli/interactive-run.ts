@@ -38,6 +38,7 @@ import {
   printStableInteractiveAgentEvents,
 } from "./interactive-render-projection.ts";
 import {
+  createInteractiveSessionDisplay,
   createStableInteractiveDisplay,
   type StableInteractiveDisplay,
 } from "./interactive-session/display.ts";
@@ -1469,6 +1470,43 @@ async function runActiveSessionCli(
         interactiveDisplay?.writeIntro();
         interactiveTerminalDisplay?.start();
       }
+      const interactiveSessionDisplay = createInteractiveSessionDisplay({
+        output: interactiveDisplay ?? runtime,
+        controls: {
+          ...(interactiveDisplay !== undefined
+            ? {
+                renderPrompt: interactiveDisplay.renderPrompt,
+                acceptInput: interactiveDisplay.acceptInput,
+                closePrompt: interactiveDisplay.closePrompt,
+              }
+            : {}),
+          ...(interactiveTerminalDisplay !== undefined
+            ? {
+                setComposerMode: interactiveTerminalDisplay.setComposerMode,
+                renderSubmittedInput:
+                  interactiveTerminalDisplay.renderSubmittedInput,
+                renderDiffReview: interactiveTerminalDisplay.renderDiffReview,
+                setGoalStatus: interactiveTerminalDisplay.setGoalStatus,
+              }
+            : {}),
+        },
+        printAgentEvents: (stream) => {
+          if (interactiveTerminalDisplay !== undefined) {
+            return printInteractiveTerminalAgentEvents(
+              stream,
+              interactiveTerminalDisplay,
+            );
+          }
+          if (stableInteractiveDisplay !== undefined) {
+            return printStableInteractiveAgentEvents(
+              stream,
+              stableInteractiveDisplay,
+            );
+          }
+          return printAgentEvents(stream, runtime);
+        },
+        formatCostReport,
+      });
       const activeSession: InteractiveActiveSession =
         cliArgs.memoryEnabled &&
         mode.kind === "interactive" &&
@@ -1600,30 +1638,7 @@ async function runActiveSessionCli(
               },
             }
           : {}),
-        writeStdout: (text) => {
-          (interactiveDisplay ?? runtime).writeStdout(text);
-        },
-        writeStderr: (text) => {
-          (interactiveDisplay ?? runtime).writeStderr(text);
-        },
-        ...(interactiveDisplay !== undefined
-          ? { renderPrompt: interactiveDisplay.renderPrompt }
-          : {}),
-        ...(interactiveDisplay !== undefined
-          ? { acceptInput: interactiveDisplay.acceptInput }
-          : {}),
-        ...(interactiveDisplay !== undefined
-          ? { closePrompt: interactiveDisplay.closePrompt }
-          : {}),
-        ...(interactiveTerminalDisplay !== undefined
-          ? {
-              setComposerMode: interactiveTerminalDisplay.setComposerMode,
-              renderSubmittedInput:
-                interactiveTerminalDisplay.renderSubmittedInput,
-              renderDiffReview: interactiveTerminalDisplay.renderDiffReview,
-              setGoalStatus: interactiveTerminalDisplay.setGoalStatus,
-            }
-          : {}),
+        display: interactiveSessionDisplay,
         onSigint: (handler) => {
           invocationInterrupt.handler = handler;
           runtime.onSigint(handler);
@@ -1651,22 +1666,6 @@ async function runActiveSessionCli(
             },
           ),
         requireKnownCostModel,
-        printAgentEvents: (stream) => {
-          if (interactiveTerminalDisplay !== undefined) {
-            return printInteractiveTerminalAgentEvents(
-              stream,
-              interactiveTerminalDisplay,
-            );
-          }
-          if (stableInteractiveDisplay !== undefined) {
-            return printStableInteractiveAgentEvents(
-              stream,
-              stableInteractiveDisplay,
-            );
-          }
-          return printAgentEvents(stream, runtime);
-        },
-        formatCostReport,
       };
       const failureReportFile = cliArgs.reportFile;
       if (failureReportFile !== undefined) {

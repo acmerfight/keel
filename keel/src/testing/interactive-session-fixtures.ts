@@ -4,8 +4,14 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect } from "vitest";
 import type { ContextCompactionOptions } from "../agent/context-compaction.ts";
-import type { AgentEvent } from "../agent/events.ts";
+import type { AgentEvent, CostReport } from "../agent/events.ts";
 import type { SessionMessage } from "../agent/session-message.ts";
+import type { InteractiveDiffInspection } from "../cli/interactive-session/diff-inspection.ts";
+import {
+  createInteractiveSessionDisplay,
+  type InteractiveComposerMode,
+  type InteractiveInputDisposition,
+} from "../cli/interactive-session/display.ts";
 import type {
   InteractiveActiveSession,
   InteractiveActiveSessionState,
@@ -71,7 +77,7 @@ const EMPTY_TEST_SKILLS = {
 export function runInteractiveSessionWithoutMemory(
   options: Omit<
     InteractiveSessionOptions,
-    "activeSession" | "skills" | "workspaceLeasesRoot"
+    "activeSession" | "display" | "skills" | "workspaceLeasesRoot"
   > & {
     readonly session: InteractiveSessionFixture;
     readonly skills?: InteractiveSkillRuntime;
@@ -82,6 +88,22 @@ export function runInteractiveSessionWithoutMemory(
     readonly initialModelSelection?: SessionModelSelection;
     readonly initialModelSwitchCount?: number;
     readonly initialQueuedInputs?: readonly SessionQueuedInput[];
+    readonly writeStdout: (text: string) => void;
+    readonly writeStderr: (text: string) => void;
+    readonly renderDiffReview?: (inspection: InteractiveDiffInspection) => void;
+    readonly renderPrompt?: () => void;
+    readonly acceptInput?: () => void;
+    readonly closePrompt?: () => void;
+    readonly setComposerMode?: (mode: InteractiveComposerMode) => void;
+    readonly renderSubmittedInput?: (
+      value: string,
+      disposition: InteractiveInputDisposition,
+    ) => void;
+    readonly setGoalStatus?: (text: string | null) => void;
+    readonly printAgentEvents: (
+      stream: AsyncIterable<AgentEvent>,
+    ) => Promise<Extract<AgentEvent, { readonly type: "end" }> | undefined>;
+    readonly formatCostReport: (cost: CostReport) => string;
   },
 ): Promise<InteractiveSessionResult> {
   const {
@@ -94,6 +116,17 @@ export function runInteractiveSessionWithoutMemory(
     initialModelSelection,
     initialModelSwitchCount = 0,
     initialQueuedInputs = [],
+    writeStdout,
+    writeStderr,
+    renderDiffReview,
+    renderPrompt,
+    acceptInput,
+    closePrompt,
+    setComposerMode,
+    renderSubmittedInput,
+    setGoalStatus,
+    printAgentEvents,
+    formatCostReport,
     ...sessionOptions
   } = options;
   const state: InteractiveActiveSessionState = {
@@ -127,6 +160,23 @@ export function runInteractiveSessionWithoutMemory(
     workspaceLeasesRoot: join(sessionOptions.workspace, ".keel-test-worktrees"),
     activeSession,
     skills,
+    display: createInteractiveSessionDisplay({
+      output: {
+        writeStdout,
+        writeStderr,
+      },
+      controls: {
+        ...(renderPrompt !== undefined ? { renderPrompt } : {}),
+        ...(acceptInput !== undefined ? { acceptInput } : {}),
+        ...(closePrompt !== undefined ? { closePrompt } : {}),
+        ...(setComposerMode !== undefined ? { setComposerMode } : {}),
+        ...(renderSubmittedInput !== undefined ? { renderSubmittedInput } : {}),
+        ...(setGoalStatus !== undefined ? { setGoalStatus } : {}),
+        ...(renderDiffReview !== undefined ? { renderDiffReview } : {}),
+      },
+      printAgentEvents,
+      formatCostReport,
+    }),
   });
 }
 
