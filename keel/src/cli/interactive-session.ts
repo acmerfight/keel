@@ -100,6 +100,7 @@ import {
   formatInteractiveForkPicker,
   formatInteractiveSessionForkPoints,
 } from "./fork-points.ts";
+import { formatLiveSessionGoalStatus } from "./interactive-render-projection.ts";
 import { createPromptedBashPermissionPolicy } from "./interactive-session/bash-approval.ts";
 import {
   formatForkRequiresNamedSession,
@@ -171,7 +172,6 @@ import {
   createCliMcpConnectionFactory,
 } from "./mcp-connection.ts";
 import {
-  formatLiveSessionGoalStatus,
   formatSubagentProgress,
   formatUndoCheckpointList,
   formatUndoCheckpointWarning,

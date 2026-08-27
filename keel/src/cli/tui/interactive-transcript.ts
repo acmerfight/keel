@@ -8,9 +8,9 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import type { InteractiveTranscriptEvent } from "../interactive-render-events.ts";
 import type { StableInteractiveDisplayOptions } from "../interactive-session/display.ts";
 import type { InteractiveInputDisposition } from "../interactive-session/types.ts";
-import type { InteractiveTranscriptEvent } from "../output.ts";
 
 export type InteractiveTerminalColorMode = "ansi" | "plain";
 
