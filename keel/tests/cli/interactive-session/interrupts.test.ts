@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
 import type { AgentEvent } from "../../../src/agent/events.ts";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
+import { createInteractiveSessionDisplay } from "../../../src/cli/interactive-session/display.ts";
 import {
   type InteractiveSkillRuntime,
   runInteractiveSession as runInteractiveSessionWithMemory,
@@ -329,16 +330,31 @@ describe("Interactive Session - Interrupts", () => {
         },
       },
       input,
-      writeStdout: (text) => {
-        stdout += text;
-      },
-      writeStderr: (text) => {
-        stderr += text;
-        if (text.includes("any other input rejects") && !approvalAnswered) {
-          approvalAnswered = true;
-          input.write("y\n");
-        }
-      },
+      display: createInteractiveSessionDisplay({
+        output: {
+          writeStdout: (text) => {
+            stdout += text;
+          },
+          writeStderr: (text) => {
+            stderr += text;
+            if (text.includes("any other input rejects") && !approvalAnswered) {
+              approvalAnswered = true;
+              input.write("y\n");
+            }
+          },
+        },
+        printAgentEvents: async (stream) => {
+          let finalEnd:
+            | Extract<AgentEvent, { readonly type: "end" }>
+            | undefined;
+          for await (const event of stream) {
+            if (event.type === "text") stdout += event.text;
+            if (event.type === "end") finalEnd = event;
+          }
+          return finalEnd;
+        },
+        formatCostReport: () => "",
+      }),
       onSigint: (handler) => {
         sigintHandlers.add(handler);
       },
@@ -356,15 +372,6 @@ describe("Interactive Session - Interrupts", () => {
         costModel: ZERO_COST_MODEL,
       }),
       requireKnownCostModel: () => ZERO_COST_MODEL,
-      printAgentEvents: async (stream) => {
-        let finalEnd: Extract<AgentEvent, { readonly type: "end" }> | undefined;
-        for await (const event of stream) {
-          if (event.type === "text") stdout += event.text;
-          if (event.type === "end") finalEnd = event;
-        }
-        return finalEnd;
-      },
-      formatCostReport: () => "",
     });
 
     // When

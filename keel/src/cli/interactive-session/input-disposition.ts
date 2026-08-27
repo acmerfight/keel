@@ -2,7 +2,7 @@ import { parseInteractiveCommand } from "./commands.ts";
 import type {
   InteractiveComposerMode,
   InteractiveInputDisposition,
-} from "./types.ts";
+} from "./display.ts";
 
 export function createInteractiveInputDispositionTracker() {
   let composerMode: InteractiveComposerMode = "ready";

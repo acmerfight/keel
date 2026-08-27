@@ -1,4 +1,4 @@
-import type { AgentEvent, CostReport } from "../../agent/events.ts";
+import type { CostReport } from "../../agent/events.ts";
 import type { ProjectInstructions } from "../../agent/prompt.ts";
 import type { SessionMessage } from "../../agent/session-message.ts";
 import type {
@@ -53,13 +53,16 @@ import type {
   SessionPersistenceReason,
   SessionQueuedInput,
 } from "../session-store.ts";
-import type { InteractiveDiffInspection } from "./diff-inspection.ts";
+import type {
+  InteractiveSessionDisplay,
+  InteractiveSessionEndEvent,
+} from "./display.ts";
 import type { InteractiveLineInput } from "./line-reader.ts";
 import type { SessionTaskRecovery } from "./task-recovery.ts";
 
 export type { ProviderSelection } from "../provider-config.ts";
 
-export type EndEvent = Extract<AgentEvent, { readonly type: "end" }>;
+export type EndEvent = InteractiveSessionEndEvent;
 export type EndEventWithCost = EndEvent & { readonly cost: CostReport };
 
 export interface InteractiveSessionArgs {
@@ -243,18 +246,7 @@ interface InteractiveSessionOptionsBase {
   };
   readonly input: NodeJS.ReadableStream;
   readonly lineInput?: InteractiveLineInput;
-  readonly writeStdout: (text: string) => void;
-  readonly writeStderr: (text: string) => void;
-  readonly renderDiffReview?: (inspection: InteractiveDiffInspection) => void;
-  readonly renderPrompt?: () => void;
-  readonly acceptInput?: () => void;
-  readonly closePrompt?: () => void;
-  readonly setComposerMode?: (mode: InteractiveComposerMode) => void;
-  readonly renderSubmittedInput?: (
-    value: string,
-    disposition: InteractiveInputDisposition,
-  ) => void;
-  readonly setGoalStatus?: (text: string | null) => void;
+  readonly display: InteractiveSessionDisplay;
   readonly onSigint: (handler: () => void) => void;
   readonly offSigint: (handler: () => void) => void;
   readonly setExitCode: (code: number) => void;
@@ -266,21 +258,9 @@ interface InteractiveSessionOptionsBase {
   readonly requireKnownCostModel: (
     resolved: InteractiveResolvedProvider,
   ) => CostModel;
-  readonly printAgentEvents: (
-    stream: AsyncIterable<AgentEvent>,
-  ) => Promise<EndEvent | undefined>;
-  readonly formatCostReport: (cost: CostReport) => string;
 }
 
 export type InteractiveSessionOptions = InteractiveSessionOptionsBase;
-
-export type InteractiveComposerMode = "approval" | "queue" | "ready" | "steer";
-
-export type InteractiveInputDisposition =
-  | "approve"
-  | "keel"
-  | "queue"
-  | "steer/next";
 
 interface InteractiveReportModelUsage {
   readonly provider: string;

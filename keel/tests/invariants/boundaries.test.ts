@@ -230,6 +230,32 @@ function namedExports(file: string, source: string): readonly string[] {
   return names;
 }
 
+function interfacePropertyNames(
+  file: string,
+  source: string,
+  interfaceName: string,
+): readonly string[] {
+  const sourceFile = parseSource(file, source);
+  const names: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isInterfaceDeclaration(node) && node.name.text === interfaceName) {
+      for (const member of node.members) {
+        if (!ts.isPropertySignature(member)) continue;
+        const name = member.name;
+        if (ts.isIdentifier(name) || ts.isStringLiteral(name)) {
+          names.push(name.text);
+        }
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return names;
+}
+
 function nonNamedExportStatements(
   file: string,
   source: string,
@@ -647,6 +673,87 @@ describe("module boundaries", () => {
         ),
       ).toContain("InteractiveTranscriptEvent");
     }
+  });
+
+  test(`Given interactive sessions render through a display port,
+    When the session coordinator and display boundary are inspected,
+    Then display-only state stays out of the session runtime contract`, () => {
+    const sessionOptionsFile = "src/cli/interactive-session/types.ts";
+    const displayOwner = "src/cli/interactive-session/display.ts";
+    const sessionCoordinator = "src/cli/interactive-session.ts";
+    const inputDispositionOwner =
+      "src/cli/interactive-session/input-disposition.ts";
+    const sessionOptionsSource = readFileSync(sessionOptionsFile, "utf8");
+    const displaySource = readFileSync(displayOwner, "utf8");
+    const sessionSource = readFileSync(sessionCoordinator, "utf8");
+
+    expect(
+      interfacePropertyNames(
+        sessionOptionsFile,
+        sessionOptionsSource,
+        "InteractiveSessionOptionsBase",
+      ),
+    ).toContain("display");
+    for (const displayCallback of [
+      "writeStdout",
+      "writeStderr",
+      "renderPrompt",
+      "acceptInput",
+      "closePrompt",
+      "setComposerMode",
+      "renderSubmittedInput",
+      "setGoalStatus",
+      "renderDiffReview",
+      "printAgentEvents",
+      "formatCostReport",
+    ]) {
+      expect(
+        interfacePropertyNames(
+          sessionOptionsFile,
+          sessionOptionsSource,
+          "InteractiveSessionOptionsBase",
+        ),
+      ).not.toContain(displayCallback);
+      expect(sessionSource).not.toMatch(
+        new RegExp(`\\boptions\\.${displayCallback}\\b`, "u"),
+      );
+    }
+
+    expect(
+      interfacePropertyNames(
+        displayOwner,
+        displaySource,
+        "InteractiveSessionDisplay",
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "writeStdout",
+        "writeStderr",
+        "renderPrompt",
+        "acceptInput",
+        "closePrompt",
+        "setComposerMode",
+        "renderSubmittedInput",
+        "setGoalStatus",
+        "renderDiffReview",
+        "printAgentEvents",
+        "formatCostReport",
+      ]),
+    );
+    expect(
+      importedNamesFromResolvedSpecifier(
+        displayOwner,
+        displaySource,
+        inputDispositionOwner,
+      ),
+    ).toContain("createInteractiveInputDispositionTracker");
+    expect(
+      importedNamesFromResolvedSpecifier(
+        sessionCoordinator,
+        sessionSource,
+        inputDispositionOwner,
+      ),
+    ).toEqual([]);
   });
 
   test(`Given interactive compaction helpers restore visible context,

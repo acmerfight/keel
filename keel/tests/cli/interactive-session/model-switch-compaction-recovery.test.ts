@@ -1,11 +1,16 @@
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "vitest";
+import type { ContextCompactionOptions } from "../../../src/agent/context-compaction.ts";
 import type { AgentEvent } from "../../../src/agent/events.ts";
+import { createReadVisibilityState } from "../../../src/agent/read-visibility.ts";
 import type { SessionMessage } from "../../../src/agent/session-message.ts";
 import type {
   ToolOutputArtifactSaveInput,
   ToolOutputArtifactStore,
 } from "../../../src/agent/tool-output-artifacts.ts";
+import { createInteractiveSessionDisplay } from "../../../src/cli/interactive-session/display.ts";
+import { executeModelSwitchCompaction } from "../../../src/cli/interactive-session/model-switch-compact.ts";
 import type { ProviderSelection } from "../../../src/cli/interactive-session/types.ts";
 import type {
   LLMProvider,
@@ -25,6 +30,7 @@ import {
   ZERO_COST_MODEL,
   ZERO_USAGE,
 } from "../../../src/testing/interactive-session-fixtures.ts";
+import { createProjectInstructionVisibilityState } from "../../../src/tools/scoped-project-instructions.ts";
 
 describe("Interactive Session - Model Switch Compaction Recovery", () => {
   test(`Given the current history does not fit a selected target context window,
@@ -462,6 +468,312 @@ describe("Interactive Session - Model Switch Compaction Recovery", () => {
       expect(sigintHandlers.size).toBe(0);
     },
   );
+
+  test(`Given model-switch compaction is interrupted after post-compaction restore,
+    When the display port handles the abort newline,
+    Then Keel rolls back the restored display-side recovery output`, async () => {
+    // Given
+    const contextCompaction: ContextCompactionOptions = {
+      contextWindowTokens: 2_000,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    };
+    const initialMessages: readonly SessionMessage[] = [
+      { role: "user", content: "large history ".repeat(3_000).trim() },
+      { role: "assistant", content: "old provider answer", toolCalls: [] },
+    ];
+    const messages: SessionMessage[] = initialMessages.map((message) =>
+      structuredClone(message),
+    );
+    const controller = new AbortController();
+    let stdout = "";
+    let restoreToolCallIds = 0;
+    const currentProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        yield { type: "text", text: "Interrupted restore checkpoint." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    let targetProviderTurns = 0;
+    const targetProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        targetProviderTurns++;
+        yield { type: "text", text: "unexpected target" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const target = {
+      ...resolvedProvider(
+        "qwen",
+        "tiny",
+        targetProvider,
+        ZERO_COST_MODEL,
+        contextCompaction,
+      ),
+      contextCompaction,
+    };
+    const visibleInstructionPath = join(process.cwd(), "AGENTS.md");
+    const readVisibility = createReadVisibilityState();
+    const projectInstructionVisibility =
+      createProjectInstructionVisibilityState(process.cwd());
+    projectInstructionVisibility.markInstructionPathsVisible([
+      visibleInstructionPath,
+    ]);
+
+    // When
+    const result = await executeModelSwitchCompaction({
+      current: resolvedProvider("fake", "fake", currentProvider),
+      target,
+      workspace: process.cwd(),
+      messages,
+      systemPrompt: "system prompt",
+      summarySystemPrompt: "summary system prompt",
+      signal: controller.signal,
+      readVisibility,
+      projectInstructionVisibility,
+      nextPostCompactionReadToolCallId: () => {
+        controller.abort();
+        restoreToolCallIds++;
+        return `restore_${restoreToolCallIds}`;
+      },
+      taskProgress: { tasks: [] },
+      options: {
+        cliArgs: { executionPosture: "trusted" },
+        display: createInteractiveSessionDisplay({
+          output: {
+            writeStdout: (text) => {
+              stdout += text;
+            },
+            writeStderr: () => {},
+          },
+          printAgentEvents: async () => {
+            throw new Error("agent event rendering is not used");
+          },
+          formatCostReport: () => "",
+        }),
+      },
+      bashToolVisible: true,
+      recordCompactionCost: () => {
+        throw new Error("untracked compaction must not record cost");
+      },
+      compactionCost: { kind: "untracked" },
+      modelOperations: null,
+    });
+
+    // Then
+    expect(result).toEqual({ status: "rejected" });
+    expect(stdout).toBe("\n");
+    expect(messages).toEqual(initialMessages);
+    expect(targetProviderTurns).toBe(0);
+    expect(restoreToolCallIds).toBe(1);
+    expect(
+      projectInstructionVisibility.visibleInstructionsMostRecentFirst(),
+    ).toEqual([
+      {
+        instructionPath: visibleInstructionPath,
+        relativePath: "AGENTS.md",
+      },
+    ]);
+  });
+
+  test(`Given model-switch compaction succeeds without bash tool visibility,
+    When the display port renders the compaction report,
+    Then Keel records non-bash compaction metadata without invoking the target provider`, async () => {
+    // Given
+    const contextCompaction: ContextCompactionOptions = {
+      contextWindowTokens: 2_000,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    };
+    const messages: SessionMessage[] = [
+      { role: "user", content: "large history ".repeat(3_000).trim() },
+      { role: "assistant", content: "old provider answer", toolCalls: [] },
+    ];
+    let stderr = "";
+    let targetProviderTurns = 0;
+    const currentProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        yield { type: "text", text: "Readonly model-switch checkpoint." };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const targetProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        targetProviderTurns++;
+        yield { type: "text", text: "unexpected target" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const target = {
+      ...resolvedProvider(
+        "qwen",
+        "tiny",
+        targetProvider,
+        ZERO_COST_MODEL,
+        contextCompaction,
+      ),
+      contextCompaction,
+    };
+
+    // When
+    const result = await executeModelSwitchCompaction({
+      current: resolvedProvider("fake", "fake", currentProvider),
+      target,
+      workspace: process.cwd(),
+      messages,
+      systemPrompt: "system prompt",
+      summarySystemPrompt: "summary system prompt",
+      signal: new AbortController().signal,
+      readVisibility: createReadVisibilityState(),
+      projectInstructionVisibility: createProjectInstructionVisibilityState(
+        process.cwd(),
+      ),
+      nextPostCompactionReadToolCallId: () => {
+        throw new Error("post-compaction restore must not need tool calls");
+      },
+      taskProgress: { tasks: [] },
+      options: {
+        cliArgs: { executionPosture: "trusted" },
+        display: createInteractiveSessionDisplay({
+          output: {
+            writeStdout: () => {},
+            writeStderr: (text) => {
+              stderr += text;
+            },
+          },
+          printAgentEvents: async () => {
+            throw new Error("agent event rendering is not used");
+          },
+          formatCostReport: () => "",
+        }),
+      },
+      bashToolVisible: false,
+      recordCompactionCost: () => {
+        throw new Error("untracked compaction must not record cost");
+      },
+      compactionCost: { kind: "untracked" },
+      modelOperations: null,
+    });
+
+    // Then
+    expect(result).toEqual({ status: "accepted" });
+    expect(stderr).toContain("Context compacted: model switch");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toEqual(
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("<conversation-checkpoint>"),
+      }),
+    );
+    expect(messages[0]?.content).toContain("Readonly model-switch checkpoint.");
+    expect(targetProviderTurns).toBe(0);
+  });
+
+  test(`Given model-switch compaction throws after interruption,
+    When the display port handles the abort newline,
+    Then Keel rejects the switch without starting the target provider`, async () => {
+    // Given
+    const initialMessages: readonly SessionMessage[] = [
+      { role: "user", content: "large history ".repeat(3_000).trim() },
+      { role: "assistant", content: "old provider answer", toolCalls: [] },
+    ];
+    let receiveSummaryRequest: () => void = () => {};
+    const summaryRequested = new Promise<void>((resolve) => {
+      receiveSummaryRequest = resolve;
+    });
+    let targetProviderTurns = 0;
+    let stdout = "";
+    const currentProvider = withProviderRequestAttemptAccounting({
+      id: "fake",
+      async *stream(options) {
+        receiveSummaryRequest();
+        if (!options.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+        }
+        throw new Error("interrupted summary must reject the switch");
+      },
+    });
+    const targetProvider: LLMProvider = {
+      id: "fake",
+      async *stream() {
+        targetProviderTurns++;
+        yield { type: "text", text: "unexpected target" };
+        yield { type: "stop", reason: "stop", usage: ZERO_USAGE };
+      },
+    };
+    const input = new PassThrough();
+    const sigintHandlers = new Set<() => void>();
+    const session = runInteractiveSession({
+      cliArgs: { executionPosture: "trusted" },
+      workspace: process.cwd(),
+      platform: process.platform,
+      session: savedInteractiveSession({
+        id: "test-session",
+        persistModelSwitch: () => {
+          throw new Error("interrupted model switch must not persist");
+        },
+      }),
+      initialMessages,
+      input,
+      writeStdout: (text) => {
+        stdout += text;
+      },
+      writeStderr: () => {},
+      onSigint: (handler) => {
+        sigintHandlers.add(handler);
+      },
+      offSigint: (handler) => {
+        sigintHandlers.delete(handler);
+      },
+      setExitCode: () => {},
+      forceExit: (code) => {
+        throw new ForcedExit(code);
+      },
+      resolveProvider: (_message, selection?: ProviderSelection) =>
+        selection?.providerId === "qwen"
+          ? resolvedProvider(
+              "qwen",
+              selection.model ?? "tiny",
+              targetProvider,
+              ZERO_COST_MODEL,
+              {
+                contextWindowTokens: 2_000,
+                reserveTokens: 0,
+                keepRecentTokens: 1,
+              },
+            )
+          : resolvedProvider("fake", "fake", currentProvider),
+      requireKnownCostModel: () => ZERO_COST_MODEL,
+      printAgentEvents: async () => {
+        throw new Error(
+          "interrupted model switch must not start an agent turn",
+        );
+      },
+      formatCostReport: () => "",
+    });
+
+    // When
+    input.write("/model qwen/tiny\n");
+    await withTimeout(summaryRequested, 5_000, "summary did not start");
+    for (const handler of [...sigintHandlers]) {
+      handler();
+    }
+    input.end();
+
+    // Then
+    await withTimeout(session, 5_000, "session did not end");
+    expect(stdout).toBe("\n");
+    expect(targetProviderTurns).toBe(0);
+    expect(sigintHandlers.size).toBe(0);
+  });
 
   test(`Given a billed model-switch summary is truncated before its retry exhausts the cost budget,
     When the retry is denied admission,

@@ -42,7 +42,10 @@ export interface ManualCompactContext {
   readonly projectInstructionVisibility: ProjectInstructionVisibilityState;
   readonly nextPostCompactionReadToolCallId: () => string;
   readonly taskProgress: SessionTaskProgress;
-  readonly options: InteractiveSessionOptions;
+  readonly options: Pick<
+    InteractiveSessionOptions,
+    "cliArgs" | "display" | "toolOutputArtifacts"
+  >;
   readonly recordCompactionCost: (
     usage: Usage,
     costModel: CostModel,
@@ -76,6 +79,7 @@ export async function executeManualCompaction(
     compactionCost,
     modelOperations,
   } = ctx;
+  const display = options.display;
   const manualCostModel =
     compactionCost.kind === "untracked" ? undefined : compactionCost.model;
   const messagesBeforeCompact = messages.slice();
@@ -125,7 +129,7 @@ export async function executeManualCompaction(
         manualCostModel === undefined
           ? undefined
           : recordCompactionCost(result.usage, manualCostModel);
-      options.writeStdout("\n");
+      display.writeStdout("\n");
       return {
         status: "not_committed",
         ...(cost !== undefined ? { cost } : {}),
@@ -145,19 +149,19 @@ export async function executeManualCompaction(
         systemPrompt,
         messages,
       });
-      options.writeStderr(
+      display.writeStderr(
         formatContextCompactionReport({
           ...reportStats,
           reasonLabel: "manual",
         }),
       );
       for (const notice of result.artifactNotices ?? []) {
-        options.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
+        display.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
       }
       if (manualCostModel !== undefined) {
         const cost = recordCompactionCost(result.usage, manualCostModel);
         if (options.cliArgs.maxCostUsd !== undefined) {
-          options.writeStderr(options.formatCostReport(cost));
+          display.writeStderr(display.formatCostReport(cost));
         }
         return { status: "committed", cost };
       }
@@ -175,21 +179,21 @@ export async function executeManualCompaction(
         result.failure.error instanceof CostBudgetAdmissionError
       ) {
         const cost = compactionCost.budgetLimitedReport();
-        options.writeStderr(options.formatCostReport(cost));
+        display.writeStderr(display.formatCostReport(cost));
         return { status: "not_committed", cost };
       }
-      options.writeStderr(
+      display.writeStderr(
         formatManualCompactionFailure(result.failure.message),
       );
       if (failedCost !== undefined) {
         const cost = failedCost;
         if (options.cliArgs.maxCostUsd !== undefined) {
-          options.writeStderr(options.formatCostReport(cost));
+          display.writeStderr(display.formatCostReport(cost));
         }
         return { status: "not_committed", cost };
       }
     } else {
-      options.writeStderr(
+      display.writeStderr(
         "Context compaction skipped: no safe history to compact.\n",
       );
     }
@@ -197,7 +201,7 @@ export async function executeManualCompaction(
   } catch (error) {
     messages.splice(0, messages.length, ...messagesBeforeCompact);
     if (signal.aborted) {
-      options.writeStdout("\n");
+      display.writeStdout("\n");
       return { status: "not_committed" };
     }
     if (
@@ -205,10 +209,10 @@ export async function executeManualCompaction(
       error instanceof CostBudgetAdmissionError
     ) {
       const cost = compactionCost.budgetLimitedReport();
-      options.writeStderr(options.formatCostReport(cost));
+      display.writeStderr(display.formatCostReport(cost));
       return { status: "not_committed", cost };
     }
-    options.writeStderr(formatManualCompactionFailure(error));
+    display.writeStderr(formatManualCompactionFailure(error));
     return { status: "not_committed" };
   }
 }
