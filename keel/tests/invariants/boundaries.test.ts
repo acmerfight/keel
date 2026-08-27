@@ -756,6 +756,95 @@ describe("module boundaries", () => {
     ).toEqual([]);
   });
 
+  test(`Given interactive local commands produce user-visible output,
+    When command projection dependencies are inspected,
+    Then command formatting is owned by the display-event projection boundary`, () => {
+    const sessionCoordinator = "src/cli/interactive-session.ts";
+    const displayOwner = "src/cli/interactive-session/display.ts";
+    const commandOutputOwner = "src/cli/interactive-session/command-output.ts";
+    const sessionSource = readFileSync(sessionCoordinator, "utf8");
+    const displaySource = readFileSync(displayOwner, "utf8");
+    const commandOutputSource = readFileSync(commandOutputOwner, "utf8");
+
+    expect(
+      interfacePropertyNames(
+        displayOwner,
+        displaySource,
+        "InteractiveSessionDisplay",
+      ),
+    ).toContain("renderCommandOutput");
+    expect(
+      importedNamesFromResolvedSpecifier(
+        sessionCoordinator,
+        sessionSource,
+        commandOutputOwner,
+      ),
+    ).toEqual(expect.arrayContaining(["projectInteractiveCommandFailure"]));
+    for (const exportName of [
+      "projectInteractiveCommandOutput",
+      "projectInteractiveCommandFailure",
+    ]) {
+      expect(commandOutputSource).toMatch(
+        new RegExp(`\\bexport\\s+function\\s+${exportName}\\b`, "u"),
+      );
+    }
+
+    for (const formatterImport of [
+      {
+        file: "src/cli/interactive-session/commands.ts",
+        names: [
+          "formatForkRequiresNamedSession",
+          "formatInteractiveCommandFailure",
+          "formatInteractiveGoalCommandOutput",
+          "formatInteractiveHelp",
+          "formatInteractiveTitle",
+          "formatInteractiveTitleSet",
+          "formatTitleRequiresSavedSession",
+        ],
+      },
+      {
+        file: "src/cli/session-status-format.ts",
+        names: ["formatSessionStatusSnapshot", "formatSessionTasks"],
+      },
+      {
+        file: "src/cli/agent-history-format.ts",
+        names: [
+          "formatAgentHistoryDetail",
+          "formatAgentHistoryList",
+          "formatAgentTranscript",
+        ],
+      },
+      {
+        file: "src/cli/fork-points.ts",
+        names: [
+          "formatInteractiveForkPicker",
+          "formatInteractiveSessionForkPoints",
+        ],
+      },
+      {
+        file: "src/cli/interactive-session/diff-inspection.ts",
+        names: ["formatInteractiveDiffOutput"],
+      },
+    ]) {
+      expect(
+        importedNamesFromResolvedSpecifier(
+          commandOutputOwner,
+          commandOutputSource,
+          formatterImport.file,
+        ),
+      ).toEqual(expect.arrayContaining(formatterImport.names));
+      for (const name of formatterImport.names) {
+        expect(
+          importedNamesFromResolvedSpecifier(
+            sessionCoordinator,
+            sessionSource,
+            formatterImport.file,
+          ),
+        ).not.toContain(name);
+      }
+    }
+  });
+
   test(`Given interactive compaction helpers restore visible context,
     When their dependencies are inspected,
     Then restoration remains owned by the dedicated post-compaction module`, () => {
