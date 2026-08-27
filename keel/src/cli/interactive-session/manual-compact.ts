@@ -13,18 +13,18 @@ import { modelMetadataMaxOutputTokens } from "../../core/model-metadata.ts";
 import type { SessionTaskProgress } from "../../core/task-progress.ts";
 import type { Usage } from "../../llm/types.ts";
 import type { ProjectInstructionVisibilityState } from "../../tools/scoped-project-instructions.ts";
-import {
-  formatContextCompactionReport,
-  formatToolOutputArtifactNotice,
-} from "../agent-event-format.ts";
-import {
-  formatManualCompactionFailure,
-  type ManualCompactCommand,
-} from "./commands.ts";
+import type { ManualCompactCommand } from "./commands.ts";
 import {
   createInteractiveCostBudgetedProvider,
   type InteractiveCompactionCost,
 } from "./cost.ts";
+import {
+  projectInteractiveCompactionAbortedNotice,
+  projectInteractiveCompactionFailureNotice,
+  projectInteractiveCompactionSkippedNotice,
+  projectInteractiveCompactionSuccessNotice,
+  projectInteractiveCostReport,
+} from "./progress-output.ts";
 import type {
   InteractiveResolvedProvider,
   InteractiveSessionOptions,
@@ -129,7 +129,7 @@ export async function executeManualCompaction(
         manualCostModel === undefined
           ? undefined
           : recordCompactionCost(result.usage, manualCostModel);
-      display.writeStdout("\n");
+      display.renderProgressOutput(projectInteractiveCompactionAbortedNotice());
       return {
         status: "not_committed",
         ...(cost !== undefined ? { cost } : {}),
@@ -149,19 +149,19 @@ export async function executeManualCompaction(
         systemPrompt,
         messages,
       });
-      display.writeStderr(
-        formatContextCompactionReport({
-          ...reportStats,
+      display.renderProgressOutput(
+        projectInteractiveCompactionSuccessNotice({
+          stats: reportStats,
           reasonLabel: "manual",
+          ...(result.artifactNotices !== undefined
+            ? { artifactNotices: result.artifactNotices }
+            : {}),
         }),
       );
-      for (const notice of result.artifactNotices ?? []) {
-        display.writeStderr(`${formatToolOutputArtifactNotice(notice)}\n`);
-      }
       if (manualCostModel !== undefined) {
         const cost = recordCompactionCost(result.usage, manualCostModel);
         if (options.cliArgs.maxCostUsd !== undefined) {
-          display.writeStderr(display.formatCostReport(cost));
+          display.renderProgressOutput(projectInteractiveCostReport(cost));
         }
         return { status: "committed", cost };
       }
@@ -179,29 +179,27 @@ export async function executeManualCompaction(
         result.failure.error instanceof CostBudgetAdmissionError
       ) {
         const cost = compactionCost.budgetLimitedReport();
-        display.writeStderr(display.formatCostReport(cost));
+        display.renderProgressOutput(projectInteractiveCostReport(cost));
         return { status: "not_committed", cost };
       }
-      display.writeStderr(
-        formatManualCompactionFailure(result.failure.message),
+      display.renderProgressOutput(
+        projectInteractiveCompactionFailureNotice(result.failure.message),
       );
       if (failedCost !== undefined) {
         const cost = failedCost;
         if (options.cliArgs.maxCostUsd !== undefined) {
-          display.writeStderr(display.formatCostReport(cost));
+          display.renderProgressOutput(projectInteractiveCostReport(cost));
         }
         return { status: "not_committed", cost };
       }
     } else {
-      display.writeStderr(
-        "Context compaction skipped: no safe history to compact.\n",
-      );
+      display.renderProgressOutput(projectInteractiveCompactionSkippedNotice());
     }
     return { status: "not_committed" };
   } catch (error) {
     messages.splice(0, messages.length, ...messagesBeforeCompact);
     if (signal.aborted) {
-      display.writeStdout("\n");
+      display.renderProgressOutput(projectInteractiveCompactionAbortedNotice());
       return { status: "not_committed" };
     }
     if (
@@ -209,10 +207,12 @@ export async function executeManualCompaction(
       error instanceof CostBudgetAdmissionError
     ) {
       const cost = compactionCost.budgetLimitedReport();
-      display.writeStderr(display.formatCostReport(cost));
+      display.renderProgressOutput(projectInteractiveCostReport(cost));
       return { status: "not_committed", cost };
     }
-    display.writeStderr(formatManualCompactionFailure(error));
+    display.renderProgressOutput(
+      projectInteractiveCompactionFailureNotice(error),
+    );
     return { status: "not_committed" };
   }
 }

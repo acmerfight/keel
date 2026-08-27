@@ -41,7 +41,6 @@ describe("Interactive session display port", () => {
         }
         return undefined;
       },
-      formatCostReport: (cost) => `cost:${cost.spentUsd}`,
     });
 
     // When
@@ -50,6 +49,16 @@ describe("Interactive session display port", () => {
     display.renderCommandOutput([
       { type: "stdout", text: "command stdout\n" },
       { type: "stderr", text: "command stderr\n" },
+    ]);
+    display.renderProgressOutput([
+      {
+        type: "cost_report",
+        cost: {
+          spentUsd: 2,
+          budget: { kind: "unbounded" },
+        },
+        text: "Cost: $2.0000\n",
+      },
     ]);
     display.setComposerMode("steer");
     display.renderSubmittedInput("guide this turn");
@@ -77,7 +86,7 @@ describe("Interactive session display port", () => {
 
     // Then
     expect(stdout).toBe("visible stdout\ncommand stdout\nagent text");
-    expect(stderr).toBe("visible stderr\ncommand stderr\n");
+    expect(stderr).toBe("visible stderr\ncommand stderr\nCost: $2.0000\n");
     expect(composerModes).toEqual(["steer", "approval", "ready"]);
     expect(submissions).toEqual([
       { line: "guide this turn", disposition: "steer/next" },
@@ -85,12 +94,6 @@ describe("Interactive session display port", () => {
       { line: "", disposition: "approve" },
       { line: "next prompt", disposition: "keel" },
     ]);
-    expect(
-      display.formatCostReport({
-        spentUsd: 2,
-        budget: { kind: "unbounded" },
-      }),
-    ).toBe("cost:2");
     expect(finalEnd?.turns).toBe(1);
   });
 });

@@ -11,6 +11,7 @@ import {
   createInteractiveSessionDisplay,
   type InteractiveComposerMode,
   type InteractiveInputDisposition,
+  type InteractiveProgressOutputEvent,
 } from "../cli/interactive-session/display.ts";
 import type {
   InteractiveActiveSession,
@@ -155,28 +156,39 @@ export function runInteractiveSessionWithoutMemory(
           state,
           memory: DISABLED_TEST_MEMORY,
         };
+  const display = createInteractiveSessionDisplay({
+    output: {
+      writeStdout,
+      writeStderr,
+    },
+    controls: {
+      ...(renderPrompt !== undefined ? { renderPrompt } : {}),
+      ...(acceptInput !== undefined ? { acceptInput } : {}),
+      ...(closePrompt !== undefined ? { closePrompt } : {}),
+      ...(setComposerMode !== undefined ? { setComposerMode } : {}),
+      ...(renderSubmittedInput !== undefined ? { renderSubmittedInput } : {}),
+      ...(setGoalStatus !== undefined ? { setGoalStatus } : {}),
+      ...(renderDiffReview !== undefined ? { renderDiffReview } : {}),
+    },
+    printAgentEvents,
+  });
+  const formatProgressEventForTest = (
+    event: InteractiveProgressOutputEvent,
+  ): InteractiveProgressOutputEvent =>
+    event.type === "cost_report"
+      ? { ...event, text: formatCostReport(event.cost) }
+      : event;
   return runProductionInteractiveSession({
     ...sessionOptions,
     workspaceLeasesRoot: join(sessionOptions.workspace, ".keel-test-worktrees"),
     activeSession,
     skills,
-    display: createInteractiveSessionDisplay({
-      output: {
-        writeStdout,
-        writeStderr,
+    display: {
+      ...display,
+      renderProgressOutput: (events) => {
+        display.renderProgressOutput(events.map(formatProgressEventForTest));
       },
-      controls: {
-        ...(renderPrompt !== undefined ? { renderPrompt } : {}),
-        ...(acceptInput !== undefined ? { acceptInput } : {}),
-        ...(closePrompt !== undefined ? { closePrompt } : {}),
-        ...(setComposerMode !== undefined ? { setComposerMode } : {}),
-        ...(renderSubmittedInput !== undefined ? { renderSubmittedInput } : {}),
-        ...(setGoalStatus !== undefined ? { setGoalStatus } : {}),
-        ...(renderDiffReview !== undefined ? { renderDiffReview } : {}),
-      },
-      printAgentEvents,
-      formatCostReport,
-    }),
+    },
   });
 }
 

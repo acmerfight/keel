@@ -705,7 +705,6 @@ describe("module boundaries", () => {
       "setGoalStatus",
       "renderDiffReview",
       "printAgentEvents",
-      "formatCostReport",
     ]) {
       expect(
         interfacePropertyNames(
@@ -737,7 +736,7 @@ describe("module boundaries", () => {
         "setGoalStatus",
         "renderDiffReview",
         "printAgentEvents",
-        "formatCostReport",
+        "renderProgressOutput",
       ]),
     );
     expect(
@@ -841,6 +840,103 @@ describe("module boundaries", () => {
             formatterImport.file,
           ),
         ).not.toContain(name);
+      }
+    }
+  });
+
+  test(`Given interactive progress notices produce user-visible output,
+    When progress projection dependencies are inspected,
+    Then progress formatting is owned by the display-event projection boundary`, () => {
+    const sessionCoordinator = "src/cli/interactive-session.ts";
+    const displayOwner = "src/cli/interactive-session/display.ts";
+    const manualCompaction = "src/cli/interactive-session/manual-compact.ts";
+    const modelSwitchCompaction =
+      "src/cli/interactive-session/model-switch-compact.ts";
+    const progressOutputOwner =
+      "src/cli/interactive-session/progress-output.ts";
+    const sessionSource = readFileSync(sessionCoordinator, "utf8");
+    const displaySource = readFileSync(displayOwner, "utf8");
+    const progressOutputSource = readFileSync(progressOutputOwner, "utf8");
+
+    expect(
+      interfacePropertyNames(
+        displayOwner,
+        displaySource,
+        "InteractiveSessionDisplay",
+      ),
+    ).toContain("renderProgressOutput");
+    expect(
+      interfacePropertyNames(
+        displayOwner,
+        displaySource,
+        "InteractiveSessionDisplay",
+      ),
+    ).not.toContain("formatCostReport");
+    expect(displaySource).not.toContain("formatCostReport");
+    expect(
+      importedNamesFromResolvedSpecifier(
+        sessionCoordinator,
+        sessionSource,
+        progressOutputOwner,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "projectInteractiveCostReport",
+        "projectInteractiveSubagentProgressNotice",
+      ]),
+    );
+
+    for (const formatterImport of [
+      {
+        file: "src/cli/output.ts",
+        names: [
+          "formatCostReport",
+          "formatSubagentProgress",
+          "formatUndoCheckpointWarning",
+        ],
+      },
+      {
+        file: "src/cli/agent-event-format.ts",
+        names: [
+          "formatContextCompactionReport",
+          "formatToolOutputArtifactNotice",
+        ],
+      },
+      {
+        file: "src/cli/interactive-session/commands.ts",
+        names: ["formatManualCompactionFailure"],
+      },
+      {
+        file: "src/skills/catalog.ts",
+        names: ["formatSkillCatalogDegradation"],
+      },
+      {
+        file: "src/core/session-goal.ts",
+        names: ["formatSessionGoalSummary"],
+      },
+    ]) {
+      expect(
+        importedNamesFromResolvedSpecifier(
+          progressOutputOwner,
+          progressOutputSource,
+          formatterImport.file,
+        ),
+      ).toEqual(expect.arrayContaining(formatterImport.names));
+      for (const consumer of [
+        sessionCoordinator,
+        manualCompaction,
+        modelSwitchCompaction,
+      ]) {
+        const consumerSource = readFileSync(consumer, "utf8");
+        for (const name of formatterImport.names) {
+          expect(
+            importedNamesFromResolvedSpecifier(
+              consumer,
+              consumerSource,
+              formatterImport.file,
+            ),
+          ).not.toContain(name);
+        }
       }
     }
   });
